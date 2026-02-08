@@ -22,6 +22,14 @@ class InMemoryEventBus:
             self.subscribers[event_type] = []
         self.subscribers[event_type].append(callback)
 
+    def unsubscribe(self, event_type: str, callback: Callable):
+        """Retire un callback d'un type d'événement."""
+        if event_type in self.subscribers:
+            try:
+                self.subscribers[event_type].remove(callback)
+            except ValueError:
+                pass
+
     async def publish(self, event_type: str, payload: Any):
         # 1. Abonnés directs
         if event_type in self.subscribers:

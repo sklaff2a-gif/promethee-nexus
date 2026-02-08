@@ -1,4 +1,15 @@
-const ws = new WebSocket(`ws://${window.location.host}/ws`);
+// Token API (lire depuis meta tag ou localStorage)
+const API_TOKEN = localStorage.getItem('api_token') || '';
+const wsUrl = API_TOKEN
+    ? `ws://${window.location.host}/ws?token=${API_TOKEN}`
+    : `ws://${window.location.host}/ws`;
+const ws = new WebSocket(wsUrl);
+
+function authHeaders() {
+    const h = { 'Content-Type': 'application/json' };
+    if (API_TOKEN) h['Authorization'] = `Bearer ${API_TOKEN}`;
+    return h;
+}
 const dialogueBox = document.getElementById('dialogue-box');
 const logsBox = document.getElementById('logs-box');
 
@@ -131,14 +142,14 @@ function sendMission() {
     
     fetch('/api/mission', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: JSON.stringify({ mission: mission })
     }).catch(err => addLog("API", "Erreur: " + err, "err"));
     input.value = "";
 }
 
 function toggleKillSwitch() {
-    fetch('/api/override', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({active: true}) });
+    fetch('/api/override', { method: 'POST', headers: authHeaders(), body: JSON.stringify({active: true}) });
     addLog('SYSTEM', 'KILL SWITCH ACTIONNÉ', 'err');
 }
 

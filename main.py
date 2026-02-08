@@ -1,7 +1,8 @@
 # main.py
-from fastapi import FastAPI, WebSocket, Request, BackgroundTasks
+from fastapi import FastAPI, WebSocket, Request, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from contextlib import asynccontextmanager
 import os
 import asyncio
@@ -9,11 +10,29 @@ import json
 import importlib
 import uvicorn
 import tracemalloc
-import sys  # <--- AJOUT POUR GÉRER LE REDÉMARRAGE
+import secrets
+import sys
 from core.orchestrator import orchestrator
 from core.event_bus.bus import bus
 from core.autonomy_engine import autonomy
-from core.router import RouterAgent  # <-- NOUVEAU
+from core.router import RouterAgent
+
+# --- AUTHENTIFICATION API ---
+API_SECRET_KEY = os.getenv("API_SECRET_KEY", "")
+security = HTTPBearer()
+
+async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Vérifie le token Bearer sur les endpoints API."""
+    if not API_SECRET_KEY:
+        return  # Pas de clé configurée = mode ouvert (dev local)
+    if not secrets.compare_digest(credentials.credentials, API_SECRET_KEY):
+        raise HTTPException(status_code=401, detail="Token invalide")
+
+def verify_ws_token(token: str) -> bool:
+    """Vérifie le token pour les connexions WebSocket."""
+    if not API_SECRET_KEY:
+        return True
+    return secrets.compare_digest(token, API_SECRET_KEY)
 
 # Configuration nettoyée (Agents financiers retirés)
 AGENTS_CONFIG = [
@@ -128,7 +147,7 @@ async def root():
             return HTMLResponse(f.read())
     return HTMLResponse("<h1>UI Loading...</h1>")
 
-@app.post("/api/override")
+@app.post("/api/override", dependencies=[Depends(verify_token)])
 async def api_override(request: Request):
     data = await request.json()
     active = data.get("active", False)
@@ -162,7 +181,7 @@ async def strategic_feedback_loop(agent_name: str, mission: str, result: str):
         "context": strategy_proposal
     })
 
-@app.post("/api/mission")
+@app.post("/api/mission", dependencies=[Depends(verify_token)])
 async def mission(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
     msn = data.get("mission", "")
@@ -180,7 +199,10 @@ async def mission(request: Request, background_tasks: BackgroundTasks):
     return {"status": "dispatched", "target": target}
 
 @app.websocket("/ws")
-async def ws_endpoint(websocket: WebSocket):
+async def ws_endpoint(websocket: WebSocket, token: str = Query(default="")):
+    if not verify_ws_token(token):
+        await websocket.close(code=1008, reason="Token invalide")
+        return
     await websocket.accept()
     async def sender(event):
         try:
@@ -192,6 +214,8 @@ async def ws_endpoint(websocket: WebSocket):
         while True: await websocket.receive_text()
     except Exception:
         pass  # Client déconnecté, fin normale du WebSocket
+    finally:
+        bus.unsubscribe("*", sender)
 
 if __name__ == "__main__":
     print("🔥 Démarrage via Lanceur Direct...")

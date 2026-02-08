@@ -38,6 +38,37 @@ class TestSubscribe:
         assert "EV2" in bus.subscribers
 
 
+class TestUnsubscribe:
+
+    def test_unsubscribe_removes_callback(self):
+        cb = lambda x: None
+        bus.subscribe("UNSUB_TEST", cb)
+        assert cb in bus.subscribers["UNSUB_TEST"]
+        bus.unsubscribe("UNSUB_TEST", cb)
+        assert cb not in bus.subscribers["UNSUB_TEST"]
+
+    def test_unsubscribe_nonexistent_callback(self):
+        """Desabonner un callback inexistant ne doit pas planter."""
+        bus.subscribe("UNSUB2", lambda x: None)
+        bus.unsubscribe("UNSUB2", lambda x: None)  # Callback different
+
+    def test_unsubscribe_nonexistent_event(self):
+        """Desabonner d'un event inexistant ne doit pas planter."""
+        bus.unsubscribe("NEVER_EXISTED", lambda x: None)
+
+    @pytest.mark.asyncio
+    async def test_unsubscribed_callback_not_called(self):
+        received = []
+        cb = lambda data: received.append(data)
+        bus.subscribe("LIFECYCLE", cb)
+        await bus.publish("LIFECYCLE", {"msg": "before"})
+        assert len(received) == 1
+
+        bus.unsubscribe("LIFECYCLE", cb)
+        await bus.publish("LIFECYCLE", {"msg": "after"})
+        assert len(received) == 1  # Pas d'appel supplementaire
+
+
 class TestPublish:
 
     @pytest.mark.asyncio
