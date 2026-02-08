@@ -5,7 +5,7 @@ import asyncio
 import uuid
 import json
 import re
-import requests
+import httpx
 import importlib
 import pkgutil
 import inspect
@@ -263,9 +263,8 @@ class BaseAgent:
         try:
             url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
             payload = { "model": model, "prompt": prompt, "stream": False, "options": { "temperature": 0.7, "num_ctx": 4096 } }
-            def run_request(): return requests.post(url, json=payload, timeout=300)
-            loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(None, run_request)
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, json=payload, timeout=300)
             if response.status_code == 200: return response.json().get("response", "Ollama vide.")
             else: return f"Erreur OLLAMA: {response.status_code}"
         except Exception as e: return "ÉCHEC TOTAL SYSTÈME."

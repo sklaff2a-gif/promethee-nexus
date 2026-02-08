@@ -8,6 +8,6 @@ cryptography
 web3
 google-search-results
 duckduckgo-search
-requests
+httpx
 pytest
 pytest-asyncio

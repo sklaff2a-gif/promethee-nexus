@@ -188,7 +188,7 @@ async def mission(request: Request, background_tasks: BackgroundTasks):
     await bus.publish("USER_COMMAND", {"mission": msn})
     
     # [V13.3] Utilisation du Router dédié
-    target = RouterAgent.classify_intent(msn)
+    target = await RouterAgent.classify_intent(msn)
 
     response = await orchestrator.dispatch_task(target, {"mission": msn})
     
