@@ -15,11 +15,15 @@ except ImportError:
 
 class RouterAgent:
     """
-    RouterAgent V2.2 - Blind Trust
+    RouterAgent V2.3 - Blind Trust + Grimoire
     - Niveau 0 : Adressage Direct (Syntaxe 'Nom: Action') -> Passe tout (Grimoire compatible).
     - Niveau 1 : Détection par Mots-clés (Réflexe instantané sur liste connue).
+    - Niveau 1.5 : Consultation du Grimoire (Index des agents éphémères).
     - Niveau 2 : Analyse Sémantique LLM (Réflexion en cas d'ambiguïté).
     """
+
+    # Cache de l'index Grimoire (chargé une seule fois)
+    _grimoire_index_cache = None
     
     @staticmethod
     async def classify_intent(mission: str) -> str:
@@ -58,10 +62,52 @@ class RouterAgent:
         if any(x in m_low for x in ["rédige", "écris", "article", "tweet", "post", "seo"]): return "writer"
         if any(x in m_low for x in ["format", "clean", "nettoie", "indente", "syntaxe"]): return "formatter"
 
+        # --- NIVEAU 1.5 : CONSULTATION DU GRIMOIRE ---
+        grimoire_match = RouterAgent._check_grimoire_index(m_low)
+        if grimoire_match:
+            print(f"📖 ROUTER: Grimoire match -> {grimoire_match.upper()}")
+            return grimoire_match
+
         # --- NIVEAU 2 : AUTO-RÉFLEXION (Appel LLM Local) ---
         # Si aucune règle ne matche, on demande au LLM de trancher
         print(f"🤔 ROUTER: Ambiguïté détectée sur '{mission[:30]}...'. Analyse Sémantique en cours...")
         return await RouterAgent._semantic_reflection(mission)
+
+    @staticmethod
+    def _check_grimoire_index(mission_lower: str) -> Optional[str]:
+        """Consulte l'index du Grimoire pour trouver un agent éphémère correspondant."""
+        try:
+            if RouterAgent._grimoire_index_cache is None:
+                index_path = os.path.join(os.path.dirname(__file__), "grimoire", "grimoire_index.json")
+                if not os.path.exists(index_path):
+                    return None
+                with open(index_path, "r", encoding="utf-8") as f:
+                    RouterAgent._grimoire_index_cache = json.load(f)
+
+            for entry in RouterAgent._grimoire_index_cache:
+                for keyword in entry.get("keywords", []):
+                    if keyword in mission_lower:
+                        return entry["slug"]
+        except Exception as e:
+            print(f"⚠️ ROUTER: Erreur lecture index Grimoire : {e}")
+        return None
+
+    @staticmethod
+    def invalidate_grimoire_cache():
+        """Invalide le cache de l'index Grimoire (après ajout d'une recette)."""
+        RouterAgent._grimoire_index_cache = None
+
+    @staticmethod
+    def _get_grimoire_slugs() -> list:
+        """Retourne la liste des slugs des agents du Grimoire."""
+        try:
+            if RouterAgent._grimoire_index_cache is None:
+                RouterAgent._check_grimoire_index("")  # Force le chargement
+            if RouterAgent._grimoire_index_cache:
+                return [entry["slug"] for entry in RouterAgent._grimoire_index_cache]
+        except Exception:
+            pass
+        return []
 
     @staticmethod
     async def _semantic_reflection(mission: str) -> str:
@@ -70,10 +116,14 @@ class RouterAgent:
             # On utilise un petit modèle rapide pour le routing
             model = "gemma3:12b"
 
-            # Prompt mis à jour avec la liste exacte des agents actifs
+            # Ajout des agents Grimoire dans la liste
+            grimoire_slugs = RouterAgent._get_grimoire_slugs()
+            all_agents = ["coder", "researcher", "strategist", "writer", "architect", "infra", "security", "evolution", "factory", "formatter"] + grimoire_slugs
+
+            # Prompt mis à jour avec la liste exacte des agents actifs + Grimoire
             prompt = (
                 f"Tu es le Routeur du système Nexus. Classifie cette mission vers l'agent le plus approprié.\n"
-                f"AGENTS DISPONIBLES : [coder, researcher, strategist, writer, architect, infra, security, evolution, factory, formatter]\n"
+                f"AGENTS DISPONIBLES : {all_agents}\n"
                 f"MISSION : \"{mission}\"\n"
                 f"RÈGLE : Réponds UNIQUEMENT par le nom de l'agent en minuscule. Rien d'autre."
             )
@@ -92,7 +142,7 @@ class RouterAgent:
             if response.status_code == 200:
                 choice = response.json().get("response", "").strip().lower()
                 # Nettoyage au cas où le LLM soit bavard
-                valid_agents = ["coder", "researcher", "strategist", "writer", "architect", "infra", "security", "evolution", "factory", "formatter"]
+                valid_agents = all_agents
                 for agent in valid_agents:
                     if agent in choice:
                         print(f"💡 ROUTER: Décision IA -> {agent.upper()}")

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import inspect
 import re
+import sys
 import traceback
 from typing import Dict, Any
 
@@ -77,6 +78,14 @@ class Orchestrator:
         try:
             # --- EXÉCUTION ---
             response = await agent.process_task(task_payload)
+
+            # --- [V18.3] DISSIPATION D'EIDOLON ---
+            if target_slug not in self.agents:
+                module_key = target_slug
+                if module_key in sys.modules:
+                    del sys.modules[module_key]
+                del agent
+                logger.info(f"👻 [GRIMOIRE] Eidolon '{target_slug}' dissipé.")
 
             # --- [V17.0] LE PONT D'EXÉCUTION (Architecte -> Factory) ---
             if target_slug == "architect" and response.get("status") == "success":
