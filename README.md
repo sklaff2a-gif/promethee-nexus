@@ -1,5 +1,7 @@
 # PROMETHEE NEXUS
 
+[![Tests](https://github.com/sklaff2a-gif/promethee-nexus/actions/workflows/tests.yml/badge.svg)](https://github.com/sklaff2a-gif/promethee-nexus/actions/workflows/tests.yml)
+
 Systeme multi-agents IA autonome avec orchestration intelligente, memoire vectorielle (RAG) et routage adaptatif Cloud/Local.
 
 Promethee coordonne 10 agents specialises qui collaborent pour generer du code, analyser des architectures, effectuer de la veille technologique, produire du contenu et s'auto-ameliorer -- le tout avec des mecanismes de securite (kill switch, watchdog, restauration d'urgence).
