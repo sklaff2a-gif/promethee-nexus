@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+*.bak
+memory/chroma_db/
+.pytest_cache/
+USER_DROPZONE/
+_FACTORY_HISTORY.txt

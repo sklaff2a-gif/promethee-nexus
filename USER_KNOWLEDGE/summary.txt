@@ -1,0 +1,1 @@
+Summary of extracted key principles, reusable code snippets, and business insights from USER_DROPZONE files.

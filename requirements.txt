@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+websockets
+google-generativeai
+psutil
+cryptography
+web3
+google-search-results
+duckduckgo-search
+requests
+pytest
+pytest-asyncio
