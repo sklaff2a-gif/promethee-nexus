@@ -120,4 +120,13 @@ class Orchestrator:
             logger.error(f"❌ Erreur exécution {target_slug}: {e}")
             return {"status": "ERROR", "error": str(e)}
 
+    async def dispatch_council(self, participants: list, mission: str,
+                               max_rounds: int = 5) -> Dict[str, Any]:
+        """Lance un débat multi-agents via le système Council."""
+        if self.kill_switch_active:
+            return {"status": "BLOCKED", "reason": "KILL_SWITCH_ACTIVE"}
+        from core.council import Council
+        council = Council(self.agents, participants, mission, max_rounds)
+        return await council.run()
+
 orchestrator = Orchestrator()

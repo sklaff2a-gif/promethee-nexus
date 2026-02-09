@@ -12,6 +12,8 @@ function authHeaders() {
 }
 const dialogueBox = document.getElementById('dialogue-box');
 const logsBox = document.getElementById('logs-box');
+const activeStreams = {};
+const recentlyStreamed = new Set();
 
 // FONCTION: Formater le code pour l'affichage
 function formatMessage(text) {
@@ -114,10 +116,62 @@ ws.onmessage = (event) => {
             addLog(payload.agent, payload.content, 'info');
         }
     } 
+    // 2b. Streaming temps réel (tokens progressifs)
+    else if (type === "AGENT_STREAM") {
+        highlightAgent(payload.agent);
+        const sid = payload.stream_id;
+
+        if (payload.status === "start") {
+            // Créer la bulle de streaming
+            const div = document.createElement('div');
+            div.className = 'msg-agent';
+            div.id = `stream-${sid}`;
+            div.innerHTML = `<span class="font-bold text-xs mb-1 block opacity-50">[${payload.agent.toUpperCase()}]</span><div class="stream-content"></div><span class="cursor">|</span>`;
+            dialogueBox.appendChild(div);
+            activeStreams[sid] = div;
+        } else if (payload.done) {
+            // Fin du stream : retirer le curseur, reformater le contenu
+            const div = activeStreams[sid];
+            if (div) {
+                const cursorEl = div.querySelector('.cursor');
+                if (cursorEl) cursorEl.remove();
+                const contentEl = div.querySelector('.stream-content');
+                if (contentEl) {
+                    const raw = contentEl.textContent;
+                    let html = "";
+                    if (raw.includes('```')) {
+                        const parts = raw.split('```');
+                        parts.forEach((part, index) => {
+                            if (index % 2 === 1) html += `<pre>${part}</pre>`;
+                            else html += part.replace(/\n/g, '<br>');
+                        });
+                    } else {
+                        html = raw.replace(/\n/g, '<br>');
+                    }
+                    contentEl.innerHTML = html;
+                }
+                delete activeStreams[sid];
+            }
+            // Marquer l'agent comme récemment streamé (TTL 3s)
+            recentlyStreamed.add(payload.agent);
+            setTimeout(() => recentlyStreamed.delete(payload.agent), 3000);
+        } else if (payload.chunk) {
+            // Chunk intermédiaire : appender le texte
+            const div = activeStreams[sid];
+            if (div) {
+                const contentEl = div.querySelector('.stream-content');
+                if (contentEl) contentEl.textContent += payload.chunk;
+                dialogueBox.scrollTop = dialogueBox.scrollHeight;
+            }
+        }
+    }
     // 3. Réponse finale d'un agent
     else if (type === "AGENT_RESPONSE") {
         highlightAgent(payload.agent);
-        addDialogue(payload.agent.toUpperCase(), payload.content, 'agent');
+        // Si l'agent vient de streamer, ne pas re-créer la bulle (contenu déjà affiché)
+        if (!recentlyStreamed.has(payload.agent)) {
+            addDialogue(payload.agent.toUpperCase(), payload.content, 'agent');
+        }
         addLog(payload.agent, "Tâche terminée avec succès", 'success');
     }
     // 4. Création de fichier (FACTORY SUCCESS)
@@ -129,6 +183,52 @@ ws.onmessage = (event) => {
     // 5. Commande Utilisateur
     else if (type === "USER_COMMAND") {
         addDialogue("COMMANDER", payload.mission, 'user');
+    }
+    // 6. COUNCIL_START : ouverture du débat
+    else if (type === "COUNCIL_START") {
+        const agents = payload.participants.map(a => a.toUpperCase()).join(", ");
+        addDialogue("SYSTEM",
+            `CONSEIL OUVERT [${agents}] - "${payload.mission}" (max ${payload.max_rounds} tours)`,
+            'system');
+        payload.participants.forEach(a => highlightAgent(a));
+    }
+    // 7. COUNCIL_TURN : tour de parole
+    else if (type === "COUNCIL_TURN") {
+        highlightAgent(payload.agent);
+        if (!recentlyStreamed.has(payload.agent)) {
+            addDialogue(payload.agent.toUpperCase(),
+                `[CONSEIL Tour ${payload.round}/${payload.max_rounds}]\n${payload.content}`,
+                'agent');
+        }
+        addLog(payload.agent, `Conseil T${payload.round}: contribution envoyée`, 'info');
+    }
+    // 8. COUNCIL_END : fermeture du débat
+    else if (type === "COUNCIL_END") {
+        const verdict = payload.status === "consensus" ? "CONSENSUS ATTEINT" : "LIMITE DE TOURS";
+        addDialogue("SYSTEM",
+            `CONSEIL FERME [${verdict}] après ${payload.rounds_used} tour(s).`,
+            'system');
+    }
+    // 9. CI_PIPELINE_START : démarrage pipeline CI/CD
+    else if (type === "CI_PIPELINE_START") {
+        addDialogue("SYSTEM",
+            `CI/CD Pipeline démarré pour : ${payload.filename}`,
+            'system');
+        addLog("CI/CD", `Pipeline démarré : ${payload.filename}`, "sys");
+    }
+    // 10. CI_PIPELINE_STEP : étape intermédiaire
+    else if (type === "CI_PIPELINE_STEP") {
+        const level = payload.status === "error" ? "err" : payload.status === "success" ? "success" : "sys";
+        addLog("CI/CD", `[${payload.step}] ${payload.status.toUpperCase()} - ${payload.filename} : ${payload.detail || ''}`, level);
+    }
+    // 11. CI_PIPELINE_RESULT : résultat final
+    else if (type === "CI_PIPELINE_RESULT") {
+        const verdict = payload.success ? "DÉPLOYÉ" : "ROLLBACK";
+        const level = payload.success ? "success" : "err";
+        addDialogue("SYSTEM",
+            `CI/CD [${verdict}] ${payload.filename} : ${payload.detail || ''}`,
+            'system');
+        addLog("CI/CD", `RÉSULTAT [${verdict}] ${payload.filename}`, level);
     }
 };
 

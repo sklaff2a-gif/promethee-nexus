@@ -61,6 +61,7 @@ class RouterAgent:
         if any(x in m_low for x in ["secu", "faille", "attack", "protect"]): return "security"
         if any(x in m_low for x in ["rédige", "écris", "article", "tweet", "post", "seo"]): return "writer"
         if any(x in m_low for x in ["format", "clean", "nettoie", "indente", "syntaxe"]): return "formatter"
+        if any(x in m_low for x in ["conseil", "débat", "council", "débattre"]): return "conseil"
 
         # --- NIVEAU 1.5 : CONSULTATION DU GRIMOIRE ---
         grimoire_match = RouterAgent._check_grimoire_index(m_low)

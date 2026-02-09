@@ -16,6 +16,8 @@ from core.orchestrator import orchestrator
 from core.event_bus.bus import bus
 from core.autonomy_engine import autonomy
 from core.router import RouterAgent
+from core import talk_logger
+from core import ci_pipeline
 
 # --- AUTHENTIFICATION API ---
 API_SECRET_KEY = os.getenv("API_SECRET_KEY", "")
@@ -51,7 +53,8 @@ AGENTS_CONFIG = [
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tracemalloc.start()
-    print(f"🤖 PROMÉTHÉE V12.4 (Smart Restart): Chargement des modules...")
+    from config import Config as _cfg
+    print(f"🤖 PROMÉTHÉE V12.4 (Smart Restart) [Projet: {_cfg.PROJECT_ID}]: Chargement des modules...")
     for slug, class_name, file_name in AGENTS_CONFIG:
         try:
             module = importlib.import_module(f"Agents.{file_name}")
@@ -63,13 +66,15 @@ async def lifespan(app: FastAPI):
     
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
     bus.subscribe("AGENT_TASK_DISPATCH", nervous_system_listener)
-    
-    # --- AMÉLIORATION A + B : FEEDBACK LOOP + MÉMOIRE ---
-    # On écoute la création de fichiers pour lancer le pipeline de contrôle et mémorisation
-    bus.subscribe("ARTIFACT_CREATED", quality_control_listener)
 
+    # --- CI/CD Pipeline (remplace quality_control_listener) ---
+    ci_pipeline.start()
+
+    talk_logger.start()
     asyncio.create_task(autonomy.start_loop())
     yield
+    ci_pipeline.stop()
+    talk_logger.stop()
     print("🔌 Arrêt.")
     tracemalloc.stop()
 
@@ -80,60 +85,6 @@ async def nervous_system_listener(event: dict):
     if target and payload:
         print(f"⚡ [NERVOUS SYSTEM] Réflexe déclenché vers -> {target.upper()}")
         asyncio.create_task(orchestrator.dispatch_task(target, payload))
-
-async def quality_control_listener(event: dict):
-    """
-    AMÉLIORATION A + B : Point d'entrée du contrôle qualité.
-    Déclenche le pipeline asynchrone pour ne pas bloquer le bus.
-    """
-    data = event.get("data", {})
-    filepath = data.get("filepath")
-    filename = data.get("filename")
-    
-    if filepath and filename and filename.endswith(".py"):
-        print(f"🕵️ [QUALITY CONTROL] Vérification demandée pour : {filename}")
-        # Lancement du pipeline en tâche de fond (Fire & Forget)
-        asyncio.create_task(run_qc_pipeline(filename, filepath))
-
-async def run_qc_pipeline(filename: str, filepath: str):
-    """
-    Pipeline séquentiel :
-    1. Coder analyse le fichier.
-    2. Si SUCCÈS -> Stratège mémorise le code (Auto-RAG).
-    3. Si FICHIER SYSTÈME -> Redémarrage intelligent (Smart Restart).
-    """
-    qc_mission = f"AUDIT_QUALITE: Le fichier '{filename}' vient d'être généré. Analyse-le. S'il est valide et fonctionnel, réponds par 'SUCCÈS' suivi d'une brève analyse. Sinon, propose un correctif."
-    
-    # 1. Appel Coder (On attend la réponse ici)
-    response = await orchestrator.dispatch_task("coder", {
-        "mission": qc_mission,
-        "context": f"CHEMIN_COMPLET: {filepath}"
-    })
-    
-    # 2. Logique de Mémorisation (Auto-RAG)
-    if response and response.get("status") == "success":
-        result_text = str(response.get("result", "")).upper()
-        
-        # Si le Coder valide explicitement
-        if "SUCCÈS" in result_text or "VALIDE" in result_text or "FONCTIONNE" in result_text:
-            print(f"🧠 [MÉMOIRE] Capitalisation du succès : {filename}")
-            
-            # On demande au Stratège d'indexer ce savoir
-            await orchestrator.dispatch_task("strategist", {
-                "mission": f"MÉMORISATION: Le script '{filename}' est validé et fonctionnel. Ajoute-le à la mémoire collective (collective_wisdom) pour qu'il serve d'exemple futur.",
-                "context": f"FICHIER: {filename}\nCHEMIN: {filepath}\nANALYSE CODER: {result_text[:500]}"
-            })
-
-    # 3. DÉTECTION DE MISE À JOUR SYSTÈME (Smart Restart)
-    # Si le fichier modifié touche au cerveau (Agents, core, ou main), on redémarre APRES le travail.
-    # On vérifie si le chemin contient des dossiers critiques
-    is_system_file = any(k in filepath for k in ["Agents", "core", "main.py", "config.py"])
-    
-    if is_system_file:
-        print(f"🔄 [SYSTÈME] Modification structurelle détectée ({filename}). Redémarrage requis.")
-        print("⏳ Attente de finalisation des tâches (3s)...")
-        await asyncio.sleep(3) # On laisse le temps au Bus de finir ses messages et à la mémoire de s'écrire
-        sys.exit(65) # Ce code signalera à start_nexus.py de relancer la boucle
 
 app = FastAPI(lifespan=lifespan)
 
@@ -190,7 +141,23 @@ async def mission(request: Request, background_tasks: BackgroundTasks):
     # [V13.3] Utilisation du Router dédié
     target = await RouterAgent.classify_intent(msn)
 
-    response = await orchestrator.dispatch_task(target, {"mission": msn})
+    if target == "conseil":
+        from core.council import parse_council_mission
+        council_text = msn.split(":", 1)[1].strip() if ":" in msn else msn
+        parsed = parse_council_mission(council_text)
+        if parsed:
+            response = await orchestrator.dispatch_council(
+                participants=parsed["participants"],
+                mission=parsed["mission"]
+            )
+        else:
+            response = await orchestrator.dispatch_task("strategist", {
+                "mission": f"L'utilisateur a demandé un conseil mais la syntaxe est incorrecte. "
+                           f"Syntaxe attendue: conseil: agent1, agent2 - mission. "
+                           f"Sa demande: {msn}"
+            })
+    else:
+        response = await orchestrator.dispatch_task(target, {"mission": msn})
     
     if response and response.get("status") == "success":
         result_text = str(response.get("result", ""))

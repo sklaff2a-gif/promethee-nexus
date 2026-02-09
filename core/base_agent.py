@@ -66,7 +66,8 @@ class BaseAgent:
         self.has_memory = False
         if ChromaMemoryManager:
             try:
-                self.memory_manager = ChromaMemoryManager.get_instance()
+                project_id = getattr(Config, "PROJECT_ID", "default")
+                self.memory_manager = ChromaMemoryManager.get_instance(project_id=project_id)
                 self.has_memory = True
             except Exception as e:
                 logger.warning(f"[{name}] Connexion mémoire ChromaDB échouée (mode dégradé) : {e}")
@@ -256,8 +257,8 @@ class BaseAgent:
         else:
             self.log_thought(f"🏠 Traitement Local (Économie) : {local_model}", type="info")
 
-        # Exécution Locale
-        return await self._call_ollama(full_prompt, local_model)
+        # Exécution Locale (avec streaming temps réel)
+        return await self._call_ollama_stream(full_prompt, local_model)
 
     async def _call_ollama(self, prompt: str, model: str) -> str:
         try:
@@ -268,6 +269,65 @@ class BaseAgent:
             if response.status_code == 200: return response.json().get("response", "Ollama vide.")
             else: return f"Erreur OLLAMA: {response.status_code}"
         except Exception as e: return "ÉCHEC TOTAL SYSTÈME."
+
+    async def _call_ollama_stream(self, prompt: str, model: str) -> str:
+        """Appel Ollama en streaming avec publication temps réel sur le bus."""
+        stream_id = str(uuid.uuid4())[:8]
+        full_text = ""
+        try:
+            url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
+            payload = { "model": model, "prompt": prompt, "stream": True, "options": { "temperature": 0.7, "num_ctx": 4096 } }
+
+            # Signal de début
+            await bus.publish("AGENT_STREAM", {
+                "agent": self.name, "stream_id": stream_id,
+                "chunk": "", "done": False, "status": "start"
+            })
+
+            async with httpx.AsyncClient() as client:
+                async with client.stream("POST", url, json=payload, timeout=300) as response:
+                    if response.status_code != 200:
+                        await bus.publish("AGENT_STREAM", {
+                            "agent": self.name, "stream_id": stream_id,
+                            "chunk": "", "done": True, "status": "end"
+                        })
+                        return f"Erreur OLLAMA: {response.status_code}"
+
+                    async for line in response.aiter_lines():
+                        if not line.strip():
+                            continue
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        token = data.get("response", "")
+                        if token:
+                            full_text += token
+                            await bus.publish("AGENT_STREAM", {
+                                "agent": self.name, "stream_id": stream_id,
+                                "chunk": token, "done": False
+                            })
+                        if data.get("done", False):
+                            break
+
+            # Signal de fin
+            await bus.publish("AGENT_STREAM", {
+                "agent": self.name, "stream_id": stream_id,
+                "chunk": "", "done": True, "status": "end"
+            })
+            return full_text or "Ollama vide."
+
+        except Exception as e:
+            logger.error(f"[{self.name}] Erreur streaming Ollama : {e}")
+            # Toujours envoyer le signal de fin pour fermer la bulle frontend
+            try:
+                await bus.publish("AGENT_STREAM", {
+                    "agent": self.name, "stream_id": stream_id,
+                    "chunk": "", "done": True, "status": "end"
+                })
+            except Exception:
+                pass
+            return full_text or "ÉCHEC TOTAL SYSTÈME."
 
     def log_thought(self, message: str, type: str = "info"):
         self.logger.info(f"[{self.name.upper()}] {message[:100]}...")

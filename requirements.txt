@@ -9,5 +9,6 @@ web3
 google-search-results
 duckduckgo-search
 httpx
+chromadb
 pytest
 pytest-asyncio

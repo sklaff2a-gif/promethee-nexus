@@ -59,6 +59,7 @@ class Config:
         "researcher": "qwen3-vl:8b"
     }
     
+    PROJECT_ID = os.getenv("PROJECT_ID", "default")
     CHROMA_PERSIST_PATH = os.getenv("CHROMA_DB_PATH", "./memory/chroma_db")
 
     if not GOOGLE_API_KEY:

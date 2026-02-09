@@ -62,6 +62,16 @@
         .dot-active { color: #22c55e !important; text-shadow: 0 0 8px #22c55e; }
         .dot-inactive { color: #374151; }
 
+        /* STREAMING CURSOR */
+        .cursor {
+            display: inline;
+            animation: blink 0.7s step-end infinite;
+            color: #00ff41;
+            font-weight: bold;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+        .stream-content { display: inline; white-space: pre-wrap; word-break: break-word; }
+
     </style>
 </head>
 <body class="h-screen w-screen flex flex-col p-1 gap-1">
