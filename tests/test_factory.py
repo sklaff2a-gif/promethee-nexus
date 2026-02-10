@@ -2,7 +2,7 @@ import pytest
 import os
 import tempfile
 from unittest.mock import patch, AsyncMock, MagicMock
-from Agents.factory_agent import _FILENAME_STOPLIST
+from Agents.factory_agent import _FILENAME_STOPLIST, _PROTECTED_FILES
 
 
 class TestFactorySandboxing:
@@ -246,3 +246,34 @@ class TestFactoryFilenameValidation:
                 mock_bus.publish = AsyncMock()
                 result = await factory.process_task(payload)
             assert result["status"] == "success"
+
+
+class TestFactoryProtectedFiles:
+    """Vérifie que les fichiers système critiques ne peuvent pas être écrasés."""
+
+    @pytest.fixture
+    def factory(self):
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            from Agents.factory_agent import DivineFactory
+            return DivineFactory()
+
+    @pytest.mark.parametrize("protected", [
+        "core/base_agent.py",
+        "core/orchestrator.py",
+        "main.py",
+        "config.py",
+    ])
+    @pytest.mark.asyncio
+    async def test_reject_protected_file(self, factory, protected):
+        """L'écriture dans un fichier protégé doit être refusée."""
+        payload = {
+            "mission": f"écris {protected}",
+            "context": "```python\nimport os\nprint('pwned')\n```"
+        }
+        result = await factory.process_task(payload)
+        assert result["status"] == "error"
+        assert "protégé" in result["result"].lower() or "Protégé" in result["result"]
+
+    @pytest.mark.asyncio
+    async def test_protected_list_not_empty(self):
+        assert len(_PROTECTED_FILES) >= 10

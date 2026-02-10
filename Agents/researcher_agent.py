@@ -25,11 +25,17 @@ class DivineResearcher(BaseAgent):
 
     async def process_task(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
         mission = task_payload.get("mission", "")
+        context = task_payload.get("context", "")
         self.log_thought(f"🔍 Mission reçue : {mission[:50]}...", type="thought")
-        
+
         # --- 1. MODE INGESTION LOCALE (Dropzone) ---
-        if "dropzone" in mission.lower() or "scan" in mission.lower() or "lecture" in mission.lower():
-            return await self._run_ingestion_routine()
+        # Guard : si on est appelé PAR le pipeline (context DROPZONE_ANALYSIS),
+        # ne pas re-déclencher le pipeline (sinon boucle infinie).
+        # On ne cherche les mots-clés que dans les 200 premiers chars (pas le contenu des fichiers).
+        if not context.startswith("DROPZONE_ANALYSIS"):
+            mission_header = mission[:200].lower()
+            if "dropzone" in mission_header:
+                return await self._run_ingestion_routine()
 
         # --- 2. MODE RECHERCHE WEB (Par défaut ou explicite) ---
         # Si la mission contient des mots de recherche OU si aucune autre action n'est détectée

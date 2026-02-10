@@ -1,4 +1,5 @@
 import os
+import shutil
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from core.dropzone_pipeline import DropzonePipeline
@@ -151,3 +152,81 @@ class TestPipelineIntegration:
         # (1 si la dédup fonctionne correctement au niveau batch, 2 si un par projet)
         # L'important : le deuxième projet ne ré-analyse pas les mêmes fichiers
         assert len(coder_calls) >= 1
+
+
+class TestArchiveProcessed:
+
+    @pytest.mark.asyncio
+    async def test_archive_moves_files(self, mock_orchestrator, tmp_path):
+        """Après le pipeline, les fichiers sources doivent être déplacés dans processed/."""
+        _create_project(tmp_path, "MoveTest", {"app.py": "print('hello')"})
+
+        pipeline = DropzonePipeline(mock_orchestrator)
+        await pipeline.run(str(tmp_path))
+
+        # Les fichiers originaux ne doivent plus être à leur emplacement d'origine
+        assert not os.path.exists(tmp_path / "MoveTest" / "app.py")
+        # Ils doivent être dans processed/batch_*/
+        processed_dir = tmp_path / "processed"
+        assert processed_dir.exists()
+        batch_dirs = [d for d in processed_dir.iterdir() if d.name.startswith("batch_")]
+        assert len(batch_dirs) == 1
+
+    @pytest.mark.asyncio
+    async def test_second_run_finds_nothing(self, mock_orchestrator, tmp_path):
+        """Un 2e run après archivage ne doit trouver aucun fichier."""
+        _create_project(tmp_path, "OnceOnly", {"code.py": "x = 1"})
+
+        pipeline = DropzonePipeline(mock_orchestrator)
+        await pipeline.run(str(tmp_path))
+
+        # Reset les mocks pour le 2e run
+        mock_orchestrator.dispatch_task.reset_mock()
+        mock_orchestrator.dispatch_council.reset_mock()
+
+        result = await pipeline.run(str(tmp_path))
+        assert result["status"] == "warning"
+        assert result["analyses"] == 0
+        mock_orchestrator.dispatch_task.assert_not_called()
+
+
+class TestResearcherAntiLoop:
+
+    @pytest.mark.asyncio
+    async def test_dropzone_context_blocks_pipeline(self):
+        """Le Researcher ne doit PAS relancer le pipeline quand context=DROPZONE_ANALYSIS."""
+        from Agents.researcher_agent import DivineResearcher
+
+        researcher = DivineResearcher()
+        # Mock generate_content et surfer pour éviter les vrais appels
+        researcher.generate_content = AsyncMock(return_value="Synthèse test")
+        researcher.surfer = MagicMock()
+        researcher.surfer.search = MagicMock(return_value="résultats web")
+
+        # Simuler un appel du pipeline avec le mot "scan" dans le contenu
+        result = await researcher.process_task({
+            "mission": "SYNTHÈSE DOCUMENTAIRE — Projet 'WebScanner'\nCode avec scan_interval...",
+            "context": "DROPZONE_ANALYSIS:WebScanner"
+        })
+
+        # Le researcher doit faire une recherche web, PAS relancer le pipeline
+        assert result["status"] == "success"
+        researcher.surfer.search.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dropzone_keyword_triggers_pipeline(self):
+        """Le mot 'dropzone' dans une mission normale DOIT déclencher le pipeline."""
+        from Agents.researcher_agent import DivineResearcher
+
+        researcher = DivineResearcher()
+
+        with patch("Agents.researcher_agent.DivineResearcher._run_ingestion_routine",
+                    new_callable=AsyncMock) as mock_routine:
+            mock_routine.return_value = {"status": "success", "result": "Done"}
+
+            result = await researcher.process_task({
+                "mission": "dropzone: Scanne la dropzone pour de nouveaux fichiers.",
+                "context": "PROTOCOLE_AUTONOMIE"
+            })
+
+            mock_routine.assert_called_once()

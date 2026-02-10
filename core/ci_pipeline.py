@@ -171,9 +171,21 @@ async def run_pipeline(filename: str, filepath: str):
             f"Inspire-toi de ces patterns validés.\n"
         )
 
+    # Contexte d'imports pour le LLM
+    import_hint = (
+        f"CONTEXTE IMPORTS DU PROJET :\n"
+        f"- Le fichier testé est : {filename} (chemin complet : {filepath})\n"
+        f"- Pour importer depuis Agents/ : `from Agents.factory_agent import DivineFactory`\n"
+        f"- Pour importer depuis core/ : `from core.base_agent import BaseAgent`\n"
+        f"- Pour importer depuis core/grimoire/ : `from core.grimoire.data_analyst import DataAnalyst`\n"
+        f"- NE PAS utiliser `import nom_fichier` directement — toujours `from dossier.module import Classe`\n"
+        f"- Pour les dépendances externes (ChromaDB, httpx, etc.), utilise des mocks.\n"
+    )
+
     test_prompt = (
         f"Génère des tests pytest pour le code suivant. "
         f"Réponds UNIQUEMENT avec un bloc de code Python contenant les tests.\n"
+        f"{import_hint}\n"
         f"{memory_context}\n"
         f"```python\n{source_code}\n```"
     )
@@ -212,7 +224,24 @@ async def run_pipeline(filename: str, filepath: str):
         "status": "success", "detail": "Tests générés"
     })
 
-    # 3. Écriture des tests dans tests/auto/
+    # 3. Validation syntaxique du code de test AVANT écriture
+    try:
+        compile(test_code, "<generated_test>", "exec")
+    except SyntaxError as e:
+        detail = f"Code test invalide (SyntaxError ligne {e.lineno}): {e.msg}"
+        await bus.publish("CI_PIPELINE_STEP", {
+            "filename": filename, "step": "test_validation",
+            "status": "error", "detail": detail
+        })
+        _remember_failure(filename, source_code, "test_validation", detail)
+        # PAS de rollback : le code source n'est pas en cause
+        await bus.publish("CI_PIPELINE_RESULT", {
+            "filename": filename, "success": False,
+            "detail": f"Tests auto-générés invalides — source conservée"
+        })
+        return
+
+    # 3b. Écriture des tests dans tests/auto/
     os.makedirs(AUTO_TESTS_DIR, exist_ok=True)
     slug = _slugify_filename(filepath)
     test_file = os.path.join(AUTO_TESTS_DIR, f"test_{slug}.py")
@@ -229,11 +258,21 @@ async def run_pipeline(filename: str, filepath: str):
 
     if not success:
         _remember_failure(filename, source_code, "test_execution", output[-500:])
-        _rollback(filepath)
-        await bus.publish("CI_PIPELINE_RESULT", {
-            "filename": filename, "success": False,
-            "detail": f"Tests échoués — rollback effectué"
-        })
+
+        # Distinguer : erreur d'import (test cassé) vs assertion (bug dans le source)
+        is_test_broken = "ImportError" in output or "ModuleNotFoundError" in output or "SyntaxError" in output
+        if is_test_broken:
+            logger.warning(f"[CI/CD] Tests auto-générés défaillants (import/syntax) — PAS de rollback pour {filename}")
+            await bus.publish("CI_PIPELINE_RESULT", {
+                "filename": filename, "success": False,
+                "detail": f"Tests auto-générés défaillants — source conservée"
+            })
+        else:
+            _rollback(filepath)
+            await bus.publish("CI_PIPELINE_RESULT", {
+                "filename": filename, "success": False,
+                "detail": f"Tests échoués — rollback effectué"
+            })
         return
 
     # 5. Validation Architect (appel DIRECT)

@@ -341,7 +341,7 @@ class BaseAgent:
             return full_text or "Ollama vide."
 
         except Exception as e:
-            logger.error(f"[{self.name}] Erreur streaming Ollama : {e}")
+            logger.error(f"[{self.name}] Erreur streaming Ollama ({type(e).__name__}): {e}")
             # Toujours envoyer le signal de fin pour fermer la bulle frontend
             try:
                 await bus.publish("AGENT_STREAM", {

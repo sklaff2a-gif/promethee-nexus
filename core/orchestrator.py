@@ -87,8 +87,12 @@ class Orchestrator:
                 del agent
                 logger.info(f"👻 [GRIMOIRE] Eidolon '{target_slug}' dissipé.")
 
+            # --- Guard : pas de réactions en chaîne pour les analyses Dropzone ---
+            task_context = str(task_payload.get("context", ""))
+            is_dropzone = task_context.startswith("DROPZONE_ANALYSIS")
+
             # --- [V17.0] LE PONT D'EXÉCUTION (Architecte -> Factory) ---
-            if target_slug == "architect" and response.get("status") == "success":
+            if target_slug == "architect" and response.get("status") == "success" and not is_dropzone:
                 res_text = str(response.get("result", ""))
 
                 if self._is_validated(res_text):
@@ -105,7 +109,7 @@ class Orchestrator:
                         logger.warning("⚠️ [BRIDGE] Validation reçue mais aucun code Python structurel trouvé dans le contexte.")
 
             # --- [V16.3] RÉACTION EN CHAÎNE (Evolution/Coder -> Architecte) ---
-            if target_slug in ["evolution", "coder"] and response.get("status") == "success":
+            if target_slug in ["evolution", "coder"] and response.get("status") == "success" and not is_dropzone:
                 result_text = str(response.get("result", ""))
                 if self._contains_python_code(result_text):
                     logger.info("⚡ DÉCLENCHEMENT ARCHITECTE...")

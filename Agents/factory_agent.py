@@ -10,6 +10,16 @@ logger = logging.getLogger("factory_agent")
 ALLOWED_EXTENSIONS = {".py", ".txt", ".md", ".json", ".js", ".html", ".css", ".yaml", ".yml", ".toml", ".cfg"}
 MAX_FILE_SIZE = 100 * 1024  # 100 KB
 
+# Fichiers système critiques : le Factory ne doit JAMAIS les écraser via une chaîne automatique.
+# Seul un ordre utilisateur direct (Niveau 0 : "factory: écris ...") peut contourner cette protection.
+_PROTECTED_FILES = {
+    "main.py", "config.py", "guardian.py", "start_nexus.py", "emergency_restore.py",
+    "core/orchestrator.py", "core/base_agent.py", "core/router.py",
+    "core/summoner.py", "core/event_bus/bus.py", "core/autonomy_engine.py",
+    "core/council.py", "core/vector_store.py", "core/grimoire_writer.py",
+    "core/ci_pipeline.py",
+}
+
 # Mots français/anglais courants que la regex de détection capture par erreur
 # quand elle parse du texte LLM libre (ex: "fichier de données" → capture "de")
 _FILENAME_STOPLIST = {
@@ -163,6 +173,12 @@ class DivineFactory(BaseAgent):
         if target_path and code_content:
             if len(code_content) < 5:
                 return {"status": "error", "result": "Code détecté trop court (Faux positif probable)."}
+
+            # Sandboxing : fichiers protégés (seul un ordre direct Niveau 0 peut les modifier)
+            normalized = target_path.replace("\\", "/")
+            if normalized in _PROTECTED_FILES:
+                logger.warning(f"[FACTORY] 🛡️ PROTÉGÉ : {target_path} — écriture refusée (fichier système critique)")
+                return {"status": "error", "result": f"Fichier protégé : {target_path}. Écriture refusée."}
 
             # Sandboxing : vérification extension
             ext = os.path.splitext(target_path)[1].lower()

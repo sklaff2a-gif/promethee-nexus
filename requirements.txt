@@ -7,7 +7,7 @@ psutil
 cryptography
 web3
 google-search-results
-duckduckgo-search
+ddgs
 httpx
 chromadb
 pytest

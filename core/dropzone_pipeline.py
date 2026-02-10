@@ -250,23 +250,53 @@ class DropzonePipeline:
         return "\n".join(parts)
 
     def _archive_processed(self, dropzone_path, manifest):
-        """Crée un rapport d'archivage dans processed/."""
+        """Déplace les fichiers traités dans processed/ pour éviter le re-scan."""
         processed_dir = os.path.join(dropzone_path, "processed")
-        os.makedirs(processed_dir, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        batch_dir = os.path.join(processed_dir, f"batch_{timestamp}")
+        os.makedirs(batch_dir, exist_ok=True)
 
-        report_path = os.path.join(
-            processed_dir,
-            f"ingestion_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-        )
+        moved_count = 0
+        for project in manifest["projects"]:
+            for f in project.get("files", []):
+                src = os.path.join(dropzone_path, f["rel_path"].replace("/", os.sep))
+                if not os.path.exists(src):
+                    continue
+                # Conserver la structure de dossiers dans le batch
+                dest = os.path.join(batch_dir, f["rel_path"].replace("/", os.sep))
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                try:
+                    shutil.move(src, dest)
+                    moved_count += 1
+                except Exception as e:
+                    logger.warning(f"Impossible de déplacer {src}: {e}")
+
+        # Nettoyer les dossiers vides restants (hors processed/)
+        for dirpath, dirnames, filenames in os.walk(dropzone_path, topdown=False):
+            abs_dir = os.path.abspath(dirpath)
+            if abs_dir.startswith(os.path.abspath(processed_dir)):
+                continue
+            if abs_dir == os.path.abspath(dropzone_path):
+                continue
+            if not filenames and not dirnames:
+                try:
+                    os.rmdir(dirpath)
+                except OSError:
+                    pass
+
+        # Écrire le rapport dans le batch
+        report_path = os.path.join(batch_dir, "ingestion_report.txt")
         try:
             summary = manifest["summary"]
-            with open(report_path, "w", encoding="utf-8") as f:
-                f.write(f"RAPPORT D'INGESTION DROPZONE 2.0\n")
-                f.write(f"Date: {manifest['scan_date']}\n")
-                f.write(f"Projets: {summary['total_projects']}\n")
-                f.write(f"Fichiers totaux: {summary['total_files']}\n")
-                f.write(f"Fichiers uniques: {summary['unique_files']}\n")
-                f.write(f"Doublons ignorés: {summary['duplicates']}\n")
-            logger.info(f"📄 Rapport d'ingestion sauvé : {report_path}")
+            with open(report_path, "w", encoding="utf-8") as fh:
+                fh.write(f"RAPPORT D'INGESTION DROPZONE 2.0\n")
+                fh.write(f"Date: {manifest['scan_date']}\n")
+                fh.write(f"Projets: {summary['total_projects']}\n")
+                fh.write(f"Fichiers totaux: {summary['total_files']}\n")
+                fh.write(f"Fichiers uniques: {summary['unique_files']}\n")
+                fh.write(f"Doublons ignorés: {summary['duplicates']}\n")
+                fh.write(f"Fichiers déplacés: {moved_count}\n")
         except Exception as e:
             logger.warning(f"Impossible de sauver le rapport : {e}")
+
+        logger.info(f"📦 Archivage terminé : {moved_count} fichiers déplacés dans {batch_dir}")
