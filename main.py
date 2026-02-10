@@ -8,10 +8,12 @@ import os
 import asyncio
 import json
 import importlib
+import time
 import uvicorn
 import tracemalloc
 import secrets
 import sys
+import httpx
 from core.orchestrator import orchestrator
 from core.event_bus.bus import bus
 from core.autonomy_engine import autonomy
@@ -19,14 +21,64 @@ from core.router import RouterAgent
 from core import talk_logger
 from core import ci_pipeline
 
+# --- RATE LIMITING ---
+class RateLimiter:
+    """Sliding window par IP. Zéro dépendance externe."""
+
+    def __init__(self, max_requests: int = 10, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window = window_seconds
+        self._hits: dict[str, list[float]] = {}
+
+    def _cleanup(self, now: float):
+        """Purge les IPs inactives (> 2× la fenêtre)."""
+        stale = [ip for ip, ts in self._hits.items() if ts and now - ts[-1] > self.window * 2]
+        for ip in stale:
+            del self._hits[ip]
+
+    def check(self, ip: str) -> tuple[bool, int]:
+        """Retourne (autorisé, secondes_avant_retry). Thread-safe pour asyncio single-thread."""
+        now = time.time()
+        cutoff = now - self.window
+        hits = self._hits.get(ip, [])
+        hits = [t for t in hits if t > cutoff]
+        if len(hits) >= self.max_requests:
+            retry_after = int(hits[0] - cutoff) + 1
+            self._hits[ip] = hits
+            return False, retry_after
+        hits.append(now)
+        self._hits[ip] = hits
+        if len(self._hits) > 1000:
+            self._cleanup(now)
+        return True, 0
+
+_rate_limiter = RateLimiter(
+    max_requests=int(os.getenv("RATE_LIMIT_MAX", "10")),
+    window_seconds=int(os.getenv("RATE_LIMIT_WINDOW", "60")),
+)
+
+async def check_rate_limit(request: Request):
+    """Dépendance FastAPI : bloque si le client dépasse la limite."""
+    ip = request.client.host if request.client else "unknown"
+    allowed, retry_after = _rate_limiter.check(ip)
+    if not allowed:
+        from fastapi.responses import JSONResponse
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Max {_rate_limiter.max_requests} requests per {_rate_limiter.window}s.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
 # --- AUTHENTIFICATION API ---
 API_SECRET_KEY = os.getenv("API_SECRET_KEY", "")
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Vérifie le token Bearer sur les endpoints API."""
     if not API_SECRET_KEY:
         return  # Pas de clé configurée = mode ouvert (dev local)
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Token requis")
     if not secrets.compare_digest(credentials.credentials, API_SECRET_KEY):
         raise HTTPException(status_code=401, detail="Token invalide")
 
@@ -87,6 +139,7 @@ async def nervous_system_listener(event: dict):
         asyncio.create_task(orchestrator.dispatch_task(target, payload))
 
 app = FastAPI(lifespan=lifespan)
+_start_time = time.time()
 
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -97,6 +150,83 @@ async def root():
         with open("static/index.html", "r", encoding="utf-8") as f:
             return HTMLResponse(f.read())
     return HTMLResponse("<h1>UI Loading...</h1>")
+
+@app.get("/health")
+async def health():
+    from config import Config
+    from core.vector_store import ChromaMemoryManager
+    uptime = time.time() - _start_time
+    agents = list(orchestrator.agents.keys())
+    memory_ok = bool(ChromaMemoryManager._instances)
+    return {
+        "status": "degraded" if orchestrator.kill_switch_active else "ok",
+        "version": Config.VERSION,
+        "uptime_seconds": round(uptime, 1),
+        "agents": agents,
+        "agents_count": len(agents),
+        "kill_switch": orchestrator.kill_switch_active,
+        "memory_available": memory_ok,
+    }
+
+@app.get("/ready")
+async def ready():
+    from config import Config
+    from core.vector_store import ChromaMemoryManager
+
+    checks = {}
+
+    # --- Ollama ---
+    ollama_base = Config.OLLAMA_URL.rsplit("/", 2)[0]  # http://localhost:11434
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{ollama_base}/api/tags", timeout=3.0)
+        if resp.status_code == 200:
+            models = [m["name"] for m in resp.json().get("models", [])]
+            checks["ollama"] = {"status": "ok", "models_loaded": len(models), "models": models}
+        else:
+            checks["ollama"] = {"status": "error", "detail": f"HTTP {resp.status_code}"}
+    except httpx.ConnectError:
+        checks["ollama"] = {"status": "error", "detail": "connection_refused"}
+    except Exception as e:
+        checks["ollama"] = {"status": "error", "detail": str(e)}
+
+    # --- ChromaDB ---
+    try:
+        instances = ChromaMemoryManager._instances
+        if not instances:
+            checks["chromadb"] = {"status": "error", "detail": "no_instance"}
+        else:
+            mgr = next(iter(instances.values()))
+            col = mgr._get_collection("collective_wisdom")
+            doc_count = col.count()
+            checks["chromadb"] = {"status": "ok", "project": mgr.project_id, "documents": doc_count}
+    except Exception as e:
+        checks["chromadb"] = {"status": "error", "detail": str(e)}
+
+    all_ok = all(c["status"] == "ok" for c in checks.values())
+    status_code = 200 if all_ok else 503
+
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "ready": all_ok,
+            "checks": checks,
+        },
+    )
+
+@app.get("/api/dropzone/status")
+async def dropzone_status():
+    """Retourne l'état de la dropzone (fichiers en attente)."""
+    from core.capabilities.dropzone_indexer import DropzoneIndexer
+    indexer = DropzoneIndexer()
+    pending = indexer.quick_count("USER_DROPZONE")
+    return {"pending_files": pending, "dropzone_path": "USER_DROPZONE/"}
+
+@app.get("/api/autonomy/status")
+async def autonomy_status():
+    """Retourne l'état complet du moteur d'autonomie."""
+    return autonomy.get_status()
 
 @app.post("/api/override", dependencies=[Depends(verify_token)])
 async def api_override(request: Request):
@@ -132,7 +262,7 @@ async def strategic_feedback_loop(agent_name: str, mission: str, result: str):
         "context": strategy_proposal
     })
 
-@app.post("/api/mission", dependencies=[Depends(verify_token)])
+@app.post("/api/mission", dependencies=[Depends(check_rate_limit), Depends(verify_token)])
 async def mission(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
     msn = data.get("mission", "")

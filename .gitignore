@@ -2,7 +2,8 @@
 __pycache__/
 *.pyc
 *.bak
-memory/chroma_db/
+memory/
 .pytest_cache/
 USER_DROPZONE/
 _FACTORY_HISTORY.txt
+log run copie/

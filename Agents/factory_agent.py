@@ -10,6 +10,29 @@ logger = logging.getLogger("factory_agent")
 ALLOWED_EXTENSIONS = {".py", ".txt", ".md", ".json", ".js", ".html", ".css", ".yaml", ".yml", ".toml", ".cfg"}
 MAX_FILE_SIZE = 100 * 1024  # 100 KB
 
+# Mots français/anglais courants que la regex de détection capture par erreur
+# quand elle parse du texte LLM libre (ex: "fichier de données" → capture "de")
+_FILENAME_STOPLIST = {
+    # Articles / déterminants français
+    "le", "la", "les", "un", "une", "des", "de", "du", "au", "aux",
+    "ce", "ces", "mon", "ton", "son", "notre", "votre", "leur",
+    # Conjonctions / prépositions
+    "et", "ou", "ni", "mais", "donc", "car", "que", "qui", "quoi",
+    "dans", "pour", "par", "sur", "sous", "avec", "sans", "entre",
+    # Verbes / adverbes courants
+    "en", "est", "sont", "fait", "sera", "avoir",
+    "pas", "plus", "moins", "bien", "mal",
+    "tout", "tous", "rien", "autre", "aussi",
+    # Noms courants captés comme faux positifs (cf. _FACTORY_HISTORY.txt)
+    "cible", "contient", "suivant", "nouveau", "nouvelle", "fichier",
+    "texte", "analyse", "route", "sortie", "entree", "resultat",
+    # Mots-clés Python (pas des noms de fichiers)
+    "try", "except", "import", "from", "class", "def", "return",
+    "if", "else", "elif", "for", "while", "with", "as", "is", "not",
+    "and", "or", "in", "true", "false", "none", "pass", "break",
+    "continue", "raise", "yield", "lambda", "global", "nonlocal",
+}
+
 class DivineFactory(BaseAgent):
     """
     DivineFactory V26.0 (Smart Path Resolver + Sandboxing)
@@ -60,6 +83,26 @@ class DivineFactory(BaseAgent):
             
         return None
 
+    def _is_valid_target_path(self, filename: str) -> bool:
+        """
+        Valide qu'un nom extrait est un vrai chemin de fichier,
+        pas un mot français/anglais capturé par la regex dans du texte LLM.
+        Règles :
+          1. Pas dans la stoplist
+          2. Doit avoir une extension (un point dans le basename) OU un séparateur de chemin
+        L'extension autorisée est vérifiée plus tard dans process_task (sandboxing).
+        """
+        if not filename:
+            return False
+        if filename.lower() in _FILENAME_STOPLIST:
+            return False
+        basename = os.path.basename(filename.replace("\\", "/"))
+        has_extension = "." in basename
+        has_path_sep = "/" in filename or "\\" in filename
+        if not has_extension and not has_path_sep:
+            return False
+        return True
+
     def _resolve_smart_path(self, filename: str) -> str:
         """
         Intelligence Géographique : Si le chemin est relatif simple (ex: 'toto.py'),
@@ -93,13 +136,21 @@ class DivineFactory(BaseAgent):
         target_path = None
         
         if path_match:
-            target_path = path_match.group(1).strip().strip("'").strip('"')
+            candidate = path_match.group(1).strip().strip("'").strip('"')
+            if self._is_valid_target_path(candidate):
+                target_path = candidate
+            else:
+                logger.info(f"[FACTORY] Path rejeté (faux positif regex) : '{candidate}'")
         elif "FICHIER:" in context:
             try:
-                target_path = context.split("FICHIER:")[1].split()[0].strip()
+                candidate = context.split("FICHIER:")[1].split()[0].strip()
+                if self._is_valid_target_path(candidate):
+                    target_path = candidate
+                else:
+                    logger.info(f"[FACTORY] Path rejeté (faux positif FICHIER:) : '{candidate}'")
             except Exception as e:
                 logger.warning(f"[FACTORY] Échec parsing chemin FICHIER: {e}")
-        
+
         # APPLICATION INTELLIGENCE GÉOGRAPHIQUE
         if target_path:
             target_path = self._resolve_smart_path(target_path)

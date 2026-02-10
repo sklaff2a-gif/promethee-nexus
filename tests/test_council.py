@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from core.council import Council, parse_council_mission, _is_consensus
+from core.council import Council, parse_council_mission, _is_consensus, _strip_markdown_prefix
 from core.orchestrator import Orchestrator
 from core.event_bus.bus import bus
 
@@ -74,6 +74,52 @@ class TestConsensus:
     def test_chaine_vide(self):
         assert _is_consensus("") is False
 
+    # --- Variantes markdown (bug fix V24) ---
+
+    def test_consensus_markdown_bold(self):
+        """**CONSENSUS** en gras markdown."""
+        assert _is_consensus("**CONSENSUS** La solution est robuste.") is True
+
+    def test_consensus_markdown_bold_with_colon(self):
+        """**CONSENSUS :** gras + deux-points."""
+        assert _is_consensus("**CONSENSUS :** Approuvé.") is True
+
+    def test_consensus_markdown_h2(self):
+        """## CONSENSUS en header markdown."""
+        assert _is_consensus("## CONSENSUS") is True
+
+    def test_consensus_markdown_h3(self):
+        """### CONSENSUS en header markdown."""
+        assert _is_consensus("### CONSENSUS\nTout est validé.") is True
+
+    def test_consensus_markdown_h1(self):
+        """# CONSENSUS en header markdown."""
+        assert _is_consensus("# CONSENSUS") is True
+
+    def test_approuve_markdown_bold(self):
+        """**APPROUVÉ** en gras."""
+        assert _is_consensus("**APPROUVÉ**") is True
+
+    def test_consensus_markdown_italic(self):
+        """*CONSENSUS* en italique."""
+        assert _is_consensus("*CONSENSUS* je valide.") is True
+
+    def test_consensus_markdown_blockquote(self):
+        """> CONSENSUS en blockquote."""
+        assert _is_consensus("> CONSENSUS trouvé.") is True
+
+    def test_non_consensus_markdown_bold(self):
+        """**Analyse** ne doit pas matcher."""
+        assert _is_consensus("**Analyse** détaillée du problème.") is False
+
+    def test_strip_markdown_prefix_double_bold(self):
+        """Vérifie le stripping de **texte**."""
+        assert _strip_markdown_prefix("**CONSENSUS**") == "CONSENSUS"
+
+    def test_strip_markdown_prefix_header(self):
+        """Vérifie le stripping de ## texte."""
+        assert _strip_markdown_prefix("## CONSENSUS final") == "CONSENSUS final"
+
 
 # ============================================================
 # TESTS DEBAT (Council.run)
@@ -119,6 +165,34 @@ class TestCouncilRun:
 
         assert result["status"] == "consensus"
         assert result["rounds_used"] == 2
+
+    @pytest.mark.asyncio
+    async def test_consensus_markdown_stops_at_round_2(self):
+        """Bug fix V24: les agents envoient CONSENSUS en markdown, le débat doit s'arrêter."""
+        # Tour 1 : contributions normales. Tour 2 : consensus en markdown.
+        researcher_responses = [
+            "Voici mes trouvailles sur les agents IA.",
+            "## CONSENSUS\nLes 3 candidats sont validés.",
+        ]
+        strategist_responses = [
+            "L'analyse est pertinente mais incomplète.",
+            "**CONSENSUS** La feuille de route est approuvée.",
+        ]
+        evolution_responses = [
+            "### CRITIQUE\nIl manque l'aspect adaptatif.",
+            "**CONSENSUS :** J'approuve avec les amendements.",
+        ]
+
+        agents = {
+            "researcher": self._make_mock_agent(researcher_responses),
+            "strategist": self._make_mock_agent(strategist_responses),
+            "evolution": self._make_mock_agent(evolution_responses),
+        }
+        council = Council(agents, ["researcher", "strategist", "evolution"], "test", max_rounds=5)
+        result = await council.run()
+
+        assert result["status"] == "consensus"
+        assert result["rounds_used"] == 2  # Arrêt au tour 2, pas 5
 
     @pytest.mark.asyncio
     async def test_consensus_partiel_ne_suffit_pas(self):

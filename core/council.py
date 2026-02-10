@@ -12,9 +12,25 @@ logger = logging.getLogger("Council")
 CONSENSUS_MARKERS = ("CONSENSUS", "APPROUVE", "APPROUVÉ", "ACCORD FINAL")
 
 
+def _strip_markdown_prefix(text: str) -> str:
+    """Retire les préfixes markdown courants (#, *, >, -) en début de texte."""
+    cleaned = text.strip()
+    # Retirer les headers markdown (##, ###, etc.)
+    cleaned = re.sub(r'^#{1,6}\s*', '', cleaned)
+    # Retirer le gras/italique AUTOUR du premier mot (ex: **CONSENSUS**)
+    cleaned = re.sub(r'^[\*_]{1,3}(.+?)[\*_]{1,3}', r'\1', cleaned)
+    # Retirer le gras/italique en préfixe seul (ex: **CONSENSUS suite)
+    cleaned = re.sub(r'^[\*_]{1,3}\s*', '', cleaned)
+    # Retirer les blockquotes (>)
+    cleaned = re.sub(r'^>\s*', '', cleaned)
+    # Retirer les tirets de liste (- )
+    cleaned = re.sub(r'^-\s+', '', cleaned)
+    return cleaned.strip()
+
+
 def _is_consensus(text: str) -> bool:
-    """Vérifie que la réponse COMMENCE par un marqueur de consensus."""
-    cleaned = text.strip().upper()
+    """Vérifie que la réponse COMMENCE par un marqueur de consensus (tolère le markdown)."""
+    cleaned = _strip_markdown_prefix(text).upper()
     return any(cleaned.startswith(marker) for marker in CONSENSUS_MARKERS)
 
 

@@ -40,7 +40,7 @@ class BaseAgent:
     """
     Classe Mère V21.0 - Full Architecture + Budget Cloud
     - Stratégie : Local First & Cloud Escalation (Stricte)
-    - Mémoire : RAG & Anti-Spam
+    - Mémoire : RAG & Anti-Spam + Decay Temporel
     - Interface : Publication temps réel sur le Bus
     - Budget : Compteur d'appels Cloud partagé entre agents
     """
@@ -48,6 +48,9 @@ class BaseAgent:
     _cloud_call_count = 0
     _cloud_call_reset_time = time.time()
     MAX_CLOUD_CALLS_PER_HOUR = 100
+
+    # Demi-vie mémoire en jours (surchargeable par agent)
+    MEMORY_HALF_LIFE_DAYS = 30
 
     def __init__(self, name: str, role: str, description: str):
         self.name = name
@@ -116,9 +119,29 @@ class BaseAgent:
     def recall(self, query: str, limit: int = 2, collection="collective_wisdom") -> str:
         if not self.has_memory: return ""
         try:
-            res = self.memory_manager.query_documents([query], n_results=limit, collection_name=collection)
-            if res and res['documents'] and res['documents'][0]:
-                return "\n".join(res['documents'][0])
+            import math
+            fetch_count = limit * 3
+            res = self.memory_manager.query_with_metadata(
+                [query], n_results=fetch_count, collection_name=collection
+            )
+            if not (res and res['documents'] and res['documents'][0]):
+                return ""
+
+            now = time.time()
+            scored = []
+            for doc, meta, dist in zip(
+                res['documents'][0], res['metadatas'][0], res['distances'][0]
+            ):
+                similarity = max(0.0, 1.0 - dist)
+                try:
+                    age_days = (now - float(meta.get("timestamp", 0))) / 86400
+                except (ValueError, TypeError):
+                    age_days = self.MEMORY_HALF_LIFE_DAYS
+                decay = math.exp(-age_days * 0.693 / self.MEMORY_HALF_LIFE_DAYS)
+                scored.append((doc, similarity * decay))
+
+            scored.sort(key=lambda x: x[1], reverse=True)
+            return "\n".join(doc for doc, _ in scored[:limit])
         except Exception as e:
             logger.warning(f"[{self.name}] Échec recall mémoire ({collection}) : {e}")
         return ""

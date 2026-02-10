@@ -57,26 +57,25 @@ class DivineResearcher(BaseAgent):
         return {"status": "success", "result": synthesis}
 
     async def _run_ingestion_routine(self):
-        """Sous-routine pour lire les fichiers locaux."""
-        self.log_thought("📂 Ingestion locale...", type="action")
-        files = self.ingestor.scan_new_files()
-        
-        if not files: 
-            return {"status": "warning", "result": "Dropzone vide. Aucun nouveau fichier à lire."}
-            
-        report = []
-        full_knowledge = ""
-        
-        for filepath in files:
-            filename, content = self.ingestor.read_and_archive(filepath)
-            if content:
-                # Analyse rapide du contenu
-                analysis = await self.generate_content(f"Analyse ce document technique ({filename}) en 3 points clés :\n{content[:4000]}...")
-                
-                # Mémorisation
-                self.remember(text=f"ARCHIVE ({filename}): {analysis}", metadata={"source": filename})
-                
-                report.append(f"✅ {filename} : Traité et mémorisé.")
-                full_knowledge += f"\n--- {filename} ---\n{analysis}\n"
-                
-        return {"status": "success", "result": f"INGESTION TERMINÉE:\n" + "\n".join(report)}
+        """Sous-routine pour analyser les fichiers de la dropzone via le pipeline intelligent."""
+        self.log_thought("📂 Lancement pipeline Dropzone 2.0...", type="action")
+
+        from core.dropzone_pipeline import DropzonePipeline
+        from core.orchestrator import orchestrator
+
+        pipeline = DropzonePipeline(orchestrator)
+        result = await pipeline.run()
+
+        if result["status"] == "success":
+            summary = result["manifest"]
+            return {
+                "status": "success",
+                "result": (
+                    f"INGESTION DROPZONE 2.0 TERMINÉE\n"
+                    f"Projets analysés: {summary['total_projects']}\n"
+                    f"Fichiers uniques: {summary['unique_files']}\n"
+                    f"Doublons ignorés: {summary['duplicates']}\n"
+                    f"Analyses produites: {result['analyses']}"
+                )
+            }
+        return {"status": "warning", "result": "Pipeline Dropzone : aucun résultat."}
