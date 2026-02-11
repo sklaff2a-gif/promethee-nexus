@@ -31,6 +31,18 @@ FORMAT DE RÉPONSE :
 - Commence par "VALIDÉ" ou "REFUSÉ".
 """
 
+    @staticmethod
+    def _strip_llm_prefix(text: str) -> str:
+        """Strip les préfixes markdown/commentary que les LLMs locaux ajoutent avant le mot-clé."""
+        text = text.strip()
+        # Retirer les headers markdown (## VALIDÉ, ### REFUSÉ, etc.)
+        text = re.sub(r'^#+\s*', '', text)
+        # Retirer bold/italic (**VALIDÉ**, *VALIDÉ*, __VALIDÉ__)
+        text = re.sub(r'^[\*_]{1,3}\s*', '', text)
+        # Retirer puces (- VALIDÉ, * VALIDÉ)
+        text = re.sub(r'^[-\*]\s+', '', text)
+        return text.strip()
+
     def _analyze_risk(self, text: str) -> str:
         """Analyse heuristique rapide des dangers."""
         text = text.lower()
@@ -53,7 +65,9 @@ FORMAT DE RÉPONSE :
         # 1. ANALYSE HEURISTIQUE
         risk_level = self._analyze_risk(full_content)
         # Override explicite uniquement via mot-clé dédié (pas de faux positifs sur "update" ou "admin")
-        is_override = "ADMIN_OVERRIDE" in mission.upper()
+        # Supporte "ADMIN_OVERRIDE" (underscore) ET "ADMIN OVERRIDE" (espace) — l'Evolution utilise l'espace
+        mission_upper = mission.upper()
+        is_override = "ADMIN_OVERRIDE" in mission_upper or "ADMIN OVERRIDE" in mission_upper
         
         # On prépare le terrain pour le LLM
         if risk_level == "LOW":
@@ -85,9 +99,10 @@ FORMAT DE RÉPONSE :
         response = await self.generate_content(full_prompt)
         
         # 3. DÉCODAGE DE LA DÉCISION
-        cleaned_response = response.upper()
-        
-        # Validation robuste : la réponse doit COMMENCER par le mot-clé
+        # Strip les préfixes markdown (## VALIDÉ, **REFUSÉ**, etc.) avant analyse
+        cleaned_response = self._strip_llm_prefix(response).upper()
+
+        # Validation robuste : la réponse doit COMMENCER par le mot-clé (après strip markdown)
         llm_approved = any(cleaned_response.startswith(kw) for kw in ["VALIDÉ", "VALIDE", "ORDRE_USINE", "ACCORD", "PROCEED"])
         llm_refused = any(cleaned_response.startswith(kw) for kw in ["REFUSÉ", "REFUSE", "REJECTED", "INTERDIT"])
 

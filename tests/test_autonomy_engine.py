@@ -187,8 +187,8 @@ class TestRoutineScorer:
         # DROPZONE_SCAN ne doit pas dominer
         dropzone_score = next(s for r, s in scored if r["intent"] == "DROPZONE_SCAN")
         other_scores = [s for r, s in scored if r["intent"] != "DROPZONE_SCAN"]
-        # Sans bonus, DROPZONE_SCAN a le même score de base que les autres
-        assert dropzone_score <= max(other_scores) + 0.01
+        # Sans bonus, DROPZONE_SCAN a le même score de base que les autres (tolérance jitter ±0.3)
+        assert dropzone_score <= max(other_scores) + 0.7
 
     def test_repetition_penalty_last_2(self):
         routines = _get_routines()
@@ -209,8 +209,8 @@ class TestRoutineScorer:
         ]
         scored = RoutineScorer.score_routines(routines, [], history)
         audit_score = next(s for r, s in scored if r["intent"] == "AUDIT_STRUCTURE")
-        # Pénalité max : score de base (1.0) - 2.0 = -1.0
-        assert audit_score <= -0.9
+        # Pénalité pour 3 occurrences : score de base (1.0) - 3.0 + jitter = ~-2.0
+        assert audit_score <= -1.5
 
     def test_context_bonus_code_keywords(self):
         routines = _get_routines()
@@ -224,8 +224,8 @@ class TestRoutineScorer:
         routines = _get_routines()
         scored = RoutineScorer.score_routines(routines, [], [])
         scores = [s for _, s in scored]
-        # Tous les scores doivent être le même (1.0 de base)
-        assert all(s == scores[0] for s in scores)
+        # Tous les scores proches de 1.0 (jitter ±0.3)
+        assert all(0.5 <= s <= 1.5 for s in scores)
 
     def test_health_degraded_penalizes_heavy(self):
         routines = _get_routines()
@@ -241,14 +241,16 @@ class TestRoutineScorer:
         intents = {r["intent"] for r, _ in scored}
         assert intents == {"EXPANSION_CODE", "AUDIT_STRUCTURE", "VEILLE_SILENCIEUSE", "DROPZONE_SCAN"}
 
-    def test_tie_breaking(self):
-        """En cas d'égalité, on vérifie que tous les scores sont identiques (pas de crash)."""
+    def test_tie_breaking_with_jitter(self):
+        """Le jitter aléatoire casse les égalités et varie l'ordre."""
         routines = _get_routines()
-        scored = RoutineScorer.score_routines(routines, [], [])
-        # Tous à 1.0, le tri est stable mais l'ordre peut varier
-        scores = [s for _, s in scored]
-        assert len(scores) == 4
-        assert all(s == 1.0 for s in scores)
+        # Lancer 20 fois et vérifier qu'on obtient au moins 2 ordres différents
+        first_intents = set()
+        for _ in range(20):
+            scored = RoutineScorer.score_routines(routines, [], [])
+            first_intents.add(scored[0][0]["intent"])
+        # Le jitter doit produire de la variété
+        assert len(first_intents) >= 2
 
     def test_dropzone_streak_forces_rotation(self):
         """Après 3 DROPZONE consécutifs, une autre routine doit passer devant."""
@@ -264,32 +266,44 @@ class TestRoutineScorer:
         assert top_intent != "DROPZONE_SCAN"
 
     def test_dropzone_recovers_after_rotation(self):
-        """Après un tour de rotation, DROPZONE reprend la priorité."""
+        """Après assez de rotation, DROPZONE reprend la priorité grâce au reactivity bonus."""
         routines = _get_routines()
+        # Les 3 DROPZONE doivent être poussées hors de la fenêtre de 5
+        # pour que la pénalité par occurrences totales ne les pénalise plus
         history = [
             _make_history_entry("DROPZONE_SCAN"),
             _make_history_entry("DROPZONE_SCAN"),
             _make_history_entry("DROPZONE_SCAN"),
-            _make_history_entry("VEILLE_SILENCIEUSE"),  # rotation casse le streak
+            _make_history_entry("VEILLE_SILENCIEUSE"),
+            _make_history_entry("AUDIT_STRUCTURE"),
+            _make_history_entry("EXPANSION_CODE"),
+            _make_history_entry("VEILLE_SILENCIEUSE"),
+            _make_history_entry("AUDIT_STRUCTURE"),  # fenêtre de 5 = les 5 dernières, plus de DROPZONE
         ]
         scored = RoutineScorer.score_routines(routines, [], history, dropzone_count=5)
         top_intent = scored[0][0]["intent"]
-        # DROPZONE revient en tête (streak=0, reactivity bonus actif)
+        # DROPZONE revient en tête (0 occurrences récentes, reactivity bonus +3.0)
         assert top_intent == "DROPZONE_SCAN"
 
-    def test_streak_penalty_progressive(self):
-        """La pénalité augmente avec la longueur du streak."""
+    def test_frequency_penalty_progressive(self):
+        """La pénalité augmente avec le nombre d'occurrences récentes."""
         routines = _get_routines()
-        history_2 = [_make_history_entry("EXPANSION_CODE")] * 2
-        history_4 = [_make_history_entry("EXPANSION_CODE")] * 4
+        history_1 = [_make_history_entry("EXPANSION_CODE")] * 1
+        history_3 = [_make_history_entry("EXPANSION_CODE")] * 3
 
-        scored_2 = RoutineScorer.score_routines(routines, [], history_2)
-        scored_4 = RoutineScorer.score_routines(routines, [], history_4)
+        # Moyenne sur plusieurs essais pour gommer le jitter
+        scores_1 = []
+        scores_3 = []
+        for _ in range(20):
+            scored_1 = RoutineScorer.score_routines(routines, [], history_1)
+            scored_3 = RoutineScorer.score_routines(routines, [], history_3)
+            scores_1.append(next(s for r, s in scored_1 if r["intent"] == "EXPANSION_CODE"))
+            scores_3.append(next(s for r, s in scored_3 if r["intent"] == "EXPANSION_CODE"))
 
-        score_2 = next(s for r, s in scored_2 if r["intent"] == "EXPANSION_CODE")
-        score_4 = next(s for r, s in scored_4 if r["intent"] == "EXPANSION_CODE")
-        # streak 4 doit être plus pénalisé que streak 2
-        assert score_4 < score_2
+        avg_1 = sum(scores_1) / len(scores_1)
+        avg_3 = sum(scores_3) / len(scores_3)
+        # 3 occurrences doit être plus pénalisé que 1
+        assert avg_3 < avg_1
 
 
 # ═══════════════════════════════════════════════════════════

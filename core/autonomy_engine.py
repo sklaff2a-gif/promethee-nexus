@@ -100,8 +100,8 @@ class RoutineScorer:
         """
         scored = []
 
-        # Extraire les intents récents depuis l'historique
-        recent_intents = [h["intent"] for h in routine_history[-3:]] if routine_history else []
+        # Extraire les intents récents depuis l'historique (fenêtre élargie à 5)
+        recent_intents = [h["intent"] for h in routine_history[-5:]] if routine_history else []
 
         # Contexte sous forme de mots
         context_text = " ".join(recent_context).lower()
@@ -120,26 +120,21 @@ class RoutineScorer:
             if intent == "DROPZONE_SCAN" and dropzone_count > 0:
                 score += 3.0
 
-            # Repetition penalty (progressive)
-            # Compte les occurrences consécutives récentes de cet intent
-            consecutive = 0
-            for h_intent in reversed(recent_intents):
-                if h_intent == intent:
-                    consecutive += 1
-                else:
-                    break
-
-            if consecutive >= 3:
-                # Streak: pénalité assez forte pour forcer la rotation
-                score -= 2.0 + (consecutive - 2) * 1.5
-            elif consecutive == 2:
-                score -= 2.0
-            elif consecutive == 1:
-                score -= 1.0
+            # Repetition penalty : basée sur le TOTAL d'occurrences récentes (pas juste consécutives)
+            total_recent = sum(1 for h in recent_intents if h == intent)
+            if total_recent >= 3:
+                score -= 3.0
+            elif total_recent == 2:
+                score -= 1.5
+            elif total_recent == 1:
+                score -= 0.5
 
             # Health penalty : si DEGRADED, pénaliser les routines lourdes
             if health_verdict == "DEGRADED" and intent == "EXPANSION_CODE":
                 score -= 1.5
+
+            # Jitter aléatoire pour casser les égalités et favoriser la diversité
+            score += random.uniform(-0.3, 0.3)
 
             scored.append((routine, score))
 

@@ -59,7 +59,7 @@ class DivineEvolution(BaseAgent):
                 
                 coder_response = await orchestrator.dispatch_task("coder", {
                     "mission": "Génère le code complet correspondant à cette spécification. Donne UNIQUEMENT le code.",
-                    "context": f"SPÉCIFICATION :\n{spec_response}"
+                    "context": f"EVOLUTION_PIPELINE\nSPÉCIFICATION :\n{spec_response}"
                 })
                 
                 generated_code = coder_response.get("result", "")
