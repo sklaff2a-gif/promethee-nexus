@@ -98,6 +98,36 @@ class TestExtractFromContext:
         assert "router" in target
 
 
+class TestHasFormattableCode:
+    def setup_method(self):
+        self.f = DivineFormatter()
+
+    def test_code_block_detected(self):
+        text = "Voici le code :\n```python\ndef hello():\n    return 42\n```"
+        assert self.f._has_formattable_code(text) is True
+
+    def test_python_lines_detected(self):
+        text = "import os\nfrom pathlib import Path\ndef process():\n    return None\n"
+        assert self.f._has_formattable_code(text) is True
+
+    def test_analysis_text_rejected(self):
+        """Un texte d'analyse sans code est rejeté."""
+        text = (
+            "L'architecture actuelle utilise un pattern observer. "
+            "Il serait judicieux d'ajouter un cache LRU pour optimiser les appels. "
+            "Le module devrait être refactorisé en trois composants distincts."
+        )
+        assert self.f._has_formattable_code(text) is False
+
+    def test_single_import_not_enough(self):
+        text = "Il faudrait faire import os dans le fichier."
+        assert self.f._has_formattable_code(text) is False
+
+    def test_class_definition_code(self):
+        text = "class MyAgent:\n    def process(self):\n        return None\n    def cleanup(self):\n        pass"
+        assert self.f._has_formattable_code(text) is True
+
+
 class TestRebuildFormattedResponse:
     def setup_method(self):
         self.f = DivineFormatter()

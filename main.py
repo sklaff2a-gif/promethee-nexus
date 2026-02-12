@@ -18,6 +18,10 @@ from core.orchestrator import orchestrator
 from core.event_bus.bus import bus
 from core.autonomy_engine import autonomy
 from core.router import RouterAgent
+from core.psyche import psyche
+from core.strategic_journal import journal as strat_journal
+from core.self_awareness import awareness
+from core.objectives_engine import objectives as objectives_engine, MAX_ACTIVE_OBJECTIVES
 from core import talk_logger
 from core import ci_pipeline
 
@@ -116,6 +120,22 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"   [ERR] {slug}: {e}")
     
+    # --- PSYCHE : Moteur de personnalité ---
+    psyche.init(list(orchestrator.agents.keys()))
+    print("   🧬 PSYCHE: Moteur de personnalité actif.")
+
+    # --- JOURNAL STRATÉGIQUE ---
+    print(f"   📖 JOURNAL: Mémoire stratégique active ({strat_journal.entry_count()} entrées).")
+
+    # --- CONSCIENCE DE SOI ---
+    awareness.init()
+    awareness.generate_snapshot()
+    print("   🪞 CONSCIENCE: Moteur de conscience de soi actif.")
+
+    # --- OBJECTIFS AUTONOMES ---
+    objectives_engine.init()
+    print(f"   🎯 OBJECTIFS: Moteur d'objectifs actif ({len(objectives_engine.get_active_objectives())} actifs).")
+
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
     bus.subscribe("AGENT_TASK_DISPATCH", nervous_system_listener)
 
@@ -228,6 +248,81 @@ async def autonomy_status():
     """Retourne l'état complet du moteur d'autonomie."""
     return autonomy.get_status()
 
+@app.post("/api/autonomy/reset-budget", dependencies=[Depends(verify_token)])
+async def autonomy_reset_budget():
+    """Reset le compteur quotidien de routines autonomes (pour debug/observation)."""
+    old_count = autonomy.daily_count
+    autonomy.daily_count = 0
+    autonomy.error_streak = 0
+    autonomy._persist_state()
+    await bus.publish("THOUGHT_STREAM", {
+        "agent": "SYSTEM",
+        "content": f"Budget autonomie réinitialisé ({old_count} → 0). Routines relancées.",
+        "type": "info"
+    })
+    return {"status": "ok", "previous_count": old_count, "new_count": 0}
+
+@app.get("/api/journal")
+async def api_journal():
+    """Retourne le journal stratégique complet + métadonnées."""
+    return {
+        "entry_count": strat_journal.entry_count(),
+        "recent_context": strat_journal.get_recent_context(5, max_chars=3000),
+        "full_journal": strat_journal.get_full_journal(),
+    }
+
+@app.get("/api/psyche/status")
+async def psyche_status():
+    """Retourne l'état complet du moteur de personnalité PSYCHE."""
+    return {
+        "system_average": psyche.get_system_average(),
+        "agents": psyche.get_all_traits(),
+        "last_decay_day": psyche.last_decay_day,
+        "history_count": len(psyche.history),
+    }
+
+@app.get("/api/awareness/status")
+async def awareness_status():
+    """Retourne le dernier snapshot de conscience + patterns détectés."""
+    return {
+        "snapshot": awareness.get_latest_snapshot(),
+        "patterns": awareness.detect_patterns(),
+        "snapshot_count": len(awareness.get_all_snapshots()),
+    }
+
+@app.get("/api/awareness/history")
+async def awareness_history():
+    """Retourne l'historique complet des snapshots de conscience."""
+    return {"snapshots": awareness.get_all_snapshots()}
+
+@app.get("/api/objectives")
+async def api_objectives():
+    """Retourne les objectifs actifs + historique récent (10 derniers complétés/expirés)."""
+    all_objs = objectives_engine.get_all_objectives()
+    active = [o for o in all_objs if o["status"] == "active"]
+    recent_done = [o for o in all_objs if o["status"] in ("completed", "failed")][-10:]
+    return {"active": active, "recent": recent_done}
+
+@app.post("/api/objectives", dependencies=[Depends(verify_token)])
+async def api_create_objective(request: Request):
+    """Création manuelle d'un objectif (source=user)."""
+    data = await request.json()
+    active = objectives_engine.get_active_objectives()
+    if len(active) >= MAX_ACTIVE_OBJECTIVES:
+        raise HTTPException(status_code=409, detail=f"Maximum d'objectifs actifs atteint ({MAX_ACTIVE_OBJECTIVES})")
+    obj = objectives_engine.create_objective(
+        title=data.get("title", "Objectif utilisateur"),
+        obj_type=data.get("type", "performance"),
+        priority=data.get("priority", "medium"),
+        source="user",
+        criteria=data.get("criteria", {"metric": "success_rate", "operator": ">=", "target": 0.8}),
+        routine_affinities=data.get("routine_affinities", {}),
+        deadline_routines=data.get("deadline_routines", 30),
+    )
+    if obj is None:
+        raise HTTPException(status_code=409, detail="Création échouée")
+    return {"status": "created", "objective": obj}
+
 @app.post("/api/override", dependencies=[Depends(verify_token)])
 async def api_override(request: Request):
     data = await request.json()
@@ -267,7 +362,20 @@ async def mission(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
     msn = data.get("mission", "")
     await bus.publish("USER_COMMAND", {"mission": msn})
-    
+
+    # Commande admin : reset budget autonomie
+    if msn.strip().lower() in ("reset budget", "reset autonomy", "relance autonomie"):
+        old_count = autonomy.daily_count
+        autonomy.daily_count = 0
+        autonomy.error_streak = 0
+        autonomy._persist_state()
+        await bus.publish("THOUGHT_STREAM", {
+            "agent": "SYSTEM",
+            "content": f"Budget autonomie réinitialisé ({old_count} → 0). Routines relancées.",
+            "type": "success"
+        })
+        return {"status": "ok", "target": "system", "action": "reset_budget"}
+
     # [V13.3] Utilisation du Router dédié
     target = await RouterAgent.classify_intent(msn)
 

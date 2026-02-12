@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from core.ci_pipeline import (
     extract_python_code,
     _slugify_filename,
+    _build_import_hint,
     _rollback,
     _remember_failure,
     _remember_success,
@@ -62,6 +63,59 @@ class TestSlugifyFilename:
 
     def test_chemin_windows(self):
         assert _slugify_filename("core\\utils\\helper.py") == "helper"
+
+
+# --- Tests _build_import_hint ---
+
+class TestBuildImportHint:
+
+    def test_fichier_dans_agents(self):
+        hint = _build_import_hint(
+            "factory_agent.py",
+            "C:/MesProjets/PROMETHEE/Agents/factory_agent.py",
+            "class DivineFactory:\n    pass\ndef create_file():\n    pass\n"
+        )
+        assert "Agents.factory_agent" in hint
+        assert "DivineFactory" in hint
+        assert "create_file" in hint
+        assert "UNIQUEMENT" in hint
+
+    def test_fichier_dans_core(self):
+        hint = _build_import_hint(
+            "router.py",
+            "C:/MesProjets/PROMETHEE/core/router.py",
+            "class RouterAgent:\n    pass\n"
+        )
+        assert "core.router" in hint
+        assert "RouterAgent" in hint
+
+    def test_fichier_racine(self):
+        """Fichier à la racine du projet, pas dans un package connu."""
+        hint = _build_import_hint(
+            "merchant_code.py",
+            "C:/MesProjets/PROMETHEE/merchant_code.py",
+            "def calculate_profit():\n    return 42\n"
+        )
+        assert "merchant_code" in hint
+        assert "N'invente PAS" in hint
+
+    def test_chemin_windows_backslash(self):
+        hint = _build_import_hint(
+            "coder_agent.py",
+            "C:\\MesProjets\\PROMETHEE\\Agents\\coder_agent.py",
+            "class DivineCoder:\n    pass\n"
+        )
+        assert "Agents.coder_agent" in hint
+        assert "DivineCoder" in hint
+
+    def test_exclut_fonctions_privees(self):
+        hint = _build_import_hint(
+            "utils.py",
+            "core/utils.py",
+            "def public_func():\n    pass\ndef _private_func():\n    pass\n"
+        )
+        assert "public_func" in hint
+        assert "_private_func" not in hint
 
 
 # --- Tests anti-boucle ---

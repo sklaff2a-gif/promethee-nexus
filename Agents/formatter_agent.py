@@ -95,11 +95,29 @@ class DivineFormatter(BaseAgent):
         """Reconstruit une réponse formatée FICHIER:/CODE pour la Factory."""
         return f"FICHIER: {target_file}\nCODE:\n```python\n{code}\n```"
 
+    def _has_formattable_code(self, text: str) -> bool:
+        """Vérifie si le texte contient du code Python exploitable."""
+        # 1. Bloc de code markdown
+        if "```" in text:
+            return True
+        # 2. Au moins 3 lignes qui ressemblent à du Python
+        code_patterns = re.compile(
+            r"^(import |from \w+ import |def \w+|class \w+|    (?:def |if |for |return |self\.))",
+            re.MULTILINE,
+        )
+        matches = code_patterns.findall(text)
+        return len(matches) >= 3
+
     async def process_task(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
         mission = task_payload.get("mission", "")
         context = task_payload.get("context", "")
         full_text = f"{mission}\n{context}"
-        
+
+        # Guard : pas de code exploitable → skip immédiat
+        if not self._has_formattable_code(full_text):
+            self.log_thought("ℹ️ Aucun code exploitable détecté — formatage ignoré.", type="info")
+            return {"status": "success", "result": "NO_CODE_TO_FORMAT"}
+
         self.log_thought("🧹 Nettoyage et formatage du code en cours...", type="thought")
 
         # Prompt Standard

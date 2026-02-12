@@ -37,6 +37,56 @@ def extract_python_code(text: str) -> str | None:
     return None
 
 
+def _build_import_hint(filename: str, filepath: str, source_code: str) -> str:
+    """Construit un hint d'imports DYNAMIQUE basé sur le fichier réel.
+    Analyse le code source pour extraire les classes/fonctions et le chemin module."""
+    normalized = filepath.replace("\\", "/")
+
+    # Déterminer le chemin module Python (ex: Agents.factory_agent, core.router)
+    module_path = None
+    for marker in ("Agents/", "core/", "capabilities/"):
+        idx = normalized.find(marker)
+        if idx >= 0:
+            rel = normalized[idx:]
+            if rel.endswith(".py"):
+                rel = rel[:-3]
+            module_path = rel.replace("/", ".")
+            break
+
+    # Extraire les classes et fonctions publiques du code source
+    classes = re.findall(r"^class (\w+)", source_code, re.MULTILINE)
+    functions = [f for f in re.findall(r"^def (\w+)", source_code, re.MULTILINE)
+                 if not f.startswith("_")]
+
+    if module_path:
+        examples = []
+        if classes:
+            examples.append(f"  `from {module_path} import {', '.join(classes[:3])}`")
+        if functions:
+            examples.append(f"  `from {module_path} import {', '.join(functions[:3])}`")
+
+        examples_str = "\n".join(examples) if examples else f"  `import {module_path}`"
+        return (
+            f"CONTEXTE IMPORTS DU PROJET :\n"
+            f"- Le fichier testé est : {filename} (chemin complet : {filepath})\n"
+            f"- Module Python : {module_path}\n"
+            f"- Imports corrects pour CE fichier :\n{examples_str}\n"
+            f"- IMPORTANT : importe UNIQUEMENT depuis {module_path}. Ne devine PAS d'autres modules.\n"
+            f"- NE PAS utiliser `import {filename}` directement.\n"
+            f"- Pour les dépendances externes (ChromaDB, httpx, etc.), utilise des mocks.\n"
+        )
+    else:
+        # Fichier hors package connu (ex: merchant_code.py à la racine)
+        return (
+            f"CONTEXTE IMPORTS DU PROJET :\n"
+            f"- Le fichier testé est : {filename} (chemin complet : {filepath})\n"
+            f"- Ce fichier est à la racine du projet, PAS dans un package.\n"
+            f"- Pour l'importer : `import {filename.replace('.py', '')}` ou utilise importlib.\n"
+            f"- IMPORTANT : N'invente PAS d'imports vers des modules qui n'existent pas.\n"
+            f"- Pour les dépendances externes, utilise des mocks.\n"
+        )
+
+
 def _slugify_filename(filepath: str) -> str:
     """'Agents/coder_agent.py' → 'coder_agent'"""
     normalized = filepath.replace("\\", "/")
@@ -171,16 +221,8 @@ async def run_pipeline(filename: str, filepath: str):
             f"Inspire-toi de ces patterns validés.\n"
         )
 
-    # Contexte d'imports pour le LLM
-    import_hint = (
-        f"CONTEXTE IMPORTS DU PROJET :\n"
-        f"- Le fichier testé est : {filename} (chemin complet : {filepath})\n"
-        f"- Pour importer depuis Agents/ : `from Agents.factory_agent import DivineFactory`\n"
-        f"- Pour importer depuis core/ : `from core.base_agent import BaseAgent`\n"
-        f"- Pour importer depuis core/grimoire/ : `from core.grimoire.data_analyst import DataAnalyst`\n"
-        f"- NE PAS utiliser `import nom_fichier` directement — toujours `from dossier.module import Classe`\n"
-        f"- Pour les dépendances externes (ChromaDB, httpx, etc.), utilise des mocks.\n"
-    )
+    # Contexte d'imports DYNAMIQUE basé sur le fichier réel
+    import_hint = _build_import_hint(filename, filepath, source_code)
 
     test_prompt = (
         f"Génère des tests pytest pour le code suivant. "

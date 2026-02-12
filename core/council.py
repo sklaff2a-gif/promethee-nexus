@@ -78,12 +78,26 @@ class Council:
     def _build_prompt(self, agent_name: str, current_round: int) -> str:
         """Construit le prompt pour un agent à un tour donné."""
         history = self._format_transcript()
+
+        # Injection du trait dominant (PSYCHE)
+        personality_line = ""
+        try:
+            from core.psyche import psyche
+            trait_name, trait_value = psyche.get_dominant_trait(agent_name)
+            personality_line = (
+                f"TA PERSONNALITÉ: {trait_name.upper()} ({trait_value:.0f}/100). "
+                f"Tes réponses reflètent naturellement ce trait dominant.\n"
+            )
+        except Exception:
+            pass
+
         return (
             f"Tu participes à un CONSEIL multi-agents.\n"
             f"MISSION : {self.mission}\n"
             f"PARTICIPANTS : {', '.join(p.upper() for p in self.participants)}\n"
             f"TOUR : {current_round}/{self.max_rounds}\n"
-            f"TON RÔLE : {agent_name.upper()}\n\n"
+            f"TON RÔLE : {agent_name.upper()}\n"
+            f"{personality_line}\n"
             f"HISTORIQUE DU DÉBAT :\n{history}\n\n"
             f"INSTRUCTIONS :\n"
             f"- Analyse la mission et les contributions précédentes.\n"
@@ -164,6 +178,7 @@ class Council:
             "council_id": self.council_id,
             "status": status,
             "rounds_used": rounds_used,
+            "participants": self.participants,
             "final_summary": final_summary
         })
 
