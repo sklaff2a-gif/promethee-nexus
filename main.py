@@ -72,6 +72,7 @@ from core.strategic_journal import journal as strat_journal
 from core.self_awareness import awareness
 from core.objectives_engine import objectives as objectives_engine, MAX_ACTIVE_OBJECTIVES
 from core import talk_logger
+from core import interface_logger
 from core import ci_pipeline
 
 # --- RATE LIMITING ---
@@ -192,10 +193,12 @@ async def lifespan(app: FastAPI):
     ci_pipeline.start()
 
     talk_logger.start()
+    interface_logger.start()
     asyncio.create_task(autonomy.start_loop())
     yield
     ci_pipeline.stop()
     talk_logger.stop()
+    interface_logger.stop()
     print("🔌 Arrêt.")
     tracemalloc.stop()
 
