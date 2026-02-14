@@ -9,7 +9,7 @@ from core.event_bus.bus import bus
 logger = logging.getLogger("Council")
 
 # Marqueurs de consensus (détection en début de réponse)
-CONSENSUS_MARKERS = ("CONSENSUS", "APPROUVE", "APPROUVÉ", "ACCORD FINAL")
+CONSENSUS_MARKERS = ("CONSENSUS", "CONSENUS", "APPROUVE", "APPROUVÉ", "ACCORD FINAL")
 
 
 def _strip_markdown_prefix(text: str) -> str:

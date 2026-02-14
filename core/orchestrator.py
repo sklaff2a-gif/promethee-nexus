@@ -79,6 +79,13 @@ class Orchestrator:
             # --- EXÉCUTION ---
             response = await agent.process_task(task_payload)
 
+            # --- Publication du statut pour SelfAwareness ---
+            from core.event_bus.bus import bus
+            await bus.publish("MISSION_COMPLETE", {
+                "agent": target_slug,
+                "status": response.get("status", "success") if isinstance(response, dict) else "success",
+            })
+
             # --- [V18.3] DISSIPATION D'EIDOLON ---
             if target_slug not in self.agents:
                 module_key = target_slug

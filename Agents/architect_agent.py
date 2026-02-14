@@ -45,12 +45,21 @@ FORMAT DE RÉPONSE :
 
     def _analyze_risk(self, text: str) -> str:
         """Analyse heuristique rapide des dangers."""
-        text = text.lower()
-        # 1. DANGER CRITIQUE
-        if any(x in text for x in ["os.remove", "shutil.rmtree", "format c:", "drop database", "system32"]):
+        text_lower = text.lower()
+        # 1. DANGER CRITIQUE — commandes destructrices, exécution arbitraire, escalade de privilèges
+        critical_patterns = [
+            "os.remove", "shutil.rmtree", "format c:", "drop database", "system32",
+            "rm -rf", "rm -r ", "rmdir /s",
+            "subprocess.run", "subprocess.call", "subprocess.popen", "os.system", "os.popen",
+            "setuid", "setgid", "chmod 777", "chmod +s",
+            "eval(", "exec(", "__import__(",
+            "pickle.loads", "marshal.loads",
+            "os.environ[", "os.putenv",
+        ]
+        if any(x in text_lower for x in critical_patterns):
             return "CRITICAL"
         # 2. RISQUE FAIBLE (Tests, Scripts simples, Logs)
-        if any(x in text for x in ["test_", "hello.py", "script", "print(", "logging.", "tests/", "config"]):
+        if any(x in text_lower for x in ["test_", "hello.py", "script", "print(", "logging.", "tests/", "config"]):
             return "LOW"
         # 3. RISQUE MOYEN (Modifs noyau, logique métier)
         return "MEDIUM"

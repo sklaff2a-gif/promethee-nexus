@@ -5,29 +5,82 @@ from core.base_agent import BaseAgent
 
 logger = logging.getLogger("evolution")
 
+# Requêtes de recherche diversifiées et pertinentes pour le projet
+_SEARCH_QUERIES = [
+    "python asyncio best practices multi-agent system 2026",
+    "FastAPI middleware performance optimization 2026",
+    "chromadb vector store RAG optimization tips",
+    "python event bus pub/sub patterns async",
+    "ollama local LLM inference optimization batch",
+    "python autonomous agent error recovery patterns",
+    "pytest async testing patterns best practices",
+    "python logging rotating file handler best practices",
+    "python singleton pattern thread safety async",
+    "websocket real-time notification system python",
+]
+
+# Modules existants du projet (pour le contexte de pertinence)
+_PROJECT_MODULES = [
+    "core/orchestrator.py — dispatch multi-agents, kill switch, chaînes de réaction",
+    "core/base_agent.py — classe mère, RAG (remember/recall), routage Cloud/Local",
+    "core/router.py — RouterAgent : classification d'intent 3 niveaux",
+    "core/autonomy_engine.py — routines autonomes après inactivité, scoring, health checks",
+    "core/event_bus/bus.py — bus pub/sub en mémoire",
+    "core/summoner.py — chargement dynamique d'agents depuis core/grimoire/",
+    "core/ci_pipeline.py — tests auto-générés, rollback, mémoire CI/CD",
+    "core/self_awareness.py — conscience de soi, snapshots, PSYCHE",
+    "core/council.py — débats multi-agents avec consensus",
+    "Agents/ — 10 agents (strategist, coder, architect, factory, formatter, researcher, writer, security, infra, evolution)",
+]
+
+
 class DivineEvolution(BaseAgent):
     """
-    DivineEvolution V3.0 (Darwin Protocol - Integral)
+    DivineEvolution V4.0 (Darwin Protocol - Project-Aware)
     - Rôle : Directeur R&D Autonome.
     - Routine : Veille -> Analyse -> Spécification -> Coder -> Architecte.
-    - Full Auto : Enchaîne les appels sans validation humaine intermédiaire.
+    - V4 : Requêtes diversifiées, contexte projet, dédup veille via mémoire RAG.
     """
+    _query_index = 0
+
     def __init__(self):
         super().__init__(name="evolution", role="R&D Director", description="Supervise l'amélioration continue du système.")
+
+    @classmethod
+    def _next_search_query(cls) -> str:
+        """Sélectionne la prochaine requête de recherche (rotation + jitter)."""
+        query = _SEARCH_QUERIES[cls._query_index % len(_SEARCH_QUERIES)]
+        cls._query_index += 1
+        return query
+
+    def _check_already_explored(self, query: str) -> bool:
+        """Vérifie si ce sujet a déjà été exploré récemment via la mémoire RAG."""
+        if not self.has_memory:
+            return False
+        past = self.recall(f"VEILLE DARWIN {query}", limit=1)
+        if past and len(past) > 50:
+            return True
+        return False
 
     async def process_task(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
         mission = task_payload.get("mission", "")
         context = task_payload.get("context", "")
-        
+
         # DÉCLENCHEMENT : MODE VEILLE (Automatique ou Manuel)
         if "[MODE VEILLE]" in mission or "veille" in mission.lower():
-            self.log_thought("🧬 Activation du Protocole Darwin (Mode Intégral)...", type="thought")
-            
+            self.log_thought("🧬 Activation du Protocole Darwin (V4 Project-Aware)...", type="thought")
+
             try:
                 from core.orchestrator import orchestrator
-                
+
                 # --- PHASE 1 : EXPLORATION (Researcher) ---
-                search_query = "python advanced design patterns automation agents 2025"
+                search_query = self._next_search_query()
+
+                # Dédup : skip si déjà exploré récemment
+                if self._check_already_explored(search_query):
+                    self.log_thought(f"💤 Sujet déjà exploré : {search_query}. Skip.", type="info")
+                    return {"status": "success", "result": "R.A.S — sujet déjà exploré."}
+
                 self.log_thought(f"🔭 Phase 1 : Lancement Researcher ({search_query})...", type="info")
                 
                 research_response = await orchestrator.dispatch_task("researcher", {
@@ -39,13 +92,27 @@ class DivineEvolution(BaseAgent):
                 if not research_data:
                     return {"status": "warning", "result": "Recherche infructueuse."}
 
+                # Mémoriser la veille pour éviter les doublons futurs
+                if self.has_memory:
+                    self.remember(
+                        f"VEILLE DARWIN {search_query}\n{research_data[:500]}",
+                        {"source": "darwin_protocol", "query": search_query}
+                    )
+
                 # --- PHASE 2 : ANALYSE & SPÉCIFICATION (Cerveau) ---
                 self.log_thought("🧠 Phase 2 : Analyse de la pertinence...", type="thought")
-                
+
+                modules_list = "\n".join(f"  - {m}" for m in _PROJECT_MODULES)
                 decision_prompt = (
-                    f"Tu es le Directeur R&D. Voici une veille technologique :\n{research_data[:2000]}\n"
-                    f"ANALYSE : Est-ce une amélioration concrète pour notre codebase (FastAPI/Python) ?\n"
-                    f"SI OUI : Rédige une SPÉCIFICATION TECHNIQUE détaillée pour le Coder (Nom du fichier, Classes, Méthodes).\n"
+                    f"Tu es le Directeur R&D du projet PROMÉTHÉE (système multi-agents IA autonome).\n"
+                    f"MODULES EXISTANTS DU PROJET :\n{modules_list}\n\n"
+                    f"Voici une veille technologique :\n{research_data[:2000]}\n\n"
+                    f"ANALYSE : Est-ce une amélioration CONCRÈTE et APPLICABLE à un module existant de PROMÉTHÉE ?\n"
+                    f"ATTENTION : Ne propose PAS de nouveau module générique (trading, commerce, smart contracts, etc.).\n"
+                    f"La spécification doit cibler un fichier EXISTANT (core/*.py ou Agents/*.py) et proposer une modification précise.\n\n"
+                    f"SI OUI : Rédige une SPÉCIFICATION TECHNIQUE pour le Coder :\n"
+                    f"  - Fichier cible existant (ex: core/orchestrator.py)\n"
+                    f"  - Modification précise (quelle méthode améliorer, quel pattern appliquer)\n"
                     f"SI NON : Réponds juste 'R.A.S'."
                 )
                 spec_response = await self.generate_content(decision_prompt)
@@ -71,7 +138,7 @@ class DivineEvolution(BaseAgent):
                 self.log_thought("🛡️ Phase 4 : Soumission à l'Architecte...", type="info")
                 
                 architect_response = await orchestrator.dispatch_task("architect", {
-                    "mission": "ADMIN OVERRIDE: Analyse ce nouveau module R&D. S'il est sûr, valide-le pour déploiement (Envoi Formatter).",
+                    "mission": "Analyse ce nouveau module R&D. S'il est sûr, valide-le pour déploiement (Envoi Formatter).",
                     "context": generated_code
                 })
                 

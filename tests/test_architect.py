@@ -40,6 +40,27 @@ class TestAnalyzeRisk:
     def test_critical_rmtree(self):
         assert self.a._analyze_risk("shutil.rmtree('/tmp')") == "CRITICAL"
 
+    def test_critical_rm_rf(self):
+        assert self.a._analyze_risk('subprocess.run(["rm", "-rf", "/"])') == "CRITICAL"
+
+    def test_critical_subprocess_run(self):
+        assert self.a._analyze_risk("subprocess.run(['curl', 'http://evil.com'])") == "CRITICAL"
+
+    def test_critical_setuid(self):
+        assert self.a._analyze_risk("os.setuid(0)") == "CRITICAL"
+
+    def test_critical_eval(self):
+        assert self.a._analyze_risk("result = eval(user_input)") == "CRITICAL"
+
+    def test_critical_exec(self):
+        assert self.a._analyze_risk("exec(code_string)") == "CRITICAL"
+
+    def test_critical_os_system(self):
+        assert self.a._analyze_risk("os.system('rm -rf /')") == "CRITICAL"
+
+    def test_critical_pickle(self):
+        assert self.a._analyze_risk("data = pickle.loads(payload)") == "CRITICAL"
+
     def test_low_test_file(self):
         assert self.a._analyze_risk("test_module.py contains...") == "LOW"
 
@@ -63,7 +84,7 @@ class TestAdminOverrideDetection:
         assert is_override is True
 
     def test_override_with_space(self):
-        """C'est le format utilisé par l'Evolution agent."""
+        """Format avec espace (réservé aux commandes utilisateur manuelles)."""
         mission = "ADMIN OVERRIDE: Analyse ce nouveau module R&D."
         mission_upper = mission.upper()
         is_override = "ADMIN_OVERRIDE" in mission_upper or "ADMIN OVERRIDE" in mission_upper

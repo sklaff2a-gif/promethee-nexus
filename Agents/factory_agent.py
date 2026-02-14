@@ -1,3 +1,4 @@
+import ast
 import logging
 import os
 import re
@@ -188,6 +189,14 @@ class DivineFactory(BaseAgent):
             # Sandboxing : limite de taille
             if len(code_content.encode("utf-8")) > MAX_FILE_SIZE:
                 return {"status": "error", "result": f"Fichier trop volumineux (>{MAX_FILE_SIZE // 1024}KB)."}
+
+            # Validation syntaxique pré-écriture (fichiers .py uniquement)
+            if ext == ".py":
+                try:
+                    ast.parse(code_content)
+                except SyntaxError as e:
+                    logger.warning(f"[FACTORY] Code Python invalide pour {target_path} (ligne {e.lineno}): {e.msg}")
+                    return {"status": "error", "result": f"Code Python invalide (SyntaxError ligne {e.lineno}): {e.msg}"}
 
             try:
                 if ".." in target_path: raise Exception("Path Traversal Interdit")

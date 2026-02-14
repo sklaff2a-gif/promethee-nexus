@@ -3,6 +3,7 @@ CI/CD Pipeline interne PROMÉTHÉE.
 Remplace le quality_control_listener : Factory écrit du code → Coder génère des tests
 → pytest les exécute → Architect valide → déploiement ou rollback.
 """
+import ast
 import asyncio
 import logging
 import os
@@ -35,6 +36,71 @@ def extract_python_code(text: str) -> str | None:
     if len(code_lines) >= 3:
         return "\n".join(code_lines)
     return None
+
+
+def _extract_api_signatures(source_code: str) -> str:
+    """Extrait les classes, méthodes et fonctions publiques du code source via AST.
+    Retourne une description lisible de l'API réelle du fichier."""
+    try:
+        tree = ast.parse(source_code)
+    except SyntaxError:
+        return ""
+
+    lines = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            bases = ", ".join(
+                getattr(b, "id", getattr(b, "attr", "?")) for b in node.bases
+            )
+            lines.append(f"  class {node.name}({bases}):")
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and not item.name.startswith("_"):
+                    args = ", ".join(a.arg for a in item.args.args if a.arg != "self")
+                    lines.append(f"    def {item.name}({args})")
+                elif isinstance(item, ast.FunctionDef) and item.name == "__init__":
+                    args = ", ".join(a.arg for a in item.args.args if a.arg != "self")
+                    lines.append(f"    def __init__({args})")
+        elif isinstance(node, ast.FunctionDef) and not isinstance(
+            getattr(node, "_parent", None), ast.ClassDef
+        ):
+            if not node.name.startswith("_") and node.col_offset == 0:
+                args = ", ".join(a.arg for a in node.args.args)
+                lines.append(f"  def {node.name}({args})")
+
+    return "\n".join(lines) if lines else ""
+
+
+def _validate_test_imports(test_code: str, source_code: str, module_path: str) -> tuple[bool, str]:
+    """Vérifie que les symboles importés dans le test existent dans le code source.
+    Retourne (valide, message_erreur)."""
+    try:
+        test_tree = ast.parse(test_code)
+        source_tree = ast.parse(source_code)
+    except SyntaxError:
+        return True, ""  # en cas d'erreur de parse, laisser pytest décider
+
+    # Collecter les symboles définis dans le source
+    source_symbols = set()
+    for node in ast.walk(source_tree):
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
+            source_symbols.add(node.name)
+
+    if not source_symbols:
+        return True, ""
+
+    # Vérifier les imports du test qui ciblent le module source
+    bad_imports = []
+    for node in ast.walk(test_tree):
+        if isinstance(node, ast.ImportFrom) and node.module and module_path:
+            if module_path.replace(".", "/") in (node.module or "").replace(".", "/") or \
+               node.module == module_path:
+                for alias in node.names:
+                    if alias.name not in source_symbols and alias.name != "*":
+                        bad_imports.append(alias.name)
+
+    if bad_imports:
+        return False, f"Imports invalides (n'existent pas dans le source) : {', '.join(bad_imports)}"
+    return True, ""
 
 
 def _build_import_hint(filename: str, filepath: str, source_code: str) -> str:
@@ -95,11 +161,16 @@ def _slugify_filename(filepath: str) -> str:
 
 
 def _rollback(filepath: str) -> bool:
-    """Restaure filepath.bak vers filepath."""
+    """Restaure filepath.bak vers filepath, ou supprime le fichier s'il est nouveau."""
     bak = filepath + ".bak"
     if os.path.exists(bak):
         shutil.copy2(bak, filepath)
         logger.info(f"[ROLLBACK] {filepath} restauré depuis .bak")
+        return True
+    # Fichier nouveau (pas de .bak) → le supprimer pour ne pas laisser un fichier défaillant
+    if os.path.exists(filepath):
+        os.remove(filepath)
+        logger.info(f"[ROLLBACK] {filepath} supprimé (fichier nouveau, pas de .bak)")
         return True
     logger.warning(f"[ROLLBACK] Pas de .bak trouvé pour {filepath}")
     return False
@@ -221,13 +292,37 @@ async def run_pipeline(filename: str, filepath: str):
             f"Inspire-toi de ces patterns validés.\n"
         )
 
+    # Validation syntaxique du code SOURCE avant de lancer la génération de tests
+    try:
+        ast.parse(source_code)
+    except SyntaxError as e:
+        detail = f"Code source invalide (SyntaxError ligne {e.lineno}): {e.msg}"
+        logger.warning(f"[CI/CD] {detail} — pipeline annulé pour {filename}")
+        await bus.publish("CI_PIPELINE_RESULT", {
+            "filename": filename, "success": False,
+            "detail": detail
+        })
+        _rollback(filepath)
+        return
+
     # Contexte d'imports DYNAMIQUE basé sur le fichier réel
     import_hint = _build_import_hint(filename, filepath, source_code)
+
+    # Extraction des signatures réelles (classes, méthodes, fonctions)
+    api_signatures = _extract_api_signatures(source_code)
+    api_section = ""
+    if api_signatures:
+        api_section = (
+            f"\nAPI RÉELLE DU FICHIER (classes et fonctions qui EXISTENT) :\n"
+            f"{api_signatures}\n"
+            f"Teste UNIQUEMENT ces classes/fonctions. N'invente PAS d'autres symboles.\n"
+        )
 
     test_prompt = (
         f"Génère des tests pytest pour le code suivant. "
         f"Réponds UNIQUEMENT avec un bloc de code Python contenant les tests.\n"
         f"{import_hint}\n"
+        f"{api_section}\n"
         f"{memory_context}\n"
         f"```python\n{source_code}\n```"
     )
@@ -283,7 +378,33 @@ async def run_pipeline(filename: str, filepath: str):
         })
         return
 
-    # 3b. Écriture des tests dans tests/auto/
+    # 3b. Validation des imports : les symboles importés doivent exister dans le source
+    normalized_fp = filepath.replace("\\", "/")
+    mod_path = None
+    for marker in ("Agents/", "core/", "capabilities/"):
+        idx = normalized_fp.find(marker)
+        if idx >= 0:
+            rel = normalized_fp[idx:]
+            if rel.endswith(".py"):
+                rel = rel[:-3]
+            mod_path = rel.replace("/", ".")
+            break
+
+    imports_ok, import_err = _validate_test_imports(test_code, source_code, mod_path or "")
+    if not imports_ok:
+        detail = f"Tests auto-générés avec imports invalides : {import_err}"
+        await bus.publish("CI_PIPELINE_STEP", {
+            "filename": filename, "step": "test_validation",
+            "status": "error", "detail": detail
+        })
+        _remember_failure(filename, source_code, "test_validation", detail)
+        await bus.publish("CI_PIPELINE_RESULT", {
+            "filename": filename, "success": False,
+            "detail": f"Tests rejetés (imports fantômes) — source conservée"
+        })
+        return
+
+    # 3c. Écriture des tests dans tests/auto/
     os.makedirs(AUTO_TESTS_DIR, exist_ok=True)
     slug = _slugify_filename(filepath)
     test_file = os.path.join(AUTO_TESTS_DIR, f"test_{slug}.py")

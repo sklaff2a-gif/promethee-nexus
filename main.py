@@ -8,12 +8,61 @@ import os
 import asyncio
 import json
 import importlib
+import logging
+import logging.handlers
 import time
 import uvicorn
 import tracemalloc
 import secrets
 import sys
 import httpx
+
+# --- LOGGING PERSISTANT ---
+# Duplique TOUT (logging + print) vers un fichier rotatif quotidien
+_LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(_LOGS_DIR, exist_ok=True)
+
+_log_formatter = logging.Formatter(
+    "[%(asctime)s] [%(name)s] %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
+# FileHandler rotatif : 1 fichier par jour, garde 14 jours
+_file_handler = logging.handlers.TimedRotatingFileHandler(
+    os.path.join(_LOGS_DIR, "promethee.log"),
+    when="midnight", backupCount=14, encoding="utf-8"
+)
+_file_handler.setFormatter(_log_formatter)
+_file_handler.suffix = "%Y-%m-%d"
+
+# Console handler (comportement existant)
+_console_handler = logging.StreamHandler(sys.stdout)
+_console_handler.setFormatter(_log_formatter)
+
+# Configurer le root logger
+logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
+
+
+class _TeeStream:
+    """Redirige print() vers le fichier log en plus de la console."""
+    def __init__(self, original, log_handler):
+        self.original = original
+        self.log_handler = log_handler
+
+    def write(self, text):
+        self.original.write(text)
+        if text.strip():
+            record = logging.LogRecord(
+                name="stdout", level=logging.INFO, pathname="", lineno=0,
+                msg=text.rstrip(), args=(), exc_info=None
+            )
+            self.log_handler.emit(record)
+
+    def flush(self):
+        self.original.flush()
+
+sys.stdout = _TeeStream(sys.__stdout__, _file_handler)
+sys.stderr = _TeeStream(sys.__stderr__, _file_handler)
 from core.orchestrator import orchestrator
 from core.event_bus.bus import bus
 from core.autonomy_engine import autonomy

@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from core.ci_pipeline import (
     extract_python_code,
+    _extract_api_signatures,
+    _validate_test_imports,
     _slugify_filename,
     _build_import_hint,
     _rollback,
@@ -170,11 +172,17 @@ class TestRollback:
         assert result is True
         assert original.read_text() == "code original"
 
-    def test_rollback_sans_bak(self, tmp_path):
+    def test_rollback_nouveau_fichier_supprime(self, tmp_path):
+        """Fichier nouveau (pas de .bak) : supprimé au lieu de laisser un orphelin."""
         original = tmp_path / "module.py"
-        original.write_text("code")
+        original.write_text("code défaillant")
 
         result = _rollback(str(original))
+        assert result is True
+        assert not original.exists()
+
+    def test_rollback_fichier_inexistant(self, tmp_path):
+        result = _rollback(str(tmp_path / "fantome.py"))
         assert result is False
 
 
@@ -486,3 +494,60 @@ class TestMemoryIntegrationPipeline:
         prompt_sent = coder.generate_content.call_args[0][0]
         assert "ATTENTION" in prompt_sent
         assert "Échecs CI/CD passés" in prompt_sent
+
+
+# --- Tests _extract_api_signatures ---
+
+class TestExtractApiSignatures:
+
+    def test_classe_avec_methodes(self):
+        code = "class MyAgent:\n    def __init__(self, name):\n        pass\n    def run(self, task):\n        pass\n    def _private(self):\n        pass\n"
+        result = _extract_api_signatures(code)
+        assert "class MyAgent" in result
+        assert "__init__(name)" in result
+        assert "run(task)" in result
+        assert "_private" not in result
+
+    def test_fonction_top_level(self):
+        code = "def hello(name):\n    return f'Hi {name}'\n\ndef _internal():\n    pass\n"
+        result = _extract_api_signatures(code)
+        assert "def hello(name)" in result
+        assert "_internal" not in result
+
+    def test_code_invalide_retourne_vide(self):
+        result = _extract_api_signatures("def broken(:\n    pass")
+        assert result == ""
+
+    def test_code_vide(self):
+        result = _extract_api_signatures("")
+        assert result == ""
+
+
+# --- Tests _validate_test_imports ---
+
+class TestValidateTestImports:
+
+    def test_imports_valides(self):
+        source = "class OrderGenerator:\n    pass\ndef process():\n    pass\n"
+        test = "from core.module import OrderGenerator, process\ndef test_ok(): pass\n"
+        ok, err = _validate_test_imports(test, source, "core.module")
+        assert ok is True
+
+    def test_imports_invalides_detectes(self):
+        source = "class OrderGenerator:\n    pass\n"
+        test = "from core.module import ResourceManager\ndef test_ok(): pass\n"
+        ok, err = _validate_test_imports(test, source, "core.module")
+        assert ok is False
+        assert "ResourceManager" in err
+
+    def test_imports_autre_module_ignores(self):
+        """Les imports vers d'autres modules (pas le source) sont ignorés."""
+        source = "class MyClass:\n    pass\n"
+        test = "import pytest\nfrom unittest.mock import MagicMock\nfrom core.module import MyClass\ndef test_ok(): pass\n"
+        ok, err = _validate_test_imports(test, source, "core.module")
+        assert ok is True
+
+    def test_source_invalide_passe(self):
+        """Si le source est invalide, on laisse pytest décider."""
+        ok, err = _validate_test_imports("def test(): pass", "def broken(:", "mod")
+        assert ok is True

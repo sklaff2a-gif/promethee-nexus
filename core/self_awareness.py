@@ -99,7 +99,7 @@ class SelfAwarenessEngine:
         if self._subscribed:
             return
         self._subscribed = True
-        bus.subscribe("AGENT_RESPONSE", self._on_agent_response)
+        bus.subscribe("MISSION_COMPLETE", self._on_agent_response)
         bus.subscribe("COUNCIL_END", self._on_council_end)
         bus.subscribe("CI_PIPELINE_RESULT", self._on_ci_result)
 
