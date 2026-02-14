@@ -11,6 +11,21 @@ logger = logging.getLogger("Council")
 # Marqueurs de consensus (détection en début de réponse)
 CONSENSUS_MARKERS = ("CONSENSUS", "CONSENUS", "APPROUVE", "APPROUVÉ", "ACCORD FINAL")
 
+# Tour minimum avant d'autoriser le consensus (force au moins 1 tour de critique)
+MIN_ROUNDS_BEFORE_CONSENSUS = 2
+
+# Contexte projet injecté dans tous les prompts Council
+_COUNCIL_PROJECT_CONTEXT = (
+    "CONTEXTE PROJET PROMÉTHÉE :\n"
+    "Système multi-agents IA autonome. Stack : Python 3.11, FastAPI, Ollama (LLM local), "
+    "Google Gemini (Cloud), ChromaDB, WebSocket. Tourne sur UN SEUL PC Windows.\n"
+    "Modules existants : orchestrator, router (3 niveaux), bus d'événements, "
+    "autonomy_engine, ci_pipeline, self_awareness, psyche, vector_store, "
+    "10 agents (strategist, coder, architect, factory, formatter, researcher, "
+    "writer, security, infra, evolution).\n"
+    "PAS de Kubernetes, Docker, Kafka, microservices, blockchain, ni budget réel."
+)
+
 
 def _strip_markdown_prefix(text: str) -> str:
     """Retire les préfixes markdown courants (#, *, >, -) en début de texte."""
@@ -54,7 +69,7 @@ def parse_council_mission(raw_mission: str) -> Optional[Dict[str, Any]]:
 class Council:
     """
     Système de débat multi-tours entre agents.
-    Les agents discutent, critiquent et convergent vers un consensus.
+    V2 : Anti-écho — force la critique au tour 1, consensus interdit avant le tour 2.
     """
 
     def __init__(self, agents: Dict[str, Any], participants: List[str],
@@ -91,20 +106,36 @@ class Council:
         except Exception:
             pass
 
+        # Instructions différenciées selon le tour
+        if current_round < MIN_ROUNDS_BEFORE_CONSENSUS:
+            round_instructions = (
+                f"INSTRUCTIONS TOUR {current_round} (CRITIQUE OBLIGATOIRE) :\n"
+                f"- Tu ne peux PAS donner ton accord (pas de CONSENSUS, APPROUVE, etc.).\n"
+                f"- Tu DOIS identifier au moins UN problème, UN risque ou UNE question.\n"
+                f"- Sois précis et technique : cite des fichiers, des fonctions, des cas limites.\n"
+                f"- Si la proposition mentionne des technologies que le projet n'utilise pas "
+                f"(Kubernetes, Docker, Kafka, blockchain, etc.), signale-le comme hors-périmètre.\n"
+            )
+        else:
+            round_instructions = (
+                f"INSTRUCTIONS TOUR {current_round} :\n"
+                f"- Analyse les critiques des tours précédents.\n"
+                f"- Si toutes les critiques ont été adressées ET que la solution est concrète "
+                f"et applicable au projet, commence ta réponse par CONSENSUS.\n"
+                f"- Sinon, apporte de nouvelles critiques ou propositions.\n"
+                f"- Rappel : une bonne solution est SIMPLE et cible des fichiers EXISTANTS.\n"
+            )
+
         return (
             f"Tu participes à un CONSEIL multi-agents.\n"
+            f"{_COUNCIL_PROJECT_CONTEXT}\n\n"
             f"MISSION : {self.mission}\n"
             f"PARTICIPANTS : {', '.join(p.upper() for p in self.participants)}\n"
             f"TOUR : {current_round}/{self.max_rounds}\n"
             f"TON RÔLE : {agent_name.upper()}\n"
             f"{personality_line}\n"
             f"HISTORIQUE DU DÉBAT :\n{history}\n\n"
-            f"INSTRUCTIONS :\n"
-            f"- Analyse la mission et les contributions précédentes.\n"
-            f"- Apporte ton expertise spécifique ({agent_name}).\n"
-            f"- Si tu estimes que le débat a convergé et que la solution est satisfaisante, "
-            f"commence ta réponse par CONSENSUS suivi de ton approbation.\n"
-            f"- Sinon, expose tes critiques ou suggestions.\n"
+            f"{round_instructions}"
         )
 
     async def run(self) -> Dict[str, Any]:
@@ -158,7 +189,8 @@ class Council:
                     "content": content
                 })
 
-                if _is_consensus(content):
+                # Consensus ignoré avant MIN_ROUNDS_BEFORE_CONSENSUS
+                if round_num >= MIN_ROUNDS_BEFORE_CONSENSUS and _is_consensus(content):
                     round_consensus_count += 1
 
             # Consensus = TOUS les participants du round ont approuvé

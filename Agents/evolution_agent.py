@@ -33,13 +33,43 @@ _PROJECT_MODULES = [
     "Agents/ — 10 agents (strategist, coder, architect, factory, formatter, researcher, writer, security, infra, evolution)",
 ]
 
+# Mots-clés hors-sujet dans les specs — si la spec en contient trop, c'est du bruit
+_SPEC_OFFTOPIC_KEYWORDS = {
+    "blockchain", "smart contract", "solidity", "ethereum", "web3",
+    "trading", "trade", "merchant", "marchand", "order",
+    "rss", "feedparser", "rss_agent",
+    "flask", "django", "streamlit",
+    "langchain", "langgraph", "crewai", "autogen",
+    "kubernetes", "docker", "terraform", "kafka",
+    "nft", "crypto", "wallet", "token",
+}
+_SPEC_OFFTOPIC_THRESHOLD = 2
+
+# Fichiers existants valides (préfixes) — la spec doit cibler un de ces chemins
+_VALID_TARGET_PREFIXES = ("core/", "Agents/", "config.py", "main.py")
+
+
+def _is_spec_offtopic(spec: str) -> bool:
+    """Vérifie si la spec contient trop de mots-clés hors-sujet."""
+    spec_lower = spec.lower()
+    count = sum(1 for kw in _SPEC_OFFTOPIC_KEYWORDS if kw in spec_lower)
+    return count >= _SPEC_OFFTOPIC_THRESHOLD
+
+
+def _spec_targets_existing_file(spec: str) -> bool:
+    """Vérifie que la spec mentionne au moins un fichier existant du projet."""
+    for prefix in _VALID_TARGET_PREFIXES:
+        if prefix in spec:
+            return True
+    return False
+
 
 class DivineEvolution(BaseAgent):
     """
-    DivineEvolution V4.0 (Darwin Protocol - Project-Aware)
+    DivineEvolution V5.0 (Darwin Protocol - Project-Aware + Relevance Filter)
     - Rôle : Directeur R&D Autonome.
     - Routine : Veille -> Analyse -> Spécification -> Coder -> Architecte.
-    - V4 : Requêtes diversifiées, contexte projet, dédup veille via mémoire RAG.
+    - V5 : Filtre de pertinence dur (mots-clés + ciblage fichier existant).
     """
     _query_index = 0
 
@@ -68,7 +98,7 @@ class DivineEvolution(BaseAgent):
 
         # DÉCLENCHEMENT : MODE VEILLE (Automatique ou Manuel)
         if "[MODE VEILLE]" in mission or "veille" in mission.lower():
-            self.log_thought("🧬 Activation du Protocole Darwin (V4 Project-Aware)...", type="thought")
+            self.log_thought("🧬 Activation du Protocole Darwin (V5 Relevance Filter)...", type="thought")
 
             try:
                 from core.orchestrator import orchestrator
@@ -82,12 +112,12 @@ class DivineEvolution(BaseAgent):
                     return {"status": "success", "result": "R.A.S — sujet déjà exploré."}
 
                 self.log_thought(f"🔭 Phase 1 : Lancement Researcher ({search_query})...", type="info")
-                
+
                 research_response = await orchestrator.dispatch_task("researcher", {
                     "mission": f"VEILLE TECHNO: Trouve une technique Python avancée ou une librairie récente ({search_query}) utile pour un système d'agents autonomes. Sois concis et technique.",
                     "context": "Focus: Performance, Stabilité, Architecture."
                 })
-                
+
                 research_data = research_response.get("result", "")
                 if not research_data:
                     return {"status": "warning", "result": "Recherche infructueuse."}
@@ -108,7 +138,7 @@ class DivineEvolution(BaseAgent):
                     f"MODULES EXISTANTS DU PROJET :\n{modules_list}\n\n"
                     f"Voici une veille technologique :\n{research_data[:2000]}\n\n"
                     f"ANALYSE : Est-ce une amélioration CONCRÈTE et APPLICABLE à un module existant de PROMÉTHÉE ?\n"
-                    f"ATTENTION : Ne propose PAS de nouveau module générique (trading, commerce, smart contracts, etc.).\n"
+                    f"ATTENTION : Ne propose PAS de nouveau module générique (trading, commerce, smart contracts, RSS, etc.).\n"
                     f"La spécification doit cibler un fichier EXISTANT (core/*.py ou Agents/*.py) et proposer une modification précise.\n\n"
                     f"SI OUI : Rédige une SPÉCIFICATION TECHNIQUE pour le Coder :\n"
                     f"  - Fichier cible existant (ex: core/orchestrator.py)\n"
@@ -116,34 +146,55 @@ class DivineEvolution(BaseAgent):
                     f"SI NON : Réponds juste 'R.A.S'."
                 )
                 spec_response = await self.generate_content(decision_prompt)
-                
+
                 if "R.A.S" in spec_response:
                     self.log_thought("💤 Découverte non pertinente. Fin de cycle.", type="info")
                     return {"status": "success", "result": "R.A.S"}
 
+                # --- FILTRE DE PERTINENCE DUR ---
+                # Vérification 1 : mots-clés hors-sujet
+                if _is_spec_offtopic(spec_response):
+                    self.log_thought(
+                        "🚫 Spec rejetée : contient des mots-clés hors-périmètre (trading/blockchain/RSS/etc.).",
+                        type="warning"
+                    )
+                    return {"status": "success", "result": "R.A.S — spec hors périmètre projet."}
+
+                # Vérification 2 : la spec doit cibler un fichier existant
+                if not _spec_targets_existing_file(spec_response):
+                    self.log_thought(
+                        "🚫 Spec rejetée : ne cible aucun fichier existant (core/*.py ou Agents/*.py).",
+                        type="warning"
+                    )
+                    return {"status": "success", "result": "R.A.S — spec ne cible aucun module existant."}
+
                 # --- PHASE 3 : MATÉRIALISATION (Coder) ---
                 self.log_thought("🛠️ Phase 3 : Délégation au Coder...", type="info")
-                
+
                 coder_response = await orchestrator.dispatch_task("coder", {
-                    "mission": "Génère le code complet correspondant à cette spécification. Donne UNIQUEMENT le code.",
+                    "mission": (
+                        "Génère le code complet correspondant à cette spécification. "
+                        "Le code DOIT modifier un fichier EXISTANT du projet PROMÉTHÉE. "
+                        "Donne UNIQUEMENT le code Python."
+                    ),
                     "context": f"EVOLUTION_PIPELINE\nSPÉCIFICATION :\n{spec_response}"
                 })
-                
+
                 generated_code = coder_response.get("result", "")
-                if not generated_code:
-                    return {"status": "error", "result": "Le Coder n'a rien produit."}
+                if not generated_code or "R.A.S" in generated_code:
+                    self.log_thought("💤 Coder n'a rien produit de pertinent.", type="info")
+                    return {"status": "success", "result": "R.A.S — code non pertinent."}
 
                 # --- PHASE 4 : DÉPLOIEMENT SÉCURISÉ (Architecte) ---
-                # On passe le bébé à l'Architecte. C'est lui qui décidera d'envoyer au Formatter -> Factory.
                 self.log_thought("🛡️ Phase 4 : Soumission à l'Architecte...", type="info")
-                
+
                 architect_response = await orchestrator.dispatch_task("architect", {
                     "mission": "Analyse ce nouveau module R&D. S'il est sûr, valide-le pour déploiement (Envoi Formatter).",
                     "context": generated_code
                 })
-                
+
                 return {
-                    "status": "success", 
+                    "status": "success",
                     "result": f"CYCLE DARWIN TERMINÉ.\nRecherche: OK\nSpec: OK\nCode: OK\nDéploiement: {architect_response.get('status')}"
                 }
 

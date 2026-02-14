@@ -1,6 +1,9 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from core.council import Council, parse_council_mission, _is_consensus, _strip_markdown_prefix
+from core.council import (
+    Council, parse_council_mission, _is_consensus, _strip_markdown_prefix,
+    MIN_ROUNDS_BEFORE_CONSENSUS, _COUNCIL_PROJECT_CONTEXT,
+)
 from core.orchestrator import Orchestrator
 from core.event_bus.bus import bus
 
@@ -195,6 +198,69 @@ class TestCouncilRun:
         assert result["rounds_used"] == 2  # Arrêt au tour 2, pas 5
 
     @pytest.mark.asyncio
+    async def test_consensus_tour_1_ignore(self):
+        """Anti-écho V2 : CONSENSUS au tour 1 est ignoré (MIN_ROUNDS_BEFORE_CONSENSUS)."""
+        # Les deux agents disent CONSENSUS à chaque tour
+        coder_responses = ["CONSENSUS : ok"] * 3
+        security_responses = ["CONSENSUS : ok"] * 3
+
+        agents = {
+            "coder": self._make_mock_agent(coder_responses),
+            "security": self._make_mock_agent(security_responses),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+        result = await council.run()
+
+        assert result["status"] == "consensus"
+        # Le consensus ne peut PAS arriver au tour 1
+        assert result["rounds_used"] >= MIN_ROUNDS_BEFORE_CONSENSUS
+        assert result["rounds_used"] == MIN_ROUNDS_BEFORE_CONSENSUS  # Accepté au tour 2
+
+    @pytest.mark.asyncio
+    async def test_prompt_tour_1_contient_critique_obligatoire(self):
+        """Le prompt du tour 1 demande la critique obligatoire."""
+        agents = {
+            "coder": self._make_mock_agent(),
+            "security": self._make_mock_agent(),
+        }
+        council = Council(agents, ["coder", "security"], "test mission", max_rounds=3)
+        prompt = council._build_prompt("coder", 1)
+
+        assert "CRITIQUE OBLIGATOIRE" in prompt
+        assert "CONSENSUS" in prompt  # Mentionne qu'on ne peut PAS donner CONSENSUS
+
+    @pytest.mark.asyncio
+    async def test_prompt_tour_2_autorise_consensus(self):
+        """Le prompt du tour 2+ autorise le consensus."""
+        agents = {
+            "coder": self._make_mock_agent(),
+            "security": self._make_mock_agent(),
+        }
+        council = Council(agents, ["coder", "security"], "test mission", max_rounds=3)
+        prompt = council._build_prompt("coder", MIN_ROUNDS_BEFORE_CONSENSUS)
+
+        assert "CRITIQUE OBLIGATOIRE" not in prompt
+        assert "CONSENSUS" in prompt  # Mentionne qu'on PEUT donner CONSENSUS
+
+    @pytest.mark.asyncio
+    async def test_prompt_contient_contexte_projet(self):
+        """Le prompt injecte le contexte projet PROMÉTHÉE."""
+        agents = {
+            "coder": self._make_mock_agent(),
+            "security": self._make_mock_agent(),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+        prompt = council._build_prompt("coder", 1)
+
+        assert "PROMÉTHÉE" in prompt
+        assert "Kubernetes" in prompt  # Dans la liste des exclusions
+
+    @pytest.mark.asyncio
+    async def test_min_rounds_before_consensus_value(self):
+        """La constante MIN_ROUNDS_BEFORE_CONSENSUS vaut 2."""
+        assert MIN_ROUNDS_BEFORE_CONSENSUS == 2
+
+    @pytest.mark.asyncio
     async def test_consensus_partiel_ne_suffit_pas(self):
         """Un seul agent en consensus ne suffit pas, il faut tous."""
         coder_responses = ["CONSENSUS : ok"] * 3
@@ -298,4 +364,5 @@ class TestOrchestratorCouncil:
 
         result = await orch.dispatch_council(["coder", "security"], "test mission")
         assert result["status"] == "consensus"
-        assert result["rounds_used"] == 1
+        # MIN_ROUNDS_BEFORE_CONSENSUS = 2 : consensus ignoré au tour 1, accepté au tour 2
+        assert result["rounds_used"] == MIN_ROUNDS_BEFORE_CONSENSUS
