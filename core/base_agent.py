@@ -72,7 +72,7 @@ class BaseAgent:
                 project_id = getattr(Config, "PROJECT_ID", "default")
                 self.memory_manager = ChromaMemoryManager.get_instance(project_id=project_id)
                 self.has_memory = True
-            except Exception as e:
+            except BaseException as e:
                 logger.warning(f"[{name}] Connexion mémoire ChromaDB échouée (mode dégradé) : {e}")
         
         # Chargement Modèles Cloud (Pour l'escalade)

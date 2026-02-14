@@ -161,7 +161,7 @@ class RoutineScorer:
             # Repetition penalty : basée sur le TOTAL d'occurrences récentes (pas juste consécutives)
             total_recent = sum(1 for h in recent_intents if h == intent)
             if total_recent >= 3:
-                score -= 3.0
+                score -= 4.0
             elif total_recent == 2:
                 score -= 1.5
             elif total_recent == 1:
