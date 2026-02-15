@@ -104,6 +104,15 @@ class StrategicJournal:
         self._save()
         logger.info(f"[JOURNAL] +Council: {subject[:60]}")
 
+    def append_objectives_report(self, report_text: str):
+        """Ajoute un bilan d'objectifs au journal."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        entry = f"### {now} — Bilan Objectifs\n{report_text}"
+        self._entries.append(entry)
+        self._trim()
+        self._save()
+        logger.info(f"[JOURNAL] +Bilan objectifs")
+
     def append_research_entry(self, topic: str, findings: str,
                               source: str = "web"):
         """Ajoute une entrée de veille/recherche."""

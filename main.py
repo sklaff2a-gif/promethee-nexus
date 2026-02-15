@@ -190,6 +190,7 @@ async def lifespan(app: FastAPI):
 
     # --- OBJECTIFS AUTONOMES ---
     objectives_engine.init()
+    objectives_engine.seed_daily_objectives()
     print(f"   🎯 OBJECTIFS: Moteur d'objectifs actif ({len(objectives_engine.get_active_objectives())} actifs).")
 
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")

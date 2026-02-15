@@ -1597,12 +1597,39 @@ class EvolutionCatalog:
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored
 
+    # Mapping type d'objectif → préfixes de specs à booster
+    OBJECTIVE_CATEGORY_BONUS = {
+        "performance": ["PERF-"],
+        "evolution": ["INT-", "OBS-"],
+        "maintenance": ["SEC-", "MEM-", "RES-"],
+    }
+
     def get_top_candidates(self, n: int = 5) -> List[tuple]:
-        """Retourne les top N candidats (spec, score)."""
+        """Retourne les top N candidats (spec, score), avec bonus objectifs actifs."""
         eligible = self.get_eligible_specs()
         if not eligible:
             return []
         scored = self.score_specs(eligible)
+
+        # Bonus objectifs actifs
+        try:
+            from core.objectives_engine import objectives as obj_engine
+            active_types = {o["type"] for o in obj_engine.get_active_objectives()}
+            if active_types:
+                boosted = []
+                for spec, sc in scored:
+                    bonus = 0.0
+                    for obj_type in active_types:
+                        prefixes = self.OBJECTIVE_CATEGORY_BONUS.get(obj_type, [])
+                        for prefix in prefixes:
+                            if spec.id.startswith(prefix):
+                                bonus = max(bonus, 2.0)
+                    boosted.append((spec, sc + bonus))
+                boosted.sort(key=lambda x: x[1], reverse=True)
+                return boosted[:n]
+        except Exception:
+            pass
+
         return scored[:n]
 
     def build_selection_prompt(self, candidates: List[tuple]) -> str:

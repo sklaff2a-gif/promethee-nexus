@@ -31,6 +31,58 @@ COMPLETION_REWARDS = {
     "evolution":    {"creativite": 1.0, "audace": 0.5, "curiosite": 0.3},
 }
 
+# Templates d'objectifs aspirationnels (rotation quotidienne)
+DAILY_OBJECTIVE_TEMPLATES = [
+    {
+        "title": "Explorer un nouveau sujet technique",
+        "type": "exploration",
+        "priority": "medium",
+        "criteria": {"metric": "total_routines", "operator": ">=", "target": 3},
+        "routine_affinities": {"VEILLE_SILENCIEUSE": 1.5, "COUNCIL_DEBATE": 0.5},
+        "deadline_routines": 40,
+    },
+    {
+        "title": "Deployer une amelioration Evolution",
+        "type": "evolution",
+        "priority": "medium",
+        "criteria": {"metric": "evolution_deployed", "operator": ">=", "target": 1},
+        "routine_affinities": {"EXPANSION_CODE": 1.5, "GRIMOIRE_INVOKE": 0.5},
+        "deadline_routines": 50,
+    },
+    {
+        "title": "Securiser un module du projet",
+        "type": "maintenance",
+        "priority": "low",
+        "criteria": {"metric": "security_audits", "operator": ">=", "target": 2},
+        "routine_affinities": {"SECURITY_AUDIT": 1.5, "AUDIT_STRUCTURE": 0.5},
+        "deadline_routines": 40,
+    },
+    {
+        "title": "Enrichir la memoire collective",
+        "type": "exploration",
+        "priority": "low",
+        "criteria": {"metric": "memories_added", "operator": ">=", "target": 3},
+        "routine_affinities": {"VEILLE_SILENCIEUSE": 1.0, "COUNCIL_DEBATE": 1.0},
+        "deadline_routines": 40,
+    },
+    {
+        "title": "Atteindre un consensus Council",
+        "type": "performance",
+        "priority": "medium",
+        "criteria": {"metric": "consensus_rate", "operator": ">=", "target": 0.5},
+        "routine_affinities": {"COUNCIL_DEBATE": 1.5},
+        "deadline_routines": 30,
+    },
+    {
+        "title": "Nettoyer et optimiser le systeme",
+        "type": "maintenance",
+        "priority": "low",
+        "criteria": {"metric": "cleanup_done", "operator": ">=", "target": 1},
+        "routine_affinities": {"MEMORY_CLEANUP": 1.5, "AUDIT_STRUCTURE": 1.0, "REFACTOR_RANDOM": 0.5},
+        "deadline_routines": 30,
+    },
+]
+
 # Mapping pattern → objectif auto-généré
 PATTERN_OBJECTIVE_MAP = {
     "error_streak": {
@@ -81,6 +133,22 @@ PATTERN_OBJECTIVE_MAP = {
         "routine_affinities": {"VEILLE_SILENCIEUSE": 0.5, "COUNCIL_DEBATE": 0.5, "EXPANSION_CODE": 0.3},
         "deadline_routines": 25,
     },
+    "trait_rising": {
+        "title": "Capitaliser sur le trait {nom}",
+        "type": "exploration",
+        "priority": "low",
+        "criteria": {"metric": "trait_value:{nom}", "operator": ">=", "target": 70},
+        "routine_affinities": {"COUNCIL_DEBATE": 1.0, "EXPANSION_CODE": 0.5},
+        "deadline_routines": 30,
+    },
+    "high_success_rate": {
+        "title": "Tenter une evolution ambitieuse",
+        "type": "evolution",
+        "priority": "medium",
+        "criteria": {"metric": "evolution_deployed", "operator": ">=", "target": 1},
+        "routine_affinities": {"EXPANSION_CODE": 1.5, "GRIMOIRE_INVOKE": 0.5},
+        "deadline_routines": 40,
+    },
 }
 
 
@@ -101,6 +169,9 @@ class ObjectivesEngine:
         self._initialized = True
         self._objectives: List[Dict[str, Any]] = []
         self._subscribed = False
+        self._seed_index: int = 0
+        self._session_counters: Dict[str, int] = {}
+        self._last_report_day: Optional[str] = None
         self._load()
 
     # --- Init & Reset ---
@@ -117,6 +188,9 @@ class ObjectivesEngine:
         self._objectives = []
         self._subscribed = False
         self._initialized = False
+        self._seed_index = 0
+        self._session_counters = {}
+        self._last_report_day = None
 
     @classmethod
     def reset_singleton(cls):
@@ -128,6 +202,19 @@ class ObjectivesEngine:
 
     async def _on_routine_complete(self, event: dict):
         """Appelé après chaque routine autonome."""
+        # Incrémenter les compteurs de session
+        intent = event.get("intent", "")
+        status = event.get("status", "")
+        if intent and status == "success":
+            if intent == "EXPANSION_CODE":
+                self._session_counters["evolution_deployed"] = self._session_counters.get("evolution_deployed", 0) + 1
+            elif intent == "SECURITY_AUDIT":
+                self._session_counters["security_audits"] = self._session_counters.get("security_audits", 0) + 1
+            elif intent == "VEILLE_SILENCIEUSE":
+                self._session_counters["memories_added"] = self._session_counters.get("memories_added", 0) + 1
+            elif intent == "MEMORY_CLEANUP":
+                self._session_counters["cleanup_done"] = self._session_counters.get("cleanup_done", 0) + 1
+
         # Incrémenter routines_since_creation pour tous les objectifs actifs
         for obj in self._objectives:
             if obj["status"] == "active":
@@ -251,6 +338,14 @@ class ObjectivesEngine:
         elif metric.startswith("trait_value:"):
             trait_name = metric.split(":", 1)[1]
             return traits_avg.get(trait_name)
+        elif metric == "total_routines":
+            try:
+                from core.autonomy_engine import autonomy
+                return autonomy.total_routines_executed
+            except Exception:
+                return 0
+        elif metric in ("evolution_deployed", "security_audits", "memories_added", "cleanup_done"):
+            return self._session_counters.get(metric, 0)
 
         return None
 
@@ -322,6 +417,89 @@ class ObjectivesEngine:
 
         self._save()
 
+    # --- Seed quotidien ---
+
+    def seed_daily_objectives(self):
+        """Crée des objectifs aspirationnels si < 3 actifs. Rotation parmi les templates."""
+        active = [o for o in self._objectives if o["status"] == "active"]
+        if len(active) >= 3:
+            return
+
+        # Métriques déjà couvertes par des objectifs actifs
+        active_metrics = {o["criteria"]["metric"] for o in active}
+
+        created = 0
+        max_to_create = 2
+        templates_count = len(DAILY_OBJECTIVE_TEMPLATES)
+
+        for _ in range(templates_count):
+            if created >= max_to_create:
+                break
+            template = DAILY_OBJECTIVE_TEMPLATES[self._seed_index % templates_count]
+            self._seed_index += 1
+
+            metric = template["criteria"]["metric"]
+            if metric in active_metrics:
+                continue
+
+            obj = self.create_objective(
+                title=template["title"],
+                obj_type=template["type"],
+                priority=template["priority"],
+                source="daily_seed",
+                criteria=dict(template["criteria"]),
+                routine_affinities=dict(template["routine_affinities"]),
+                deadline_routines=template["deadline_routines"],
+            )
+            if obj:
+                active_metrics.add(metric)
+                created += 1
+
+        if created > 0:
+            self._save()
+            logger.info(f"OBJECTIFS: Seed quotidien — {created} objectif(s) aspirationnel(s) créé(s).")
+
+    # --- Bilan quotidien ---
+
+    def generate_daily_report(self) -> str:
+        """Génère un bilan des objectifs : actifs, complétés, expirés."""
+        active = [o for o in self._objectives if o["status"] == "active"]
+        completed = [o for o in self._objectives if o["status"] == "completed"]
+        failed = [o for o in self._objectives if o["status"] == "failed"]
+
+        lines = [f"## Bilan Objectifs — {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
+
+        if active:
+            lines.append(f"\n**Objectifs actifs ({len(active)})** :")
+            for o in active:
+                remaining = max(0, o["deadline_routines"] - o["routines_since_creation"])
+                lines.append(f"- {o['title']} — {o['progress']:.0%} (reste {remaining} routines)")
+        else:
+            lines.append("\n**Aucun objectif actif.**")
+
+        if completed:
+            lines.append(f"\n**Complétés ({len(completed)})** :")
+            for o in completed[-5:]:
+                lines.append(f"- ✅ {o['title']}")
+
+        if failed:
+            lines.append(f"\n**Expirés ({len(failed)})** :")
+            for o in failed[-5:]:
+                lines.append(f"- ❌ {o['title']}")
+
+        report = "\n".join(lines)
+
+        # Écrire dans le journal stratégique
+        try:
+            from core.strategic_journal import journal as strat_journal
+            strat_journal.append_objectives_report(report)
+        except Exception as e:
+            logger.warning(f"OBJECTIFS: Écriture journal échouée: {e}")
+
+        self._last_report_day = datetime.now().strftime("%Y-%m-%d")
+        logger.info(f"OBJECTIFS: Bilan quotidien généré ({len(active)} actifs, {len(completed)} complétés, {len(failed)} expirés).")
+        return report
+
     # --- Bonus scoring ---
 
     def get_routine_bonus(self, intent: str) -> float:
@@ -351,8 +529,8 @@ class ObjectivesEngine:
             if not template:
                 continue
 
-            # Gérer le cas spécial trait_falling (dynamique)
-            if p_type == "trait_falling":
+            # Gérer les cas spéciaux dynamiques (trait_falling, trait_rising)
+            if p_type in ("trait_falling", "trait_rising"):
                 trait_name = self._extract_trait_name(pattern.get("message", ""))
                 if not trait_name:
                     continue

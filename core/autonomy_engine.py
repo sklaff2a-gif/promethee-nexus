@@ -289,6 +289,14 @@ class AutonomyEngine:
             self.daily_count = 0
             self.last_reset_day = today
 
+            # Bilan et seed objectifs quotidiens
+            try:
+                from core.objectives_engine import objectives as obj_engine
+                obj_engine.generate_daily_report()
+                obj_engine.seed_daily_objectives()
+            except Exception as e:
+                logger.warning(f"[AUTONOMY] Objectifs daily reset échoué: {e}")
+
         if self.daily_count >= MAX_DAILY_ROUTINES:
             logger.warning(f"[AUTONOMY] Budget quotidien atteint ({MAX_DAILY_ROUTINES} routines). Pause jusqu'à demain.")
             return False
@@ -456,6 +464,21 @@ class AutonomyEngine:
         intent = selected["intent"]
 
         print(f"   ✨ AUTONOMY: Routine [{intent}] (score={score:.1f}) -> [{agent.upper()}] ({self.daily_count + 1}/{MAX_DAILY_ROUTINES})")
+
+        # Annonce de l'objectif associé
+        try:
+            from core.objectives_engine import objectives as obj_engine
+            best_affinity = 0.0
+            best_obj = None
+            for obj in obj_engine.get_active_objectives():
+                affinity = obj.get("routine_affinities", {}).get(intent, 0.0)
+                if affinity > best_affinity:
+                    best_affinity = affinity
+                    best_obj = obj
+            if best_obj:
+                print(f"   🎯 Contribue à: {best_obj['title']} ({best_obj['progress']:.0%})")
+        except Exception:
+            pass
 
         # Gestion spéciale des routines non-standard
         if intent == "COUNCIL_DEBATE":

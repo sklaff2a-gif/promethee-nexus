@@ -363,7 +363,15 @@ class SelfAwarenessEngine:
                             "message": f"Trait '{trait}' en baisse constante ({values[0]:.1f} → {values[2]:.1f}).",
                         })
 
-        # 4. Cloud budget critical
+        # 4. High success rate (pattern positif)
+        if perf.get("mission_count", 0) >= 10 and perf.get("success_rate", 0) > 0.85:
+            patterns.append({
+                "type": "high_success_rate",
+                "severity": "info",
+                "message": f"Taux de succes excellent: {perf['success_rate']:.0%}.",
+            })
+
+        # 5. Cloud budget critical
         cloud_used = perf.get("cloud_budget_used", 0)
         cloud_max = perf.get("cloud_budget_max", 100)
         if cloud_max > 0 and cloud_used >= cloud_max * 0.9:

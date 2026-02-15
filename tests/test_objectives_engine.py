@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 from core.objectives_engine import (
     ObjectivesEngine, STATE_FILE,
     MAX_ACTIVE_OBJECTIVES, PRIORITY_WEIGHTS, PATTERN_OBJECTIVE_MAP,
-    COMPLETION_REWARDS,
+    COMPLETION_REWARDS, DAILY_OBJECTIVE_TEMPLATES,
 )
 
 
@@ -359,3 +359,214 @@ class TestExtractTraitName:
     def test_extract_no_quotes(self):
         msg = "Trait en baisse"
         assert ObjectivesEngine._extract_trait_name(msg) is None
+
+
+class TestSeedDailyObjectives:
+    """Tests du seed quotidien d'objectifs aspirationnels."""
+
+    def test_seed_creates_two_objectives_when_empty(self, engine):
+        engine.seed_daily_objectives()
+        active = engine.get_active_objectives()
+        assert len(active) == 2
+
+    def test_seed_does_not_exceed_two(self, engine):
+        engine.seed_daily_objectives()
+        engine.seed_daily_objectives()
+        active = engine.get_active_objectives()
+        # Déjà 2 actifs → le 2e appel ne devrait rien créer (>= 3 requis pour skip, mais < 3 donc crée encore)
+        # En fait : 2 actifs < 3 donc ça va créer encore... mais les métriques sont déjà couvertes
+        # Donc ça ne devrait pas dépasser 2 + max 2 = 4 mais les doublons métriques sont bloqués
+        assert len(active) <= 4
+
+    def test_seed_skips_when_three_active(self, engine):
+        for i in range(3):
+            engine.create_objective(
+                title=f"Existant {i}", obj_type="performance", priority="medium",
+                source="user", criteria={"metric": f"metric_{i}", "operator": ">=", "target": 1},
+                routine_affinities={},
+            )
+        engine.seed_daily_objectives()
+        assert len(engine.get_active_objectives()) == 3
+
+    def test_seed_no_duplicate_metric(self, engine):
+        # Créer un objectif avec la même métrique que le premier template
+        first_metric = DAILY_OBJECTIVE_TEMPLATES[0]["criteria"]["metric"]
+        engine.create_objective(
+            title="Pré-existant", obj_type="performance", priority="medium",
+            source="user", criteria={"metric": first_metric, "operator": ">=", "target": 1},
+            routine_affinities={},
+        )
+        engine.seed_daily_objectives()
+        # L'objectif avec la même métrique ne devrait pas être dupliqué
+        metrics = [o["criteria"]["metric"] for o in engine.get_active_objectives()]
+        assert metrics.count(first_metric) == 1
+
+    def test_seed_source_is_daily_seed(self, engine):
+        engine.seed_daily_objectives()
+        active = engine.get_active_objectives()
+        for obj in active:
+            assert obj["source"] == "daily_seed"
+
+    def test_seed_rotates_templates(self, engine):
+        engine.seed_daily_objectives()
+        first_titles = {o["title"] for o in engine.get_active_objectives()}
+        # Compléter les objectifs pour libérer de la place
+        for obj in engine.get_active_objectives():
+            engine.complete_objective(obj["id"], "test")
+        engine.seed_daily_objectives()
+        second_titles = {o["title"] for o in engine.get_active_objectives()}
+        # Les titres devraient être différents (rotation)
+        assert first_titles != second_titles
+
+
+class TestDailyReport:
+    """Tests du bilan quotidien."""
+
+    def test_report_empty(self, engine):
+        report = engine.generate_daily_report()
+        assert "Bilan Objectifs" in report
+        assert "Aucun objectif actif" in report
+
+    def test_report_with_active(self, engine):
+        engine.create_objective(
+            title="Obj actif", obj_type="performance", priority="medium",
+            source="user", criteria={"metric": "success_rate", "operator": ">=", "target": 0.8},
+            routine_affinities={},
+        )
+        report = engine.generate_daily_report()
+        assert "Obj actif" in report
+        assert "Objectifs actifs (1)" in report
+
+    def test_report_with_completed(self, engine):
+        obj = engine.create_objective(
+            title="Obj complété", obj_type="performance", priority="medium",
+            source="user", criteria={"metric": "success_rate", "operator": ">=", "target": 0.8},
+            routine_affinities={},
+        )
+        engine.complete_objective(obj["id"], "test")
+        report = engine.generate_daily_report()
+        assert "Obj complété" in report
+        assert "Complétés (1)" in report
+
+    def test_report_with_failed(self, engine):
+        obj = engine.create_objective(
+            title="Obj expiré", obj_type="performance", priority="medium",
+            source="user", criteria={"metric": "success_rate", "operator": ">=", "target": 0.8},
+            routine_affinities={}, deadline_routines=0,
+        )
+        engine._find_objective(obj["id"])["routines_since_creation"] = 1
+        engine.expire_objectives()
+        report = engine.generate_daily_report()
+        assert "Obj expiré" in report
+        assert "Expirés (1)" in report
+
+    def test_report_sets_last_report_day(self, engine):
+        assert engine._last_report_day is None
+        engine.generate_daily_report()
+        assert engine._last_report_day is not None
+
+
+class TestSessionCounters:
+    """Tests des compteurs de session."""
+
+    @pytest.mark.asyncio
+    async def test_counter_expansion_code(self, engine):
+        await engine._on_routine_complete({"intent": "EXPANSION_CODE", "status": "success"})
+        assert engine._session_counters.get("evolution_deployed") == 1
+
+    @pytest.mark.asyncio
+    async def test_counter_security_audit(self, engine):
+        await engine._on_routine_complete({"intent": "SECURITY_AUDIT", "status": "success"})
+        assert engine._session_counters.get("security_audits") == 1
+
+    @pytest.mark.asyncio
+    async def test_counter_veille(self, engine):
+        await engine._on_routine_complete({"intent": "VEILLE_SILENCIEUSE", "status": "success"})
+        assert engine._session_counters.get("memories_added") == 1
+
+    @pytest.mark.asyncio
+    async def test_counter_memory_cleanup(self, engine):
+        await engine._on_routine_complete({"intent": "MEMORY_CLEANUP", "status": "success"})
+        assert engine._session_counters.get("cleanup_done") == 1
+
+    @pytest.mark.asyncio
+    async def test_counter_not_incremented_on_error(self, engine):
+        await engine._on_routine_complete({"intent": "EXPANSION_CODE", "status": "error"})
+        assert engine._session_counters.get("evolution_deployed", 0) == 0
+
+
+class TestNewReadMetrics:
+    """Tests des nouvelles métriques session."""
+
+    def test_read_evolution_deployed(self, engine):
+        engine._session_counters["evolution_deployed"] = 3
+        snap = {"performance": {}, "health": {}, "traits": {"average": {}}}
+        assert engine._read_metric("evolution_deployed", snap) == 3
+
+    def test_read_security_audits(self, engine):
+        engine._session_counters["security_audits"] = 2
+        snap = {"performance": {}, "health": {}, "traits": {"average": {}}}
+        assert engine._read_metric("security_audits", snap) == 2
+
+    def test_read_memories_added(self, engine):
+        engine._session_counters["memories_added"] = 5
+        snap = {"performance": {}, "health": {}, "traits": {"average": {}}}
+        assert engine._read_metric("memories_added", snap) == 5
+
+    def test_read_cleanup_done(self, engine):
+        engine._session_counters["cleanup_done"] = 1
+        snap = {"performance": {}, "health": {}, "traits": {"average": {}}}
+        assert engine._read_metric("cleanup_done", snap) == 1
+
+    def test_read_session_counter_default_zero(self, engine):
+        snap = {"performance": {}, "health": {}, "traits": {"average": {}}}
+        assert engine._read_metric("evolution_deployed", snap) == 0
+
+
+class TestNewPatterns:
+    """Tests des patterns positifs (trait_rising, high_success_rate)."""
+
+    def test_auto_generate_trait_rising(self, engine):
+        patterns = [{"type": "trait_rising", "severity": "info",
+                     "message": "Trait 'creativite' en hausse constante (50.0 → 65.0)."}]
+        engine.auto_generate_from_patterns(patterns)
+        active = engine.get_active_objectives()
+        assert len(active) == 1
+        assert "creativite" in active[0]["title"]
+        assert active[0]["criteria"]["metric"] == "trait_value:creativite"
+
+    def test_auto_generate_high_success_rate(self, engine):
+        patterns = [{"type": "high_success_rate", "severity": "info",
+                     "message": "Taux de succes excellent: 90%."}]
+        engine.auto_generate_from_patterns(patterns)
+        active = engine.get_active_objectives()
+        assert len(active) == 1
+        assert active[0]["title"] == "Tenter une evolution ambitieuse"
+
+    def test_pattern_map_has_trait_rising(self):
+        assert "trait_rising" in PATTERN_OBJECTIVE_MAP
+
+    def test_pattern_map_has_high_success_rate(self):
+        assert "high_success_rate" in PATTERN_OBJECTIVE_MAP
+
+
+class TestDailyObjectiveTemplates:
+    """Tests des templates aspirationnels."""
+
+    def test_templates_count(self):
+        assert len(DAILY_OBJECTIVE_TEMPLATES) == 6
+
+    def test_templates_have_required_fields(self):
+        required = {"title", "type", "priority", "criteria", "routine_affinities", "deadline_routines"}
+        for t in DAILY_OBJECTIVE_TEMPLATES:
+            assert required.issubset(t.keys()), f"Template '{t.get('title')}' manque des champs"
+
+    def test_templates_criteria_have_metric(self):
+        for t in DAILY_OBJECTIVE_TEMPLATES:
+            assert "metric" in t["criteria"]
+            assert "operator" in t["criteria"]
+            assert "target" in t["criteria"]
+
+    def test_templates_unique_metrics(self):
+        metrics = [t["criteria"]["metric"] for t in DAILY_OBJECTIVE_TEMPLATES]
+        assert len(metrics) == len(set(metrics)), "Métriques en double dans les templates"

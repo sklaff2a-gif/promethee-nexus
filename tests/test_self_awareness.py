@@ -221,6 +221,45 @@ class TestPatternDetection:
         types = [p["type"] for p in patterns]
         assert "trait_rising" in types
 
+    def test_high_success_rate_pattern(self):
+        engine = SelfAwarenessEngine()
+        engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {"error_streak": 0, "mission_count": 15, "success_rate": 0.9,
+                            "cloud_budget_used": 5, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "GO"},
+        })
+        patterns = engine.detect_patterns()
+        types = [p["type"] for p in patterns]
+        assert "high_success_rate" in types
+
+    def test_high_success_rate_not_triggered_below_threshold(self):
+        engine = SelfAwarenessEngine()
+        engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {"error_streak": 0, "mission_count": 15, "success_rate": 0.8,
+                            "cloud_budget_used": 5, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "GO"},
+        })
+        patterns = engine.detect_patterns()
+        types = [p["type"] for p in patterns]
+        assert "high_success_rate" not in types
+
+    def test_high_success_rate_requires_min_missions(self):
+        engine = SelfAwarenessEngine()
+        engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {"error_streak": 0, "mission_count": 5, "success_rate": 0.95,
+                            "cloud_budget_used": 5, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "GO"},
+        })
+        patterns = engine.detect_patterns()
+        types = [p["type"] for p in patterns]
+        assert "high_success_rate" not in types
+
 
 class TestEventHandlers:
     """Tests des handlers d'événements bus."""

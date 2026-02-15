@@ -574,6 +574,88 @@ class TestMetaEvolution:
             assert combo.status == "available"
 
 
+class TestObjectivesBonus:
+    """Tests du bonus objectifs dans get_top_candidates."""
+
+    def setup_method(self):
+        self.cat = EvolutionCatalog()
+
+    def test_performance_objective_boosts_perf_specs(self):
+        """Un objectif actif de type 'performance' booste les specs PERF-*."""
+        mock_obj_engine = MagicMock()
+        mock_obj_engine.get_active_objectives.return_value = [
+            {"type": "performance", "criteria": {"metric": "success_rate"}},
+        ]
+        mock_module = MagicMock()
+        mock_module.objectives = mock_obj_engine
+
+        with patch.dict("sys.modules", {"core.objectives_engine": mock_module}):
+            candidates = self.cat.get_top_candidates(5)
+
+        # Au moins un PERF-* devrait être dans le top 5
+        perf_ids = [s.id for s, _ in candidates if s.id.startswith("PERF-")]
+        assert len(perf_ids) > 0
+
+    def test_maintenance_objective_boosts_sec_mem_res_specs(self):
+        """Un objectif de type 'maintenance' booste SEC-*, MEM-*, RES-*."""
+        mock_obj_engine = MagicMock()
+        mock_obj_engine.get_active_objectives.return_value = [
+            {"type": "maintenance", "criteria": {"metric": "error_streak"}},
+        ]
+        mock_module = MagicMock()
+        mock_module.objectives = mock_obj_engine
+
+        with patch.dict("sys.modules", {"core.objectives_engine": mock_module}):
+            candidates = self.cat.get_top_candidates(10)
+
+        # Les specs SEC/MEM/RES devraient être boostées
+        boosted_ids = [s.id for s, _ in candidates
+                       if s.id.startswith(("SEC-", "MEM-", "RES-"))]
+        assert len(boosted_ids) >= 2
+
+    def test_evolution_objective_boosts_int_obs_specs(self):
+        """Un objectif de type 'evolution' booste INT-*, OBS-*."""
+        mock_obj_engine = MagicMock()
+        mock_obj_engine.get_active_objectives.return_value = [
+            {"type": "evolution", "criteria": {"metric": "evolution_deployed"}},
+        ]
+        mock_module = MagicMock()
+        mock_module.objectives = mock_obj_engine
+
+        with patch.dict("sys.modules", {"core.objectives_engine": mock_module}):
+            candidates = self.cat.get_top_candidates(10)
+
+        boosted_ids = [s.id for s, _ in candidates
+                       if s.id.startswith(("INT-", "OBS-"))]
+        assert len(boosted_ids) >= 2
+
+    def test_no_objectives_no_bonus(self):
+        """Sans objectifs actifs, les scores ne changent pas (pas de bonus ajouté)."""
+        mock_obj_engine = MagicMock()
+        mock_obj_engine.get_active_objectives.return_value = []
+        mock_module = MagicMock()
+        mock_module.objectives = mock_obj_engine
+
+        # Avec des objectifs vides, les candidats devraient avoir les mêmes scores
+        # que sans bonus (pas de +2 appliqué)
+        with patch.dict("sys.modules", {"core.objectives_engine": mock_module}):
+            candidates = self.cat.get_top_candidates(5)
+
+        # Vérifier que les scores sont raisonnables (pas de bonus +2)
+        for spec, score in candidates:
+            assert score < 4.0, f"{spec.id} a un score trop élevé ({score}) sans objectifs actifs"
+
+    def test_objective_category_bonus_mapping(self):
+        """Vérifie que le mapping OBJECTIVE_CATEGORY_BONUS est correct."""
+        mapping = self.cat.OBJECTIVE_CATEGORY_BONUS
+        assert "performance" in mapping
+        assert "evolution" in mapping
+        assert "maintenance" in mapping
+        assert "PERF-" in mapping["performance"]
+        assert "INT-" in mapping["evolution"]
+        assert "SEC-" in mapping["maintenance"]
+
+
 class TestSummary:
 
     def setup_method(self):
