@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from core.council import (
     Council, parse_council_mission, _is_consensus, _strip_markdown_prefix,
     MIN_ROUNDS_BEFORE_CONSENSUS, _COUNCIL_PROJECT_CONTEXT,
+    _get_project_structure,
 )
 from core.orchestrator import Orchestrator
 from core.event_bus.bus import bus
@@ -366,3 +367,49 @@ class TestOrchestratorCouncil:
         assert result["status"] == "consensus"
         # MIN_ROUNDS_BEFORE_CONSENSUS = 2 : consensus ignoré au tour 1, accepté au tour 2
         assert result["rounds_used"] == MIN_ROUNDS_BEFORE_CONSENSUS
+
+
+# ============================================================
+# TESTS STRUCTURE PROJET (Task #13)
+# ============================================================
+
+class TestProjectStructure:
+    """Vérifie l'injection de la structure projet réelle dans les prompts."""
+
+    def setup_method(self):
+        # Reset le cache pour chaque test
+        import core.council
+        core.council._PROJECT_STRUCTURE_CACHE = None
+
+    def test_get_project_structure_returns_string(self):
+        result = _get_project_structure()
+        assert isinstance(result, str)
+        assert "FICHIERS RÉELS DU PROJET" in result
+
+    def test_project_structure_contains_core(self):
+        result = _get_project_structure()
+        assert "core/" in result
+
+    def test_project_structure_contains_agents(self):
+        result = _get_project_structure()
+        assert "Agents/" in result
+
+    def test_project_structure_contains_python_files(self):
+        result = _get_project_structure()
+        assert ".py" in result
+
+    def test_project_structure_cached(self):
+        """La 2e appel utilise le cache."""
+        result1 = _get_project_structure()
+        result2 = _get_project_structure()
+        assert result1 is result2  # Même objet (cache)
+
+    def test_council_prompt_contains_project_files(self):
+        """Le prompt Council contient la structure projet."""
+        agents = {
+            "coder": MagicMock(),
+            "security": MagicMock(),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+        prompt = council._build_prompt("coder", 1)
+        assert "FICHIERS RÉELS" in prompt

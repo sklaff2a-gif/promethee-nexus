@@ -95,22 +95,37 @@ class BaseAgent:
 
     # --- MÉTHODES MÉMOIRE (PROTECTION ANTI-SPAM) ---
 
+    # Seuil de similarité pour la déduplication (0 = identique, 1 = très différent)
+    _DEDUP_DISTANCE_THRESHOLD = 0.15
+
     def remember(self, text: str, metadata: Dict = None, collection="collective_wisdom"):
         if not self.has_memory: return
         try:
-            # Check Anti-Doublon (Le Pare-Feu)
-            existing = self.memory_manager.query_documents([text], n_results=1, collection_name=collection)
+            # Check Anti-Doublon V2 : distance vectorielle + substring
+            existing = self.memory_manager.query_with_metadata(
+                [text], n_results=1, collection_name=collection
+            )
             if existing and existing['documents'] and existing['documents'][0]:
                 existing_text = existing['documents'][0][0]
-                # Si le texte est très similaire, on ignore
+                distance = existing['distances'][0][0] if existing.get('distances') else 1.0
+
+                # Doublon exact (substring)
                 if text.strip() in existing_text.strip() or existing_text.strip() in text.strip():
-                    return 
+                    return
+
+                # Doublon sémantique (distance vectorielle très proche)
+                if distance < self._DEDUP_DISTANCE_THRESHOLD:
+                    self.log_thought(
+                        f"🔄 Doublon RAG détecté (dist={distance:.3f} < {self._DEDUP_DISTANCE_THRESHOLD}), skip.",
+                        type="info"
+                    )
+                    return
 
             doc_id = str(uuid.uuid4())
             meta = metadata or {}
             meta["agent"] = self.name
             meta["timestamp"] = str(time.time())
-            
+
             self.log_thought(f"💾 Sauvegarde en mémoire ({collection})...", type="info")
             self.memory_manager.add_documents([text], [meta], [doc_id], collection)
         except Exception as e:
@@ -226,6 +241,8 @@ class BaseAgent:
 
         full_prompt = (
             f"\n[SYSTEM: Nexus V20 (Local First) | AGENT: {self.name.upper()}]\n"
+            f"[CONTRAINTE: Projet sur UN SEUL PC Windows + Ollama local. "
+            f"Pas de Kubernetes/Docker/Kafka/microservices/blockchain.]\n"
             f"{context_memory}"
             f"{prompt}"
         )
@@ -269,7 +286,7 @@ class BaseAgent:
                             # Si succès Cloud sur tâche complexe, on apprend
                             if len(cloud_response) > 50:
                                 self.remember(f"Q: {prompt}\nA: {cloud_response}", metadata={"source": used_model, "trigger": "cloud_escalation"})
-                            return cloud_response
+                            return self._strip_cot(cloud_response)
                     except Exception:
                         continue
 
@@ -281,7 +298,8 @@ class BaseAgent:
             self.log_thought(f"🏠 Traitement Local (Économie) : {local_model}", type="info")
 
         # Exécution Locale (avec streaming temps réel)
-        return await self._call_ollama_stream(full_prompt, local_model)
+        result = await self._call_ollama_stream(full_prompt, local_model)
+        return self._strip_cot(result)
 
     async def _call_ollama(self, prompt: str, model: str) -> str:
         try:
@@ -351,6 +369,41 @@ class BaseAgent:
             except Exception:
                 pass
             return full_text or "ÉCHEC TOTAL SYSTÈME."
+
+    # Patterns de chain-of-thought internes que les LLMs locaux fuient
+    _COT_PATTERNS = re.compile(
+        r'^(?:'
+        r'(?:We|I) (?:need|should|can|will|must|have) '
+        r"|(?:The (?:assistant|user|system|code|task|question|problem|answer)'s)"
+        r'|(?:Ok |Okay |Alright |Sure |Well |So |Now |First|Second|Third|Let me )'
+        r"|(?:Here'?s? (?:my|the|a|what) )"
+        r"|(?:I'(?:ll|m|ve) )"
+        r"|(?:This (?:is|seems|looks|appears|means|requires) )"
+        r"|(?:Let's )"
+        r')',
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _strip_cot(cls, text: str) -> str:
+        """Retire les lignes de chain-of-thought et les blocs <think>."""
+        # Strip les blocs <think>...</think> (deepseek-r1)
+        cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+        if not cleaned:
+            return text  # Ne pas retourner vide
+        # Strip les lignes de raisonnement interne en tête de réponse
+        lines = cleaned.split('\n')
+        start = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if cls._COT_PATTERNS.match(stripped):
+                start = i + 1
+            else:
+                break
+        result = '\n'.join(lines[start:]).strip()
+        return result if result else cleaned
 
     def log_thought(self, message: str, type: str = "info"):
         self.logger.info(f"[{self.name.upper()}] {message[:100]}...")

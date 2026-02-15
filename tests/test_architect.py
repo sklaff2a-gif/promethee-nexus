@@ -1,4 +1,7 @@
-"""Tests pour l'Architect Agent - strip markdown, override detection, risk analysis."""
+"""Tests pour l'Architect Agent - strip markdown, override detection, risk analysis, anti-sterile, autonomous guard."""
+import asyncio
+import pytest
+from unittest.mock import AsyncMock, patch, MagicMock
 from Agents.architect_agent import DivineArchitect
 
 
@@ -162,3 +165,136 @@ class TestShouldActivateLogic:
                           (risk_level == "LOW" and not llm_refused) or \
                           (is_override and risk_level != "CRITICAL")
         assert should_activate is False
+
+
+# ═══════════════════════════════════════════════════════════
+# TestContainsPythonCode (5 tests) — Task #11
+# ═══════════════════════════════════════════════════════════
+
+class TestContainsPythonCode:
+    """Vérifie la détection de code Python structurel."""
+
+    def test_real_code_detected(self):
+        code = "import os\nfrom typing import Dict\ndef foo():\n    pass"
+        assert DivineArchitect._contains_python_code(code) is True
+
+    def test_class_and_import(self):
+        code = "import logging\nclass MyAgent:\n    def run(self): pass"
+        assert DivineArchitect._contains_python_code(code) is True
+
+    def test_plain_text_rejected(self):
+        text = "VALIDÉ — Les fichiers temporaires sont propres."
+        assert DivineArchitect._contains_python_code(text) is False
+
+    def test_single_import_insufficient(self):
+        text = "Le code utilise import os mais c'est tout."
+        assert DivineArchitect._contains_python_code(text) is False
+
+    def test_audit_result_rejected(self):
+        text = "Aucun fichier .tmp ou .log trouvé à la racine. Tout est propre."
+        assert DivineArchitect._contains_python_code(text) is False
+
+
+# ═══════════════════════════════════════════════════════════
+# TestAntiSterileLoop (3 tests) — Task #11
+# ═══════════════════════════════════════════════════════════
+
+class TestAntiSterileLoop:
+    """Vérifie que le Formatter n'est pas appelé sans code Python."""
+
+    @pytest.mark.asyncio
+    async def test_validation_without_code_skips_formatter(self):
+        """VALIDÉ + pas de code → VALIDÉ_SANS_CODE, pas de dispatch au Formatter."""
+        architect = DivineArchitect()
+        with patch.object(architect, "generate_content", new_callable=AsyncMock,
+                          return_value="VALIDÉ — Fichiers temporaires OK"), \
+             patch.object(architect, "recall", return_value=""), \
+             patch.object(architect, "log_thought"):
+            result = await architect.process_task({
+                "mission": "Vérifie les fichiers temporaires.",
+                "context": "Aucun .tmp trouvé."
+            })
+        assert result["status"] == "success"
+        assert result["result"] == "VALIDÉ_SANS_CODE"
+
+    @pytest.mark.asyncio
+    async def test_validation_with_code_dispatches_formatter(self):
+        """VALIDÉ + code Python → ROUTAGE_FORMATTER_OK."""
+        architect = DivineArchitect()
+        code_context = "import os\nfrom typing import Dict\ndef process():\n    return True"
+        with patch.object(architect, "generate_content", new_callable=AsyncMock,
+                          return_value="VALIDÉ — Code propre"), \
+             patch.object(architect, "recall", return_value=""), \
+             patch.object(architect, "log_thought"), \
+             patch("core.orchestrator.orchestrator") as mock_orch, \
+             patch("asyncio.get_running_loop") as mock_loop:
+            mock_loop.return_value.create_task = MagicMock()
+            mock_orch.dispatch_task = AsyncMock()
+            result = await architect.process_task({
+                "mission": "Valide ce code.",
+                "context": code_context
+            })
+        assert result["result"] == "ROUTAGE_FORMATTER_OK"
+
+
+# ═══════════════════════════════════════════════════════════
+# TestAutonomousOverrideGuard (4 tests) — Task #12
+# ═══════════════════════════════════════════════════════════
+
+class TestAutonomousOverrideGuard:
+    """ADMIN_OVERRIDE doit être ignoré en mode autonome."""
+
+    @pytest.mark.asyncio
+    async def test_override_ignored_with_protocole_autonomie(self):
+        """ADMIN_OVERRIDE + PROTOCOLE_AUTONOMIE → override ignoré."""
+        architect = DivineArchitect()
+        with patch.object(architect, "generate_content", new_callable=AsyncMock,
+                          return_value="REFUSÉ — Risque moyen"), \
+             patch.object(architect, "recall", return_value=""), \
+             patch.object(architect, "log_thought"):
+            result = await architect.process_task({
+                "mission": "ADMIN_OVERRIDE: Valide ce module.",
+                "context": "PROTOCOLE_AUTONOMIE"
+            })
+        # Sans override et sans LLM approval, risque MEDIUM → bloqué
+        assert result["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_override_ignored_with_evolution_pipeline(self):
+        """ADMIN_OVERRIDE + EVOLUTION_PIPELINE → override ignoré."""
+        architect = DivineArchitect()
+        with patch.object(architect, "generate_content", new_callable=AsyncMock,
+                          return_value="REFUSÉ — Code suspect"), \
+             patch.object(architect, "recall", return_value=""), \
+             patch.object(architect, "log_thought"):
+            result = await architect.process_task({
+                "mission": "ADMIN_OVERRIDE: Valide cette spec R&D.",
+                "context": "EVOLUTION_PIPELINE\nSPEC_ID: test"
+            })
+        assert result["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_override_works_from_user_command(self):
+        """ADMIN_OVERRIDE sans marqueur autonome → override fonctionne."""
+        architect = DivineArchitect()
+        with patch.object(architect, "generate_content", new_callable=AsyncMock,
+                          return_value="REFUSÉ — Risque inconnu"), \
+             patch.object(architect, "recall", return_value=""), \
+             patch.object(architect, "log_thought"), \
+             patch("core.orchestrator.orchestrator") as mock_orch, \
+             patch("asyncio.get_running_loop") as mock_loop:
+            mock_loop.return_value.create_task = MagicMock()
+            mock_orch.dispatch_task = AsyncMock()
+            result = await architect.process_task({
+                "mission": "ADMIN_OVERRIDE: Deploy ce code maintenant.",
+                "context": "import os\nfrom foo import bar\ndef run(): pass"
+            })
+        # Override user + code Python → ROUTAGE_FORMATTER_OK
+        assert result["status"] == "success"
+
+    def test_autonomous_markers_list(self):
+        """Vérifie que les marqueurs autonomes sont définis."""
+        markers = DivineArchitect._AUTONOMOUS_MARKERS
+        assert "PROTOCOLE_AUTONOMIE" in markers
+        assert "EVOLUTION_PIPELINE" in markers
+        assert "MODE VEILLE" in markers

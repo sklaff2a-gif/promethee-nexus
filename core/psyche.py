@@ -377,45 +377,60 @@ class PsycheEngine:
 
     def select_council_topic(self, error_streak: int = 0,
                              daily_count: int = 0,
-                             debate_index: int = 0) -> Dict[str, Any]:
+                             debate_index: int = 0,
+                             recent_subjects: list = None) -> Dict[str, Any]:
         """Choisit le sujet et les participants du débat autonome.
         debate_index sert à faire tourner les thèmes de recherche.
-        Retourne {"participants": [...], "mission": str, "needs_research": bool, "research_query": str|None}
+        recent_subjects : liste des identifiants courts des derniers sujets débattus (pour déduplication).
+        Retourne {"participants": [...], "mission": str, "needs_research": bool, "research_query": str|None, "subject_key": str}
         """
         avg = self.get_system_average()
+        recent = [s.lower() for s in (recent_subjects or [])]
 
-        # Priorité 1 : situations critiques (pas de recherche, réaction immédiate)
-        if error_streak >= 2:
+        # Priorité 1 : situations critiques (avec cooldown — max 1 débat par sujet critique)
+        if error_streak >= 2 and "erreurs" not in recent[-2:]:
             return {
                 "participants": ["strategist", "architect", "security"],
                 "mission": "Le système accumule des erreurs. Comment stabiliser la situation ?",
                 "needs_research": False, "research_query": None,
+                "subject_key": "erreurs",
             }
-        if daily_count >= 15:
+        if daily_count >= 15 and "budget" not in recent[-2:]:
             return {
                 "participants": ["strategist", "evolution"],
                 "mission": "Le budget quotidien est presque épuisé. Comment prioriser les actions restantes ?",
                 "needs_research": False, "research_query": None,
+                "subject_key": "budget",
             }
 
         # Priorité 2 (par défaut) : débat alimenté par la recherche web (rotation)
-        # C'est le cœur de l'apprentissage — TOUJOURS actif sauf situations critiques
-        # ou trait véritablement extrême (seuils hauts à 80+, rares en pratique).
-        theme = RESEARCH_THEMES[debate_index % len(RESEARCH_THEMES)]
+        # Avancer l'index si le thème a déjà été débattu récemment
+        n_themes = len(RESEARCH_THEMES)
+        for offset in range(n_themes):
+            idx = (debate_index + offset) % n_themes
+            theme = RESEARCH_THEMES[idx]
+            theme_key = theme["query"][:30].lower()
+            if theme_key not in recent[-3:]:
+                break
+        else:
+            # Tous les thèmes ont été débattus récemment — prendre le suivant en rotation
+            theme = RESEARCH_THEMES[debate_index % n_themes]
+            theme_key = theme["query"][:30].lower()
 
         # Priorité 3 : traits extrêmes — REMPLACE le thème de recherche (rare)
-        # Seuils hauts (80+) pour ne se déclencher qu'en cas de dérive réelle
         if avg.get("curiosite", 50) > 80:
             return {
                 "participants": ["researcher", "evolution", "coder"],
                 "mission": "La curiosité du système est très élevée. Quel domaine explorer en priorité ?",
                 "needs_research": True, "research_query": theme["query"],
+                "subject_key": "curiosite",
             }
         if avg.get("survie", 50) > 80:
             return {
                 "participants": ["architect", "security", "strategist"],
                 "mission": "L'instinct de survie est extrême. Est-ce de la prudence excessive ?",
                 "needs_research": True, "research_query": theme["query"],
+                "subject_key": "survie",
             }
 
         return {
@@ -423,6 +438,7 @@ class PsycheEngine:
             "mission": theme["framing"],
             "needs_research": True,
             "research_query": theme["query"],
+            "subject_key": theme_key,
         }
 
     def get_debate_index(self) -> int:

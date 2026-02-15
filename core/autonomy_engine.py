@@ -122,6 +122,10 @@ CONTEXT_KEYWORDS = {
     "AUDIT_STRUCTURE": ["fichier", "structure", "nettoyer", "organiser", "tmp", "log"],
     "VEILLE_SILENCIEUSE": ["recherche", "apprendre", "astuce", "documentation", "veille"],
     "DROPZONE_SCAN": ["dropzone", "fichier", "import", "ingestion", "upload"],
+    "GRIMOIRE_INVOKE": ["grimoire", "éphémère", "recette", "spécialiste", "debug", "analyse"],
+    "SECURITY_AUDIT": ["sécurité", "vulnérabilité", "injection", "risque", "audit"],
+    "MEMORY_CLEANUP": ["mémoire", "nettoyage", "ancien", "doublon", "rag"],
+    "REFACTOR_RANDOM": ["refactoring", "simplifier", "lisibilité", "dette", "technique"],
 }
 
 
@@ -138,11 +142,14 @@ class RoutineScorer:
         """
         scored = []
 
-        # Extraire les intents récents depuis l'historique (fenêtre élargie à 5)
-        recent_intents = [h["intent"] for h in routine_history[-5:]] if routine_history else []
+        # Extraire les intents récents depuis l'historique (fenêtre élargie à 10)
+        recent_intents = [h["intent"] for h in routine_history[-10:]] if routine_history else []
 
         # Contexte sous forme de mots
         context_text = " ".join(recent_context).lower()
+
+        # Timestamp courant pour le cooldown temporel
+        now = datetime.now()
 
         for routine in routines:
             intent = routine["intent"]
@@ -158,14 +165,30 @@ class RoutineScorer:
             if intent == "DROPZONE_SCAN" and dropzone_count > 0:
                 score += 3.0
 
-            # Repetition penalty : basée sur le TOTAL d'occurrences récentes (pas juste consécutives)
+            # Repetition penalty : basée sur le TOTAL d'occurrences récentes (fenêtre 10)
             total_recent = sum(1 for h in recent_intents if h == intent)
-            if total_recent >= 3:
-                score -= 4.0
+            if total_recent >= 4:
+                score -= 5.0
+            elif total_recent >= 3:
+                score -= 3.0
             elif total_recent == 2:
                 score -= 1.5
             elif total_recent == 1:
                 score -= 0.5
+
+            # Cooldown temporel : pénaliser si le même intent a été exécuté récemment
+            for h in reversed(routine_history):
+                if h["intent"] == intent and "timestamp" in h:
+                    try:
+                        last_exec = datetime.fromisoformat(h["timestamp"])
+                        hours_ago = (now - last_exec).total_seconds() / 3600
+                        if hours_ago < 2:
+                            score -= 3.0
+                        elif hours_ago < 4:
+                            score -= 1.0
+                    except (ValueError, TypeError):
+                        pass
+                    break  # Seule la dernière occurrence compte
 
             # Health penalty : si DEGRADED, pénaliser les routines lourdes
             if health_verdict == "DEGRADED" and intent == "EXPANSION_CODE":
@@ -270,6 +293,10 @@ class AutonomyEngine:
             {"agent": "researcher", "intent": "VEILLE_SILENCIEUSE", "mission": "Cherche une astuce Python 'One-Liner' utile et sauvegarde-la."},
             {"agent": "researcher", "intent": "DROPZONE_SCAN", "mission": "dropzone: Scanne la dropzone pour de nouveaux fichiers."},
             {"agent": "_council", "intent": "COUNCIL_DEBATE", "mission": "Débat autonome entre agents."},
+            {"agent": "_grimoire", "intent": "GRIMOIRE_INVOKE", "mission": "Invoque un agent éphémère du Grimoire."},
+            {"agent": "security", "intent": "SECURITY_AUDIT", "mission": "Audite un module aléatoire du projet pour des vulnérabilités (injection, eval, subprocess, fichiers non sanitisés)."},
+            {"agent": "_memory_cleanup", "intent": "MEMORY_CLEANUP", "mission": "Nettoie la mémoire RAG ancienne et les doublons."},
+            {"agent": "coder", "intent": "REFACTOR_RANDOM", "mission": "Choisis un fichier Python aléatoire du projet et propose un refactoring pour améliorer la lisibilité (noms de variables, simplification de logique)."},
         ]
 
     def _persist_state(self):
@@ -284,16 +311,19 @@ class AutonomyEngine:
         }
         AutonomyStatePersistence.save(state)
 
-    def _record_routine(self, agent: str, intent: str, status: str):
-        self.routine_history.append({
+    def _record_routine(self, agent: str, intent: str, status: str, subject: str = ""):
+        entry = {
             "agent": agent,
             "intent": intent,
             "status": status,
             "timestamp": datetime.now().isoformat(),
-        })
-        # FIFO max 20
-        if len(self.routine_history) > 20:
-            self.routine_history = self.routine_history[-20:]
+        }
+        if subject:
+            entry["subject"] = subject
+        self.routine_history.append(entry)
+        # FIFO max 40 (étendu pour l'analyse temporelle)
+        if len(self.routine_history) > 40:
+            self.routine_history = self.routine_history[-40:]
 
     def get_status(self) -> dict:
         return {
@@ -360,9 +390,17 @@ class AutonomyEngine:
 
         print(f"   ✨ AUTONOMY: Routine [{intent}] (score={score:.1f}) -> [{agent.upper()}] ({self.daily_count + 1}/{MAX_DAILY_ROUTINES})")
 
-        # Gestion spéciale COUNCIL_DEBATE
+        # Gestion spéciale des routines non-standard
         if intent == "COUNCIL_DEBATE":
             response = await self._execute_council_debate()
+        elif intent == "GRIMOIRE_INVOKE":
+            response = await self._execute_grimoire_routine()
+        elif intent == "MEMORY_CLEANUP":
+            response = await self._execute_memory_cleanup()
+        elif intent == "SECURITY_AUDIT":
+            response = await self._execute_security_audit()
+        elif intent == "REFACTOR_RANDOM":
+            response = await self._execute_refactor_random()
         elif intent == "DROPZONE_SCAN" and dropzone_count == 0:
             # Dropzone vide → veille YouTube IA (rotation des sujets)
             yt_index = self.total_routines_executed % len(YOUTUBE_AI_VEILLE)
@@ -393,12 +431,15 @@ class AutonomyEngine:
                 "context": "PROTOCOLE_AUTONOMIE"
             })
 
+        # Sujet du council (pour la déduplication)
+        council_subject = getattr(self, "_current_council_subject", "")
+
         if response and response.get("status") in ("success", "consensus"):
             print(f"   ✅ Fin Routine {agent.upper() if agent != '_council' else 'COUNCIL'}")
-            self._record_routine(agent, intent, "success")
+            self._record_routine(agent, intent, "success", subject=council_subject)
             self.error_streak = 0
         else:
-            self._record_routine(agent, intent, "error")
+            self._record_routine(agent, intent, "error", subject=council_subject)
             self.error_streak += 1
 
         # Publier AUTONOMY_ROUTINE_COMPLETE pour les handlers PSYCHE
@@ -424,8 +465,63 @@ class AutonomyEngine:
             except Exception:
                 pass
 
+    async def _execute_grimoire_routine(self) -> dict:
+        """Invoque un agent Grimoire en rotation (le moins récemment utilisé)."""
+        try:
+            grimoire_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grimoire", "grimoire_index.json")
+            with open(grimoire_path, "r", encoding="utf-8") as f:
+                grimoire_index = json.load(f)
+
+            if not grimoire_index:
+                return {"status": "error", "result": "Grimoire vide."}
+
+            # Rotation : choisir le slug le moins récemment invoqué
+            recent_grimoire = [
+                h["agent"] for h in self.routine_history
+                if h.get("intent") == "GRIMOIRE_INVOKE"
+            ]
+            slugs = [entry["slug"] for entry in grimoire_index]
+
+            # Trouver le slug absent de l'historique, ou le plus ancien
+            best_slug = None
+            for slug in slugs:
+                if slug not in recent_grimoire:
+                    best_slug = slug
+                    break
+            if not best_slug:
+                # Tous ont été invoqués récemment → prendre le premier (le plus ancien dans la rotation)
+                best_slug = slugs[self.total_routines_executed % len(slugs)]
+
+            # Trouver la description pour construire la mission
+            entry = next((e for e in grimoire_index if e["slug"] == best_slug), None)
+            description = entry.get("description", "Agent spécialisé") if entry else "Agent spécialisé"
+
+            mission = (
+                f"[MODE VEILLE] En tant que spécialiste ({description}), "
+                f"effectue une analyse ou action pertinente pour le système Prométhée. "
+                f"Agis de ta propre initiative."
+            )
+
+            print(f"   📖 GRIMOIRE INVOKE: {best_slug} — {description[:60]}")
+            response = await orchestrator.dispatch_task(best_slug, {
+                "mission": mission,
+                "context": "PROTOCOLE_AUTONOMIE_GRIMOIRE"
+            })
+            return response or {"status": "error", "result": "Pas de réponse du Grimoire."}
+
+        except Exception as e:
+            logger.warning(f"[AUTONOMY] Erreur routine Grimoire: {e}")
+            return {"status": "error", "result": str(e)}
+
     async def _execute_council_debate(self) -> dict:
         """Lance un débat autonome Council : Recherche web → Débat éclairé."""
+        # Extraire les sujets des derniers councils pour la déduplication
+        recent_subjects = [
+            h.get("subject", "")
+            for h in self.routine_history
+            if h.get("intent") == "COUNCIL_DEBATE" and h.get("subject")
+        ][-5:]
+
         try:
             from core.psyche import psyche
             debate_index = psyche.get_debate_index()
@@ -433,13 +529,18 @@ class AutonomyEngine:
                 error_streak=self.error_streak,
                 daily_count=self.daily_count,
                 debate_index=debate_index,
+                recent_subjects=recent_subjects,
             )
         except Exception:
             topic = {
                 "participants": ["strategist", "coder", "architect"],
                 "mission": "Quelle amélioration prioritaire pour le système ?",
                 "needs_research": False, "research_query": None,
+                "subject_key": "default",
             }
+
+        # Stocker la clé du sujet pour la déduplication future
+        self._current_council_subject = topic.get("subject_key", "")
 
         # Phase 1 : Recherche web si le sujet le demande
         research_context = ""
@@ -492,6 +593,13 @@ class AutonomyEngine:
         )
         result["participants"] = topic["participants"]
 
+        # Pipeline Council → Action : si consensus, créer des specs Evolution
+        if result.get("status") == "consensus":
+            try:
+                await self._process_council_consensus(result, topic)
+            except Exception as e:
+                logger.warning(f"[COUNCIL→ACTION] Extraction specs échouée: {e}")
+
         # Enregistrer le débat dans le journal stratégique
         try:
             from core.strategic_journal import journal as strat_journal
@@ -506,6 +614,190 @@ class AutonomyEngine:
             logger.warning(f"[COUNCIL] Écriture journal échouée: {e}")
 
         return result
+
+    async def _execute_memory_cleanup(self) -> dict:
+        """Nettoie la mémoire RAG : supprime les doublons et les entrées très anciennes."""
+        try:
+            from core.vector_store import ChromaMemoryManager
+            mgr = ChromaMemoryManager.get_instance()
+            if not mgr:
+                return {"status": "error", "result": "ChromaDB indisponible."}
+
+            removed = 0
+            for coll_name in ["collective_wisdom"]:
+                try:
+                    coll = getattr(mgr, coll_name, None) or mgr.client.get_collection(coll_name)
+                    count = coll.count()
+                    if count < 10:
+                        continue
+                    # Récupérer les plus anciens documents
+                    results = coll.get(limit=min(count, 100), include=["metadatas", "documents"])
+                    if not results or not results.get("ids"):
+                        continue
+                    now = time.time()
+                    ids_to_delete = []
+                    for i, meta in enumerate(results.get("metadatas", [])):
+                        try:
+                            ts = float(meta.get("timestamp", 0))
+                            age_days = (now - ts) / 86400
+                            if age_days > 60:  # Plus de 60 jours
+                                ids_to_delete.append(results["ids"][i])
+                        except (ValueError, TypeError):
+                            pass
+                    if ids_to_delete:
+                        coll.delete(ids=ids_to_delete[:20])  # Max 20 par cycle
+                        removed += len(ids_to_delete[:20])
+                except Exception as e:
+                    logger.warning(f"[MEMORY_CLEANUP] Erreur collection {coll_name}: {e}")
+
+            msg = f"Nettoyage mémoire : {removed} entrées anciennes supprimées."
+            print(f"   🧹 {msg}")
+            return {"status": "success", "result": msg}
+        except Exception as e:
+            return {"status": "error", "result": str(e)}
+
+    async def _execute_security_audit(self) -> dict:
+        """Audite un fichier aléatoire du projet pour des vulnérabilités."""
+        try:
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            # Lister les fichiers Python du projet
+            target_dirs = [
+                os.path.join(project_root, "core"),
+                os.path.join(project_root, "Agents"),
+            ]
+            py_files = []
+            for d in target_dirs:
+                if os.path.isdir(d):
+                    py_files.extend(
+                        os.path.join(d, f) for f in os.listdir(d) if f.endswith(".py")
+                    )
+            if not py_files:
+                return {"status": "error", "result": "Aucun fichier Python trouvé."}
+
+            # Choisir un fichier en rotation
+            target = py_files[self.total_routines_executed % len(py_files)]
+            filename = os.path.basename(target)
+
+            # Lire le contenu (limité à 3000 chars)
+            with open(target, "r", encoding="utf-8") as f:
+                code = f.read()[:3000]
+
+            print(f"   🔒 SECURITY AUDIT: {filename}")
+            response = await orchestrator.dispatch_task("security", {
+                "mission": f"[MODE VEILLE] Audite ce fichier pour des vulnérabilités : {filename}",
+                "context": (
+                    f"PROTOCOLE_AUTONOMIE\n"
+                    f"FICHIER: {filename}\n"
+                    f"CODE:\n{code}"
+                ),
+            })
+            return response or {"status": "error", "result": "Pas de réponse."}
+        except Exception as e:
+            return {"status": "error", "result": str(e)}
+
+    async def _execute_refactor_random(self) -> dict:
+        """Propose un refactoring pour un fichier aléatoire."""
+        try:
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            target_dirs = [
+                os.path.join(project_root, "core"),
+                os.path.join(project_root, "Agents"),
+            ]
+            py_files = []
+            for d in target_dirs:
+                if os.path.isdir(d):
+                    py_files.extend(
+                        os.path.join(d, f) for f in os.listdir(d) if f.endswith(".py")
+                    )
+            if not py_files:
+                return {"status": "error", "result": "Aucun fichier Python trouvé."}
+
+            # Rotation différente du security audit (offset +7)
+            target = py_files[(self.total_routines_executed + 7) % len(py_files)]
+            filename = os.path.basename(target)
+
+            with open(target, "r", encoding="utf-8") as f:
+                code = f.read()[:3000]
+
+            print(f"   🔧 REFACTOR: {filename}")
+            response = await orchestrator.dispatch_task("coder", {
+                "mission": (
+                    f"[MODE VEILLE] Analyse {filename} et propose UN SEUL refactoring précis "
+                    f"pour améliorer la lisibilité ou réduire la complexité. "
+                    f"Pas de réécriture complète, juste une suggestion ciblée."
+                ),
+                "context": f"PROTOCOLE_AUTONOMIE\nFICHIER: {filename}\nCODE:\n{code}",
+            })
+            return response or {"status": "error", "result": "Pas de réponse."}
+        except Exception as e:
+            return {"status": "error", "result": str(e)}
+
+    async def _process_council_consensus(self, council_result: dict, topic: dict):
+        """Transforme un consensus Council en specs Evolution (Council → Action)."""
+        import re
+        from core.evolution_catalog import EvolutionCatalog, ImprovementSpec
+
+        final_summary = council_result.get("final_summary", "")
+        if not final_summary or len(final_summary) < 50:
+            return
+
+        catalog = EvolutionCatalog()
+
+        # Limiter à 2 specs générées par session pour éviter le spam
+        existing_council_specs = [
+            s for s in catalog.specs.values()
+            if s.id.startswith("COUNCIL-") and s.status == "available"
+        ]
+        if len(existing_council_specs) >= 4:
+            logger.info("[COUNCIL→ACTION] Déjà 4 specs Council en attente, skip.")
+            return
+
+        # Extraire les fichiers cibles mentionnés dans le consensus
+        valid_prefixes = ("core/", "Agents/")
+        file_mentions = re.findall(r'((?:core|Agents)/[\w/]+\.py)', final_summary)
+        file_mentions = [f for f in file_mentions if any(f.startswith(p) for p in valid_prefixes)]
+
+        # Extraire les actions concrètes (lignes avec "ACTION", "IMPLÉMENTER", "AJOUTER", "MODIFIER")
+        action_patterns = re.findall(
+            r'(?:ACTION|IMPLÉMENTER|AJOUTER|MODIFIER|SUGGESTION|RECOMMANDATION)\s*[:\-]\s*(.+)',
+            final_summary,
+            re.IGNORECASE,
+        )
+
+        if not action_patterns and not file_mentions:
+            logger.info("[COUNCIL→ACTION] Pas d'action concrète dans le consensus.")
+            return
+
+        # Construire la spec
+        mission_short = topic.get("mission", "amélioration")[:80]
+        spec_id = f"COUNCIL-{int(time.time()) % 100000}"
+
+        # Prendre le premier fichier cible mentionné, ou un générique
+        target_file = file_mentions[0] if file_mentions else "core/base_agent.py"
+
+        # Résumé des actions
+        actions_text = "\n".join(f"- {a.strip()}" for a in action_patterns[:3])
+        if not actions_text:
+            actions_text = final_summary[:500]
+
+        spec = ImprovementSpec(
+            id=spec_id,
+            name=f"Council: {mission_short}",
+            description=f"Issu d'un consensus Council.\n{actions_text}",
+            category="intelligence",
+            target_file=target_file,
+            target_method="process_task",
+            difficulty=2,
+            code_template=f"# Spec générée par consensus Council\n# Mission: {mission_short}\n# Actions:\n{actions_text}",
+            validation="Vérifier que l'amélioration proposée par le Council fonctionne.",
+            tags=["council", "consensus", "auto-generated"],
+            status="available",
+        )
+
+        catalog.specs[spec_id] = spec
+        catalog._save()
+        logger.info(f"[COUNCIL→ACTION] Spec {spec_id} créée : {mission_short}")
+        print(f"   📋 COUNCIL→ACTION: Spec {spec_id} ajoutée au catalogue Evolution")
 
     async def start_loop(self):
         self.is_running = True

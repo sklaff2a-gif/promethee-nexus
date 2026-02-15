@@ -1,3 +1,4 @@
+import os
 import re
 import logging
 import time
@@ -23,8 +24,35 @@ _COUNCIL_PROJECT_CONTEXT = (
     "autonomy_engine, ci_pipeline, self_awareness, psyche, vector_store, "
     "10 agents (strategist, coder, architect, factory, formatter, researcher, "
     "writer, security, infra, evolution).\n"
-    "PAS de Kubernetes, Docker, Kafka, microservices, blockchain, ni budget réel."
+    "CONTRAINTE MATÉRIELLE : Le projet tourne sur UN SEUL PC Windows avec Ollama local. "
+    "Pas de cluster, pas de conteneurs, pas de cloud infra.\n"
+    "HORS PÉRIMÈTRE : Kubernetes, Docker, Kafka, microservices, blockchain, "
+    "Chaos Engineering, load balancing, budget réel."
 )
+
+
+_PROJECT_STRUCTURE_CACHE = None
+
+def _get_project_structure() -> str:
+    """Liste dynamique des fichiers réels du projet (lazy, cached)."""
+    global _PROJECT_STRUCTURE_CACHE
+    if _PROJECT_STRUCTURE_CACHE is not None:
+        return _PROJECT_STRUCTURE_CACHE
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    lines = ["FICHIERS RÉELS DU PROJET :"]
+    for subdir in ["core", "Agents", "core/grimoire", "core/event_bus",
+                    "core/capabilities", "core/memory"]:
+        dir_path = os.path.join(project_root, subdir.replace("/", os.sep))
+        if os.path.isdir(dir_path):
+            py_files = sorted(f for f in os.listdir(dir_path) if f.endswith(".py"))
+            if py_files:
+                lines.append(f"  {subdir}/ : {', '.join(py_files)}")
+    root_py = sorted(f for f in os.listdir(project_root)
+                     if f.endswith(".py") and os.path.isfile(os.path.join(project_root, f)))
+    if root_py:
+        lines.append(f"  ./ : {', '.join(root_py)}")
+    _PROJECT_STRUCTURE_CACHE = "\n".join(lines)
+    return _PROJECT_STRUCTURE_CACHE
 
 
 def _strip_markdown_prefix(text: str) -> str:
@@ -126,9 +154,16 @@ class Council:
                 f"- Rappel : une bonne solution est SIMPLE et cible des fichiers EXISTANTS.\n"
             )
 
+        # Structure projet réelle (anti-hallucination de fichiers)
+        try:
+            project_files = _get_project_structure()
+        except Exception:
+            project_files = ""
+
         return (
             f"Tu participes à un CONSEIL multi-agents.\n"
-            f"{_COUNCIL_PROJECT_CONTEXT}\n\n"
+            f"{_COUNCIL_PROJECT_CONTEXT}\n"
+            f"{project_files}\n\n"
             f"MISSION : {self.mission}\n"
             f"PARTICIPANTS : {', '.join(p.upper() for p in self.participants)}\n"
             f"TOUR : {current_round}/{self.max_rounds}\n"

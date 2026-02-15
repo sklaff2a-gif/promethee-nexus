@@ -61,6 +61,12 @@ class _TeeStream:
     def flush(self):
         self.original.flush()
 
+    def isatty(self):
+        return self.original.isatty()
+
+    def fileno(self):
+        return self.original.fileno()
+
 sys.stdout = _TeeStream(sys.__stdout__, _file_handler)
 sys.stderr = _TeeStream(sys.__stderr__, _file_handler)
 from core.orchestrator import orchestrator

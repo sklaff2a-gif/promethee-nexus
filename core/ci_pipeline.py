@@ -47,23 +47,29 @@ def _extract_api_signatures(source_code: str) -> str:
         return ""
 
     lines = []
-    for node in ast.walk(tree):
+    # Variables/constantes de module (top-level assignments)
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                name = getattr(target, "id", None)
+                if name and name.isupper():
+                    lines.append(f"  {name} = ...")
+
+    for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.ClassDef):
             bases = ", ".join(
                 getattr(b, "id", getattr(b, "attr", "?")) for b in node.bases
             )
             lines.append(f"  class {node.name}({bases}):")
             for item in node.body:
-                if isinstance(item, ast.FunctionDef) and not item.name.startswith("_"):
-                    args = ", ".join(a.arg for a in item.args.args if a.arg != "self")
-                    lines.append(f"    def {item.name}({args})")
-                elif isinstance(item, ast.FunctionDef) and item.name == "__init__":
+                if isinstance(item, ast.FunctionDef) and item.name == "__init__":
                     args = ", ".join(a.arg for a in item.args.args if a.arg != "self")
                     lines.append(f"    def __init__({args})")
-        elif isinstance(node, ast.FunctionDef) and not isinstance(
-            getattr(node, "_parent", None), ast.ClassDef
-        ):
-            if not node.name.startswith("_") and node.col_offset == 0:
+                elif isinstance(item, ast.FunctionDef) and not item.name.startswith("_"):
+                    args = ", ".join(a.arg for a in item.args.args if a.arg != "self")
+                    lines.append(f"    def {item.name}({args})")
+        elif isinstance(node, ast.FunctionDef):
+            if not node.name.startswith("_"):
                 args = ", ".join(a.arg for a in node.args.args)
                 lines.append(f"  def {node.name}({args})")
 
@@ -319,66 +325,21 @@ async def run_pipeline(filename: str, filepath: str):
         )
 
     test_prompt = (
-        f"Génère des tests pytest pour le code suivant. "
-        f"Réponds UNIQUEMENT avec un bloc de code Python contenant les tests.\n"
+        f"MISSION : Génère des tests pytest pour le fichier '{filename}'.\n\n"
         f"{import_hint}\n"
         f"{api_section}\n"
+        f"RÈGLES STRICTES :\n"
+        f"1. Importe UNIQUEMENT les symboles listés dans 'API RÉELLE' ci-dessus.\n"
+        f"2. N'invente AUCUNE classe, fonction ou méthode qui n'est pas listée.\n"
+        f"3. Utilise des mocks (unittest.mock) pour les dépendances externes.\n"
+        f"4. Réponds UNIQUEMENT avec un bloc ```python contenant les tests.\n"
+        f"5. Chaque test doit utiliser assert (pas de print).\n"
         f"{memory_context}\n"
+        f"CODE SOURCE COMPLET À TESTER :\n"
         f"```python\n{source_code}\n```"
     )
 
-    try:
-        test_response = await coder.generate_content(test_prompt)
-    except Exception as e:
-        await bus.publish("CI_PIPELINE_STEP", {
-            "filename": filename, "step": "test_generation",
-            "status": "error", "detail": str(e)
-        })
-        _remember_failure(filename, source_code, "test_generation", str(e))
-        _rollback(filepath)
-        await bus.publish("CI_PIPELINE_RESULT", {
-            "filename": filename, "success": False,
-            "detail": f"Échec génération tests : {e}"
-        })
-        return
-
-    test_code = extract_python_code(test_response)
-    if not test_code:
-        await bus.publish("CI_PIPELINE_STEP", {
-            "filename": filename, "step": "test_generation",
-            "status": "error", "detail": "Aucun code test extrait de la réponse LLM"
-        })
-        _remember_failure(filename, source_code, "test_generation", "Aucun code test extrait de la réponse LLM")
-        _rollback(filepath)
-        await bus.publish("CI_PIPELINE_RESULT", {
-            "filename": filename, "success": False,
-            "detail": "Échec extraction tests depuis la réponse LLM"
-        })
-        return
-
-    await bus.publish("CI_PIPELINE_STEP", {
-        "filename": filename, "step": "test_generation",
-        "status": "success", "detail": "Tests générés"
-    })
-
-    # 3. Validation syntaxique du code de test AVANT écriture
-    try:
-        compile(test_code, "<generated_test>", "exec")
-    except SyntaxError as e:
-        detail = f"Code test invalide (SyntaxError ligne {e.lineno}): {e.msg}"
-        await bus.publish("CI_PIPELINE_STEP", {
-            "filename": filename, "step": "test_validation",
-            "status": "error", "detail": detail
-        })
-        _remember_failure(filename, source_code, "test_validation", detail)
-        # PAS de rollback : le code source n'est pas en cause
-        await bus.publish("CI_PIPELINE_RESULT", {
-            "filename": filename, "success": False,
-            "detail": f"Tests auto-générés invalides — source conservée"
-        })
-        return
-
-    # 3b. Validation des imports : les symboles importés doivent exister dans le source
+    # Calcul du module path (réutilisé pour validation)
     normalized_fp = filepath.replace("\\", "/")
     mod_path = None
     for marker in ("Agents/", "core/", "capabilities/"):
@@ -390,19 +351,104 @@ async def run_pipeline(filename: str, filepath: str):
             mod_path = rel.replace("/", ".")
             break
 
-    imports_ok, import_err = _validate_test_imports(test_code, source_code, mod_path or "")
-    if not imports_ok:
-        detail = f"Tests auto-générés avec imports invalides : {import_err}"
-        await bus.publish("CI_PIPELINE_STEP", {
-            "filename": filename, "step": "test_validation",
-            "status": "error", "detail": detail
-        })
-        _remember_failure(filename, source_code, "test_validation", detail)
-        await bus.publish("CI_PIPELINE_RESULT", {
-            "filename": filename, "success": False,
-            "detail": f"Tests rejetés (imports fantômes) — source conservée"
-        })
-        return
+    # Boucle génération + validation (max 2 tentatives)
+    max_attempts = 2
+    current_prompt = test_prompt
+    test_code = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            test_response = await coder.generate_content(current_prompt)
+        except Exception as e:
+            await bus.publish("CI_PIPELINE_STEP", {
+                "filename": filename, "step": "test_generation",
+                "status": "error", "detail": str(e)
+            })
+            _remember_failure(filename, source_code, "test_generation", str(e))
+            _rollback(filepath)
+            await bus.publish("CI_PIPELINE_RESULT", {
+                "filename": filename, "success": False,
+                "detail": f"Échec génération tests : {e}"
+            })
+            return
+
+        test_code = extract_python_code(test_response)
+        if not test_code:
+            if attempt < max_attempts:
+                logger.info(f"[CI/CD] Tentative {attempt} : pas de code extrait, retry")
+                continue
+            await bus.publish("CI_PIPELINE_STEP", {
+                "filename": filename, "step": "test_generation",
+                "status": "error", "detail": "Aucun code test extrait de la réponse LLM"
+            })
+            _remember_failure(filename, source_code, "test_generation",
+                              "Aucun code test extrait de la réponse LLM")
+            _rollback(filepath)
+            await bus.publish("CI_PIPELINE_RESULT", {
+                "filename": filename, "success": False,
+                "detail": "Échec extraction tests depuis la réponse LLM"
+            })
+            return
+
+        # 3. Validation syntaxique du code de test
+        try:
+            compile(test_code, "<generated_test>", "exec")
+        except SyntaxError as e:
+            if attempt < max_attempts:
+                logger.info(f"[CI/CD] Tentative {attempt} : SyntaxError, retry")
+                current_prompt = (
+                    f"CORRECTION : ta réponse précédente contenait une SyntaxError "
+                    f"(ligne {e.lineno}: {e.msg}).\n"
+                    f"Régénère les tests en corrigeant cette erreur.\n\n"
+                    + test_prompt
+                )
+                continue
+            detail = f"Code test invalide (SyntaxError ligne {e.lineno}): {e.msg}"
+            await bus.publish("CI_PIPELINE_STEP", {
+                "filename": filename, "step": "test_validation",
+                "status": "error", "detail": detail
+            })
+            _remember_failure(filename, source_code, "test_validation", detail)
+            await bus.publish("CI_PIPELINE_RESULT", {
+                "filename": filename, "success": False,
+                "detail": f"Tests auto-générés invalides — source conservée"
+            })
+            return
+
+        # 3b. Validation des imports : les symboles importés doivent exister
+        imports_ok, import_err = _validate_test_imports(
+            test_code, source_code, mod_path or ""
+        )
+        if not imports_ok:
+            if attempt < max_attempts:
+                logger.info(f"[CI/CD] Tentative {attempt} : {import_err}, retry")
+                current_prompt = (
+                    f"CORRECTION : ta réponse précédente avait des imports invalides.\n"
+                    f"ERREUR : {import_err}\n"
+                    f"Utilise UNIQUEMENT les symboles qui existent dans le code source.\n\n"
+                    + test_prompt
+                )
+                continue
+            detail = f"Tests auto-générés avec imports invalides : {import_err}"
+            await bus.publish("CI_PIPELINE_STEP", {
+                "filename": filename, "step": "test_validation",
+                "status": "error", "detail": detail
+            })
+            _remember_failure(filename, source_code, "test_validation", detail)
+            await bus.publish("CI_PIPELINE_RESULT", {
+                "filename": filename, "success": False,
+                "detail": f"Tests rejetés (imports fantômes) — source conservée"
+            })
+            return
+
+        # Validation passée
+        break
+
+    await bus.publish("CI_PIPELINE_STEP", {
+        "filename": filename, "step": "test_generation",
+        "status": "success",
+        "detail": f"Tests générés (tentative {attempt})"
+    })
 
     # 3c. Écriture des tests dans tests/auto/
     os.makedirs(AUTO_TESTS_DIR, exist_ok=True)

@@ -3,6 +3,7 @@ import os
 import httpx
 import json
 import logging
+import unicodedata
 from typing import Optional
 
 # Configuration minimale pour l'appel LLM autonome du routeur
@@ -15,10 +16,10 @@ except ImportError:
 
 class RouterAgent:
     """
-    RouterAgent V2.3 - Blind Trust + Grimoire
+    RouterAgent V2.4 - Grimoire-First
     - Niveau 0 : Adressage Direct (Syntaxe 'Nom: Action') -> Passe tout (Grimoire compatible).
+    - Niveau 0.5 : Consultation du Grimoire (agents éphémères spécialisés, scoring + normalisation Unicode).
     - Niveau 1 : Détection par Mots-clés (Réflexe instantané sur liste connue).
-    - Niveau 1.5 : Consultation du Grimoire (Index des agents éphémères).
     - Niveau 2 : Analyse Sémantique LLM (Réflexion en cas d'ambiguïté).
     """
 
@@ -40,6 +41,13 @@ class RouterAgent:
             # Ex: "math_wizard" (OK) vs "Calcul le" (KO - ignoré)
             if ' ' not in potential_agent:
                 return potential_agent.lower()
+
+        # --- NIVEAU 0.5 : CONSULTATION DU GRIMOIRE (Spécialistes éphémères) ---
+        # Les recettes Grimoire sont spécialisées et matchent avant les mots-clés génériques.
+        grimoire_match = RouterAgent._check_grimoire_index(m_low)
+        if grimoire_match:
+            print(f"📖 ROUTER: Grimoire match -> {grimoire_match.upper()}")
+            return grimoire_match
 
         # --- NIVEAU 1 : SYSTÈME RÉFLEXE (Règles strictes sur Agents Connus) ---
 
@@ -63,32 +71,51 @@ class RouterAgent:
         if any(x in m_low for x in ["format", "clean", "nettoie", "indente", "syntaxe"]): return "formatter"
         if any(x in m_low for x in ["conseil", "débat", "council", "débattre"]): return "conseil"
 
-        # --- NIVEAU 1.5 : CONSULTATION DU GRIMOIRE ---
-        grimoire_match = RouterAgent._check_grimoire_index(m_low)
-        if grimoire_match:
-            print(f"📖 ROUTER: Grimoire match -> {grimoire_match.upper()}")
-            return grimoire_match
-
         # --- NIVEAU 2 : AUTO-RÉFLEXION (Appel LLM Local) ---
         # Si aucune règle ne matche, on demande au LLM de trancher
         print(f"🤔 ROUTER: Ambiguïté détectée sur '{mission[:30]}...'. Analyse Sémantique en cours...")
         return await RouterAgent._semantic_reflection(mission)
 
     @staticmethod
+    def _normalize(text: str) -> str:
+        """Retire les accents et met en minuscule pour comparaison insensible aux accents."""
+        nfkd = unicodedata.normalize('NFKD', text)
+        return "".join(c for c in nfkd if not unicodedata.combining(c)).lower()
+
+    @staticmethod
+    def _load_grimoire_index():
+        """Charge le cache de l'index Grimoire si nécessaire."""
+        if RouterAgent._grimoire_index_cache is None:
+            index_path = os.path.join(os.path.dirname(__file__), "grimoire", "grimoire_index.json")
+            if not os.path.exists(index_path):
+                return False
+            with open(index_path, "r", encoding="utf-8") as f:
+                RouterAgent._grimoire_index_cache = json.load(f)
+        return True
+
+    @staticmethod
     def _check_grimoire_index(mission_lower: str) -> Optional[str]:
-        """Consulte l'index du Grimoire pour trouver un agent éphémère correspondant."""
+        """Consulte l'index du Grimoire avec matching robuste (scoring + normalisation Unicode)."""
         try:
-            if RouterAgent._grimoire_index_cache is None:
-                index_path = os.path.join(os.path.dirname(__file__), "grimoire", "grimoire_index.json")
-                if not os.path.exists(index_path):
-                    return None
-                with open(index_path, "r", encoding="utf-8") as f:
-                    RouterAgent._grimoire_index_cache = json.load(f)
+            if not RouterAgent._load_grimoire_index():
+                return None
+
+            mission_norm = RouterAgent._normalize(mission_lower)
+            best_slug = None
+            best_score = 0
 
             for entry in RouterAgent._grimoire_index_cache:
                 for keyword in entry.get("keywords", []):
-                    if keyword in mission_lower:
-                        return entry["slug"]
+                    kw_norm = RouterAgent._normalize(keyword)
+                    if len(kw_norm) < 3:
+                        continue  # Trop court, risque de faux positif
+                    if kw_norm in mission_norm:
+                        score = len(kw_norm)  # Les mots-clés longs sont plus précis
+                        if score > best_score:
+                            best_score = score
+                            best_slug = entry["slug"]
+
+            return best_slug
         except Exception as e:
             print(f"⚠️ ROUTER: Erreur lecture index Grimoire : {e}")
         return None

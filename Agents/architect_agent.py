@@ -8,11 +8,13 @@ logger = logging.getLogger("architect")
 
 class DivineArchitect(BaseAgent):
     """
-    DivineArchitect V26.1 (Router + Admin Override)
+    DivineArchitect V26.2 (Anti-Sterile + Autonomous Guard)
     - Rôle : Valideur ET Routeur.
     - Safety Net : Force la validation si le risque est 'LOW'.
-    - Admin Override : Autorise les mises à jour système si demandées explicitement.
-    - Action : Si validation OK, déclenche le FORMATTER.
+    - Admin Override : Autorise les mises à jour système si demandées par l'UTILISATEUR.
+    - Anti-Sterile : Skip le Formatter si aucun code Python n'est détecté.
+    - Autonomous Guard : ADMIN_OVERRIDE ignoré en mode autonome.
+    - Action : Si validation OK ET code présent, déclenche le FORMATTER.
     """
     def __init__(self):
         super().__init__(name="architect", role="Senior Staff Engineer", description="Valideur et Gardien de la cohérence.")
@@ -42,6 +44,15 @@ FORMAT DE RÉPONSE :
         # Retirer puces (- VALIDÉ, * VALIDÉ)
         text = re.sub(r'^[-\*]\s+', '', text)
         return text.strip()
+
+    # Marqueurs de contexte indiquant un pipeline autonome (pas d'utilisateur)
+    _AUTONOMOUS_MARKERS = ("PROTOCOLE_AUTONOMIE", "EVOLUTION_PIPELINE", "MODE VEILLE")
+
+    @staticmethod
+    def _contains_python_code(text: str) -> bool:
+        """Détecte du vrai code Python structurel (pas une simple mention)."""
+        code_patterns = re.findall(r'^(import |from \w+ import|class \w+|def \w+\(|@\w+)', text, re.MULTILINE)
+        return len(code_patterns) >= 2
 
     def _analyze_risk(self, text: str) -> str:
         """Analyse heuristique rapide des dangers."""
@@ -74,9 +85,19 @@ FORMAT DE RÉPONSE :
         # 1. ANALYSE HEURISTIQUE
         risk_level = self._analyze_risk(full_content)
         # Override explicite uniquement via mot-clé dédié (pas de faux positifs sur "update" ou "admin")
-        # Supporte "ADMIN_OVERRIDE" (underscore) ET "ADMIN OVERRIDE" (espace) — l'Evolution utilise l'espace
+        # Supporte "ADMIN_OVERRIDE" (underscore) ET "ADMIN OVERRIDE" (espace)
         mission_upper = mission.upper()
         is_override = "ADMIN_OVERRIDE" in mission_upper or "ADMIN OVERRIDE" in mission_upper
+
+        # Guard autonome : ADMIN_OVERRIDE ignoré si le contexte vient d'un pipeline autonome
+        # (seules les commandes utilisateur réelles peuvent forcer l'override)
+        if is_override:
+            context_upper = context.upper()
+            is_autonomous = any(m in context_upper or m in mission_upper
+                                for m in self._AUTONOMOUS_MARKERS)
+            if is_autonomous:
+                self.log_thought("🛡️ ADMIN_OVERRIDE ignoré (mode autonome détecté).", type="warning")
+                is_override = False
         
         # On prépare le terrain pour le LLM
         if risk_level == "LOW":
@@ -126,30 +147,38 @@ FORMAT DE RÉPONSE :
                           (is_override and risk_level != "CRITICAL")
 
         if should_activate:
-            trigger_msg = "✅ VALIDATION (Envoi au Formatter)."
+            trigger_msg = "✅ VALIDATION"
             if is_override: trigger_msg += " [ADMIN OVERRIDE]"
             elif not llm_approved: trigger_msg += " [Force-Low-Risk]"
-            
+
+            # --- GUARD ANTI-BOUCLE STÉRILE ---
+            # Ne dispatcher au Formatter QUE s'il y a du vrai code Python
+            if not self._contains_python_code(full_content):
+                trigger_msg += " (Pas de code Python — skip Formatter)."
+                self.log_thought(trigger_msg, type="success")
+                return {"status": "success", "result": "VALIDÉ_SANS_CODE", "details": trigger_msg}
+
+            trigger_msg += " (Envoi au Formatter)."
             self.log_thought(trigger_msg, type="success")
-            
+
             # --- ROUTAGE VERS LE FORMATTER ---
             try:
                 from core.orchestrator import orchestrator
-                
+
                 formatter_payload = {
                     "mission": "Nettoie ce code validé pour la Factory.",
-                    "context": full_content 
+                    "context": full_content
                 }
-                
+
                 loop = asyncio.get_running_loop()
                 loop.create_task(orchestrator.dispatch_task("formatter", formatter_payload))
-                
+
                 return {"status": "success", "result": "ROUTAGE_FORMATTER_OK", "details": trigger_msg}
-                
+
             except Exception as e:
                 self.log_thought(f"⚠️ Erreur Technique Relais : {e}", type="error")
                 return {"status": "warning", "result": "VALIDÉ MAIS ÉCHEC ROUTAGE"}
-        
+
         else:
             self.log_thought(f"❌ BLOQUÉ ({risk_level}) : {response[:50]}...", type="error")
             return {"status": "error", "result": response}
