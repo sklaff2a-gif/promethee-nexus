@@ -157,23 +157,25 @@ class TestRememberDedup:
         agent.memory_manager.add_documents.assert_not_called()
 
     def test_different_text_saved(self):
-        """Un texte suffisamment différent (distance > 0.15) EST enregistré."""
+        """Un texte suffisamment différent (distance > 0.15) ET assez long EST enregistré."""
         agent = self._make_agent()
         agent.memory_manager.query_with_metadata.return_value = {
             "documents": [["Audit sécurité du routeur"]],
             "distances": [[0.85]],  # Distance > 0.15
         }
-        agent.remember("Synthèse YouTube IA tendances")
+        long_text = "Synthèse complète des tendances YouTube IA pour le projet Prométhée en 2026, incluant les dernières avancées en multi-agents"
+        agent.remember(long_text)
         agent.memory_manager.add_documents.assert_called_once()
 
     def test_empty_memory_saves(self):
-        """Si la mémoire est vide, le texte est enregistré."""
+        """Si la mémoire est vide, le texte (assez long) est enregistré."""
         agent = self._make_agent()
         agent.memory_manager.query_with_metadata.return_value = {
             "documents": [[]],
             "distances": [[]],
         }
-        agent.remember("Premier souvenir")
+        long_text = "Premier souvenir du système Prométhée après initialisation complète de la mémoire vectorielle et des agents autonomes."
+        agent.remember(long_text)
         agent.memory_manager.add_documents.assert_called_once()
 
     def test_no_memory_no_crash(self):

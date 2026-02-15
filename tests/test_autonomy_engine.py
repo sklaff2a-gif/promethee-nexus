@@ -499,7 +499,10 @@ class TestAutonomyEngineV24:
         health = _make_health("GO")
         with patch("core.autonomy_engine.orchestrator") as mock_orch, \
              patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer:
-            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
+            mock_orch.dispatch_task = AsyncMock(return_value={
+                "status": "success",
+                "result": "Analyse complete du systeme avec recommandations detaillees pour ameliorer les performances globales du projet Promethee."
+            })
             mock_scorer.return_value = [(_get_routines()[0], 2.0)]
             asyncio.get_event_loop().run_until_complete(
                 self.engine._execute_scored_routine(health)
@@ -1115,3 +1118,84 @@ class TestNewRoutines:
         # Refactor: index = (total_routines_executed + 7) % len(py_files)
         # Vérifié par inspection du code : le offset +7 est bien là
         assert True  # Test de documentation
+
+
+# ═══════════════════════════════════════════════════════════
+# TestResultQualityScoring — P6
+# ═══════════════════════════════════════════════════════════
+
+class TestResultQualityScoring:
+    """Tests P6 : scoring qualité post-routine."""
+
+    def setup_method(self):
+        AutonomyEngine._instance = None
+        self.engine = AutonomyEngine.__new__(AutonomyEngine)
+        self.engine._initialized = False
+        self.engine.__init__()
+
+    def test_none_response_scores_zero(self):
+        """Réponse None → score 0.0."""
+        assert self.engine._score_result_quality(None, "VEILLE") == 0.0
+
+    def test_empty_result_scores_zero(self):
+        """Résultat vide → score 0.0."""
+        assert self.engine._score_result_quality({"status": "success", "result": ""}, "VEILLE") == 0.0
+
+    def test_very_short_result_penalized(self):
+        """Résultat très court (<50 chars) → pénalité forte."""
+        score = self.engine._score_result_quality(
+            {"status": "success", "result": "OK tout va bien."},
+            "VEILLE"
+        )
+        assert score == 0.0  # <20 chars
+
+    def test_short_result_penalized(self):
+        """Résultat court (50-100 chars) → pénalité modérée."""
+        text = "A" * 60
+        score = self.engine._score_result_quality(
+            {"status": "success", "result": text},
+            "VEILLE"
+        )
+        assert 0.5 < score < 1.0  # Pénalisé mais pas rejeté
+
+    def test_good_result_high_score(self):
+        """Résultat long et latin → bon score."""
+        text = "Voici une analyse detaillee du systeme " * 10
+        score = self.engine._score_result_quality(
+            {"status": "success", "result": text},
+            "VEILLE"
+        )
+        assert score >= 0.8
+
+    def test_non_latin_hallucination_penalized(self):
+        """Résultat avec beaucoup de non-latin → forte pénalité."""
+        text = "这是一个测试" * 30 + "a" * 10  # >15% non-latin
+        score = self.engine._score_result_quality(
+            {"status": "success", "result": text},
+            "SECURITY_AUDIT"
+        )
+        assert score < 0.6
+
+    def test_repeated_result_penalized(self):
+        """Résultat identique au précédent → pénalité."""
+        repeated_text = "Analyse de securite identique bla bla " * 10
+        # Simuler un historique avec un résultat similaire
+        self.engine.routine_history = [
+            {"agent": "security", "intent": "SECURITY_AUDIT",
+             "status": "success", "result_preview": repeated_text[:200],
+             "timestamp": datetime.now().isoformat()}
+        ]
+        score = self.engine._score_result_quality(
+            {"status": "success", "result": repeated_text},
+            "SECURITY_AUDIT"
+        )
+        assert score < 0.8  # Pénalisé pour répétition
+
+    def test_dict_without_result_key(self):
+        """Réponse sans clé 'result' → score basé sur la représentation string."""
+        score = self.engine._score_result_quality(
+            {"status": "success"},
+            "VEILLE"
+        )
+        # str(None) = "" → score 0.0
+        assert score == 0.0

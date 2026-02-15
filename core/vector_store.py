@@ -124,3 +124,47 @@ class ChromaMemoryManager:
         except Exception as e:
             print(f"❌ Erreur Mémoire (Count): {e}")
             return 0
+
+    def purge_low_quality(self, min_length: int = 100, max_non_latin_ratio: float = 0.10,
+                          collection_name: str = None) -> int:
+        """Supprime les souvenirs de mauvaise qualité (trop courts, hallucinations non-latin).
+
+        Args:
+            min_length: longueur minimum du document (en chars)
+            max_non_latin_ratio: ratio max de caractères non-latin (0.0-1.0)
+            collection_name: collection cible (None = toutes)
+
+        Returns:
+            Nombre de documents supprimés.
+        """
+        targets = [collection_name] if collection_name else list(self.collections.keys())
+        total = 0
+        for name in targets:
+            try:
+                col = self._get_collection(name)
+                all_docs = col.get(include=["documents"])
+                if not all_docs["ids"]:
+                    continue
+                bad_ids = []
+                for doc_id, doc in zip(all_docs["ids"], all_docs["documents"]):
+                    if not doc:
+                        bad_ids.append(doc_id)
+                        continue
+                    # Trop court
+                    if len(doc.strip()) < min_length:
+                        bad_ids.append(doc_id)
+                        continue
+                    # Ratio non-latin trop élevé
+                    alpha_chars = [c for c in doc if c.isalpha()]
+                    if alpha_chars:
+                        non_latin = sum(1 for c in alpha_chars if ord(c) > 0x024F)
+                        ratio = non_latin / len(alpha_chars)
+                        if ratio > max_non_latin_ratio:
+                            bad_ids.append(doc_id)
+                            continue
+                if bad_ids:
+                    col.delete(ids=bad_ids)
+                    total += len(bad_ids)
+            except Exception as e:
+                print(f"Erreur Memoire (Purge qualite {name}): {e}")
+        return total

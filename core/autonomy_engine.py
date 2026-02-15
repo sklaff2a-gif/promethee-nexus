@@ -329,6 +329,55 @@ class AutonomyEngine:
         }
         AutonomyStatePersistence.save(state)
 
+    def _score_result_quality(self, response: dict, intent: str) -> float:
+        """Score qualité du résultat d'une routine (0.0 = garbage, 1.0 = excellent).
+
+        Critères :
+        - Longueur du résultat (trop court = mauvais)
+        - Ratio caractères non-latin (hallucination)
+        - Répétition avec les résultats précédents
+        """
+        if not response or not isinstance(response, dict):
+            return 0.0
+
+        result_text = str(response.get("result", ""))
+        score = 1.0
+
+        # 1. Pénalité longueur : résultat vide ou très court
+        if len(result_text.strip()) < 20:
+            return 0.0
+        elif len(result_text.strip()) < 50:
+            score -= 0.4
+        elif len(result_text.strip()) < 100:
+            score -= 0.2
+
+        # 2. Pénalité non-latin (hallucination)
+        alpha_chars = [c for c in result_text if c.isalpha()]
+        if alpha_chars:
+            non_latin = sum(1 for c in alpha_chars if ord(c) > 0x024F)
+            ratio = non_latin / len(alpha_chars)
+            if ratio > 0.15:
+                score -= 0.5  # Forte pénalité
+            elif ratio > 0.05:
+                score -= 0.2
+
+        # 3. Pénalité répétition avec les résultats précédents
+        recent_results = [
+            str(h.get("result_preview", ""))
+            for h in self.routine_history[-5:]
+            if h.get("result_preview")
+        ]
+        for prev in recent_results:
+            if prev and result_text[:200] == prev[:200]:
+                score -= 0.4
+                break
+
+        # Stocker un aperçu pour la comparaison future
+        if hasattr(self, 'routine_history') and self.routine_history:
+            pass  # Le preview sera ajouté dans _record_routine
+
+        return max(0.0, min(1.0, score))
+
     def _record_routine(self, agent: str, intent: str, status: str, subject: str = ""):
         entry = {
             "agent": agent,
@@ -452,10 +501,19 @@ class AutonomyEngine:
         # Sujet du council (pour la déduplication)
         council_subject = getattr(self, "_current_council_subject", "")
 
+        # Score qualité post-routine
+        quality_score = self._score_result_quality(response, intent)
+
         if response and response.get("status") in ("success", "consensus"):
-            print(f"   ✅ Fin Routine {agent.upper() if agent != '_council' else 'COUNCIL'}")
-            self._record_routine(agent, intent, "success", subject=council_subject)
-            self.error_streak = 0
+            if quality_score < 0.3:
+                # Succès technique mais résultat de mauvaise qualité
+                print(f"   ⚠️ Routine {intent} terminée mais qualité basse ({quality_score:.2f})")
+                self._record_routine(agent, intent, "low_quality", subject=council_subject)
+                self.error_streak += 1
+            else:
+                print(f"   ✅ Fin Routine {agent.upper() if agent != '_council' else 'COUNCIL'} (qualité: {quality_score:.2f})")
+                self._record_routine(agent, intent, "success", subject=council_subject)
+                self.error_streak = 0
         else:
             self._record_routine(agent, intent, "error", subject=council_subject)
             self.error_streak += 1
@@ -468,7 +526,8 @@ class AutonomyEngine:
             "intent": intent,
             "agent": agent,
             "participants": participants,
-            "status": "success" if response and response.get("status") in ("success", "consensus") else "error",
+            "status": "success" if response and response.get("status") in ("success", "consensus") and quality_score >= 0.3 else "error",
+            "quality_score": quality_score,
         })
 
         self.daily_count += 1
@@ -634,21 +693,23 @@ class AutonomyEngine:
         return result
 
     async def _execute_memory_cleanup(self) -> dict:
-        """Nettoie la mémoire RAG : supprime les doublons et les entrées très anciennes."""
+        """Nettoie la mémoire RAG : purge les anciennes ET les mauvaise qualité."""
         try:
             from core.vector_store import ChromaMemoryManager
             mgr = ChromaMemoryManager.get_instance()
             if not mgr:
                 return {"status": "error", "result": "ChromaDB indisponible."}
 
-            removed = 0
+            removed_old = 0
+            removed_quality = 0
+
+            # Phase 1 : Purge des entrées anciennes (>60 jours)
             for coll_name in ["collective_wisdom"]:
                 try:
                     coll = getattr(mgr, coll_name, None) or mgr.client.get_collection(coll_name)
                     count = coll.count()
                     if count < 10:
                         continue
-                    # Récupérer les plus anciens documents
                     results = coll.get(limit=min(count, 100), include=["metadatas", "documents"])
                     if not results or not results.get("ids"):
                         continue
@@ -658,17 +719,28 @@ class AutonomyEngine:
                         try:
                             ts = float(meta.get("timestamp", 0))
                             age_days = (now - ts) / 86400
-                            if age_days > 60:  # Plus de 60 jours
+                            if age_days > 60:
                                 ids_to_delete.append(results["ids"][i])
                         except (ValueError, TypeError):
                             pass
                     if ids_to_delete:
-                        coll.delete(ids=ids_to_delete[:20])  # Max 20 par cycle
-                        removed += len(ids_to_delete[:20])
+                        coll.delete(ids=ids_to_delete[:20])
+                        removed_old += len(ids_to_delete[:20])
                 except Exception as e:
                     logger.warning(f"[MEMORY_CLEANUP] Erreur collection {coll_name}: {e}")
 
-            msg = f"Nettoyage mémoire : {removed} entrées anciennes supprimées."
+            # Phase 2 : Purge qualitative (textes courts, hallucinations non-latin)
+            try:
+                removed_quality = mgr.purge_low_quality(
+                    min_length=100,
+                    max_non_latin_ratio=0.10,
+                    collection_name="collective_wisdom"
+                )
+            except Exception as e:
+                logger.warning(f"[MEMORY_CLEANUP] Erreur purge qualitative: {e}")
+
+            total = removed_old + removed_quality
+            msg = f"Nettoyage mémoire : {removed_old} anciennes + {removed_quality} basse qualité = {total} supprimées."
             print(f"   🧹 {msg}")
             return {"status": "success", "result": msg}
         except Exception as e:

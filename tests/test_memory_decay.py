@@ -216,6 +216,61 @@ class TestCountDocuments:
         assert mgr.count_documents("collective_wisdom") == 1
 
 
+# ─── TestPurgeLowQuality ───
+
+class TestPurgeLowQuality:
+    """Tests P5 : purge qualitative de la mémoire."""
+
+    def test_purge_short_docs(self):
+        """Les documents trop courts (<100 chars) sont supprimés."""
+        mgr = _make_manager()
+        now = time.time()
+
+        _add_doc(mgr, "trop court", now, "short1")
+        _add_doc(mgr, "A" * 150 + " texte assez long pour passer le filtre qualite", now, "long1")
+        assert mgr.count_documents("collective_wisdom") == 2
+
+        removed = mgr.purge_low_quality(min_length=100, collection_name="collective_wisdom")
+        assert removed == 1
+        assert mgr.count_documents("collective_wisdom") == 1
+
+    def test_purge_non_latin_docs(self):
+        """Les documents avec >10% non-latin sont supprimés."""
+        mgr = _make_manager()
+        now = time.time()
+
+        # Document avec beaucoup de chinois
+        chinese_doc = "这是一个测试" * 30  # 100% non-latin, ~180 chars
+        _add_doc(mgr, chinese_doc, now, "chinese1")
+        # Document latin normal (>100 chars)
+        latin_doc = "Ceci est un document de test assez long pour depasser la limite " * 3
+        _add_doc(mgr, latin_doc, now, "latin1")
+        assert mgr.count_documents("collective_wisdom") == 2
+
+        removed = mgr.purge_low_quality(collection_name="collective_wisdom")
+        assert removed == 1
+        assert mgr.count_documents("collective_wisdom") == 1
+
+    def test_purge_empty_collection(self):
+        """Purge sur collection vide retourne 0."""
+        mgr = _make_manager()
+        removed = mgr.purge_low_quality(collection_name="collective_wisdom")
+        assert removed == 0
+
+    def test_purge_keeps_good_docs(self):
+        """Les documents de bonne qualité sont conservés."""
+        mgr = _make_manager()
+        now = time.time()
+
+        good_doc = "Ceci est un souvenir de bonne qualite, assez long et entierement en francais. " * 3
+        _add_doc(mgr, good_doc, now, "good1")
+        assert mgr.count_documents("collective_wisdom") == 1
+
+        removed = mgr.purge_low_quality(collection_name="collective_wisdom")
+        assert removed == 0
+        assert mgr.count_documents("collective_wisdom") == 1
+
+
 # ─── TestBackwardCompat ───
 
 class TestBackwardCompat:
@@ -230,3 +285,129 @@ class TestBackwardCompat:
         res = mgr.query_documents(["backward"], n_results=1, collection_name="collective_wisdom")
         assert res is not None
         assert res["documents"][0][0] == "backward compat test"
+
+
+# ─── TestRememberQualityFilter ───
+
+class TestRememberQualityFilter:
+    """Tests P2 : filtres qualité dans remember()."""
+
+    def test_short_text_rejected(self, monkeypatch):
+        """Un texte de moins de 100 chars est ignoré par remember()."""
+        agent = _make_agent(monkeypatch)
+        agent.memory_manager.add_documents = MagicMock()
+        agent.memory_manager.query_with_metadata = MagicMock(return_value={
+            "documents": [[]], "metadatas": [[]], "distances": [[]]
+        })
+
+        agent.remember("Trop court.")
+        agent.memory_manager.add_documents.assert_not_called()
+
+    def test_long_enough_text_accepted(self, monkeypatch):
+        """Un texte de 100+ chars passe le filtre qualité."""
+        agent = _make_agent(monkeypatch)
+        agent.memory_manager.query_with_metadata = MagicMock(return_value={
+            "documents": [[]], "metadatas": [[]], "distances": [[]]
+        })
+        agent.memory_manager.add_documents = MagicMock()
+
+        long_text = "A" * 150 + " " + "B" * 50  # 201 chars
+        agent.remember(long_text)
+        agent.memory_manager.add_documents.assert_called_once()
+
+    def test_non_latin_text_rejected(self, monkeypatch):
+        """Un texte avec >10% de caractères non-latin est rejeté (hallucination)."""
+        agent = _make_agent(monkeypatch)
+        agent.memory_manager.add_documents = MagicMock()
+        agent.memory_manager.query_with_metadata = MagicMock(return_value={
+            "documents": [[]], "metadatas": [[]], "distances": [[]]
+        })
+
+        # Texte avec beaucoup de chinois (>10% non-latin)
+        chinese_text = "这是一个测试" * 20 + "a" * 10  # majoritairement non-latin
+        agent.remember(chinese_text)
+        agent.memory_manager.add_documents.assert_not_called()
+
+    def test_mixed_latin_text_accepted(self, monkeypatch):
+        """Un texte majoritairement latin avec quelques accents passe."""
+        agent = _make_agent(monkeypatch)
+        agent.memory_manager.query_with_metadata = MagicMock(return_value={
+            "documents": [[]], "metadatas": [[]], "distances": [[]]
+        })
+        agent.memory_manager.add_documents = MagicMock()
+
+        # Texte français avec accents (< 10% non-latin car accents sont Latin Extended)
+        french_text = "Ceci est un texte en français avec des accents éàüö et beaucoup de mots pour dépasser la limite de cent caractères minimum requise."
+        agent.remember(french_text)
+        agent.memory_manager.add_documents.assert_called_once()
+
+    def test_text_truncated_at_max(self, monkeypatch):
+        """Un texte très long est tronqué à _MAX_REMEMBER_LENGTH avant stockage."""
+        agent = _make_agent(monkeypatch)
+        agent.memory_manager.query_with_metadata = MagicMock(return_value={
+            "documents": [[]], "metadatas": [[]], "distances": [[]]
+        })
+        agent.memory_manager.add_documents = MagicMock()
+
+        mega_text = "X" * 10000  # 10K chars
+        agent.remember(mega_text)
+        # Vérifier que le texte stocké fait 5000 chars (tronqué)
+        stored_text = agent.memory_manager.add_documents.call_args[0][0][0]
+        assert len(stored_text) == 5000
+
+
+# ─── TestRecallQualityThreshold ───
+
+class TestRecallQualityThreshold:
+    """Tests P2 : seuil qualité dans recall()."""
+
+    def test_low_score_filtered(self, monkeypatch):
+        """Les résultats avec score < 0.15 sont exclus du recall."""
+        agent = _make_agent(monkeypatch)
+        now = time.time()
+
+        # Distance 0.95 → similarity 0.05, decay ~1.0 → score ≈ 0.05 < 0.15
+        mock_result = {
+            "documents": [["doc pertinent", "doc bruit"]],
+            "metadatas": [[
+                {"agent": "test", "timestamp": str(now - 60)},
+                {"agent": "test", "timestamp": str(now - 60)},
+            ]],
+            "distances": [[0.2, 0.95]],  # 0.2 → score ~0.8, 0.95 → score ~0.05
+        }
+        agent.memory_manager.query_with_metadata = MagicMock(return_value=mock_result)
+
+        result = agent.recall("query", limit=2)
+        lines = [l for l in result.strip().split("\n") if l]
+        assert len(lines) == 1
+        assert lines[0] == "doc pertinent"
+
+    def test_all_below_threshold_returns_empty(self, monkeypatch):
+        """Si tous les résultats sont sous le seuil, recall retourne vide."""
+        agent = _make_agent(monkeypatch)
+        now = time.time()
+
+        mock_result = {
+            "documents": [["bruit 1", "bruit 2"]],
+            "metadatas": [[
+                {"agent": "test", "timestamp": str(now - 60)},
+                {"agent": "test", "timestamp": str(now - 60)},
+            ]],
+            "distances": [[0.95, 0.98]],  # Tout loin → score < 0.15
+        }
+        agent.memory_manager.query_with_metadata = MagicMock(return_value=mock_result)
+
+        result = agent.recall("query", limit=2)
+        assert result == ""
+
+    def test_non_latin_ratio_calculation(self):
+        """Vérifie le calcul du ratio non-latin."""
+        from core.base_agent import BaseAgent
+        # Texte 100% latin
+        assert BaseAgent._non_latin_ratio("hello world") == 0.0
+        # Texte 100% non-latin
+        assert BaseAgent._non_latin_ratio("你好世界测试") == 1.0
+        # Texte vide
+        assert BaseAgent._non_latin_ratio("") == 0.0
+        # Texte sans alpha
+        assert BaseAgent._non_latin_ratio("123 !@#") == 0.0

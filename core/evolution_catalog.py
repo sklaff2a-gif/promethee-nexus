@@ -42,7 +42,7 @@ class ImprovementSpec:
 
 
 # ---------------------------------------------------------------------------
-# Catalogue des 28 specs
+# Catalogue des 46 specs (28 originales + 18 sur fichiers non-protégés)
 # ---------------------------------------------------------------------------
 
 def _build_catalog() -> Dict[str, ImprovementSpec]:
@@ -913,6 +913,546 @@ if self._check_rate_limit(agent_name):
 """,
         validation="Dispatcher 11 missions au même agent, vérifier que la 11e est rejetée.",
         tags=["security", "rate-limit", "orchestrator"],
+    )
+
+    # === NOUVELLES SPECS — Fichiers NON protégés (18 specs) ===
+    # Ajoutées pour remplacer les 24 specs ciblant des fichiers protégés par Factory.
+    # Toutes ciblent des fichiers dans Agents/ ou core/ hors _PROTECTED_FILES.
+
+    # --- PERFORMANCE (3 specs) ---
+
+    specs["PERF-008"] = ImprovementSpec(
+        id="PERF-008",
+        name="Cache listing projet Strategist",
+        description="Cache le résultat de _get_project_files() avec TTL 60s pour éviter un scan disque à chaque process_task.",
+        category="performance",
+        target_file="Agents/strategist_agent.py",
+        target_method="_get_project_files",
+        difficulty=1,
+        code_template="""
+# Attributs de classe DivineStrategist :
+_project_files_cache: str = ""
+_project_files_ts: float = 0.0
+_PROJECT_FILES_TTL = 60  # secondes
+
+def _get_project_files(self) -> str:
+    import time
+    now = time.time()
+    if self._project_files_cache and (now - self._project_files_ts) < self._PROJECT_FILES_TTL:
+        return self._project_files_cache
+    # ... scan disque existant ...
+    self._project_files_cache = result
+    self._project_files_ts = now
+    return result
+""",
+        validation="Appeler _get_project_files 2x en <60s, vérifier que le 2e appel n'accède pas au disque.",
+        tags=["performance", "cache", "strategist"],
+    )
+
+    specs["PERF-009"] = ImprovementSpec(
+        id="PERF-009",
+        name="Lazy init WebSurfer Researcher",
+        description="Retarde l'instanciation de WebSurfer et KnowledgeIngestor au premier usage dans process_task.",
+        category="performance",
+        target_file="Agents/researcher_agent.py",
+        target_method="__init__",
+        difficulty=1,
+        code_template="""
+# Dans __init__, remplacer l'init immédiate par :
+self._surfer = None
+self._ingestor = None
+
+@property
+def surfer(self):
+    if self._surfer is None:
+        from core.capabilities.web_surfer import WebSurfer
+        self._surfer = WebSurfer()
+    return self._surfer
+
+@property
+def ingestor(self):
+    if self._ingestor is None:
+        from core.capabilities.knowledge_ingestor import KnowledgeIngestor
+        self._ingestor = KnowledgeIngestor()
+    return self._ingestor
+""",
+        validation="Créer un DivineResearcher, vérifier que WebSurfer n'est pas instancié. Appeler process_task, vérifier que WebSurfer est maintenant chargé.",
+        tags=["performance", "lazy", "import", "researcher"],
+    )
+
+    specs["PERF-010"] = ImprovementSpec(
+        id="PERF-010",
+        name="Skip binaires Dropzone",
+        description="Dans _read_batch, détecter les fichiers binaires (octets nuls dans les 512 premiers bytes) et les skip.",
+        category="performance",
+        target_file="core/dropzone_pipeline.py",
+        target_method="_read_batch",
+        difficulty=1,
+        code_template="""
+# Au début de la lecture de chaque fichier dans _read_batch :
+def _is_binary(filepath: str) -> bool:
+    try:
+        with open(filepath, 'rb') as f:
+            chunk = f.read(512)
+            return b'\\x00' in chunk
+    except Exception:
+        return True  # En cas d'erreur, considérer comme binaire
+
+# Dans _read_batch, avant la lecture :
+if _is_binary(os.path.join(root, filename)):
+    continue  # Skip les fichiers binaires
+""",
+        validation="Placer un fichier .png dans la dropzone, vérifier qu'il est ignoré par _read_batch.",
+        tags=["performance", "dropzone", "binary"],
+    )
+
+    # --- RESILIENCE (3 specs) ---
+
+    specs["RES-006"] = ImprovementSpec(
+        id="RES-006",
+        name="Fallback recherche locale Researcher",
+        description="Si WebSurfer échoue (timeout, erreur réseau), le Researcher utilise uniquement la mémoire RAG locale.",
+        category="resilience",
+        target_file="Agents/researcher_agent.py",
+        target_method="process_task",
+        difficulty=1,
+        code_template="""
+# Dans process_task, wrapper l'appel WebSurfer :
+web_results = ""
+try:
+    web_results = await self.surfer.search(query)
+except Exception as e:
+    logger.warning(f"[Researcher] WebSurfer failed, fallback RAG local: {e}")
+    web_results = self.recall(query)
+    if web_results:
+        web_results = f"(Résultats mémoire locale)\\n{web_results}"
+""",
+        validation="Mock WebSurfer pour lever une exception, vérifier que le Researcher utilise recall() et ne crash pas.",
+        tags=["resilience", "researcher", "fallback", "web"],
+    )
+
+    specs["RES-007"] = ImprovementSpec(
+        id="RES-007",
+        name="Timeout sub-checks Infra",
+        description="Ajoute un timeout de 5s sur chaque vérification psutil dans _perform_health_check pour éviter les freeze.",
+        category="resilience",
+        target_file="Agents/infra_agent.py",
+        target_method="_perform_health_check",
+        difficulty=1,
+        code_template="""
+import asyncio
+
+async def _safe_check(coro_or_func, timeout=5.0, default=None):
+    '''Exécute un check avec timeout.'''
+    try:
+        if asyncio.iscoroutinefunction(coro_or_func):
+            return await asyncio.wait_for(coro_or_func(), timeout=timeout)
+        else:
+            loop = asyncio.get_event_loop()
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, coro_or_func),
+                timeout=timeout
+            )
+    except asyncio.TimeoutError:
+        logger.warning(f"Health check timeout après {timeout}s")
+        return default
+    except Exception as e:
+        logger.warning(f"Health check error: {e}")
+        return default
+
+# Utiliser dans _perform_health_check :
+cpu = await _safe_check(lambda: psutil.cpu_percent(interval=1), default=0)
+ram = await _safe_check(lambda: psutil.virtual_memory().percent, default=0)
+""",
+        validation="Mock psutil.cpu_percent pour bloquer 10s, vérifier que le health check retourne en <6s.",
+        tags=["resilience", "infra", "timeout", "health"],
+    )
+
+    specs["RES-008"] = ImprovementSpec(
+        id="RES-008",
+        name="Auto-trim journal stratégique",
+        description="Limite le journal stratégique à 100 entrées max. Au-delà, supprime les plus anciennes.",
+        category="resilience",
+        target_file="core/strategic_journal.py",
+        target_method="append_council_entry",
+        difficulty=1,
+        code_template="""
+_MAX_JOURNAL_ENTRIES = 100
+
+# À la fin de append_council_entry et append_research_entry :
+def _auto_trim(self):
+    if len(self._entries) > _MAX_JOURNAL_ENTRIES:
+        overflow = len(self._entries) - _MAX_JOURNAL_ENTRIES
+        self._entries = self._entries[overflow:]
+        logger.info(f"Journal: auto-trim {overflow} entrées anciennes")
+        self._save()
+
+# Appeler self._auto_trim() après chaque append
+""",
+        validation="Insérer 105 entrées dans le journal, vérifier qu'il n'en reste que 100.",
+        tags=["resilience", "journal", "trim", "memory"],
+    )
+
+    # --- INTELLIGENCE (4 specs) ---
+
+    specs["INT-006"] = ImprovementSpec(
+        id="INT-006",
+        name="Post-filtre code Coder",
+        description="Après génération, vérifie que le résultat contient du code Python structurel. Sinon, re-prompt avec instruction stricte.",
+        category="intelligence",
+        target_file="Agents/coder_agent.py",
+        target_method="process_task",
+        difficulty=2,
+        code_template="""
+import re
+
+def _has_code_structure(text: str) -> bool:
+    '''Vérifie la présence de structures Python (def, class, import).'''
+    patterns = [r'^\\s*def\\s+', r'^\\s*class\\s+', r'^\\s*import\\s+', r'^\\s*from\\s+']
+    count = sum(1 for p in patterns if re.search(p, text, re.MULTILINE))
+    return count >= 2  # Au moins 2 structures différentes
+
+# Dans process_task, après la première génération :
+if "code" in mission.lower() and not _has_code_structure(result):
+    # Re-prompt plus strict
+    strict_prompt = f"GÉNÈRE UNIQUEMENT du code Python. Pas d'explication.\\n\\n{mission}"
+    result = await self.generate_content(strict_prompt)
+""",
+        validation="Demander du code, vérifier que le résultat contient des structures Python. Si le LLM retourne du texte, vérifier le re-prompt.",
+        tags=["intelligence", "coder", "quality", "post-filter"],
+    )
+
+    specs["INT-007"] = ImprovementSpec(
+        id="INT-007",
+        name="Métriques lisibilité Writer",
+        description="Calcule la longueur moyenne des phrases et le nombre de paragraphes, injecte en metadata du résultat.",
+        category="intelligence",
+        target_file="Agents/writer_agent.py",
+        target_method="process_task",
+        difficulty=1,
+        code_template="""
+def _compute_readability(text: str) -> dict:
+    '''Métriques de lisibilité basiques.'''
+    sentences = [s.strip() for s in re.split(r'[.!?]+', text) if s.strip()]
+    words = text.split()
+    paragraphs = [p.strip() for p in text.split('\\n\\n') if p.strip()]
+    avg_sentence_len = len(words) / max(len(sentences), 1)
+    return {
+        "word_count": len(words),
+        "sentence_count": len(sentences),
+        "paragraph_count": len(paragraphs),
+        "avg_sentence_length": round(avg_sentence_len, 1),
+    }
+
+# Dans process_task, après la génération :
+readability = _compute_readability(result_text)
+# Ajouter au résultat
+result["readability"] = readability
+""",
+        validation="Générer un texte, vérifier que le résultat contient les métriques de lisibilité.",
+        tags=["intelligence", "writer", "readability", "metrics"],
+    )
+
+    specs["INT-008"] = ImprovementSpec(
+        id="INT-008",
+        name="Sonde latence Ollama Infra",
+        description="Lors du health check, ping Ollama /api/tags et mesure le temps de réponse. Inclut dans les métriques.",
+        category="intelligence",
+        target_file="Agents/infra_agent.py",
+        target_method="_perform_health_check",
+        difficulty=1,
+        code_template="""
+import time
+import httpx
+
+async def _probe_ollama_latency() -> dict:
+    '''Mesure la latence Ollama via /api/tags.'''
+    try:
+        start = time.time()
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get("http://localhost:11434/api/tags")
+            latency_ms = (time.time() - start) * 1000
+            models = len(resp.json().get("models", []))
+            return {"status": "up", "latency_ms": round(latency_ms, 1), "models_loaded": models}
+    except Exception as e:
+        return {"status": "down", "error": str(e)[:100]}
+
+# Dans _perform_health_check :
+ollama_info = await _probe_ollama_latency()
+metrics["ollama"] = ollama_info
+""",
+        validation="Vérifier que les métriques contiennent ollama.latency_ms quand Ollama est up.",
+        tags=["intelligence", "infra", "ollama", "latency"],
+    )
+
+    specs["INT-009"] = ImprovementSpec(
+        id="INT-009",
+        name="Évolution traits par résultat Psyche",
+        description="Ajuste les traits PSYCHE selon le résultat des routines : succès → +créativité, échec → +prudence.",
+        category="intelligence",
+        target_file="core/psyche.py",
+        target_method="_on_routine_complete",
+        difficulty=1,
+        code_template="""
+# Dans _on_routine_complete :
+async def _on_routine_complete(self, event: dict):
+    agent = event.get("agent", "")
+    status = event.get("status", "")
+    intent = event.get("intent", "")
+
+    if not agent or agent not in self._traits:
+        return
+
+    if status == "success":
+        deltas = {"créativité": 1.5, "prudence": -0.5}
+    elif status == "error":
+        deltas = {"prudence": 1.5, "créativité": -0.5}
+    else:
+        return
+
+    self._apply_deltas_single(agent, deltas)
+    await self._publish_update()
+""",
+        validation="Simuler un event routine_complete avec status=success, vérifier que la créativité augmente.",
+        tags=["intelligence", "psyche", "traits", "adaptive"],
+    )
+
+    # --- OBSERVABILITY (4 specs) ---
+
+    specs["OBS-005"] = ImprovementSpec(
+        id="OBS-005",
+        name="Talk log structuré JSON",
+        description="Ajoute un préfixe JSON parseable à chaque entrée du talk log pour faciliter l'analyse automatique.",
+        category="observability",
+        target_file="core/talk_logger.py",
+        target_method="_format_entry",
+        difficulty=1,
+        code_template="""
+import json
+
+def _format_entry(event_type: str, data: dict) -> str:
+    '''Format structuré : ligne JSON + texte lisible.'''
+    meta = {
+        "type": event_type,
+        "ts": data.get("timestamp", ""),
+        "agent": data.get("agent", "system"),
+    }
+    json_line = json.dumps(meta, ensure_ascii=False)
+    content = data.get("content", str(data))[:500]
+    return f"[JSON]{json_line}[/JSON]\\n{content}\\n"
+""",
+        validation="Vérifier que chaque entrée du talk log contient un bloc [JSON]...[/JSON] parseable.",
+        tags=["observability", "logging", "structured", "json"],
+    )
+
+    specs["OBS-006"] = ImprovementSpec(
+        id="OBS-006",
+        name="Dédup recherches journal",
+        description="Avant d'ajouter une entrée research, vérifie si le même topic existe dans les 5 dernières entrées.",
+        category="observability",
+        target_file="core/strategic_journal.py",
+        target_method="append_research_entry",
+        difficulty=1,
+        code_template="""
+def append_research_entry(self, topic: str, findings: str, source: str = "web"):
+    # Déduplication : vérifier les 5 dernières entrées
+    topic_lower = topic.strip().lower()
+    recent = self._entries[-5:] if len(self._entries) >= 5 else self._entries
+    for entry in recent:
+        if entry.get("type") == "research":
+            if entry.get("topic", "").strip().lower() == topic_lower:
+                logger.info(f"Journal: topic dupliqué '{topic[:50]}' — skip")
+                return
+    # ... code existant d'ajout ...
+""",
+        validation="Ajouter 2x le même topic, vérifier que le 2e est ignoré.",
+        tags=["observability", "journal", "dedup"],
+    )
+
+    specs["OBS-007"] = ImprovementSpec(
+        id="OBS-007",
+        name="Détection cycles debug SelfAwareness",
+        description="Détecte le pattern 'boucle de debug' : 3+ alternances error/success en 10 minutes sur le même agent.",
+        category="observability",
+        target_file="core/self_awareness.py",
+        target_method="detect_patterns",
+        difficulty=2,
+        code_template="""
+def _detect_debug_loops(self) -> list:
+    '''Détecte les boucles error→success→error sur un même agent.'''
+    patterns = []
+    # Grouper les événements récents par agent
+    recent = self._agent_events[-50:]  # 50 derniers events
+    by_agent = {}
+    for ev in recent:
+        agent = ev.get("agent", "unknown")
+        by_agent.setdefault(agent, []).append(ev)
+
+    for agent, events in by_agent.items():
+        # Compter les alternances error↔success
+        alternances = 0
+        for i in range(1, len(events)):
+            prev_ok = events[i-1].get("status") == "success"
+            curr_ok = events[i].get("status") == "success"
+            if prev_ok != curr_ok:
+                alternances += 1
+        if alternances >= 3:
+            patterns.append({
+                "type": "debug_loop",
+                "agent": agent,
+                "alternances": alternances,
+                "severity": "warning"
+            })
+    return patterns
+""",
+        validation="Simuler 4 alternances error/success sur un agent, vérifier que le pattern debug_loop est détecté.",
+        tags=["observability", "patterns", "debug", "self-awareness"],
+    )
+
+    specs["OBS-008"] = ImprovementSpec(
+        id="OBS-008",
+        name="Métriques processing Dropzone",
+        description="Après chaque run Dropzone, publie un event DROPZONE_STATS avec files_processed, total_chars, duration.",
+        category="observability",
+        target_file="core/dropzone_pipeline.py",
+        target_method="run",
+        difficulty=1,
+        code_template="""
+import time
+from core.event_bus.bus import bus
+
+# Dans run(), au début :
+start_time = time.time()
+files_count = 0
+total_chars = 0
+
+# Après chaque fichier analysé :
+files_count += 1
+total_chars += len(content)
+
+# À la fin de run() :
+duration = time.time() - start_time
+await bus.publish("DROPZONE_STATS", {
+    "files_processed": files_count,
+    "total_chars": total_chars,
+    "duration_s": round(duration, 1),
+    "timestamp": datetime.now().isoformat()
+})
+""",
+        validation="Exécuter un run Dropzone, vérifier que l'event DROPZONE_STATS est publié avec les bonnes métriques.",
+        tags=["observability", "dropzone", "metrics", "stats"],
+    )
+
+    # --- SECURITY (2 specs) ---
+
+    specs["SEC-004"] = ImprovementSpec(
+        id="SEC-004",
+        name="Sanitization secrets Coder",
+        description="Scanne le code généré pour les patterns de secrets (API keys, tokens, passwords) et les remplace par des placeholders.",
+        category="security",
+        target_file="Agents/coder_agent.py",
+        target_method="process_task",
+        difficulty=1,
+        code_template="""
+import re
+
+_SECRET_PATTERNS = [
+    (r'["\\'](sk-[a-zA-Z0-9]{20,})["\\'"]', '"<API_KEY>"'),
+    (r'["\\'](AIza[a-zA-Z0-9_-]{30,})["\\'"]', '"<GOOGLE_API_KEY>"'),
+    (r'password\\s*=\\s*["\\'"]([^"\\'']+)["\\'"]', 'password = "<REDACTED>"'),
+    (r'token\\s*=\\s*["\\'"]([^"\\'']+)["\\'"]', 'token = "<REDACTED>"'),
+]
+
+def _sanitize_secrets(code: str) -> str:
+    for pattern, replacement in _SECRET_PATTERNS:
+        code = re.sub(pattern, replacement, code)
+    return code
+
+# Dans process_task, avant de retourner :
+result_text = _sanitize_secrets(result_text)
+""",
+        validation="Générer du code contenant 'sk-abc123...', vérifier qu'il est remplacé par <API_KEY>.",
+        tags=["security", "coder", "secrets", "sanitization"],
+    )
+
+    specs["SEC-005"] = ImprovementSpec(
+        id="SEC-005",
+        name="Whitelist extensions Dropzone",
+        description="N'analyse que les fichiers avec extensions autorisées (.py, .txt, .md, .json, .csv, .log, .yaml, .toml).",
+        category="security",
+        target_file="core/dropzone_pipeline.py",
+        target_method="run",
+        difficulty=1,
+        code_template="""
+_ALLOWED_EXTENSIONS = {".py", ".txt", ".md", ".json", ".csv", ".log", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".html", ".js"}
+
+def _is_allowed_file(filepath: str) -> bool:
+    ext = os.path.splitext(filepath)[1].lower()
+    return ext in _ALLOWED_EXTENSIONS
+
+# Dans run() ou _analyze_project(), filtrer les fichiers :
+files = [f for f in all_files if _is_allowed_file(f)]
+""",
+        validation="Placer un .exe et un .py dans la dropzone, vérifier que seul le .py est analysé.",
+        tags=["security", "dropzone", "whitelist", "extensions"],
+    )
+
+    # --- MEMORY (2 specs) ---
+
+    specs["MEM-005"] = ImprovementSpec(
+        id="MEM-005",
+        name="Mémoire structurée Researcher",
+        description="Formate les findings en 'TOPIC: x | SOURCE: y | INSIGHT: z' avant remember() pour améliorer le recall.",
+        category="memory",
+        target_file="Agents/researcher_agent.py",
+        target_method="process_task",
+        difficulty=1,
+        code_template="""
+def _format_research_memory(topic: str, source: str, findings: str) -> str:
+    '''Formate une découverte pour une meilleure recherche future.'''
+    # Extraire la première phrase comme insight clé
+    first_sentence = findings.split('.')[0].strip() if '.' in findings else findings[:200]
+    return f"TOPIC: {topic[:100]} | SOURCE: {source} | INSIGHT: {first_sentence}"
+
+# Dans process_task, avant remember() :
+structured = _format_research_memory(topic, source, raw_findings)
+self.remember(structured)
+""",
+        validation="Le Researcher mémorise un finding structuré, vérifier que recall('TOPIC: X') le retrouve.",
+        tags=["memory", "researcher", "structured", "rag"],
+    )
+
+    specs["MEM-006"] = ImprovementSpec(
+        id="MEM-006",
+        name="Snapshot traits Psyche",
+        description="Lors de chaque save(), stocke un mini-historique des traits dominants (10 derniers snapshots) pour suivre l'évolution.",
+        category="memory",
+        target_file="core/psyche.py",
+        target_method="save",
+        difficulty=1,
+        code_template="""
+_MAX_TRAIT_HISTORY = 10
+
+def save(self):
+    # ... code existant de sauvegarde ...
+
+    # Ajouter un snapshot des traits dominants
+    snapshot = {}
+    for agent, traits in self._traits.items():
+        dominant = max(traits.items(), key=lambda x: x[1])
+        snapshot[agent] = {"trait": dominant[0], "value": round(dominant[1], 1)}
+
+    if not hasattr(self, '_trait_history'):
+        self._trait_history = []
+    self._trait_history.append({
+        "ts": datetime.now().isoformat(),
+        "dominant_traits": snapshot
+    })
+    # Garder seulement les N derniers
+    self._trait_history = self._trait_history[-_MAX_TRAIT_HISTORY:]
+""",
+        validation="Sauvegarder Psyche 3x avec des traits différents, vérifier que _trait_history contient 3 snapshots.",
+        tags=["memory", "psyche", "history", "traits"],
     )
 
     return specs

@@ -275,6 +275,7 @@ class TestAutonomousOverrideGuard:
         assert result["status"] == "error"
 
     @pytest.mark.asyncio
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
     async def test_override_works_from_user_command(self):
         """ADMIN_OVERRIDE sans marqueur autonome → override fonctionne."""
         architect = DivineArchitect()

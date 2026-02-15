@@ -67,7 +67,7 @@ class TestBuildCatalog:
 
     def test_catalog_has_28_specs(self):
         specs = _build_catalog()
-        assert len(specs) == 28
+        assert len(specs) == 46
 
     def test_all_categories_present(self):
         specs = _build_catalog()
@@ -79,12 +79,12 @@ class TestBuildCatalog:
         by_cat = {}
         for s in specs.values():
             by_cat[s.category] = by_cat.get(s.category, 0) + 1
-        assert by_cat["performance"] == 7
-        assert by_cat["resilience"] == 5
-        assert by_cat["intelligence"] == 5
-        assert by_cat["memory"] == 4
-        assert by_cat["observability"] == 4
-        assert by_cat["security"] == 3
+        assert by_cat["performance"] == 10   # 7 + 3 nouvelles
+        assert by_cat["resilience"] == 8     # 5 + 3 nouvelles
+        assert by_cat["intelligence"] == 9   # 5 + 4 nouvelles
+        assert by_cat["memory"] == 6         # 4 + 2 nouvelles
+        assert by_cat["observability"] == 8  # 4 + 4 nouvelles
+        assert by_cat["security"] == 5       # 3 + 2 nouvelles
 
     def test_all_ids_unique(self):
         specs = _build_catalog()
@@ -141,7 +141,7 @@ class TestEvolutionCatalogSingleton:
 
     def test_initial_state(self):
         cat = EvolutionCatalog()
-        assert len(cat.specs) == 28
+        assert len(cat.specs) == 46
         stats = cat.get_stats()
         assert stats["total_deployed"] == 0
         assert stats["total_failed"] == 0
@@ -163,16 +163,16 @@ class TestSpecAccess:
 
     def test_get_all_specs(self):
         all_specs = self.cat.get_all_specs()
-        assert len(all_specs) == 28
+        assert len(all_specs) == 46
 
     def test_get_specs_by_category(self):
         perf = self.cat.get_specs_by_category("performance")
-        assert len(perf) == 7
+        assert len(perf) == 10
         assert all(s.category == "performance" for s in perf)
 
     def test_get_specs_by_status(self):
         available = self.cat.get_specs_by_status("available")
-        assert len(available) == 28  # Toutes par défaut
+        assert len(available) == 46  # Toutes par défaut
 
 
 class TestEligibility:
@@ -183,7 +183,7 @@ class TestEligibility:
     def test_all_initially_eligible(self):
         eligible = self.cat.get_eligible_specs()
         # OBS-004 dépend de OBS-001, donc elle n'est pas éligible
-        expected = 28 - 1  # OBS-004 a une dépendance
+        expected = 46 - 1  # OBS-004 a une dépendance
         assert len(eligible) == expected
 
     def test_attempted_not_eligible_within_24h(self):
@@ -455,14 +455,14 @@ class TestPersistence:
     def test_load_missing_file(self):
         # Le fichier n'existe pas encore (la fixture le supprime)
         cat = EvolutionCatalog()
-        assert len(cat.specs) == 28
+        assert len(cat.specs) == 46
 
     def test_load_corrupt_file(self):
         with open(_FAKE_STATE_FILE, "w") as f:
             f.write("not json")
         EvolutionCatalog.reset_singleton()
         cat = EvolutionCatalog()
-        assert len(cat.specs) == 28
+        assert len(cat.specs) == 46
 
     def test_json_structure(self):
         cat = EvolutionCatalog()
@@ -582,7 +582,7 @@ class TestSummary:
     def test_summary_format(self):
         summary = self.cat.get_summary()
         assert "Catalogue" in summary
-        assert "28" in summary
+        assert "46" in summary
         assert "available" in summary
 
     def test_summary_after_changes(self):

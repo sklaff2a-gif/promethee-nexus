@@ -55,8 +55,11 @@ class BaseAgent:
 
     # Quotas journaliers Gemini Free Tier (RPD = requests per day)
     _daily_cloud_calls = 0
+    _daily_cloud_calls_evolution = 0  # Compteur séparé pour Evolution
     _daily_cloud_reset_day = None
-    MAX_DAILY_CLOUD_CALLS = 50  # Budget conservateur (Gemini Pro=100, Flash=250)
+    MAX_DAILY_CLOUD_CALLS = 50        # Budget total conservateur
+    MAX_DAILY_EVOLUTION_CALLS = 15    # Réservé pour Evolution (R&D)
+    # Les autres agents partagent MAX_DAILY_CLOUD_CALLS - MAX_DAILY_EVOLUTION_CALLS = 35
 
     # Demi-vie mémoire en jours (surchargeable par agent)
     MEMORY_HALF_LIFE_DAYS = 30
@@ -102,14 +105,46 @@ class BaseAgent:
             except Exception as e:
                 logger.warning(f"[{self.name}] Échec chargement capability '{module_name}' : {e}")
 
-    # --- MÉTHODES MÉMOIRE (PROTECTION ANTI-SPAM) ---
+    # --- MÉTHODES MÉMOIRE (PROTECTION ANTI-SPAM + QUALITÉ) ---
 
     # Seuil de similarité pour la déduplication (0 = identique, 1 = très différent)
     _DEDUP_DISTANCE_THRESHOLD = 0.15
+    # Filtres qualité remember()
+    _MIN_REMEMBER_LENGTH = 100       # Ignore les textes trop courts (bruit)
+    _MAX_REMEMBER_LENGTH = 5000      # Tronque les textes trop longs
+    _MAX_NON_LATIN_RATIO = 0.10      # Rejette si >10% de caractères non-latin (hallucination)
+    # Seuil qualité recall()
+    _MIN_RECALL_SCORE = 0.15         # Ignore les résultats avec score < seuil
+
+    @staticmethod
+    def _non_latin_ratio(text: str) -> float:
+        """Calcule le ratio de caractères non-latin (hors ponctuation/espaces)."""
+        if not text:
+            return 0.0
+        alpha_chars = [c for c in text if c.isalpha()]
+        if not alpha_chars:
+            return 0.0
+        non_latin = sum(1 for c in alpha_chars if ord(c) > 0x024F)  # Au-delà du Latin Extended-B
+        return non_latin / len(alpha_chars)
 
     def remember(self, text: str, metadata: Dict = None, collection="collective_wisdom"):
         if not self.has_memory: return
         try:
+            # Filtre qualité : longueur minimale
+            if len(text.strip()) < self._MIN_REMEMBER_LENGTH:
+                return
+
+            # Filtre qualité : détection hallucination (caractères non-latin)
+            if self._non_latin_ratio(text) > self._MAX_NON_LATIN_RATIO:
+                self.log_thought(
+                    f"🚫 Mémoire rejetée : ratio non-latin trop élevé ({self._non_latin_ratio(text):.1%})",
+                    type="warning"
+                )
+                return
+
+            # Cap longueur
+            text = text[:self._MAX_REMEMBER_LENGTH]
+
             # Check Anti-Doublon V2 : distance vectorielle + substring
             existing = self.memory_manager.query_with_metadata(
                 [text], n_results=1, collection_name=collection
@@ -165,6 +200,8 @@ class BaseAgent:
                 scored.append((doc, similarity * decay))
 
             scored.sort(key=lambda x: x[1], reverse=True)
+            # Filtre qualité : exclure les résultats sous le seuil
+            scored = [(doc, s) for doc, s in scored if s >= self._MIN_RECALL_SCORE]
             return "\n".join(doc for doc, _ in scored[:limit])
         except Exception as e:
             logger.warning(f"[{self.name}] Échec recall mémoire ({collection}) : {e}")
@@ -280,7 +317,17 @@ class BaseAgent:
             today = date.today()
             if BaseAgent._daily_cloud_reset_day != today:
                 BaseAgent._daily_cloud_calls = 0
+                BaseAgent._daily_cloud_calls_evolution = 0
                 BaseAgent._daily_cloud_reset_day = today
+
+            # Budget Cloud séparé : Evolution a son propre quota réservé
+            is_evolution = self.name == "evolution"
+            if is_evolution:
+                daily_limit = BaseAgent.MAX_DAILY_EVOLUTION_CALLS
+                daily_used = BaseAgent._daily_cloud_calls_evolution
+            else:
+                daily_limit = BaseAgent.MAX_DAILY_CLOUD_CALLS - BaseAgent.MAX_DAILY_EVOLUTION_CALLS
+                daily_used = BaseAgent._daily_cloud_calls - BaseAgent._daily_cloud_calls_evolution
 
             # Vérification cooldown 429
             if now < BaseAgent._cloud_cooldown_until:
@@ -290,8 +337,8 @@ class BaseAgent:
             elif BaseAgent._cloud_call_count >= BaseAgent.MAX_CLOUD_CALLS_PER_HOUR:
                 self.log_thought(f"💰 Budget Cloud horaire atteint ({BaseAgent.MAX_CLOUD_CALLS_PER_HOUR}/h) -> Fallback Local", type="warning")
                 needs_cloud = False
-            elif BaseAgent._daily_cloud_calls >= BaseAgent.MAX_DAILY_CLOUD_CALLS:
-                self.log_thought(f"💰 Budget Cloud journalier atteint ({BaseAgent._daily_cloud_calls}/{BaseAgent.MAX_DAILY_CLOUD_CALLS}) -> Fallback Local", type="warning")
+            elif daily_used >= daily_limit:
+                self.log_thought(f"💰 Budget Cloud {'Evolution' if is_evolution else 'général'} atteint ({daily_used}/{daily_limit}) -> Fallback Local", type="warning")
                 needs_cloud = False
             else:
                 cloud_response = None
@@ -305,6 +352,8 @@ class BaseAgent:
                         response = await loop.run_in_executor(None, client.generate_content, full_prompt)
                         BaseAgent._cloud_call_count += 1
                         BaseAgent._daily_cloud_calls += 1
+                        if is_evolution:
+                            BaseAgent._daily_cloud_calls_evolution += 1
                         if response.text:
                             cloud_response = response.text
                             used_model = model_name.split('/')[-1]
