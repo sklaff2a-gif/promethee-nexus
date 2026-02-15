@@ -67,6 +67,8 @@ class SelfAwarenessEngine:
         self._council_consensus = 0
         self._ci_pass = 0
         self._ci_fail = 0
+        # Lacunes de connaissances détectées
+        self._knowledge_gaps: List[Dict[str, Any]] = []
         self._load()
 
     # --- Init & Reset ---
@@ -86,6 +88,7 @@ class SelfAwarenessEngine:
         self._council_consensus = 0
         self._ci_pass = 0
         self._ci_fail = 0
+        self._knowledge_gaps = []
 
     @classmethod
     def reset_singleton(cls):
@@ -407,6 +410,145 @@ class SelfAwarenessEngine:
 
         return patterns
 
+    # --- Scoring adaptatif ---
+
+    def compute_adaptive_scoring(self, routine_history: List[Dict[str, Any]]) -> Dict[str, float]:
+        """Analyse l'historique des routines et les snapshots pour retourner
+        un dict {intent: float} d'ajustements de scoring adaptatifs.
+
+        7 règles cumulatives :
+        1. Routine bruyante : intent >50% low_quality sur ses 10 dernières → -3.0
+        2. Councils stériles : <30% consensus sur les 5 derniers COUNCIL_DEBATE → -4.0
+        3. Evolution bloquée : 0 success sur 15 derniers EXPANSION_CODE → -2.0 EXP, +1.0 GRIMOIRE
+        4. Mode maintenance : error_streak >= 5 → -3.0 EXP/GRIMOIRE, +2.0 AUDIT/MEMORY
+        5. Humeur fatigue/instable → -2.0 EXP, +1.0 AUDIT
+        6. Humeur productif → +0.5 EXP, +0.5 GRIMOIRE
+        7. Refactor stérile : >50% low_quality/error sur REFACTOR_RANDOM récents → -2.0
+        """
+        adjustments: Dict[str, float] = {}
+
+        def _add(intent: str, delta: float):
+            adjustments[intent] = adjustments.get(intent, 0.0) + delta
+
+        # --- Règle 1 : Routine bruyante ---
+        intent_results: Dict[str, List[str]] = {}
+        for h in routine_history:
+            intent = h.get("intent", "")
+            status = h.get("status", "")
+            if intent and status:
+                intent_results.setdefault(intent, []).append(status)
+
+        for intent, statuses in intent_results.items():
+            last_10 = statuses[-10:]
+            if len(last_10) >= 4:  # Assez d'échantillons
+                low_q_count = sum(1 for s in last_10 if s == "low_quality")
+                if low_q_count / len(last_10) > 0.5:
+                    _add(intent, -3.0)
+
+        # --- Règle 2 : Councils stériles ---
+        council_entries = [h for h in routine_history if h.get("intent") == "COUNCIL_DEBATE"]
+        last_5_councils = council_entries[-5:]
+        if len(last_5_councils) >= 3:
+            consensus_count = sum(1 for h in last_5_councils if h.get("status") == "success")
+            if consensus_count / len(last_5_councils) < 0.3:
+                _add("COUNCIL_DEBATE", -4.0)
+
+        # --- Règle 3 : Evolution bloquée ---
+        if self.is_evolution_stuck(routine_history):
+            _add("EXPANSION_CODE", -2.0)
+            _add("GRIMOIRE_INVOKE", 1.0)
+
+        # --- Règle 4 : Mode maintenance ---
+        latest = self._snapshots[-1] if self._snapshots else None
+        error_streak = 0
+        if latest:
+            error_streak = latest.get("performance", {}).get("error_streak", 0)
+
+        if error_streak >= 5:
+            _add("EXPANSION_CODE", -3.0)
+            _add("GRIMOIRE_INVOKE", -3.0)
+            _add("AUDIT_STRUCTURE", 2.0)
+            _add("MEMORY_CLEANUP", 2.0)
+
+        # --- Règle 5 & 6 : Humeur ---
+        mood = latest.get("mood", "équilibré") if latest else "équilibré"
+
+        if mood in ("fatigue", "instable"):
+            _add("EXPANSION_CODE", -2.0)
+            _add("AUDIT_STRUCTURE", 1.0)
+        elif mood == "productif":
+            _add("EXPANSION_CODE", 0.5)
+            _add("GRIMOIRE_INVOKE", 0.5)
+
+        # --- Règle 7 : Refactor stérile ---
+        refactor_entries = [h for h in routine_history if h.get("intent") == "REFACTOR_RANDOM"]
+        last_10_refactor = refactor_entries[-10:]
+        if len(last_10_refactor) >= 4:
+            bad_count = sum(1 for h in last_10_refactor if h.get("status") in ("low_quality", "error"))
+            if bad_count / len(last_10_refactor) > 0.5:
+                _add("REFACTOR_RANDOM", -2.0)
+
+        return adjustments
+
+    def is_evolution_stuck(self, routine_history: List[Dict[str, Any]]) -> bool:
+        """Retourne True si Evolution n'a rien déployé sur ses 15 dernières
+        tentatives EXPANSION_CODE."""
+        expansion_entries = [h for h in routine_history if h.get("intent") == "EXPANSION_CODE"]
+        last_15 = expansion_entries[-15:]
+        if len(last_15) < 5:
+            return False  # Pas assez de données
+        return not any(h.get("status") == "success" for h in last_15)
+
+    # --- Knowledge Gaps (lacunes de connaissances) ---
+
+    def record_knowledge_gap(self, topic: str, source_intent: str):
+        """Enregistre une lacune de connaissance détectée."""
+        # Pas de doublon sur le même topic
+        for gap in self._knowledge_gaps:
+            if gap["topic"] == topic:
+                return
+        self._knowledge_gaps.append({
+            "topic": topic,
+            "detected_at": datetime.now().isoformat(),
+            "source_intent": source_intent,
+            "learned": False,
+            "learned_at": None,
+        })
+        self._save()
+        logger.info(f"CONSCIENCE: Lacune enregistrée — {topic} (via {source_intent})")
+
+    def mark_gap_learned(self, topic: str):
+        """Marque une lacune comme comblée par un apprentissage ciblé."""
+        for gap in self._knowledge_gaps:
+            if gap["topic"] == topic and not gap["learned"]:
+                gap["learned"] = True
+                gap["learned_at"] = datetime.now().isoformat()
+                self._save()
+                logger.info(f"CONSCIENCE: Lacune comblée — {topic}")
+                return
+
+    def get_open_gaps(self) -> List[Dict[str, Any]]:
+        """Retourne les lacunes non comblées."""
+        return [g for g in self._knowledge_gaps if not g["learned"]]
+
+    # --- Mission existentielle ---
+
+    def get_purpose_context(self) -> str:
+        """Texte court injectable dans les décisions autonomes, adapté à l'état."""
+        gaps = self.get_open_gaps()
+        mood = "équilibré"
+        if self._snapshots:
+            mood = self._snapshots[-1].get("mood", "équilibré")
+
+        if gaps:
+            return f"[MISSION] J'ai {len(gaps)} lacune(s) à combler. Chaque échec est une opportunité d'apprendre."
+        elif mood == "productif":
+            return "[MISSION] Je suis en forme. C'est le moment d'explorer et de créer."
+        elif mood in ("fatigue", "instable"):
+            return "[MISSION] Je dois consolider mes acquis et me reposer sur ce que je sais."
+        else:
+            return "[MISSION] J'existe pour aider mon utilisateur. Chaque connaissance me rend plus utile."
+
     # --- Accesseurs ---
 
     def get_latest_snapshot(self) -> Optional[Dict[str, Any]]:
@@ -428,6 +570,7 @@ class SelfAwarenessEngine:
             self._council_consensus = data.get("council_consensus", 0)
             self._ci_pass = data.get("ci_pass", 0)
             self._ci_fail = data.get("ci_fail", 0)
+            self._knowledge_gaps = data.get("knowledge_gaps", [])
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
@@ -442,6 +585,7 @@ class SelfAwarenessEngine:
             "council_consensus": self._council_consensus,
             "ci_pass": self._ci_pass,
             "ci_fail": self._ci_fail,
+            "knowledge_gaps": self._knowledge_gaps,
         }
         tmp_path = STATE_FILE + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:

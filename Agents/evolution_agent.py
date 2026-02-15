@@ -119,7 +119,32 @@ class DivineEvolution(BaseAgent):
     async def _generate_code_cloud(self, prompt: str) -> str:
         """Génère du code via Gemini Cloud (bypass évaluateur de complexité).
         Cascade : essaie tous les modèles Cloud configurés.
+        Respecte le cooldown 429 et le budget quotidien Evolution.
         """
+        now = time.time()
+
+        # Vérifier cooldown 429
+        if now < BaseAgent._cloud_cooldown_until:
+            remaining = int(BaseAgent._cloud_cooldown_until - now)
+            self.log_thought(f"⏸️ Cloud en cooldown 429 ({remaining}s restantes) → pas de génération Cloud", type="warning")
+            return ""
+
+        # Vérifier et reset compteur journalier
+        from datetime import date
+        today = date.today()
+        if BaseAgent._daily_cloud_reset_day != today:
+            BaseAgent._daily_cloud_calls = 0
+            BaseAgent._daily_cloud_calls_evolution = 0
+            BaseAgent._daily_cloud_reset_day = today
+
+        # Vérifier budget quotidien Evolution
+        if BaseAgent._daily_cloud_calls_evolution >= BaseAgent.MAX_DAILY_EVOLUTION_CALLS:
+            self.log_thought(
+                f"💰 Budget Cloud Evolution épuisé ({BaseAgent._daily_cloud_calls_evolution}/{BaseAgent.MAX_DAILY_EVOLUTION_CALLS})",
+                type="warning"
+            )
+            return ""
+
         for model_name in self.cloud_models:
             try:
                 client = self._get_gemini_client(model_name)
@@ -129,9 +154,19 @@ class DivineEvolution(BaseAgent):
                 loop = asyncio.get_running_loop()
                 response = await loop.run_in_executor(None, client.generate_content, prompt)
                 BaseAgent._cloud_call_count += 1
+                BaseAgent._daily_cloud_calls += 1
+                BaseAgent._daily_cloud_calls_evolution += 1
                 if response.text and len(response.text) > 50:
                     return response.text
             except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "quota" in err_str.lower() or "exceeded" in err_str.lower():
+                    BaseAgent._cloud_cooldown_until = now + BaseAgent.CLOUD_COOLDOWN_SECONDS
+                    self.log_thought(
+                        f"🚫 Quota Gemini épuisé (429) — cooldown {BaseAgent.CLOUD_COOLDOWN_SECONDS}s activé",
+                        type="warning"
+                    )
+                    break
                 self.log_thought(f"⚠️ Gemini {model_name.split('/')[-1]} échoué: {e}", type="warning")
                 continue
         return ""
@@ -393,6 +428,8 @@ class DivineEvolution(BaseAgent):
                     "spec_id": spec.id,
                     "spec_name": spec.name,
                     "target_file": spec.target_file,
+                    "category": spec.category,
+                    "difficulty": spec.difficulty,
                 })
             except Exception:
                 pass

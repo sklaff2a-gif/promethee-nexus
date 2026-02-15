@@ -193,6 +193,11 @@ async def lifespan(app: FastAPI):
     objectives_engine.seed_daily_objectives()
     print(f"   🎯 OBJECTIFS: Moteur d'objectifs actif ({len(objectives_engine.get_active_objectives())} actifs).")
 
+    # --- FEEDBACK EVOLUTION ---
+    from core.evolution_feedback import feedback_loop
+    feedback_loop.init()
+    print("   🔄 FEEDBACK: Boucle de feedback Evolution active.")
+
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
     bus.subscribe("AGENT_TASK_DISPATCH", nervous_system_listener)
 

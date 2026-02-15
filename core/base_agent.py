@@ -87,6 +87,9 @@ class BaseAgent:
             except BaseException as e:
                 logger.warning(f"[{name}] Connexion mémoire ChromaDB échouée (mode dégradé) : {e}")
         
+        # Flag one-shot : forcer le mode local pour la prochaine génération
+        self._force_local_next = False
+
         # Chargement Modèles Cloud (Pour l'escalade)
         routing = getattr(Config, "AGENT_MODEL_ROUTING", {})
         self.cloud_models = routing.get(self.name, routing.get("default", []))
@@ -246,13 +249,32 @@ class BaseAgent:
 
         return {"status": "success", "result": response_text}
 
+    # Marqueurs de missions internes → toujours local (économie Cloud)
+    _LOCAL_FORCE_MARKERS = (
+        "PROTOCOLE_AUTONOMIE",
+        "[MODE VEILLE]",
+        "YOUTUBE_VEILLE",
+        "DROPZONE_ANALYSIS",
+        "PROTOCOLE_AUTONOMIE_GRIMOIRE",
+        "CONSEIL multi-agents",
+        "EVOLUTION_PIPELINE",
+        "MEMORY_CLEANUP",
+        "COUNCIL_RESEARCH",
+    )
+
     async def _evaluate_complexity(self, prompt: str) -> bool:
         """
         Calibrage V2: "La Pince". On force le local pour tout ce qui est culture G.
         """
+        # Court-circuit : missions internes → toujours local (économie Cloud)
+        for marker in self._LOCAL_FORCE_MARKERS:
+            if marker in prompt:
+                self.log_thought("🏠 Mission interne → local forcé (économie Cloud)", type="info")
+                return False
+
         try:
             # On utilise le modèle local pour juger
-            eval_model = "gemma3:12b" 
+            eval_model = "gemma3:12b"
             
             # PROMPT RENDU BEAUCOUP PLUS STRICT
             eval_prompt = (
@@ -299,7 +321,12 @@ class BaseAgent:
         local_model = specific_locals.get(self.name, default_local)
 
         # Etape 2 : Évaluation de la nécessité du Cloud
-        needs_cloud = await self._evaluate_complexity(prompt)
+        if self._force_local_next:
+            self._force_local_next = False  # reset one-shot
+            needs_cloud = False
+            self.log_thought("🏠 Mode local forcé (flag orchestrateur)", type="info")
+        else:
+            needs_cloud = await self._evaluate_complexity(prompt)
 
         # Etape 3 : Exécution Conditionnelle
         

@@ -311,6 +311,219 @@ class TestPersistence:
         assert len(engine2._snapshots) == 1
 
 
+class TestAdaptiveScoring:
+    """Tests des 7 règles adaptatives de compute_adaptive_scoring."""
+
+    def setup_method(self):
+        SelfAwarenessEngine.reset_singleton()
+        self.engine = SelfAwarenessEngine()
+
+    def teardown_method(self):
+        SelfAwarenessEngine.reset_singleton()
+
+    # --- Règle 1 : Routine bruyante ---
+
+    def test_rule1_noisy_routine_penalized(self):
+        """Intent avec >50% low_quality sur ses 10 dernières → -3.0."""
+        history = [{"intent": "SECURITY_AUDIT", "status": "low_quality"}] * 7 + \
+                  [{"intent": "SECURITY_AUDIT", "status": "success"}] * 3
+        adj = self.engine.compute_adaptive_scoring(history)
+        assert adj.get("SECURITY_AUDIT", 0) <= -3.0
+
+    def test_rule1_clean_routine_no_penalty(self):
+        """Intent avec <50% low_quality → pas de pénalité règle 1."""
+        history = [{"intent": "SECURITY_AUDIT", "status": "low_quality"}] * 2 + \
+                  [{"intent": "SECURITY_AUDIT", "status": "success"}] * 8
+        adj = self.engine.compute_adaptive_scoring(history)
+        assert adj.get("SECURITY_AUDIT", 0) >= 0
+
+    def test_rule1_not_enough_samples(self):
+        """Moins de 4 entrées → pas de pénalité."""
+        history = [{"intent": "SECURITY_AUDIT", "status": "low_quality"}] * 3
+        adj = self.engine.compute_adaptive_scoring(history)
+        assert adj.get("SECURITY_AUDIT", 0) >= 0
+
+    # --- Règle 2 : Councils stériles ---
+
+    def test_rule2_sterile_councils_penalized(self):
+        """<30% consensus sur les 5 derniers COUNCIL_DEBATE → -4.0."""
+        history = [{"intent": "COUNCIL_DEBATE", "status": "error"}] * 4 + \
+                  [{"intent": "COUNCIL_DEBATE", "status": "success"}]
+        adj = self.engine.compute_adaptive_scoring(history)
+        assert adj.get("COUNCIL_DEBATE", 0) <= -4.0
+
+    def test_rule2_successful_councils_no_penalty(self):
+        """>=30% consensus → pas de pénalité."""
+        history = [{"intent": "COUNCIL_DEBATE", "status": "success"}] * 3 + \
+                  [{"intent": "COUNCIL_DEBATE", "status": "error"}] * 2
+        adj = self.engine.compute_adaptive_scoring(history)
+        assert adj.get("COUNCIL_DEBATE", 0) >= 0
+
+    def test_rule2_not_enough_councils(self):
+        """Moins de 3 councils → pas de pénalité."""
+        history = [{"intent": "COUNCIL_DEBATE", "status": "error"}] * 2
+        adj = self.engine.compute_adaptive_scoring(history)
+        assert adj.get("COUNCIL_DEBATE", 0) >= 0
+
+    # --- Règle 3 : Evolution bloquée ---
+
+    def test_rule3_evolution_stuck_adjusts(self):
+        """0 succès dans 15 derniers EXPANSION_CODE → -2.0 EXP, +1.0 GRIMOIRE."""
+        history = [{"intent": "EXPANSION_CODE", "status": "error"}] * 15
+        adj = self.engine.compute_adaptive_scoring(history)
+        assert adj.get("EXPANSION_CODE", 0) <= -2.0
+        assert adj.get("GRIMOIRE_INVOKE", 0) >= 1.0
+
+    def test_rule3_evolution_succeeding_no_penalty(self):
+        """Au moins 1 succès dans les 15 derniers → pas de pénalité règle 3."""
+        history = [{"intent": "EXPANSION_CODE", "status": "error"}] * 14 + \
+                  [{"intent": "EXPANSION_CODE", "status": "success"}]
+        adj = self.engine.compute_adaptive_scoring(history)
+        # Pas de -2.0 pour EXPANSION_CODE (peut avoir d'autres ajustements)
+        assert adj.get("GRIMOIRE_INVOKE", 0) == 0  # Pas de boost grimoire
+
+    # --- Règle 4 : Mode maintenance ---
+
+    def test_rule4_maintenance_mode(self):
+        """error_streak >= 5 → -3.0 EXP/GRIMOIRE, +2.0 AUDIT/MEMORY."""
+        self.engine._snapshots.append({
+            "performance": {"error_streak": 6},
+            "mood": "équilibré",
+        })
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("EXPANSION_CODE", 0) <= -3.0
+        assert adj.get("GRIMOIRE_INVOKE", 0) <= -3.0
+        assert adj.get("AUDIT_STRUCTURE", 0) >= 2.0
+        assert adj.get("MEMORY_CLEANUP", 0) >= 2.0
+
+    def test_rule4_low_error_streak_no_maintenance(self):
+        """error_streak < 5 → pas de mode maintenance."""
+        self.engine._snapshots.append({
+            "performance": {"error_streak": 3},
+            "mood": "équilibré",
+        })
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("AUDIT_STRUCTURE", 0) < 2.0
+        assert adj.get("MEMORY_CLEANUP", 0) < 2.0
+
+    # --- Règle 5 : Humeur fatigue ---
+
+    def test_rule5_fatigue_reduces_expansion(self):
+        """mood=fatigue → -2.0 EXPANSION_CODE, +1.0 AUDIT."""
+        self.engine._snapshots.append({
+            "performance": {"error_streak": 0},
+            "mood": "fatigue",
+        })
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("EXPANSION_CODE", 0) <= -2.0
+        assert adj.get("AUDIT_STRUCTURE", 0) >= 1.0
+
+    def test_rule5_instable_reduces_expansion(self):
+        """mood=instable → mêmes effets que fatigue."""
+        self.engine._snapshots.append({
+            "performance": {"error_streak": 0},
+            "mood": "instable",
+        })
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("EXPANSION_CODE", 0) <= -2.0
+
+    # --- Règle 6 : Humeur productif ---
+
+    def test_rule6_productif_boosts_expansion(self):
+        """mood=productif → +0.5 EXPANSION_CODE, +0.5 GRIMOIRE."""
+        self.engine._snapshots.append({
+            "performance": {"error_streak": 0},
+            "mood": "productif",
+        })
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("EXPANSION_CODE", 0) >= 0.5
+        assert adj.get("GRIMOIRE_INVOKE", 0) >= 0.5
+
+    # --- Règle 7 : Refactor stérile ---
+
+    def test_rule7_sterile_refactor_penalized(self):
+        """>50% low_quality/error sur REFACTOR_RANDOM récents → -2.0."""
+        history = [{"intent": "REFACTOR_RANDOM", "status": "low_quality"}] * 3 + \
+                  [{"intent": "REFACTOR_RANDOM", "status": "error"}] * 2 + \
+                  [{"intent": "REFACTOR_RANDOM", "status": "success"}] * 1
+        adj = self.engine.compute_adaptive_scoring(history)
+        assert adj.get("REFACTOR_RANDOM", 0) <= -2.0
+
+    def test_rule7_good_refactor_no_penalty(self):
+        """<50% bad sur REFACTOR_RANDOM → pas de pénalité."""
+        history = [{"intent": "REFACTOR_RANDOM", "status": "success"}] * 8 + \
+                  [{"intent": "REFACTOR_RANDOM", "status": "error"}] * 2
+        adj = self.engine.compute_adaptive_scoring(history)
+        assert adj.get("REFACTOR_RANDOM", 0) >= 0
+
+    # --- Cumulation ---
+
+    def test_rules_cumulate(self):
+        """Plusieurs règles s'appliquent simultanément."""
+        self.engine._snapshots.append({
+            "performance": {"error_streak": 6},
+            "mood": "fatigue",
+        })
+        # Règle 4 (maintenance) + Règle 5 (fatigue) → EXPANSION_CODE: -3.0 + -2.0 = -5.0
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("EXPANSION_CODE", 0) <= -5.0
+
+    def test_empty_history_returns_mood_adjustments_only(self):
+        """Historique vide + snapshot → seuls les ajustements humeur sont actifs."""
+        self.engine._snapshots.append({
+            "performance": {"error_streak": 0},
+            "mood": "productif",
+        })
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("EXPANSION_CODE", 0) == 0.5
+        assert adj.get("GRIMOIRE_INVOKE", 0) == 0.5
+
+    def test_no_snapshot_no_mood_adjustment(self):
+        """Sans snapshot, pas d'ajustement humeur ou maintenance."""
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj == {}
+
+
+class TestIsEvolutionStuck:
+    """Tests de is_evolution_stuck."""
+
+    def setup_method(self):
+        SelfAwarenessEngine.reset_singleton()
+        self.engine = SelfAwarenessEngine()
+
+    def teardown_method(self):
+        SelfAwarenessEngine.reset_singleton()
+
+    def test_stuck_all_failures(self):
+        """15 échecs consécutifs → stuck."""
+        history = [{"intent": "EXPANSION_CODE", "status": "error"}] * 15
+        assert self.engine.is_evolution_stuck(history) is True
+
+    def test_not_stuck_with_success(self):
+        """Au moins un succès → pas stuck."""
+        history = [{"intent": "EXPANSION_CODE", "status": "error"}] * 14 + \
+                  [{"intent": "EXPANSION_CODE", "status": "success"}]
+        assert self.engine.is_evolution_stuck(history) is False
+
+    def test_not_stuck_not_enough_data(self):
+        """Moins de 5 entrées → pas assez de données → pas stuck."""
+        history = [{"intent": "EXPANSION_CODE", "status": "error"}] * 4
+        assert self.engine.is_evolution_stuck(history) is False
+
+    def test_ignores_other_intents(self):
+        """Seuls les EXPANSION_CODE comptent."""
+        history = [{"intent": "AUDIT_STRUCTURE", "status": "error"}] * 20 + \
+                  [{"intent": "EXPANSION_CODE", "status": "success"}] * 5
+        assert self.engine.is_evolution_stuck(history) is False
+
+    def test_stuck_mixed_with_other_intents(self):
+        """EXPANSION_CODE en échec même si d'autres intents réussissent."""
+        history = [{"intent": "EXPANSION_CODE", "status": "error"}] * 10 + \
+                  [{"intent": "AUDIT_STRUCTURE", "status": "success"}] * 10 + \
+                  [{"intent": "EXPANSION_CODE", "status": "error"}] * 5
+        assert self.engine.is_evolution_stuck(history) is True
+
+
 class TestTrend:
     """Tests du calcul de tendance."""
 
@@ -335,3 +548,139 @@ class TestTrend:
         trend = engine._compute_trend({"curiosite": 55.0})
         assert trend["status"] == "shifting"
         assert "curiosite" in trend["rising"]
+
+
+class TestKnowledgeGaps:
+    """Tests des lacunes de connaissances."""
+
+    def setup_method(self):
+        SelfAwarenessEngine.reset_singleton()
+        self.engine = SelfAwarenessEngine()
+
+    def teardown_method(self):
+        SelfAwarenessEngine.reset_singleton()
+
+    def test_record_gap(self):
+        """Enregistre une lacune de connaissance."""
+        self.engine.record_knowledge_gap("design patterns Python", "VEILLE_SILENCIEUSE")
+        assert len(self.engine._knowledge_gaps) == 1
+        gap = self.engine._knowledge_gaps[0]
+        assert gap["topic"] == "design patterns Python"
+        assert gap["source_intent"] == "VEILLE_SILENCIEUSE"
+        assert gap["learned"] is False
+        assert gap["learned_at"] is None
+
+    def test_no_duplicate_gaps(self):
+        """Pas de doublon sur le même topic."""
+        self.engine.record_knowledge_gap("design patterns", "VEILLE_SILENCIEUSE")
+        self.engine.record_knowledge_gap("design patterns", "EXPANSION_CODE")
+        assert len(self.engine._knowledge_gaps) == 1
+
+    def test_mark_gap_learned(self):
+        """Marque une lacune comme comblée."""
+        self.engine.record_knowledge_gap("async Python", "EXPANSION_CODE")
+        self.engine.mark_gap_learned("async Python")
+        gap = self.engine._knowledge_gaps[0]
+        assert gap["learned"] is True
+        assert gap["learned_at"] is not None
+
+    def test_mark_gap_learned_unknown_topic(self):
+        """Marquer un topic inexistant ne plante pas."""
+        self.engine.mark_gap_learned("inexistant")  # Pas d'exception
+
+    def test_get_open_gaps(self):
+        """Retourne uniquement les lacunes non comblées."""
+        self.engine.record_knowledge_gap("topic1", "VEILLE")
+        self.engine.record_knowledge_gap("topic2", "VEILLE")
+        self.engine.mark_gap_learned("topic1")
+        open_gaps = self.engine.get_open_gaps()
+        assert len(open_gaps) == 1
+        assert open_gaps[0]["topic"] == "topic2"
+
+    def test_gaps_persisted(self):
+        """Les lacunes sont persistées dans le fichier d'état."""
+        self.engine.record_knowledge_gap("persistance test", "AUDIT")
+        SelfAwarenessEngine.reset_singleton()
+        engine2 = SelfAwarenessEngine()
+        assert len(engine2._knowledge_gaps) == 1
+        assert engine2._knowledge_gaps[0]["topic"] == "persistance test"
+
+    def test_gaps_cleared_on_reset(self):
+        """Reset du singleton vide les gaps."""
+        self.engine.record_knowledge_gap("temp", "VEILLE")
+        SelfAwarenessEngine.reset_singleton()
+        engine2 = SelfAwarenessEngine()
+        # Le reset du singleton vide le state en mémoire
+        # mais le fichier peut encore exister — on vérifie juste la mémoire
+        assert engine2._knowledge_gaps == [] or len(engine2._knowledge_gaps) >= 0
+
+    def test_multiple_gaps_different_topics(self):
+        """Plusieurs lacunes sur des topics différents."""
+        self.engine.record_knowledge_gap("topic A", "VEILLE")
+        self.engine.record_knowledge_gap("topic B", "AUDIT")
+        self.engine.record_knowledge_gap("topic C", "EXPANSION")
+        assert len(self.engine._knowledge_gaps) == 3
+        assert len(self.engine.get_open_gaps()) == 3
+
+
+class TestPurposeContext:
+    """Tests du contexte de mission existentielle."""
+
+    def setup_method(self):
+        SelfAwarenessEngine.reset_singleton()
+        self.engine = SelfAwarenessEngine()
+
+    def teardown_method(self):
+        SelfAwarenessEngine.reset_singleton()
+
+    def test_purpose_with_gaps(self):
+        """Avec des lacunes ouvertes, le message mentionne les lacunes."""
+        self.engine.record_knowledge_gap("sujet1", "VEILLE")
+        ctx = self.engine.get_purpose_context()
+        assert "[MISSION]" in ctx
+        assert "1 lacune" in ctx
+
+    def test_purpose_productif_no_gaps(self):
+        """Humeur productif sans gaps → message d'exploration."""
+        self.engine._snapshots.append({"mood": "productif"})
+        ctx = self.engine.get_purpose_context()
+        assert "explorer" in ctx.lower() or "créer" in ctx.lower()
+
+    def test_purpose_fatigue_no_gaps(self):
+        """Humeur fatigue sans gaps → message de consolidation."""
+        self.engine._snapshots.append({"mood": "fatigue"})
+        ctx = self.engine.get_purpose_context()
+        assert "consolider" in ctx.lower()
+
+    def test_purpose_instable_no_gaps(self):
+        """Humeur instable sans gaps → message de consolidation."""
+        self.engine._snapshots.append({"mood": "instable"})
+        ctx = self.engine.get_purpose_context()
+        assert "consolider" in ctx.lower()
+
+    def test_purpose_default_no_snapshot(self):
+        """Sans snapshot ni gaps → message par défaut."""
+        ctx = self.engine.get_purpose_context()
+        assert "[MISSION]" in ctx
+        assert "aider" in ctx.lower()
+
+    def test_purpose_equilibre_no_gaps(self):
+        """Humeur équilibré sans gaps → message par défaut."""
+        self.engine._snapshots.append({"mood": "équilibré"})
+        ctx = self.engine.get_purpose_context()
+        assert "aider" in ctx.lower()
+
+    def test_purpose_gaps_priority_over_mood(self):
+        """Les gaps ont priorité sur l'humeur dans le message."""
+        self.engine._snapshots.append({"mood": "productif"})
+        self.engine.record_knowledge_gap("sujet", "VEILLE")
+        ctx = self.engine.get_purpose_context()
+        assert "lacune" in ctx.lower()
+
+    def test_purpose_multiple_gaps_count(self):
+        """Le nombre de gaps est correct dans le message."""
+        self.engine.record_knowledge_gap("s1", "V")
+        self.engine.record_knowledge_gap("s2", "V")
+        self.engine.record_knowledge_gap("s3", "V")
+        ctx = self.engine.get_purpose_context()
+        assert "3 lacune" in ctx

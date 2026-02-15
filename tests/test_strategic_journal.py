@@ -99,6 +99,39 @@ class TestAppendCouncil:
         assert "**Recherche**" not in full
 
 
+class TestAppendEvolutionReport:
+    def setup_method(self):
+        StrategicJournal.reset_singleton()
+        if os.path.exists(JOURNAL_FILE):
+            os.remove(JOURNAL_FILE)
+
+    def teardown_method(self):
+        StrategicJournal.reset_singleton()
+        if os.path.exists(JOURNAL_FILE):
+            os.remove(JOURNAL_FILE)
+
+    def test_append_evolution_report(self):
+        j = StrategicJournal()
+        j.append_evolution_report("**Spec**: [PERF-001] Cache LRU\n**Verdict**: AMELIORE")
+        assert j.entry_count() == 1
+
+    def test_evolution_report_format(self):
+        j = StrategicJournal()
+        j.append_evolution_report("**Spec**: [PERF-001] Cache LRU\n**Verdict**: AMELIORE")
+        full = j.get_full_journal()
+        assert "Feedback Evolution" in full
+        assert "PERF-001" in full
+        assert "AMELIORE" in full
+
+    def test_evolution_report_persisted(self):
+        j = StrategicJournal()
+        j.append_evolution_report("Test report")
+        StrategicJournal.reset_singleton()
+        j2 = StrategicJournal()
+        assert j2.entry_count() == 1
+        assert "Test report" in j2.get_full_journal()
+
+
 class TestAppendResearch:
     def setup_method(self):
         StrategicJournal.reset_singleton()

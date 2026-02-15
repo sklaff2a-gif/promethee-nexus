@@ -34,6 +34,13 @@ class Orchestrator:
         code_patterns = re.findall(r'^(import |from \w+ import|class \w+|def \w+\(|@\w+)', text, re.MULTILINE)
         return len(code_patterns) >= 2
 
+    # Marqueurs de contextes internes → forcer le mode local sur l'agent
+    _INTERNAL_CONTEXT_MARKERS = (
+        "PROTOCOLE_AUTONOMIE", "YOUTUBE_VEILLE", "DROPZONE_ANALYSIS",
+        "PROTOCOLE_AUTONOMIE_GRIMOIRE", "EVOLUTION_PIPELINE",
+        "COUNCIL_RESEARCH", "MEMORY_CLEANUP",
+    )
+
     async def dispatch_task(self, target_slug: str, task_payload: Dict[str, Any]):
         if self.kill_switch_active:
             return {"status": "BLOCKED", "reason": "KILL_SWITCH_ACTIVE"}
@@ -76,8 +83,21 @@ class Orchestrator:
             return {"status": "ERROR", "reason": f"AGENT_NOT_FOUND: {target_slug}"}
 
         try:
+            # --- DÉTECTION CONTEXTE INTERNE → FORCER LOCAL ---
+            context = str(task_payload.get("context", ""))
+            mission = str(task_payload.get("mission", ""))
+            if task_payload.get("force_local", False) or any(
+                m in context or m in mission for m in self._INTERNAL_CONTEXT_MARKERS
+            ):
+                if hasattr(agent, "_force_local_next"):
+                    agent._force_local_next = True
+
             # --- EXÉCUTION ---
             response = await agent.process_task(task_payload)
+
+            # Cleanup du flag (sécurité — normalement déjà reset par generate_content)
+            if hasattr(agent, "_force_local_next"):
+                agent._force_local_next = False
 
             # --- Publication du statut pour SelfAwareness ---
             from core.event_bus.bus import bus

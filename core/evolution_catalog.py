@@ -33,11 +33,12 @@ class ImprovementSpec:
     dependencies: list = field(default_factory=list)
     combinable_with: list = field(default_factory=list)
     # Tracking (persisté via JSON)
-    status: str = "available"  # available|attempted|deployed|failed|combined|generated
+    status: str = "available"  # available|attempted|deployed|failed|combined|generated|confirmed|rolled_back
     attempts: int = 0
     max_attempts: int = 3
     last_attempt: Optional[str] = None
     deployed_at: Optional[str] = None
+    confirmed_at: Optional[str] = None
     failure_reasons: list = field(default_factory=list)
 
 
@@ -1605,11 +1606,25 @@ class EvolutionCatalog:
     }
 
     def get_top_candidates(self, n: int = 5) -> List[tuple]:
-        """Retourne les top N candidats (spec, score), avec bonus objectifs actifs."""
+        """Retourne les top N candidats (spec, score), avec bonus objectifs actifs
+        et bonus difficulté basse si Evolution est bloquée."""
         eligible = self.get_eligible_specs()
         if not eligible:
             return []
         scored = self.score_specs(eligible)
+
+        # Bonus difficulté basse si Evolution est stuck
+        try:
+            from core.self_awareness import awareness
+            from core.autonomy_engine import autonomy
+            if awareness.is_evolution_stuck(autonomy.routine_history):
+                scored = [
+                    (spec, sc + 2.0) if spec.difficulty == 1 else (spec, sc)
+                    for spec, sc in scored
+                ]
+                scored.sort(key=lambda x: x[1], reverse=True)
+        except Exception:
+            pass
 
         # Bonus objectifs actifs
         try:
@@ -1716,6 +1731,28 @@ class EvolutionCatalog:
             return
         spec.status = "available"
         self._save()
+
+    def mark_confirmed(self, spec_id: str):
+        """Marque une spec déployée comme confirmée (prouvée en production)."""
+        spec = self.specs.get(spec_id)
+        if not spec:
+            return
+        spec.status = "confirmed"
+        spec.confirmed_at = datetime.now().isoformat()
+        self._save()
+        logger.info(f"Catalogue: {spec_id} confirmé en production !")
+
+    def mark_rolled_back(self, spec_id: str, reason: str = ""):
+        """Marque une spec déployée comme rollbackée (dégradation détectée)."""
+        spec = self.specs.get(spec_id)
+        if not spec:
+            return
+        spec.status = "rolled_back"
+        if reason:
+            spec.failure_reasons.append(reason)
+        self._stats["total_rolled_back"] = self._stats.get("total_rolled_back", 0) + 1
+        self._save()
+        logger.warning(f"Catalogue: {spec_id} rollbacké — {reason}")
 
     # --- Meta-Evolution ---
 
@@ -1836,6 +1873,9 @@ class EvolutionCatalog:
         parts = [f"Catalogue: {total} specs"]
         for status, count in sorted(by_status.items()):
             parts.append(f"  {status}: {count}")
+        rolled_back = self._stats.get("total_rolled_back", 0)
+        if rolled_back:
+            parts.append(f"  (total rollbacks: {rolled_back})")
         return "\n".join(parts)
 
     # --- Persistance ---
@@ -1857,6 +1897,7 @@ class EvolutionCatalog:
                 spec.max_attempts = tracking.get("max_attempts", spec.max_attempts)
                 spec.last_attempt = tracking.get("last_attempt", spec.last_attempt)
                 spec.deployed_at = tracking.get("deployed_at", spec.deployed_at)
+                spec.confirmed_at = tracking.get("confirmed_at", spec.confirmed_at)
                 spec.failure_reasons = tracking.get("failure_reasons", spec.failure_reasons)
 
         self._combinations_generated = data.get("combinations_generated", [])
@@ -1882,6 +1923,7 @@ class EvolutionCatalog:
                     max_attempts=gen_data.get("max_attempts", 3),
                     last_attempt=gen_data.get("last_attempt"),
                     deployed_at=gen_data.get("deployed_at"),
+                    confirmed_at=gen_data.get("confirmed_at"),
                     failure_reasons=gen_data.get("failure_reasons", []),
                 )
 
@@ -1900,6 +1942,7 @@ class EvolutionCatalog:
                     "max_attempts": spec.max_attempts,
                     "last_attempt": spec.last_attempt,
                     "deployed_at": spec.deployed_at,
+                    "confirmed_at": spec.confirmed_at,
                     "failure_reasons": spec.failure_reasons,
                 }
 
@@ -1922,6 +1965,7 @@ class EvolutionCatalog:
                     "max_attempts": spec.max_attempts,
                     "last_attempt": spec.last_attempt,
                     "deployed_at": spec.deployed_at,
+                    "confirmed_at": spec.confirmed_at,
                     "failure_reasons": spec.failure_reasons,
                 }
 

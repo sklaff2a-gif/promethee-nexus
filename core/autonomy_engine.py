@@ -279,6 +279,10 @@ class AutonomyEngine:
         self.error_streak = persisted.get("error_streak", 0)
         self.total_routines_executed = persisted.get("total_routines_executed", 0)
         self.last_health_check = persisted.get("last_health_check")
+        # Historique d'apprentissage ciblé {topic: timestamp_iso}
+        self._learning_history: dict = persisted.get("learning_history", {})
+        # Flag : max 1 apprentissage par cycle de routine
+        self._learning_done_this_cycle = False
 
         bus.subscribe("USER_COMMAND", self.reset_timer)
 
@@ -334,6 +338,7 @@ class AutonomyEngine:
             "last_health_check": self.last_health_check,
             "error_streak": self.error_streak,
             "total_routines_executed": self.total_routines_executed,
+            "learning_history": self._learning_history,
         }
         AutonomyStatePersistence.save(state)
 
@@ -386,15 +391,120 @@ class AutonomyEngine:
 
         return max(0.0, min(1.0, score))
 
-    def _record_routine(self, agent: str, intent: str, status: str, subject: str = ""):
+    def _diagnose_failure(self, response: dict, quality_score: float, intent: str) -> str:
+        """Diagnostique le TYPE d'échec : hallucination, repetition, ignorance, technical."""
+        if not response or not isinstance(response, dict):
+            return "technical"
+
+        result_text = str(response.get("result", ""))
+
+        # 1. Hallucination : ratio non-latin > 15%
+        alpha_chars = [c for c in result_text if c.isalpha()]
+        if alpha_chars:
+            non_latin = sum(1 for c in alpha_chars if ord(c) > 0x024F)
+            if non_latin / len(alpha_chars) > 0.15:
+                return "hallucination"
+
+        # 2. Répétition : 200 premiers chars identiques à un résultat précédent
+        recent_previews = [
+            str(h.get("result_preview", ""))
+            for h in self.routine_history[-5:]
+            if h.get("result_preview")
+        ]
+        for prev in recent_previews:
+            if prev and len(result_text) >= 200 and result_text[:200] == prev[:200]:
+                return "repetition"
+
+        # 3. Ignorance : résultat court/vague + patterns linguistiques
+        #    Exclure les résultats vides/quasi-vides (c'est technique, pas de l'ignorance)
+        stripped = result_text.strip()
+        if len(stripped) < 10:
+            return "technical"
+
+        ignorance_markers = [
+            "je ne sais pas", "aucune information", "pas d'information",
+            "je n'ai pas", "impossible de", "je ne peux pas",
+            "hors de mes compétences", "pas de données",
+            "i don't know", "no information", "unable to",
+        ]
+        lower_text = result_text.lower()
+        has_ignorance_marker = any(m in lower_text for m in ignorance_markers)
+        is_short = len(stripped) < 150
+        if has_ignorance_marker or (is_short and quality_score < 0.4):
+            return "ignorance"
+
+        # 4. Défaut : technique
+        return "technical"
+
+    async def _trigger_targeted_learning(self, mission: str, agent: str, intent: str):
+        """Déclenche un apprentissage ciblé quand failure_type == 'ignorance'."""
+        # Garde-fou : pas d'apprentissage si le Researcher lui-même a échoué
+        if agent == "researcher":
+            return
+
+        # Garde-fou : max 1 apprentissage par cycle
+        if self._learning_done_this_cycle:
+            return
+
+        # Extraire le sujet de la mission (les 100 premiers caractères significatifs)
+        topic = mission[:100].strip()
+        if topic.startswith("[MODE VEILLE]"):
+            topic = topic[len("[MODE VEILLE]"):].strip()
+
+        # Garde-fou : cooldown 2h sur le même sujet
+        if topic in self._learning_history:
+            try:
+                last_learn = datetime.fromisoformat(self._learning_history[topic])
+                hours_ago = (datetime.now() - last_learn).total_seconds() / 3600
+                if hours_ago < 2:
+                    logger.info(f"[AUTONOMY] Apprentissage en cooldown pour: {topic[:50]}...")
+                    return
+            except (ValueError, TypeError):
+                pass
+
+        # Dispatcher une recherche ciblée au Researcher
+        print(f"   📚 APPRENTISSAGE: Recherche ciblée sur '{topic[:60]}...'")
+        try:
+            await orchestrator.dispatch_task("researcher", {
+                "mission": f"[APPRENTISSAGE CIBLÉ] Recherche approfondie sur: {topic}",
+                "context": (
+                    "APPRENTISSAGE_CIBLE — Le système a détecté une lacune de connaissance "
+                    "sur ce sujet. Recherche des informations pertinentes et sauvegarde-les "
+                    "en mémoire (remember) pour que les agents puissent les utiliser à l'avenir."
+                ),
+                "force_local": True,
+            })
+            self._learning_history[topic] = datetime.now().isoformat()
+            self._learning_done_this_cycle = True
+
+            # Enregistrer le gap dans la conscience de soi
+            try:
+                from core.self_awareness import awareness
+                awareness.record_knowledge_gap(topic, intent)
+                awareness.mark_gap_learned(topic)
+            except Exception:
+                pass
+
+            logger.info(f"[AUTONOMY] Apprentissage ciblé terminé: {topic[:50]}")
+        except Exception as e:
+            logger.warning(f"[AUTONOMY] Apprentissage ciblé échoué: {e}")
+
+    def _record_routine(self, agent: str, intent: str, status: str, subject: str = "",
+                        quality_score: float = 0.0, failure_type: str = None,
+                        result_preview: str = ""):
         entry = {
             "agent": agent,
             "intent": intent,
             "status": status,
             "timestamp": datetime.now().isoformat(),
+            "quality_score": quality_score,
         }
         if subject:
             entry["subject"] = subject
+        if failure_type:
+            entry["failure_type"] = failure_type
+        if result_preview:
+            entry["result_preview"] = result_preview[:200]
         self.routine_history.append(entry)
         # FIFO max 40 (étendu pour l'analyse temporelle)
         if len(self.routine_history) > 40:
@@ -459,6 +569,25 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Ajustements adaptatifs (conscience de soi) ---
+        adaptive_adjustments = {}
+        try:
+            from core.self_awareness import awareness
+            adaptive_adjustments = awareness.compute_adaptive_scoring(self.routine_history)
+            if adaptive_adjustments:
+                for i, (routine, s) in enumerate(scored):
+                    adj = adaptive_adjustments.get(routine["intent"], 0.0)
+                    if adj != 0.0:
+                        scored[i] = (routine, s + adj)
+                scored.sort(key=lambda x: x[1], reverse=True)
+                # Log des ajustements actifs
+                active = {k: v for k, v in adaptive_adjustments.items() if v != 0.0}
+                if active:
+                    parts = [f"{k}:{v:+.1f}" for k, v in active.items()]
+                    print(f"   🧠 CONSCIENCE: Ajustements adaptatifs: {', '.join(parts)}")
+        except Exception:
+            pass
+
         selected, score = scored[0]
         agent = selected["agent"]
         intent = selected["intent"]
@@ -504,6 +633,7 @@ class AutonomyEngine:
                     "Résume les 2-3 découvertes les plus pertinentes pour un système multi-agents "
                     "autonome comme Prométhée. Sauvegarde les trouvailles en mémoire."
                 ),
+                "force_local": True,
             })
             # Enregistrer la veille YouTube dans le journal stratégique
             try:
@@ -516,9 +646,20 @@ class AutonomyEngine:
             except Exception as e:
                 logger.warning(f"[AUTONOMY] Écriture journal veille échouée: {e}")
         else:
+            # Injection du purpose_context dans les missions autonomes standard
+            purpose_ctx = ""
+            try:
+                from core.self_awareness import awareness
+                purpose_ctx = awareness.get_purpose_context()
+            except Exception:
+                pass
+            mission_text = f"[MODE VEILLE] {selected['mission']}\nAgis de ta propre initiative."
+            if purpose_ctx:
+                mission_text = f"{purpose_ctx}\n{mission_text}"
             response = await orchestrator.dispatch_task(agent, {
-                "mission": f"[MODE VEILLE] {selected['mission']}\nAgis de ta propre initiative.",
-                "context": "PROTOCOLE_AUTONOMIE"
+                "mission": mission_text,
+                "context": "PROTOCOLE_AUTONOMIE",
+                "force_local": True,
             })
 
         # Sujet du council (pour la déduplication)
@@ -527,19 +668,50 @@ class AutonomyEngine:
         # Score qualité post-routine
         quality_score = self._score_result_quality(response, intent)
 
+        # Aperçu du résultat pour comparaison future
+        result_preview = ""
+        if response and isinstance(response, dict):
+            result_preview = str(response.get("result", ""))[:200]
+
+        # Reset du flag d'apprentissage pour ce cycle
+        self._learning_done_this_cycle = False
+
         if response and response.get("status") in ("success", "consensus"):
             if quality_score < 0.3:
                 # Succès technique mais résultat de mauvaise qualité
-                print(f"   ⚠️ Routine {intent} terminée mais qualité basse ({quality_score:.2f})")
-                self._record_routine(agent, intent, "low_quality", subject=council_subject)
+                failure_type = self._diagnose_failure(response, quality_score, intent)
+                print(f"   ⚠️ Routine {intent} terminée mais qualité basse ({quality_score:.2f}) [{failure_type}]")
+                self._record_routine(agent, intent, "low_quality", subject=council_subject,
+                                     quality_score=quality_score, failure_type=failure_type,
+                                     result_preview=result_preview)
                 self.error_streak += 1
+                # Apprentissage ciblé si ignorance détectée
+                if failure_type == "ignorance":
+                    try:
+                        from core.self_awareness import awareness
+                        awareness.record_knowledge_gap(selected["mission"][:100], intent)
+                    except Exception:
+                        pass
+                    await self._trigger_targeted_learning(selected["mission"], agent, intent)
             else:
                 print(f"   ✅ Fin Routine {agent.upper() if agent != '_council' else 'COUNCIL'} (qualité: {quality_score:.2f})")
-                self._record_routine(agent, intent, "success", subject=council_subject)
+                self._record_routine(agent, intent, "success", subject=council_subject,
+                                     quality_score=quality_score, result_preview=result_preview)
                 self.error_streak = 0
         else:
-            self._record_routine(agent, intent, "error", subject=council_subject)
+            failure_type = self._diagnose_failure(response, quality_score, intent)
+            self._record_routine(agent, intent, "error", subject=council_subject,
+                                 quality_score=quality_score, failure_type=failure_type,
+                                 result_preview=result_preview)
             self.error_streak += 1
+            # Apprentissage ciblé si ignorance détectée
+            if failure_type == "ignorance":
+                try:
+                    from core.self_awareness import awareness
+                    awareness.record_knowledge_gap(selected["mission"][:100], intent)
+                except Exception:
+                    pass
+                await self._trigger_targeted_learning(selected["mission"], agent, intent)
 
         # Publier AUTONOMY_ROUTINE_COMPLETE pour les handlers PSYCHE
         participants = []
@@ -605,7 +777,8 @@ class AutonomyEngine:
             print(f"   📖 GRIMOIRE INVOKE: {best_slug} — {description[:60]}")
             response = await orchestrator.dispatch_task(best_slug, {
                 "mission": mission,
-                "context": "PROTOCOLE_AUTONOMIE_GRIMOIRE"
+                "context": "PROTOCOLE_AUTONOMIE_GRIMOIRE",
+                "force_local": True,
             })
             return response or {"status": "error", "result": "Pas de réponse du Grimoire."}
 
@@ -649,7 +822,8 @@ class AutonomyEngine:
             try:
                 res = await orchestrator.dispatch_task("researcher", {
                     "mission": f"VEILLE TECHNO: {topic['research_query']}",
-                    "context": "COUNCIL_RESEARCH — Résume les découvertes clés en 5-10 lignes pour alimenter un débat."
+                    "context": "COUNCIL_RESEARCH — Résume les découvertes clés en 5-10 lignes pour alimenter un débat.",
+                    "force_local": True,
                 })
                 if res and res.get("status") == "success":
                     research_context = str(res.get("result", ""))[:2000]
@@ -811,6 +985,7 @@ class AutonomyEngine:
                     f"FICHIER: {filename}\n"
                     f"CODE À AUDITER (ne génère pas de nouveau code, analyse celui-ci) :\n{code}"
                 ),
+                "force_local": True,
             })
 
             # Post-filtre anti-hallucination : détecter les réponses hors-sujet
@@ -861,6 +1036,7 @@ class AutonomyEngine:
                     f"Pas de réécriture complète, juste une suggestion ciblée."
                 ),
                 "context": f"PROTOCOLE_AUTONOMIE\nFICHIER: {filename}\nCODE:\n{code}",
+                "force_local": True,
             })
             return response or {"status": "error", "result": "Pas de réponse."}
         except Exception as e:

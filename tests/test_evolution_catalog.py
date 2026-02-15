@@ -418,11 +418,39 @@ class TestTracking:
         spec = self.cat.get_spec("PERF-001")
         assert spec.status == "available"
 
+    def test_mark_confirmed(self):
+        self.cat.mark_attempted("PERF-001")
+        self.cat.mark_deployed("PERF-001")
+        self.cat.mark_confirmed("PERF-001")
+        spec = self.cat.get_spec("PERF-001")
+        assert spec.status == "confirmed"
+        assert spec.confirmed_at is not None
+
+    def test_mark_rolled_back(self):
+        self.cat.mark_attempted("PERF-002")
+        self.cat.mark_deployed("PERF-002")
+        self.cat.mark_rolled_back("PERF-002", "success_rate chute de 20%")
+        spec = self.cat.get_spec("PERF-002")
+        assert spec.status == "rolled_back"
+        assert "success_rate chute de 20%" in spec.failure_reasons
+        assert self.cat._stats.get("total_rolled_back", 0) == 1
+
+    def test_mark_rolled_back_increments_counter(self):
+        self.cat.mark_attempted("PERF-001")
+        self.cat.mark_deployed("PERF-001")
+        self.cat.mark_rolled_back("PERF-001", "raison 1")
+        self.cat.mark_attempted("PERF-002")
+        self.cat.mark_deployed("PERF-002")
+        self.cat.mark_rolled_back("PERF-002", "raison 2")
+        assert self.cat._stats["total_rolled_back"] == 2
+
     def test_mark_nonexistent_spec(self):
         # Pas d'exception
         self.cat.mark_attempted("FAKE-999")
         self.cat.mark_deployed("FAKE-999")
         self.cat.mark_failed("FAKE-999")
+        self.cat.mark_confirmed("FAKE-999")
+        self.cat.mark_rolled_back("FAKE-999")
 
 
 class TestPersistence:
@@ -451,6 +479,32 @@ class TestPersistence:
         assert res.status == "available"
         assert res.attempts == 1
         assert res.failure_reasons == ["test error"]
+
+    def test_confirmed_at_persisted(self):
+        cat = EvolutionCatalog()
+        cat.mark_attempted("PERF-001")
+        cat.mark_deployed("PERF-001")
+        cat.mark_confirmed("PERF-001")
+        cat._save()
+
+        EvolutionCatalog.reset_singleton()
+        cat2 = EvolutionCatalog()
+        spec = cat2.get_spec("PERF-001")
+        assert spec.status == "confirmed"
+        assert spec.confirmed_at is not None
+
+    def test_rolled_back_persisted(self):
+        cat = EvolutionCatalog()
+        cat.mark_attempted("PERF-002")
+        cat.mark_deployed("PERF-002")
+        cat.mark_rolled_back("PERF-002", "dégradation")
+        cat._save()
+
+        EvolutionCatalog.reset_singleton()
+        cat2 = EvolutionCatalog()
+        spec = cat2.get_spec("PERF-002")
+        assert spec.status == "rolled_back"
+        assert "dégradation" in spec.failure_reasons
 
     def test_load_missing_file(self):
         # Le fichier n'existe pas encore (la fixture le supprime)
@@ -656,6 +710,70 @@ class TestObjectivesBonus:
         assert "SEC-" in mapping["maintenance"]
 
 
+class TestEvolutionStuckBonus:
+    """Tests du bonus difficulté basse quand Evolution est stuck."""
+
+    def setup_method(self):
+        self.cat = EvolutionCatalog()
+
+    def test_stuck_boosts_difficulty_1(self):
+        """Si Evolution est stuck, les specs de difficulté 1 reçoivent +2.0."""
+        mock_awareness = MagicMock()
+        mock_awareness.is_evolution_stuck.return_value = True
+        mock_awareness_mod = MagicMock()
+        mock_awareness_mod.awareness = mock_awareness
+
+        mock_autonomy = MagicMock()
+        mock_autonomy.routine_history = [
+            {"intent": "EXPANSION_CODE", "status": "error"}
+        ] * 15
+        mock_autonomy_mod = MagicMock()
+        mock_autonomy_mod.autonomy = mock_autonomy
+
+        # On doit aussi mocker _get_system_state pour éviter l'interférence
+        default_state = {"error_streak": 0, "success_rate": 1.0, "cloud_budget_pct": 0, "health": "GO"}
+        with patch.dict("sys.modules", {
+            "core.self_awareness": mock_awareness_mod,
+            "core.autonomy_engine": mock_autonomy_mod,
+        }), patch.object(self.cat, "_get_system_state", return_value=default_state):
+            candidates = self.cat.get_top_candidates(10)
+
+        # Les specs diff=1 devraient être boostées en haut
+        if candidates:
+            top_diffs = [spec.difficulty for spec, _ in candidates[:5]]
+            assert 1 in top_diffs
+
+    def test_not_stuck_no_bonus(self):
+        """Si Evolution n'est pas stuck, pas de bonus difficulté."""
+        mock_awareness = MagicMock()
+        mock_awareness.is_evolution_stuck.return_value = False
+        mock_awareness_mod = MagicMock()
+        mock_awareness_mod.awareness = mock_awareness
+
+        mock_autonomy = MagicMock()
+        mock_autonomy.routine_history = []
+        mock_autonomy_mod = MagicMock()
+        mock_autonomy_mod.autonomy = mock_autonomy
+
+        default_state = {"error_streak": 0, "success_rate": 1.0, "cloud_budget_pct": 0, "health": "GO"}
+        with patch.dict("sys.modules", {
+            "core.self_awareness": mock_awareness_mod,
+            "core.autonomy_engine": mock_autonomy_mod,
+        }), patch.object(self.cat, "_get_system_state", return_value=default_state):
+            candidates_not_stuck = self.cat.get_top_candidates(5)
+
+        # Les scores devraient être normaux (pas de bonus +2.0)
+        for spec, score in candidates_not_stuck:
+            if spec.difficulty == 1:
+                assert score < 4.0  # Pas de bonus +2.0
+
+    def test_stuck_bonus_graceful_on_import_error(self):
+        """Si l'import échoue, get_top_candidates fonctionne quand même."""
+        with patch.dict("sys.modules", {"core.self_awareness": None}):
+            candidates = self.cat.get_top_candidates(5)
+        assert len(candidates) == 5
+
+
 class TestSummary:
 
     def setup_method(self):
@@ -672,6 +790,21 @@ class TestSummary:
         self.cat.mark_deployed("PERF-001")
         summary = self.cat.get_summary()
         assert "deployed" in summary
+
+    def test_summary_confirmed_status(self):
+        self.cat.mark_attempted("PERF-001")
+        self.cat.mark_deployed("PERF-001")
+        self.cat.mark_confirmed("PERF-001")
+        summary = self.cat.get_summary()
+        assert "confirmed" in summary
+
+    def test_summary_rolled_back_status(self):
+        self.cat.mark_attempted("PERF-002")
+        self.cat.mark_deployed("PERF-002")
+        self.cat.mark_rolled_back("PERF-002", "test")
+        summary = self.cat.get_summary()
+        assert "rolled_back" in summary
+        assert "rollbacks" in summary
 
 
 class TestSystemState:

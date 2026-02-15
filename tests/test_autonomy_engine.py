@@ -1020,6 +1020,94 @@ class TestCouncilToAction:
         EvolutionCatalog.reset_singleton()
 
 
+# ═══════════════════════════════════════════════════════════
+# TestAdaptiveScoringIntegration (3 tests)
+# ═══════════════════════════════════════════════════════════
+
+class TestAdaptiveScoringIntegration:
+    """Tests d'intégration du scoring adaptatif dans _execute_scored_routine."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        self.state_path = str(tmp_path / "state.json")
+        with patch("core.autonomy_engine.STATE_FILE", self.state_path):
+            with patch("core.autonomy_engine.AutonomyStatePersistence.load",
+                       return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                self.engine = AutonomyEngine(idle_threshold_seconds=300)
+        yield
+
+    @pytest.mark.asyncio
+    async def test_adaptive_scoring_applied(self):
+        """compute_adaptive_scoring est appelé et ses ajustements appliqués."""
+        health = _make_health("GO")
+        mock_awareness = MagicMock()
+        mock_awareness.compute_adaptive_scoring.return_value = {"EXPANSION_CODE": -5.0}
+
+        with patch("core.autonomy_engine.orchestrator") as mock_orch, \
+             patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
+             patch.dict("sys.modules", {"core.self_awareness": MagicMock(awareness=mock_awareness)}):
+            mock_orch.dispatch_task = AsyncMock(return_value={
+                "status": "success",
+                "result": "Analyse complete du systeme avec recommandations detaillees."
+            })
+            routines = _get_routines()
+            mock_scorer.return_value = [(r, 2.0) for r in routines]
+            await self.engine._execute_scored_routine(health)
+            mock_awareness.compute_adaptive_scoring.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_adaptive_scoring_changes_selection(self):
+        """L'ajustement adaptatif change la routine sélectionnée."""
+        health = _make_health("GO")
+        mock_awareness = MagicMock()
+        # Pénaliser EXPANSION_CODE, booster AUDIT_STRUCTURE
+        mock_awareness.compute_adaptive_scoring.return_value = {
+            "EXPANSION_CODE": -10.0,
+            "AUDIT_STRUCTURE": 5.0,
+        }
+
+        dispatched_agents = []
+
+        async def capture_dispatch(agent, payload):
+            dispatched_agents.append(agent)
+            return {"status": "success", "result": "OK " * 50}
+
+        with patch("core.autonomy_engine.orchestrator") as mock_orch, \
+             patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
+             patch.dict("sys.modules", {"core.self_awareness": MagicMock(awareness=mock_awareness)}):
+            mock_orch.dispatch_task = AsyncMock(side_effect=capture_dispatch)
+            routines = _get_routines()
+            # EXPANSION en tête par défaut
+            mock_scorer.return_value = [
+                (routines[0], 5.0),   # EXPANSION_CODE
+                (routines[1], 4.0),   # AUDIT_STRUCTURE
+                (routines[2], 3.0),   # VEILLE
+                (routines[3], 2.0),   # DROPZONE
+            ]
+            await self.engine._execute_scored_routine(health)
+            # AUDIT devrait être dispatché (score 4.0+5.0=9.0 > EXPANSION 5.0-10.0=-5.0)
+            assert dispatched_agents[0] == "architect"
+
+    @pytest.mark.asyncio
+    async def test_adaptive_scoring_graceful_on_error(self):
+        """Si compute_adaptive_scoring échoue, la routine continue normalement."""
+        health = _make_health("GO")
+        mock_awareness = MagicMock()
+        mock_awareness.compute_adaptive_scoring.side_effect = RuntimeError("boom")
+
+        with patch("core.autonomy_engine.orchestrator") as mock_orch, \
+             patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
+             patch.dict("sys.modules", {"core.self_awareness": MagicMock(awareness=mock_awareness)}):
+            mock_orch.dispatch_task = AsyncMock(return_value={
+                "status": "success",
+                "result": "Analyse complete du systeme avec recommandations detaillees."
+            })
+            mock_scorer.return_value = [(_get_routines()[0], 2.0)]
+            # Ne doit pas lever d'exception
+            await self.engine._execute_scored_routine(health)
+            mock_orch.dispatch_task.assert_called_once()
+
+
 # ─── Tests nouvelles routines (Fix #6) ───
 
 class TestNewRoutines:
@@ -1199,3 +1287,186 @@ class TestResultQualityScoring:
         )
         # str(None) = "" → score 0.0
         assert score == 0.0
+
+
+# ═══════════════════════════════════════════════════════════
+# TestDiagnoseFailure (8 tests) — Conscience d'ignorance
+# ═══════════════════════════════════════════════════════════
+
+class TestDiagnoseFailure:
+    """Tests du diagnostic d'échec (_diagnose_failure)."""
+
+    def setup_method(self):
+        self.engine = AutonomyEngine.__new__(AutonomyEngine)
+        self.engine.routine_history = []
+        self.engine.error_streak = 0
+        self.engine._learning_history = {}
+        self.engine._learning_done_this_cycle = False
+
+    def test_none_response_is_technical(self):
+        """Réponse None → technique."""
+        assert self.engine._diagnose_failure(None, 0.0, "VEILLE") == "technical"
+
+    def test_non_dict_response_is_technical(self):
+        """Réponse non-dict → technique."""
+        assert self.engine._diagnose_failure("string", 0.0, "VEILLE") == "technical"
+
+    def test_hallucination_detected(self):
+        """Ratio non-latin > 15% → hallucination."""
+        text = "这是一个测试这是一个测试" * 20 + "abc"
+        result = self.engine._diagnose_failure(
+            {"result": text}, 0.3, "SECURITY_AUDIT"
+        )
+        assert result == "hallucination"
+
+    def test_repetition_detected(self):
+        """200 premiers chars identiques au précédent → repetition."""
+        repeated = "Analyse identique du systeme " * 20
+        self.engine.routine_history = [
+            {"result_preview": repeated[:200], "intent": "VEILLE"}
+        ]
+        result = self.engine._diagnose_failure(
+            {"result": repeated}, 0.3, "VEILLE"
+        )
+        assert result == "repetition"
+
+    def test_ignorance_with_marker(self):
+        """Pattern linguistique d'ignorance → ignorance."""
+        result = self.engine._diagnose_failure(
+            {"result": "Je ne sais pas comment répondre à cette question sur les design patterns."},
+            0.3, "VEILLE"
+        )
+        assert result == "ignorance"
+
+    def test_ignorance_short_and_low_quality(self):
+        """Résultat court + quality_score < 0.4 → ignorance."""
+        result = self.engine._diagnose_failure(
+            {"result": "Pas de résultat clair."},
+            0.2, "EXPANSION_CODE"
+        )
+        assert result == "ignorance"
+
+    def test_technical_fallback(self):
+        """Résultat long, latin, pas de markers → technical."""
+        text = "Voici une analyse technique detaillee du systeme " * 10
+        result = self.engine._diagnose_failure(
+            {"result": text}, 0.5, "VEILLE"
+        )
+        assert result == "technical"
+
+    def test_hallucination_priority_over_ignorance(self):
+        """Hallucination est détectée avant ignorance (même si court)."""
+        text = "这是一个测试" * 20
+        result = self.engine._diagnose_failure(
+            {"result": text}, 0.1, "VEILLE"
+        )
+        assert result == "hallucination"
+
+
+# ═══════════════════════════════════════════════════════════
+# TestTriggerTargetedLearning (8 tests) — Apprentissage ciblé
+# ═══════════════════════════════════════════════════════════
+
+class TestTriggerTargetedLearning:
+    """Tests de l'apprentissage ciblé (_trigger_targeted_learning)."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        self.state_path = str(tmp_path / "state.json")
+        with patch("core.autonomy_engine.STATE_FILE", self.state_path):
+            with patch("core.autonomy_engine.AutonomyStatePersistence.load",
+                       return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                self.engine = AutonomyEngine(idle_threshold_seconds=300)
+        yield
+
+    @pytest.mark.asyncio
+    async def test_learning_dispatches_to_researcher(self):
+        """L'apprentissage dispatche au Researcher."""
+        with patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
+            await self.engine._trigger_targeted_learning(
+                "Comprendre les design patterns", "coder", "EXPANSION_CODE"
+            )
+            mock_orch.dispatch_task.assert_called_once()
+            call_args = mock_orch.dispatch_task.call_args
+            assert call_args[0][0] == "researcher"
+            assert "APPRENTISSAGE" in call_args[0][1]["mission"]
+
+    @pytest.mark.asyncio
+    async def test_learning_blocked_for_researcher(self):
+        """Pas d'apprentissage si l'agent qui a échoué est le Researcher."""
+        with patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock()
+            await self.engine._trigger_targeted_learning(
+                "Recherche X", "researcher", "VEILLE_SILENCIEUSE"
+            )
+            mock_orch.dispatch_task.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_learning_max_once_per_cycle(self):
+        """Max 1 apprentissage par cycle."""
+        self.engine._learning_done_this_cycle = True
+        with patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock()
+            await self.engine._trigger_targeted_learning(
+                "Topic X", "coder", "EXPANSION_CODE"
+            )
+            mock_orch.dispatch_task.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_learning_cooldown_2h(self):
+        """Pas de re-learning sur le même sujet dans les 2h."""
+        topic = "Design patterns avancés"
+        self.engine._learning_history[topic] = datetime.now().isoformat()
+        with patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock()
+            await self.engine._trigger_targeted_learning(
+                topic, "coder", "EXPANSION_CODE"
+            )
+            mock_orch.dispatch_task.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_learning_allowed_after_cooldown(self):
+        """Apprentissage autorisé après 2h de cooldown."""
+        from datetime import timedelta
+        topic = "Design patterns avancés"
+        old_ts = (datetime.now() - timedelta(hours=3)).isoformat()
+        self.engine._learning_history[topic] = old_ts
+        with patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
+            await self.engine._trigger_targeted_learning(
+                topic, "coder", "EXPANSION_CODE"
+            )
+            mock_orch.dispatch_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_learning_sets_done_flag(self):
+        """Après apprentissage, le flag _learning_done_this_cycle est True."""
+        with patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
+            await self.engine._trigger_targeted_learning(
+                "Topic Y", "coder", "EXPANSION_CODE"
+            )
+            assert self.engine._learning_done_this_cycle is True
+
+    @pytest.mark.asyncio
+    async def test_learning_records_in_history(self):
+        """L'apprentissage est enregistré dans _learning_history."""
+        with patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
+            await self.engine._trigger_targeted_learning(
+                "Topic Z", "coder", "EXPANSION_CODE"
+            )
+            assert "Topic Z" in self.engine._learning_history
+
+    @pytest.mark.asyncio
+    async def test_learning_strips_veille_prefix(self):
+        """Le préfixe [MODE VEILLE] est retiré du topic."""
+        with patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
+            await self.engine._trigger_targeted_learning(
+                "[MODE VEILLE] Cherche une astuce Python", "coder", "VEILLE"
+            )
+            # Le topic stocké ne doit pas commencer par [MODE VEILLE]
+            stored_topics = list(self.engine._learning_history.keys())
+            assert not stored_topics[0].startswith("[MODE VEILLE]")
