@@ -38,16 +38,25 @@ logger = logging.getLogger("BaseAgent")
 
 class BaseAgent:
     """
-    Classe Mère V21.0 - Full Architecture + Budget Cloud
+    Classe Mère V22.0 - Full Architecture + Budget Cloud + Cooldown 429
     - Stratégie : Local First & Cloud Escalation (Stricte)
     - Mémoire : RAG & Anti-Spam + Decay Temporel
     - Interface : Publication temps réel sur le Bus
-    - Budget : Compteur d'appels Cloud partagé entre agents
+    - Budget : Compteur d'appels Cloud partagé + cooldown 429 + quotas journaliers
     """
     # Compteur Cloud partagé entre toutes les instances
     _cloud_call_count = 0
     _cloud_call_reset_time = time.time()
     MAX_CLOUD_CALLS_PER_HOUR = 100
+
+    # Cooldown après erreur 429 (quota exceeded)
+    _cloud_cooldown_until = 0.0  # timestamp jusqu'auquel le Cloud est désactivé
+    CLOUD_COOLDOWN_SECONDS = 3600  # 1 heure de cooldown après un 429
+
+    # Quotas journaliers Gemini Free Tier (RPD = requests per day)
+    _daily_cloud_calls = 0
+    _daily_cloud_reset_day = None
+    MAX_DAILY_CLOUD_CALLS = 50  # Budget conservateur (Gemini Pro=100, Flash=250)
 
     # Demi-vie mémoire en jours (surchargeable par agent)
     MEMORY_HALF_LIFE_DAYS = 30
@@ -259,14 +268,30 @@ class BaseAgent:
         
         # CAS A : Tâche Complexe -> On tente le Cloud d'abord
         if needs_cloud:
-            # Vérification budget Cloud
             now = time.time()
+
+            # Reset compteur horaire
             if now - BaseAgent._cloud_call_reset_time > 3600:
                 BaseAgent._cloud_call_count = 0
                 BaseAgent._cloud_call_reset_time = now
 
-            if BaseAgent._cloud_call_count >= BaseAgent.MAX_CLOUD_CALLS_PER_HOUR:
-                self.log_thought(f"💰 Budget Cloud atteint ({BaseAgent.MAX_CLOUD_CALLS_PER_HOUR}/h) -> Fallback Local", type="warning")
+            # Reset compteur journalier
+            from datetime import date
+            today = date.today()
+            if BaseAgent._daily_cloud_reset_day != today:
+                BaseAgent._daily_cloud_calls = 0
+                BaseAgent._daily_cloud_reset_day = today
+
+            # Vérification cooldown 429
+            if now < BaseAgent._cloud_cooldown_until:
+                remaining = int(BaseAgent._cloud_cooldown_until - now)
+                self.log_thought(f"⏸️ Cloud en cooldown 429 ({remaining}s restantes) -> Fallback Local", type="warning")
+                needs_cloud = False
+            elif BaseAgent._cloud_call_count >= BaseAgent.MAX_CLOUD_CALLS_PER_HOUR:
+                self.log_thought(f"💰 Budget Cloud horaire atteint ({BaseAgent.MAX_CLOUD_CALLS_PER_HOUR}/h) -> Fallback Local", type="warning")
+                needs_cloud = False
+            elif BaseAgent._daily_cloud_calls >= BaseAgent.MAX_DAILY_CLOUD_CALLS:
+                self.log_thought(f"💰 Budget Cloud journalier atteint ({BaseAgent._daily_cloud_calls}/{BaseAgent.MAX_DAILY_CLOUD_CALLS}) -> Fallback Local", type="warning")
                 needs_cloud = False
             else:
                 cloud_response = None
@@ -279,6 +304,7 @@ class BaseAgent:
                         loop = asyncio.get_running_loop()
                         response = await loop.run_in_executor(None, client.generate_content, full_prompt)
                         BaseAgent._cloud_call_count += 1
+                        BaseAgent._daily_cloud_calls += 1
                         if response.text:
                             cloud_response = response.text
                             used_model = model_name.split('/')[-1]
@@ -287,7 +313,16 @@ class BaseAgent:
                             if len(cloud_response) > 50:
                                 self.remember(f"Q: {prompt}\nA: {cloud_response}", metadata={"source": used_model, "trigger": "cloud_escalation"})
                             return self._strip_cot(cloud_response)
-                    except Exception:
+                    except Exception as e:
+                        # Détecter les erreurs 429 (quota exceeded)
+                        err_str = str(e)
+                        if "429" in err_str or "quota" in err_str.lower() or "exceeded" in err_str.lower():
+                            BaseAgent._cloud_cooldown_until = now + BaseAgent.CLOUD_COOLDOWN_SECONDS
+                            self.log_thought(
+                                f"🚫 Quota Gemini épuisé (429) — cooldown {BaseAgent.CLOUD_COOLDOWN_SECONDS}s activé",
+                                type="warning"
+                            )
+                            break  # Stop la cascade, pas la peine d'essayer les autres modèles
                         continue
 
                 # Si le Cloud échoue, fallback sur le Local

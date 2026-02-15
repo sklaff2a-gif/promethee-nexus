@@ -14,6 +14,18 @@ logger = logging.getLogger("AutonomyEngine")
 MAX_DAILY_ROUTINES = 80
 
 # Veille YouTube IA — rotation quand la dropzone est vide
+# Veille silencieuse — rotation de sujets (évite les doublons)
+VEILLE_TOPICS = [
+    "Cherche une astuce Python 'One-Liner' utile et sauvegarde-la.",
+    "Cherche une technique de debugging Python avancée (pdb, traceback, logging).",
+    "Cherche un pattern de conception Python utile pour un système multi-agents.",
+    "Cherche une astuce d'optimisation mémoire Python (generators, __slots__, weakref).",
+    "Cherche une nouveauté récente de Python 3.12+ (typing, match/case, perf).",
+    "Cherche une technique de gestion d'erreurs robuste en Python async.",
+    "Cherche un outil Python utile pour le monitoring système (psutil, watchdog).",
+    "Cherche une astuce FastAPI pour améliorer les performances ou la sécurité.",
+]
+
 YOUTUBE_AI_VEILLE = [
     {
         "query": "YouTube AI autonomous agents framework latest 2025 2026",
@@ -183,8 +195,10 @@ class RoutineScorer:
                         last_exec = datetime.fromisoformat(h["timestamp"])
                         hours_ago = (now - last_exec).total_seconds() / 3600
                         if hours_ago < 2:
-                            score -= 3.0
+                            score -= 5.0  # Quasi-bloquant dans les 2 premières heures
                         elif hours_ago < 4:
+                            score -= 2.5
+                        elif hours_ago < 6:
                             score -= 1.0
                     except (ValueError, TypeError):
                         pass
@@ -287,10 +301,14 @@ class AutonomyEngine:
             if len(self.recent_context) > 5: self.recent_context.pop(0)
 
     def _get_routines(self) -> list:
+        # Rotation du sujet de veille silencieuse
+        veille_index = self.total_routines_executed % len(VEILLE_TOPICS)
+        veille_mission = f"[MODE VEILLE] {VEILLE_TOPICS[veille_index]}"
+
         return [
             {"agent": "evolution", "intent": "EXPANSION_CODE", "mission": "Analyse un fichier aléatoire. Propose une petite optimisation (typage/docstring)."},
             {"agent": "architect", "intent": "AUDIT_STRUCTURE", "mission": "Vérifie qu'aucun fichier temporaire (.tmp, .log) ne traîne à la racine."},
-            {"agent": "researcher", "intent": "VEILLE_SILENCIEUSE", "mission": "Cherche une astuce Python 'One-Liner' utile et sauvegarde-la."},
+            {"agent": "researcher", "intent": "VEILLE_SILENCIEUSE", "mission": veille_mission},
             {"agent": "researcher", "intent": "DROPZONE_SCAN", "mission": "dropzone: Scanne la dropzone pour de nouveaux fichiers."},
             {"agent": "_council", "intent": "COUNCIL_DEBATE", "mission": "Débat autonome entre agents."},
             {"agent": "_grimoire", "intent": "GRIMOIRE_INVOKE", "mission": "Invoque un agent éphémère du Grimoire."},
@@ -684,13 +702,34 @@ class AutonomyEngine:
 
             print(f"   🔒 SECURITY AUDIT: {filename}")
             response = await orchestrator.dispatch_task("security", {
-                "mission": f"[MODE VEILLE] Audite ce fichier pour des vulnérabilités : {filename}",
+                "mission": (
+                    f"[MODE VEILLE] Audite le fichier {filename} pour des vulnérabilités.\n"
+                    f"RÈGLES STRICTES :\n"
+                    f"- Réponds UNIQUEMENT en français.\n"
+                    f"- Analyse UNIQUEMENT le code fourni ci-dessous, pas de code inventé.\n"
+                    f"- NE GÉNÈRE PAS de code. Liste seulement les vulnérabilités trouvées.\n"
+                    f"- Format : une liste numérotée de vulnérabilités (ou 'Aucune vulnérabilité détectée').\n"
+                    f"- Maximum 500 mots."
+                ),
                 "context": (
                     f"PROTOCOLE_AUTONOMIE\n"
                     f"FICHIER: {filename}\n"
-                    f"CODE:\n{code}"
+                    f"CODE À AUDITER (ne génère pas de nouveau code, analyse celui-ci) :\n{code}"
                 ),
             })
+
+            # Post-filtre anti-hallucination : détecter les réponses hors-sujet
+            if response and response.get("result"):
+                result_text = response["result"]
+                # Détection de caractères non-latins massifs (chinois, etc.)
+                non_latin = sum(1 for c in result_text if ord(c) > 0x024F)
+                if non_latin > len(result_text) * 0.1:
+                    logger.warning(f"[SECURITY_AUDIT] Hallucination détectée ({non_latin} chars non-latins)")
+                    response["result"] = f"Audit de {filename} : résultat filtré (hallucination LLM détectée)."
+                # Tronquer les réponses excessivement longues
+                elif len(result_text) > 3000:
+                    response["result"] = result_text[:3000] + "\n\n[... tronqué — réponse trop longue]"
+
             return response or {"status": "error", "result": "Pas de réponse."}
         except Exception as e:
             return {"status": "error", "result": str(e)}

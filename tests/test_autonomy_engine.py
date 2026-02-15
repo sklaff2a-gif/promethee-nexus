@@ -56,6 +56,7 @@ def _get_routines():
 # TestSystemHealthCheck (8 tests)
 # ═══════════════════════════════════════════════════════════
 
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
 class TestSystemHealthCheck:
 
     def _mock_psutil(self, cpu=30.0, ram_percent=50.0, ram_used=8*1024**3, ram_total=16*1024**3):

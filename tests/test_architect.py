@@ -260,6 +260,7 @@ class TestAutonomousOverrideGuard:
         assert result["status"] == "error"
 
     @pytest.mark.asyncio
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
     async def test_override_ignored_with_evolution_pipeline(self):
         """ADMIN_OVERRIDE + EVOLUTION_PIPELINE → override ignoré."""
         architect = DivineArchitect()

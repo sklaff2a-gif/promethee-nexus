@@ -162,6 +162,7 @@ class Council:
 
         return (
             f"Tu participes à un CONSEIL multi-agents.\n"
+            f"LANGUE OBLIGATOIRE : Réponds UNIQUEMENT en français. Pas d'anglais.\n"
             f"{_COUNCIL_PROJECT_CONTEXT}\n"
             f"{project_files}\n\n"
             f"MISSION : {self.mission}\n"
