@@ -204,6 +204,12 @@ class TestLegacyPipeline:
 class TestCatalogPipelineV6:
     """Tests du pipeline V6 (catalogue pré-défini)."""
 
+    @pytest.fixture(autouse=True)
+    def disable_protected_files_guard(self):
+        """Désactive le guard fichiers protégés (testé dans TestProtectedFilesGuard)."""
+        with patch("Agents.factory_agent._PROTECTED_FILES", set()):
+            yield
+
     @pytest.mark.asyncio
     async def test_catalog_pipeline_selects_spec(self):
         """Le pipeline V6 sélectionne une spec du catalogue et génère le code via Gemini."""
@@ -517,6 +523,12 @@ class TestExtractPythonCode:
 class TestGeminiCodeGeneration:
     """Tests du pipeline Gemini Cloud pour la génération de code."""
 
+    @pytest.fixture(autouse=True)
+    def disable_protected_files_guard(self):
+        """Désactive le guard fichiers protégés (testé dans TestProtectedFilesGuard)."""
+        with patch("Agents.factory_agent._PROTECTED_FILES", set()):
+            yield
+
     @pytest.mark.asyncio
     async def test_cloud_generation_with_retry(self):
         """Si le premier code est invalide, le retry via Gemini corrige."""
@@ -566,3 +578,61 @@ class TestGeminiCodeGeneration:
         # Le Coder local doit avoir été appelé en fallback
         coder_calls = [c for c in mock_orch.dispatch_task.call_args_list if c[0][0] == "coder"]
         assert len(coder_calls) == 1
+
+
+# --- Tests fichiers protégés (Fix Evolution→Factory) ---
+
+class TestProtectedFilesGuard:
+    """Vérifie que l'Evolution refuse les specs ciblant des fichiers protégés."""
+
+    @pytest.mark.asyncio
+    async def test_protected_file_skipped(self):
+        """Une spec ciblant core/router.py (protégé) est rejetée avant Phase 3."""
+        evo = DivineEvolution()
+
+        # Créer une spec ciblant un fichier protégé
+        catalog = EvolutionCatalog()
+        spec = ImprovementSpec(
+            id="TEST-PROT", name="Cache Router", description="test",
+            category="performance", target_file="core/router.py",
+            target_method="classify_intent", difficulty=3,
+            code_template="# cache", validation="test", status="available",
+        )
+        catalog.specs[spec.id] = spec
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value="# code existant\npass"):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        assert "protégé" in result.get("result", "").lower() or "warning" in result.get("status", "")
+
+    @pytest.mark.asyncio
+    async def test_non_protected_file_proceeds(self):
+        """Une spec ciblant un fichier non-protégé passe normalement."""
+        evo = DivineEvolution()
+
+        catalog = EvolutionCatalog()
+        # Nettoyer toutes les specs par défaut et n'en garder qu'une non-protégée
+        catalog.specs.clear()
+        spec = ImprovementSpec(
+            id="TEST-OK", name="Amélioration custom", description="test",
+            category="performance", target_file="core/psyche.py",
+            target_method="test", difficulty=2,
+            code_template="# code", validation="test", status="available",
+        )
+        catalog.specs[spec.id] = spec
+
+        valid_code = "import os\nimport sys\nprint('hello world minimum chars padded')"
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={
+            "result": "VALIDÉ", "status": "success"
+        })
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value="# existing code\npass"), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=valid_code), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # La spec a été traitée (pas de rejet fichier protégé)
+        assert "protégé" not in result.get("result", "").lower()

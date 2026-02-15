@@ -390,7 +390,16 @@ class BaseAgent:
         # Strip les blocs <think>...</think> (deepseek-r1)
         cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
         if not cleaned:
-            return text  # Ne pas retourner vide
+            # Texte = uniquement des blocs <think> : extraire le contenu comme fallback
+            think_content = re.findall(r'<think>(.*?)</think>', text, flags=re.DOTALL)
+            if think_content:
+                # Prendre les dernières lignes non-vides du think (souvent la conclusion)
+                all_lines = think_content[-1].strip().split('\n')
+                # Garder les 5 dernières lignes non-vides comme résumé
+                meaningful = [l.strip() for l in all_lines if l.strip()]
+                if meaningful:
+                    return '\n'.join(meaningful[-5:])
+            return text  # Fallback ultime : retourner tel quel
         # Strip les lignes de raisonnement interne en tête de réponse
         lines = cleaned.split('\n')
         start = 0

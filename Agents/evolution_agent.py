@@ -289,6 +289,18 @@ class DivineEvolution(BaseAgent):
             catalog.mark_failed(spec.id, reason)
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
+        # Vérifier que le fichier n'est pas protégé par la Factory
+        try:
+            from Agents.factory_agent import _PROTECTED_FILES
+            normalized_target = spec.target_file.replace("\\", "/")
+            if normalized_target in _PROTECTED_FILES:
+                reason = f"Fichier protégé par Factory: {spec.target_file}"
+                self.log_thought(f"🛡️ {reason} — skip spec [{spec.id}]", type="warning")
+                catalog.mark_failed(spec.id, reason)
+                return {"status": "warning", "result": f"R.A.S — {reason}"}
+        except ImportError:
+            pass
+
         # --- PHASE 3 : MATÉRIALISATION (Gemini Cloud) ---
         self.log_thought(f"🛠️ Phase 3 : Génération du code via Gemini Cloud [{spec.id}]...", type="info")
 

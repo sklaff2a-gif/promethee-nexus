@@ -266,6 +266,23 @@ class TestCouncilForge:
         assert "strategist" in topic["participants"]
         assert not topic["needs_research"]
 
+    def test_budget_skipped_if_already_debated(self):
+        """Le sujet 'budget' est skip si déjà dans recent_subjects (même loin)."""
+        topic = self.engine.select_council_topic(
+            daily_count=16,
+            recent_subjects=["erreurs", "budget", "curiosite", "recherche"]
+        )
+        # "budget" est dans recent_subjects → ne doit PAS redébattre le budget
+        assert topic["subject_key"] != "budget"
+
+    def test_erreurs_skipped_if_already_debated(self):
+        """Le sujet 'erreurs' est skip si déjà dans recent_subjects."""
+        topic = self.engine.select_council_topic(
+            error_streak=3,
+            recent_subjects=["erreurs", "curiosite"]
+        )
+        assert topic["subject_key"] != "erreurs"
+
     def test_select_topic_high_curiosite(self):
         for name in self.engine.agents:
             self.engine.agents[name]["curiosite"] = 85.0

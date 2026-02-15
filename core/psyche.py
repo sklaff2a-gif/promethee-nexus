@@ -387,15 +387,15 @@ class PsycheEngine:
         avg = self.get_system_average()
         recent = [s.lower() for s in (recent_subjects or [])]
 
-        # Priorité 1 : situations critiques (avec cooldown — max 1 débat par sujet critique)
-        if error_streak >= 2 and "erreurs" not in recent[-2:]:
+        # Priorité 1 : situations critiques (cooldown élargi — 1 seul débat par sujet critique par session)
+        if error_streak >= 2 and "erreurs" not in recent:
             return {
                 "participants": ["strategist", "architect", "security"],
                 "mission": "Le système accumule des erreurs. Comment stabiliser la situation ?",
                 "needs_research": False, "research_query": None,
                 "subject_key": "erreurs",
             }
-        if daily_count >= 15 and "budget" not in recent[-2:]:
+        if daily_count >= 15 and "budget" not in recent:
             return {
                 "participants": ["strategist", "evolution"],
                 "mission": "Le budget quotidien est presque épuisé. Comment prioriser les actions restantes ?",

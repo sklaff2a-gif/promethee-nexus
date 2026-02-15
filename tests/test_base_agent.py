@@ -92,6 +92,35 @@ class TestStripCot:
         """Le pattern CoT est bien un regex compilé."""
         assert isinstance(BaseAgent._COT_PATTERNS, re.Pattern)
 
+    def test_think_only_extracts_conclusion(self):
+        """Si le texte n'est QU'un bloc <think>, extrait les dernières lignes."""
+        text = (
+            "<think>Je dois analyser ce fichier.\n"
+            "Il contient des vulnérabilités potentielles.\n"
+            "1. Injection SQL possible ligne 42\n"
+            "2. XSS dans le template\n"
+            "Conclusion : 2 vulnérabilités détectées.</think>"
+        )
+        result = BaseAgent._strip_cot(text)
+        assert "<think>" not in result
+        assert "vulnérabilités" in result
+
+    def test_think_only_returns_last_5_lines(self):
+        """Le fallback think extrait max 5 lignes."""
+        lines = [f"Étape {i}" for i in range(20)]
+        text = f"<think>\n" + "\n".join(lines) + "\n</think>"
+        result = BaseAgent._strip_cot(text)
+        assert "<think>" not in result
+        result_lines = [l for l in result.split('\n') if l.strip()]
+        assert len(result_lines) <= 5
+
+    def test_think_empty_content_returns_original(self):
+        """Un bloc <think> vide retourne le texte original."""
+        text = "<think></think>"
+        result = BaseAgent._strip_cot(text)
+        # Le contenu du think est vide, pas de meaningful lines → retourne original
+        assert result == text
+
 
 # ─── Tests RAG Dedup (Fix #5) ───
 
