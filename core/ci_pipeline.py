@@ -3,6 +3,7 @@ CI/CD Pipeline interne PROMÉTHÉE.
 Remplace le quality_control_listener : Factory écrit du code → Coder génère des tests
 → pytest les exécute → Architect valide → déploiement ou rollback.
 """
+import ast
 import asyncio
 import logging
 import os
@@ -12,6 +13,7 @@ import sys
 
 from core.event_bus.bus import bus
 from core.orchestrator import orchestrator
+from core.prompt_templates import TEST_GENERATION_GUARDRAIL
 
 logger = logging.getLogger("CIPipeline")
 
@@ -37,6 +39,127 @@ def extract_python_code(text: str) -> str | None:
     return None
 
 
+def _extract_api_signatures(source_code: str) -> str:
+    """Extrait les classes, méthodes et fonctions publiques du code source via AST.
+    Retourne une description lisible de l'API réelle du fichier."""
+    try:
+        tree = ast.parse(source_code)
+    except SyntaxError:
+        return ""
+
+    lines = []
+    # Variables/constantes de module (top-level assignments)
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                name = getattr(target, "id", None)
+                if name and name.isupper():
+                    lines.append(f"  {name} = ...")
+
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ClassDef):
+            bases = ", ".join(
+                getattr(b, "id", getattr(b, "attr", "?")) for b in node.bases
+            )
+            lines.append(f"  class {node.name}({bases}):")
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == "__init__":
+                    args = ", ".join(a.arg for a in item.args.args if a.arg != "self")
+                    lines.append(f"    def __init__({args})")
+                elif isinstance(item, ast.FunctionDef) and not item.name.startswith("_"):
+                    args = ", ".join(a.arg for a in item.args.args if a.arg != "self")
+                    lines.append(f"    def {item.name}({args})")
+        elif isinstance(node, ast.FunctionDef):
+            if not node.name.startswith("_"):
+                args = ", ".join(a.arg for a in node.args.args)
+                lines.append(f"  def {node.name}({args})")
+
+    return "\n".join(lines) if lines else ""
+
+
+def _validate_test_imports(test_code: str, source_code: str, module_path: str) -> tuple[bool, str]:
+    """Vérifie que les symboles importés dans le test existent dans le code source.
+    Retourne (valide, message_erreur)."""
+    try:
+        test_tree = ast.parse(test_code)
+        source_tree = ast.parse(source_code)
+    except SyntaxError:
+        return True, ""  # en cas d'erreur de parse, laisser pytest décider
+
+    # Collecter les symboles définis dans le source
+    source_symbols = set()
+    for node in ast.walk(source_tree):
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
+            source_symbols.add(node.name)
+
+    if not source_symbols:
+        return True, ""
+
+    # Vérifier les imports du test qui ciblent le module source
+    bad_imports = []
+    for node in ast.walk(test_tree):
+        if isinstance(node, ast.ImportFrom) and node.module and module_path:
+            if module_path.replace(".", "/") in (node.module or "").replace(".", "/") or \
+               node.module == module_path:
+                for alias in node.names:
+                    if alias.name not in source_symbols and alias.name != "*":
+                        bad_imports.append(alias.name)
+
+    if bad_imports:
+        return False, f"Imports invalides (n'existent pas dans le source) : {', '.join(bad_imports)}"
+    return True, ""
+
+
+def _build_import_hint(filename: str, filepath: str, source_code: str) -> str:
+    """Construit un hint d'imports DYNAMIQUE basé sur le fichier réel.
+    Analyse le code source pour extraire les classes/fonctions et le chemin module."""
+    normalized = filepath.replace("\\", "/")
+
+    # Déterminer le chemin module Python (ex: Agents.factory_agent, core.router)
+    module_path = None
+    for marker in ("Agents/", "core/", "capabilities/"):
+        idx = normalized.find(marker)
+        if idx >= 0:
+            rel = normalized[idx:]
+            if rel.endswith(".py"):
+                rel = rel[:-3]
+            module_path = rel.replace("/", ".")
+            break
+
+    # Extraire les classes et fonctions publiques du code source
+    classes = re.findall(r"^class (\w+)", source_code, re.MULTILINE)
+    functions = [f for f in re.findall(r"^def (\w+)", source_code, re.MULTILINE)
+                 if not f.startswith("_")]
+
+    if module_path:
+        examples = []
+        if classes:
+            examples.append(f"  `from {module_path} import {', '.join(classes[:3])}`")
+        if functions:
+            examples.append(f"  `from {module_path} import {', '.join(functions[:3])}`")
+
+        examples_str = "\n".join(examples) if examples else f"  `import {module_path}`"
+        return (
+            f"CONTEXTE IMPORTS DU PROJET :\n"
+            f"- Le fichier testé est : {filename} (chemin complet : {filepath})\n"
+            f"- Module Python : {module_path}\n"
+            f"- Imports corrects pour CE fichier :\n{examples_str}\n"
+            f"- IMPORTANT : importe UNIQUEMENT depuis {module_path}. Ne devine PAS d'autres modules.\n"
+            f"- NE PAS utiliser `import {filename}` directement.\n"
+            f"- Pour les dépendances externes (ChromaDB, httpx, etc.), utilise des mocks.\n"
+        )
+    else:
+        # Fichier hors package connu (ex: merchant_code.py à la racine)
+        return (
+            f"CONTEXTE IMPORTS DU PROJET :\n"
+            f"- Le fichier testé est : {filename} (chemin complet : {filepath})\n"
+            f"- Ce fichier est à la racine du projet, PAS dans un package.\n"
+            f"- Pour l'importer : `import {filename.replace('.py', '')}` ou utilise importlib.\n"
+            f"- IMPORTANT : N'invente PAS d'imports vers des modules qui n'existent pas.\n"
+            f"- Pour les dépendances externes, utilise des mocks.\n"
+        )
+
+
 def _slugify_filename(filepath: str) -> str:
     """'Agents/coder_agent.py' → 'coder_agent'"""
     normalized = filepath.replace("\\", "/")
@@ -45,11 +168,16 @@ def _slugify_filename(filepath: str) -> str:
 
 
 def _rollback(filepath: str) -> bool:
-    """Restaure filepath.bak vers filepath."""
+    """Restaure filepath.bak vers filepath, ou supprime le fichier s'il est nouveau."""
     bak = filepath + ".bak"
     if os.path.exists(bak):
         shutil.copy2(bak, filepath)
         logger.info(f"[ROLLBACK] {filepath} restauré depuis .bak")
+        return True
+    # Fichier nouveau (pas de .bak) → le supprimer pour ne pas laisser un fichier défaillant
+    if os.path.exists(filepath):
+        os.remove(filepath)
+        logger.info(f"[ROLLBACK] {filepath} supprimé (fichier nouveau, pas de .bak)")
         return True
     logger.warning(f"[ROLLBACK] Pas de .bak trouvé pour {filepath}")
     return False
@@ -171,48 +299,176 @@ async def run_pipeline(filename: str, filepath: str):
             f"Inspire-toi de ces patterns validés.\n"
         )
 
+    # Validation syntaxique du code SOURCE avant de lancer la génération de tests
+    try:
+        ast.parse(source_code)
+    except SyntaxError as e:
+        detail = f"Code source invalide (SyntaxError ligne {e.lineno}): {e.msg}"
+        logger.warning(f"[CI/CD] {detail} — pipeline annulé pour {filename}")
+        await bus.publish("CI_PIPELINE_RESULT", {
+            "filename": filename, "success": False,
+            "detail": detail
+        })
+        _rollback(filepath)
+        return
+
+    # Validation imports aliens (Django, Flask, etc.) — anti-hallucination
+    try:
+        from Agents.evolution_agent import _detect_alien_imports
+        aliens = _detect_alien_imports(source_code)
+        if aliens:
+            detail = f"Imports aliens détectés ({', '.join(aliens)}) — hallucination LLM probable"
+            logger.warning(f"[CI/CD] {detail} — rollback pour {filename}")
+            await bus.publish("CI_PIPELINE_RESULT", {
+                "filename": filename, "success": False,
+                "detail": detail
+            })
+            _rollback(filepath)
+            return
+    except ImportError:
+        pass  # Si evolution_agent n'est pas dispo, skip ce check
+
+    # Contexte d'imports DYNAMIQUE basé sur le fichier réel
+    import_hint = _build_import_hint(filename, filepath, source_code)
+
+    # Extraction des signatures réelles (classes, méthodes, fonctions)
+    api_signatures = _extract_api_signatures(source_code)
+    api_section = ""
+    if api_signatures:
+        api_section = (
+            f"\nAPI RÉELLE DU FICHIER (classes et fonctions qui EXISTENT) :\n"
+            f"{api_signatures}\n"
+            f"Teste UNIQUEMENT ces classes/fonctions. N'invente PAS d'autres symboles.\n"
+        )
+
     test_prompt = (
-        f"Génère des tests pytest pour le code suivant. "
-        f"Réponds UNIQUEMENT avec un bloc de code Python contenant les tests.\n"
+        f"MISSION : Génère des tests pytest pour le fichier '{filename}'.\n\n"
+        f"{import_hint}\n"
+        f"{api_section}\n"
+        f"RÈGLES STRICTES :\n"
+        f"1. Importe UNIQUEMENT les symboles listés dans 'API RÉELLE' ci-dessus.\n"
+        f"2. N'invente AUCUNE classe, fonction ou méthode qui n'est pas listée.\n"
+        f"3. Utilise des mocks (unittest.mock) pour les dépendances externes.\n"
+        f"4. Réponds UNIQUEMENT avec un bloc ```python contenant les tests.\n"
+        f"5. Chaque test doit utiliser assert (pas de print).\n"
         f"{memory_context}\n"
+        f"CODE SOURCE COMPLET À TESTER :\n"
         f"```python\n{source_code}\n```"
+        f"{TEST_GENERATION_GUARDRAIL}"
     )
 
-    try:
-        test_response = await coder.generate_content(test_prompt)
-    except Exception as e:
-        await bus.publish("CI_PIPELINE_STEP", {
-            "filename": filename, "step": "test_generation",
-            "status": "error", "detail": str(e)
-        })
-        _remember_failure(filename, source_code, "test_generation", str(e))
-        _rollback(filepath)
-        await bus.publish("CI_PIPELINE_RESULT", {
-            "filename": filename, "success": False,
-            "detail": f"Échec génération tests : {e}"
-        })
-        return
+    # Calcul du module path (réutilisé pour validation)
+    normalized_fp = filepath.replace("\\", "/")
+    mod_path = None
+    for marker in ("Agents/", "core/", "capabilities/"):
+        idx = normalized_fp.find(marker)
+        if idx >= 0:
+            rel = normalized_fp[idx:]
+            if rel.endswith(".py"):
+                rel = rel[:-3]
+            mod_path = rel.replace("/", ".")
+            break
 
-    test_code = extract_python_code(test_response)
-    if not test_code:
-        await bus.publish("CI_PIPELINE_STEP", {
-            "filename": filename, "step": "test_generation",
-            "status": "error", "detail": "Aucun code test extrait de la réponse LLM"
-        })
-        _remember_failure(filename, source_code, "test_generation", "Aucun code test extrait de la réponse LLM")
-        _rollback(filepath)
-        await bus.publish("CI_PIPELINE_RESULT", {
-            "filename": filename, "success": False,
-            "detail": "Échec extraction tests depuis la réponse LLM"
-        })
-        return
+    # Boucle génération + validation (max 2 tentatives)
+    max_attempts = 2
+    current_prompt = test_prompt
+    test_code = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            test_response = await coder.generate_content(current_prompt)
+        except Exception as e:
+            await bus.publish("CI_PIPELINE_STEP", {
+                "filename": filename, "step": "test_generation",
+                "status": "error", "detail": str(e)
+            })
+            _remember_failure(filename, source_code, "test_generation", str(e))
+            _rollback(filepath)
+            await bus.publish("CI_PIPELINE_RESULT", {
+                "filename": filename, "success": False,
+                "detail": f"Échec génération tests : {e}"
+            })
+            return
+
+        test_code = extract_python_code(test_response)
+        if not test_code:
+            if attempt < max_attempts:
+                logger.info(f"[CI/CD] Tentative {attempt} : pas de code extrait, retry")
+                continue
+            await bus.publish("CI_PIPELINE_STEP", {
+                "filename": filename, "step": "test_generation",
+                "status": "error", "detail": "Aucun code test extrait de la réponse LLM"
+            })
+            _remember_failure(filename, source_code, "test_generation",
+                              "Aucun code test extrait de la réponse LLM")
+            _rollback(filepath)
+            await bus.publish("CI_PIPELINE_RESULT", {
+                "filename": filename, "success": False,
+                "detail": "Échec extraction tests depuis la réponse LLM"
+            })
+            return
+
+        # 3. Validation syntaxique du code de test
+        try:
+            compile(test_code, "<generated_test>", "exec")
+        except SyntaxError as e:
+            if attempt < max_attempts:
+                logger.info(f"[CI/CD] Tentative {attempt} : SyntaxError, retry")
+                current_prompt = (
+                    f"CORRECTION : ta réponse précédente contenait une SyntaxError "
+                    f"(ligne {e.lineno}: {e.msg}).\n"
+                    f"Régénère les tests en corrigeant cette erreur.\n\n"
+                    + test_prompt
+                )
+                continue
+            detail = f"Code test invalide (SyntaxError ligne {e.lineno}): {e.msg}"
+            await bus.publish("CI_PIPELINE_STEP", {
+                "filename": filename, "step": "test_validation",
+                "status": "error", "detail": detail
+            })
+            _remember_failure(filename, source_code, "test_validation", detail)
+            await bus.publish("CI_PIPELINE_RESULT", {
+                "filename": filename, "success": False,
+                "detail": f"Tests auto-générés invalides — source conservée"
+            })
+            return
+
+        # 3b. Validation des imports : les symboles importés doivent exister
+        imports_ok, import_err = _validate_test_imports(
+            test_code, source_code, mod_path or ""
+        )
+        if not imports_ok:
+            if attempt < max_attempts:
+                logger.info(f"[CI/CD] Tentative {attempt} : {import_err}, retry")
+                current_prompt = (
+                    f"CORRECTION : ta réponse précédente avait des imports invalides.\n"
+                    f"ERREUR : {import_err}\n"
+                    f"Utilise UNIQUEMENT les symboles qui existent dans le code source.\n\n"
+                    + test_prompt
+                )
+                continue
+            detail = f"Tests auto-générés avec imports invalides : {import_err}"
+            await bus.publish("CI_PIPELINE_STEP", {
+                "filename": filename, "step": "test_validation",
+                "status": "error", "detail": detail
+            })
+            _remember_failure(filename, source_code, "test_validation", detail)
+            await bus.publish("CI_PIPELINE_RESULT", {
+                "filename": filename, "success": False,
+                "detail": f"Tests rejetés (imports fantômes) — source conservée"
+            })
+            return
+
+        # Validation passée
+        break
 
     await bus.publish("CI_PIPELINE_STEP", {
         "filename": filename, "step": "test_generation",
-        "status": "success", "detail": "Tests générés"
+        "status": "success",
+        "detail": f"Tests générés (tentative {attempt})"
     })
 
-    # 3. Écriture des tests dans tests/auto/
+    # 3c. Écriture des tests dans tests/auto/
     os.makedirs(AUTO_TESTS_DIR, exist_ok=True)
     slug = _slugify_filename(filepath)
     test_file = os.path.join(AUTO_TESTS_DIR, f"test_{slug}.py")
@@ -229,11 +485,21 @@ async def run_pipeline(filename: str, filepath: str):
 
     if not success:
         _remember_failure(filename, source_code, "test_execution", output[-500:])
-        _rollback(filepath)
-        await bus.publish("CI_PIPELINE_RESULT", {
-            "filename": filename, "success": False,
-            "detail": f"Tests échoués — rollback effectué"
-        })
+
+        # Distinguer : erreur d'import (test cassé) vs assertion (bug dans le source)
+        is_test_broken = "ImportError" in output or "ModuleNotFoundError" in output or "SyntaxError" in output
+        if is_test_broken:
+            logger.warning(f"[CI/CD] Tests auto-générés défaillants (import/syntax) — PAS de rollback pour {filename}")
+            await bus.publish("CI_PIPELINE_RESULT", {
+                "filename": filename, "success": False,
+                "detail": f"Tests auto-générés défaillants — source conservée"
+            })
+        else:
+            _rollback(filepath)
+            await bus.publish("CI_PIPELINE_RESULT", {
+                "filename": filename, "success": False,
+                "detail": f"Tests échoués — rollback effectué"
+            })
         return
 
     # 5. Validation Architect (appel DIRECT)

@@ -1,3 +1,4 @@
+import os
 import re
 import logging
 import time
@@ -9,13 +10,62 @@ from core.event_bus.bus import bus
 logger = logging.getLogger("Council")
 
 # Marqueurs de consensus (détection en début de réponse)
-CONSENSUS_MARKERS = ("CONSENSUS", "APPROUVE", "APPROUVÉ", "ACCORD FINAL")
+CONSENSUS_MARKERS = ("CONSENSUS", "CONSENUS", "APPROUVE", "APPROUVÉ", "ACCORD FINAL")
+
+# Tour minimum avant d'autoriser le consensus (force au moins 2 tours de critique)
+MIN_ROUNDS_BEFORE_CONSENSUS = 3
+
+# Longueur minimale du contenu d'un consensus pour qu'il soit considéré substantiel
+MIN_CONSENSUS_CONTENT_LENGTH = 100
+
+# Contexte projet injecté dans tous les prompts Council
+_COUNCIL_PROJECT_CONTEXT = (
+    "CONTEXTE PROJET PROMÉTHÉE :\n"
+    "Système multi-agents IA autonome. Stack : Python 3.11, FastAPI, Ollama (LLM local), "
+    "Google Gemini (Cloud), ChromaDB, WebSocket. Tourne sur UN SEUL PC Windows.\n"
+    "Modules existants : orchestrator, router (3 niveaux), bus d'événements, "
+    "autonomy_engine, ci_pipeline, self_awareness, psyche, vector_store, "
+    "10 agents (strategist, coder, architect, factory, formatter, researcher, "
+    "writer, security, infra, evolution).\n"
+    "CONTRAINTE MATÉRIELLE : Le projet tourne sur UN SEUL PC Windows avec Ollama local. "
+    "Pas de cluster, pas de conteneurs, pas de cloud infra.\n"
+    "HORS PÉRIMÈTRE : Kubernetes, Docker, Kafka, microservices, blockchain, "
+    "Chaos Engineering, load balancing, budget réel."
+)
+
+
+from core.prompt_templates import get_project_structure as _get_project_structure
+
+
+def _strip_markdown_prefix(text: str) -> str:
+    """Retire les préfixes markdown courants (#, *, >, -) en début de texte."""
+    cleaned = text.strip()
+    # Retirer les headers markdown (##, ###, etc.)
+    cleaned = re.sub(r'^#{1,6}\s*', '', cleaned)
+    # Retirer le gras/italique AUTOUR du premier mot (ex: **CONSENSUS**)
+    cleaned = re.sub(r'^[\*_]{1,3}(.+?)[\*_]{1,3}', r'\1', cleaned)
+    # Retirer le gras/italique en préfixe seul (ex: **CONSENSUS suite)
+    cleaned = re.sub(r'^[\*_]{1,3}\s*', '', cleaned)
+    # Retirer les blockquotes (>)
+    cleaned = re.sub(r'^>\s*', '', cleaned)
+    # Retirer les tirets de liste (- )
+    cleaned = re.sub(r'^-\s+', '', cleaned)
+    return cleaned.strip()
 
 
 def _is_consensus(text: str) -> bool:
-    """Vérifie que la réponse COMMENCE par un marqueur de consensus."""
-    cleaned = text.strip().upper()
-    return any(cleaned.startswith(marker) for marker in CONSENSUS_MARKERS)
+    """Vérifie que la réponse COMMENCE par un marqueur de consensus (tolère le markdown)
+    ET que le contenu après le marqueur est substantiel (>= MIN_CONSENSUS_CONTENT_LENGTH chars)."""
+    cleaned = _strip_markdown_prefix(text)
+    cleaned_upper = cleaned.upper()
+    for marker in CONSENSUS_MARKERS:
+        if cleaned_upper.startswith(marker):
+            # Extraire le contenu après le marqueur
+            remainder = cleaned[len(marker):].strip(" :\n\t-—")
+            if len(remainder) < MIN_CONSENSUS_CONTENT_LENGTH:
+                return False  # Shallow consensus — contenu insuffisant
+            return True
+    return False
 
 
 def parse_council_mission(raw_mission: str) -> Optional[Dict[str, Any]]:
@@ -38,7 +88,7 @@ def parse_council_mission(raw_mission: str) -> Optional[Dict[str, Any]]:
 class Council:
     """
     Système de débat multi-tours entre agents.
-    Les agents discutent, critiquent et convergent vers un consensus.
+    V2 : Anti-écho — force la critique au tour 1, consensus interdit avant le tour 2.
     """
 
     def __init__(self, agents: Dict[str, Any], participants: List[str],
@@ -62,19 +112,57 @@ class Council:
     def _build_prompt(self, agent_name: str, current_round: int) -> str:
         """Construit le prompt pour un agent à un tour donné."""
         history = self._format_transcript()
+
+        # Injection du trait dominant (PSYCHE)
+        personality_line = ""
+        try:
+            from core.psyche import psyche
+            trait_name, trait_value = psyche.get_dominant_trait(agent_name)
+            personality_line = (
+                f"TA PERSONNALITÉ: {trait_name.upper()} ({trait_value:.0f}/100). "
+                f"Tes réponses reflètent naturellement ce trait dominant.\n"
+            )
+        except Exception:
+            pass
+
+        # Instructions différenciées selon le tour
+        if current_round < MIN_ROUNDS_BEFORE_CONSENSUS:
+            round_instructions = (
+                f"INSTRUCTIONS TOUR {current_round} (CRITIQUE OBLIGATOIRE) :\n"
+                f"- Tu ne peux PAS donner ton accord (pas de CONSENSUS, APPROUVE, etc.).\n"
+                f"- Tu DOIS identifier au moins UN problème, UN risque ou UNE question.\n"
+                f"- Sois précis et technique : cite des fichiers, des fonctions, des cas limites.\n"
+                f"- Si la proposition mentionne des technologies que le projet n'utilise pas "
+                f"(Kubernetes, Docker, Kafka, blockchain, etc.), signale-le comme hors-périmètre.\n"
+            )
+        else:
+            round_instructions = (
+                f"INSTRUCTIONS TOUR {current_round} :\n"
+                f"- Analyse les critiques des tours précédents.\n"
+                f"- Si toutes les critiques ont été adressées ET que la solution est concrète "
+                f"et applicable au projet, commence ta réponse par CONSENSUS.\n"
+                f"- Sinon, apporte de nouvelles critiques ou propositions.\n"
+                f"- Rappel : une bonne solution est SIMPLE et cible des fichiers EXISTANTS.\n"
+            )
+
+        # Structure projet réelle (anti-hallucination de fichiers)
+        try:
+            project_files = _get_project_structure()
+        except Exception:
+            project_files = ""
+
         return (
             f"Tu participes à un CONSEIL multi-agents.\n"
+            f"LANGUE OBLIGATOIRE : Réponds UNIQUEMENT en français. Pas d'anglais.\n"
+            f"{_COUNCIL_PROJECT_CONTEXT}\n"
+            f"{project_files}\n\n"
             f"MISSION : {self.mission}\n"
             f"PARTICIPANTS : {', '.join(p.upper() for p in self.participants)}\n"
             f"TOUR : {current_round}/{self.max_rounds}\n"
-            f"TON RÔLE : {agent_name.upper()}\n\n"
+            f"TON RÔLE : {agent_name.upper()}\n"
+            f"{personality_line}\n"
             f"HISTORIQUE DU DÉBAT :\n{history}\n\n"
-            f"INSTRUCTIONS :\n"
-            f"- Analyse la mission et les contributions précédentes.\n"
-            f"- Apporte ton expertise spécifique ({agent_name}).\n"
-            f"- Si tu estimes que le débat a convergé et que la solution est satisfaisante, "
-            f"commence ta réponse par CONSENSUS suivi de ton approbation.\n"
-            f"- Sinon, expose tes critiques ou suggestions.\n"
+            f"{round_instructions}"
         )
 
     async def run(self) -> Dict[str, Any]:
@@ -128,11 +216,13 @@ class Council:
                     "content": content
                 })
 
-                if _is_consensus(content):
+                # Consensus ignoré avant MIN_ROUNDS_BEFORE_CONSENSUS
+                if round_num >= MIN_ROUNDS_BEFORE_CONSENSUS and _is_consensus(content):
                     round_consensus_count += 1
 
-            # Consensus = TOUS les participants du round ont approuvé
-            if round_consensus_count == len(self.participants):
+            # Consensus = majorité qualifiée (>= 2/3 des participants)
+            quorum = max(2, (len(self.participants) * 2 + 2) // 3)  # ceil(2/3)
+            if round_consensus_count >= quorum:
                 consensus_reached = True
                 break
 
@@ -148,6 +238,7 @@ class Council:
             "council_id": self.council_id,
             "status": status,
             "rounds_used": rounds_used,
+            "participants": self.participants,
             "final_summary": final_summary
         })
 
