@@ -64,6 +64,7 @@ _ALIEN_IMPORTS = {
     "torch", "tensorflow", "keras",
     "pandas", "numpy", "scipy",
     "web3", "solidity",
+    "openai", "pygame",
 }
 
 
@@ -439,6 +440,30 @@ class DivineEvolution(BaseAgent):
                 catalog.mark_failed(spec.id, reason)
                 self.log_thought(f"❌ Syntaxe invalide (retry Cloud indisponible) : {e}", type="error")
                 return {"status": "error", "result": f"Spec [{spec.id}] rejetée : {reason}"}
+
+        # --- PHASE 4b : FILTRE ANTI-HALLUCINATION (imports aliens) ---
+        aliens = _detect_alien_imports(generated_code)
+        if aliens:
+            reason = f"Imports aliens détectés ({', '.join(aliens)}) — hallucination LLM"
+            catalog.mark_failed(spec.id, reason)
+            self.log_thought(f"🚫 {reason}", type="warning")
+            return {"status": "warning", "result": f"R.A.S — {reason}"}
+
+        # --- PHASE 4c : VALIDATION STRUCTURELLE ---
+        # Le code doit contenir au moins un def/class/import pour être une vraie amélioration
+        try:
+            _tree = ast.parse(generated_code)
+            _has_structure = any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom))
+                for node in ast.walk(_tree)
+            )
+        except SyntaxError:
+            _has_structure = False
+        if not _has_structure:
+            reason = "Code non-structurel (pas de def/class/import) — hallucination probable"
+            catalog.mark_failed(spec.id, reason)
+            self.log_thought(f"🚫 {reason}", type="warning")
+            return {"status": "warning", "result": f"R.A.S — {reason}"}
 
         # --- PHASE 5 : DÉPLOIEMENT SÉCURISÉ (Architecte) ---
         self.log_thought(f"🛡️ Phase 5 : Soumission [{spec.id}] à l'Architecte...", type="info")
