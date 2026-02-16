@@ -50,6 +50,22 @@ _SPEC_OFFTOPIC_KEYWORDS = {
 }
 _SPEC_OFFTOPIC_THRESHOLD = 2
 
+# Imports étrangers au projet — si le code généré en contient, c'est une hallucination
+# (set élargi : couvre les frameworks ML, web, BDD, vector DBs, cloud providers)
+_ALIEN_IMPORTS = {
+    "django", "flask", "streamlit", "gradio", "pygame", "tkinter",
+    "langchain", "langgraph", "crewai", "autogen",
+    "tensorflow", "torch", "keras", "sklearn",
+    "pandas", "numpy", "scipy",
+    "kubernetes", "docker", "terraform", "kafka",
+    "web3", "solidity", "brownie",
+    "sqlalchemy", "peewee", "mongoengine",
+    "fastapi_users", "starlette_admin",
+    "faiss", "pinecone", "weaviate", "qdrant",
+    "openai", "anthropic", "cohere",
+    "express", "react", "vue", "angular",
+}
+
 # Fichiers existants valides (préfixes) — la spec doit cibler un de ces chemins
 _VALID_TARGET_PREFIXES = ("core/", "Agents/", "config.py", "main.py")
 
@@ -57,19 +73,9 @@ _VALID_TARGET_PREFIXES = ("core/", "Agents/", "config.py", "main.py")
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-# Imports "aliens" (frameworks hors-périmètre) — détection anti-hallucination
-_ALIEN_IMPORTS = {
-    "django", "flask", "streamlit", "gradio",
-    "langchain", "langgraph", "crewai", "autogen",
-    "torch", "tensorflow", "keras",
-    "pandas", "numpy", "scipy",
-    "web3", "solidity",
-    "openai", "pygame",
-}
-
-
 def _detect_alien_imports(source_code: str) -> list:
-    """Détecte les imports de frameworks hors-périmètre dans du code source.
+    """Détecte les imports de frameworks hors-périmètre dans du code source via AST.
+    Plus robuste que le parsing ligne par ligne (gère multi-import, aliases, etc.).
     Retourne la liste des modules aliens détectés."""
     import ast as _ast
     aliens = []
@@ -293,6 +299,10 @@ class DivineEvolution(BaseAgent):
             # Extraction du code Python depuis les blocs markdown
             generated_code = self._extract_python_code(generated_code)
 
+            # Filtre anti-hallucination (imports étrangers)
+            aliens = _detect_alien_imports(generated_code)
+            if aliens:
+                return {"status": "warning", "result": f"R.A.S — hallucination Grimoire ({', '.join(aliens)})"}
             # Écrire via GrimoireWriter (les 7 validations sont intégrées)
             result = GrimoireWriter.write_recipe(
                 slug=slug,
@@ -446,7 +456,7 @@ class DivineEvolution(BaseAgent):
         if aliens:
             reason = f"Imports aliens détectés ({', '.join(aliens)}) — hallucination LLM"
             catalog.mark_failed(spec.id, reason)
-            self.log_thought(f"🚫 {reason}", type="warning")
+            self.log_thought(f"🚫 [{spec.id}] {reason}", type="warning")
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
         # --- PHASE 4c : VALIDATION STRUCTURELLE ---
@@ -462,7 +472,7 @@ class DivineEvolution(BaseAgent):
         if not _has_structure:
             reason = "Code non-structurel (pas de def/class/import) — hallucination probable"
             catalog.mark_failed(spec.id, reason)
-            self.log_thought(f"🚫 {reason}", type="warning")
+            self.log_thought(f"🚫 [{spec.id}] {reason}", type="warning")
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
         # --- PHASE 5 : DÉPLOIEMENT SÉCURISÉ (Architecte) ---
@@ -478,6 +488,10 @@ class DivineEvolution(BaseAgent):
         })
 
         deploy_status = architect_response.get("status", "unknown")
+        # Vérifier que le code est structurel (même check que le Bridge)
+        if deploy_status == "success" and not orchestrator._contains_python_code(generated_code):
+            deploy_status = "rejected_no_code"
+            self.log_thought(f"⚠️ [{spec.id}] Architect a validé mais le code n'est pas structurel Python — rejeté.", type="warning")
         if deploy_status == "success":
             catalog.mark_deployed(spec.id)
             self.log_thought(f"✅ [{spec.id}] {spec.name} déployé avec succès !", type="info")
@@ -597,6 +611,12 @@ class DivineEvolution(BaseAgent):
         if not generated_code or "R.A.S" in generated_code:
             self.log_thought("💤 Coder n'a rien produit de pertinent.", type="info")
             return {"status": "success", "result": "R.A.S — code non pertinent."}
+
+        # Filtre anti-hallucination (imports étrangers)
+        aliens = _detect_alien_imports(generated_code)
+        if aliens:
+            self.log_thought(f"🚫 Hallucination Coder : imports étrangers ({', '.join(aliens)})", type="warning")
+            return {"status": "success", "result": f"R.A.S — hallucination détectée ({', '.join(aliens)})"}
 
         self.log_thought("🛡️ Phase 4 : Soumission à l'Architecte...", type="info")
 

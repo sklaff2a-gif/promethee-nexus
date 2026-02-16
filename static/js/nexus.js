@@ -230,6 +230,16 @@ ws.onmessage = (event) => {
             'system');
         addLog("CI/CD", `RÉSULTAT [${verdict}] ${payload.filename}`, level);
     }
+    // 12. PSYCHE_UPDATE : mise à jour du radar de personnalité
+    else if (type === "PSYCHE_UPDATE") {
+        if (payload.system_average && typeof psycheChartInstance !== 'undefined') {
+            const avg = payload.system_average;
+            psycheChartInstance.data.datasets[0].data = [
+                avg.curiosite, avg.creativite, avg.audace, avg.savoir, avg.survie, avg.respect
+            ];
+            psycheChartInstance.update();
+        }
+    }
 };
 
 function sendMission() {
@@ -253,31 +263,43 @@ function toggleKillSwitch() {
     addLog('SYSTEM', 'KILL SWITCH ACTIONNÉ', 'err');
 }
 
-// Chart Init (Psyché - Radar)
+// Chart Init (Psyché - Radar) — 6 dimensions dynamiques
+const psycheLabels = ['Curiosite', 'Creativite', 'Audace', 'Savoir', 'Survie', 'Respect'];
 const ctx = document.getElementById('psycheChart').getContext('2d');
-new Chart(ctx, { 
-    type: 'radar', 
-    data: { 
-        labels: ['Logic', 'Creativity', 'Speed', 'Safety', 'Memory'], 
-        datasets: [{ 
-            data: [90, 70, 95, 100, 80], 
-            backgroundColor: 'rgba(0, 255, 65, 0.2)', 
-            borderColor: '#00ff41', 
+const psycheChartInstance = new Chart(ctx, {
+    type: 'radar',
+    data: {
+        labels: psycheLabels,
+        datasets: [{
+            data: [50, 50, 50, 50, 60, 55],
+            backgroundColor: 'rgba(0, 255, 65, 0.2)',
+            borderColor: '#00ff41',
             borderWidth: 1,
-            pointRadius: 0 
-        }] 
-    }, 
-    options: { 
-        plugins: { legend: { display: false } }, 
-        scales: { 
-            r: { 
-                ticks: { display: false }, 
-                grid: { color: '#00220a' }, 
+            pointRadius: 0
+        }]
+    },
+    options: {
+        plugins: { legend: { display: false } },
+        scales: {
+            r: {
+                ticks: { display: false },
+                grid: { color: '#00220a' },
                 angleLines: { color: '#00441b' },
                 suggestedMin: 0,
                 suggestedMax: 100
-            } 
-        }, 
-        maintainAspectRatio: false 
-    } 
+            }
+        },
+        maintainAspectRatio: false
+    }
 });
+
+// Chargement initial des traits PSYCHE
+fetch('/api/psyche/status').then(r => r.json()).then(data => {
+    if (data && data.system_average) {
+        const avg = data.system_average;
+        psycheChartInstance.data.datasets[0].data = [
+            avg.curiosite, avg.creativite, avg.audace, avg.savoir, avg.survie, avg.respect
+        ];
+        psycheChartInstance.update();
+    }
+}).catch(() => {});

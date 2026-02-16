@@ -8,25 +8,137 @@ import os
 import asyncio
 import json
 import importlib
+import logging
+import logging.handlers
+import time
 import uvicorn
 import tracemalloc
 import secrets
 import sys
+import httpx
+
+# --- LOGGING PERSISTANT ---
+# Duplique TOUT (logging + print) vers un fichier rotatif quotidien
+_LOGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(_LOGS_DIR, exist_ok=True)
+
+_log_formatter = logging.Formatter(
+    "[%(asctime)s] [%(name)s] %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
+# FileHandler rotatif : 1 fichier par jour, garde 14 jours
+_file_handler = logging.handlers.TimedRotatingFileHandler(
+    os.path.join(_LOGS_DIR, "promethee.log"),
+    when="midnight", backupCount=14, encoding="utf-8"
+)
+_file_handler.setFormatter(_log_formatter)
+_file_handler.suffix = "%Y-%m-%d"
+
+# Console handler (comportement existant)
+_console_handler = logging.StreamHandler(sys.stdout)
+_console_handler.setFormatter(_log_formatter)
+
+# Configurer le root logger
+logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
+
+
+class _TeeStream:
+    """Redirige print() vers le fichier log en plus de la console."""
+    def __init__(self, original, log_handler):
+        self.original = original
+        self.log_handler = log_handler
+
+    def write(self, text):
+        self.original.write(text)
+        if text.strip():
+            record = logging.LogRecord(
+                name="stdout", level=logging.INFO, pathname="", lineno=0,
+                msg=text.rstrip(), args=(), exc_info=None
+            )
+            self.log_handler.emit(record)
+
+    def flush(self):
+        self.original.flush()
+
+    def isatty(self):
+        return self.original.isatty()
+
+    def fileno(self):
+        return self.original.fileno()
+
+sys.stdout = _TeeStream(sys.__stdout__, _file_handler)
+sys.stderr = _TeeStream(sys.__stderr__, _file_handler)
 from core.orchestrator import orchestrator
 from core.event_bus.bus import bus
 from core.autonomy_engine import autonomy
 from core.router import RouterAgent
+from core.psyche import psyche
+from core.strategic_journal import journal as strat_journal
+from core.self_awareness import awareness
+from core.objectives_engine import objectives as objectives_engine, MAX_ACTIVE_OBJECTIVES
 from core import talk_logger
+from core import interface_logger
 from core import ci_pipeline
+
+# --- RATE LIMITING ---
+class RateLimiter:
+    """Sliding window par IP. Zéro dépendance externe."""
+
+    def __init__(self, max_requests: int = 10, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window = window_seconds
+        self._hits: dict[str, list[float]] = {}
+
+    def _cleanup(self, now: float):
+        """Purge les IPs inactives (> 2× la fenêtre)."""
+        stale = [ip for ip, ts in self._hits.items() if ts and now - ts[-1] > self.window * 2]
+        for ip in stale:
+            del self._hits[ip]
+
+    def check(self, ip: str) -> tuple[bool, int]:
+        """Retourne (autorisé, secondes_avant_retry). Thread-safe pour asyncio single-thread."""
+        now = time.time()
+        cutoff = now - self.window
+        hits = self._hits.get(ip, [])
+        hits = [t for t in hits if t > cutoff]
+        if len(hits) >= self.max_requests:
+            retry_after = int(hits[0] - cutoff) + 1
+            self._hits[ip] = hits
+            return False, retry_after
+        hits.append(now)
+        self._hits[ip] = hits
+        if len(self._hits) > 1000:
+            self._cleanup(now)
+        return True, 0
+
+_rate_limiter = RateLimiter(
+    max_requests=int(os.getenv("RATE_LIMIT_MAX", "10")),
+    window_seconds=int(os.getenv("RATE_LIMIT_WINDOW", "60")),
+)
+
+async def check_rate_limit(request: Request):
+    """Dépendance FastAPI : bloque si le client dépasse la limite."""
+    ip = request.client.host if request.client else "unknown"
+    allowed, retry_after = _rate_limiter.check(ip)
+    if not allowed:
+        from fastapi.responses import JSONResponse
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. Max {_rate_limiter.max_requests} requests per {_rate_limiter.window}s.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 # --- AUTHENTIFICATION API ---
 API_SECRET_KEY = os.getenv("API_SECRET_KEY", "")
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Vérifie le token Bearer sur les endpoints API."""
     if not API_SECRET_KEY:
         return  # Pas de clé configurée = mode ouvert (dev local)
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Token requis")
     if not secrets.compare_digest(credentials.credentials, API_SECRET_KEY):
         raise HTTPException(status_code=401, detail="Token invalide")
 
@@ -64,6 +176,28 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"   [ERR] {slug}: {e}")
     
+    # --- PSYCHE : Moteur de personnalité ---
+    psyche.init(list(orchestrator.agents.keys()))
+    print("   🧬 PSYCHE: Moteur de personnalité actif.")
+
+    # --- JOURNAL STRATÉGIQUE ---
+    print(f"   📖 JOURNAL: Mémoire stratégique active ({strat_journal.entry_count()} entrées).")
+
+    # --- CONSCIENCE DE SOI ---
+    awareness.init()
+    awareness.generate_snapshot()
+    print("   🪞 CONSCIENCE: Moteur de conscience de soi actif.")
+
+    # --- OBJECTIFS AUTONOMES ---
+    objectives_engine.init()
+    objectives_engine.seed_daily_objectives()
+    print(f"   🎯 OBJECTIFS: Moteur d'objectifs actif ({len(objectives_engine.get_active_objectives())} actifs).")
+
+    # --- FEEDBACK EVOLUTION ---
+    from core.evolution_feedback import feedback_loop
+    feedback_loop.init()
+    print("   🔄 FEEDBACK: Boucle de feedback Evolution active.")
+
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
     bus.subscribe("AGENT_TASK_DISPATCH", nervous_system_listener)
 
@@ -71,10 +205,12 @@ async def lifespan(app: FastAPI):
     ci_pipeline.start()
 
     talk_logger.start()
+    interface_logger.start()
     asyncio.create_task(autonomy.start_loop())
     yield
     ci_pipeline.stop()
     talk_logger.stop()
+    interface_logger.stop()
     print("🔌 Arrêt.")
     tracemalloc.stop()
 
@@ -87,6 +223,7 @@ async def nervous_system_listener(event: dict):
         asyncio.create_task(orchestrator.dispatch_task(target, payload))
 
 app = FastAPI(lifespan=lifespan)
+_start_time = time.time()
 
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -97,6 +234,158 @@ async def root():
         with open("static/index.html", "r", encoding="utf-8") as f:
             return HTMLResponse(f.read())
     return HTMLResponse("<h1>UI Loading...</h1>")
+
+@app.get("/health")
+async def health():
+    from config import Config
+    from core.vector_store import ChromaMemoryManager
+    uptime = time.time() - _start_time
+    agents = list(orchestrator.agents.keys())
+    memory_ok = bool(ChromaMemoryManager._instances)
+    return {
+        "status": "degraded" if orchestrator.kill_switch_active else "ok",
+        "version": Config.VERSION,
+        "uptime_seconds": round(uptime, 1),
+        "agents": agents,
+        "agents_count": len(agents),
+        "kill_switch": orchestrator.kill_switch_active,
+        "memory_available": memory_ok,
+    }
+
+@app.get("/ready")
+async def ready():
+    from config import Config
+    from core.vector_store import ChromaMemoryManager
+
+    checks = {}
+
+    # --- Ollama ---
+    ollama_base = Config.OLLAMA_URL.rsplit("/", 2)[0]  # http://localhost:11434
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(f"{ollama_base}/api/tags", timeout=3.0)
+        if resp.status_code == 200:
+            models = [m["name"] for m in resp.json().get("models", [])]
+            checks["ollama"] = {"status": "ok", "models_loaded": len(models), "models": models}
+        else:
+            checks["ollama"] = {"status": "error", "detail": f"HTTP {resp.status_code}"}
+    except httpx.ConnectError:
+        checks["ollama"] = {"status": "error", "detail": "connection_refused"}
+    except Exception as e:
+        checks["ollama"] = {"status": "error", "detail": str(e)}
+
+    # --- ChromaDB ---
+    try:
+        instances = ChromaMemoryManager._instances
+        if not instances:
+            checks["chromadb"] = {"status": "error", "detail": "no_instance"}
+        else:
+            mgr = next(iter(instances.values()))
+            col = mgr._get_collection("collective_wisdom")
+            doc_count = col.count()
+            checks["chromadb"] = {"status": "ok", "project": mgr.project_id, "documents": doc_count}
+    except Exception as e:
+        checks["chromadb"] = {"status": "error", "detail": str(e)}
+
+    all_ok = all(c["status"] == "ok" for c in checks.values())
+    status_code = 200 if all_ok else 503
+
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "ready": all_ok,
+            "checks": checks,
+        },
+    )
+
+@app.get("/api/dropzone/status")
+async def dropzone_status():
+    """Retourne l'état de la dropzone (fichiers en attente)."""
+    from core.capabilities.dropzone_indexer import DropzoneIndexer
+    indexer = DropzoneIndexer()
+    pending = indexer.quick_count("USER_DROPZONE")
+    return {"pending_files": pending, "dropzone_path": "USER_DROPZONE/"}
+
+@app.get("/api/autonomy/status")
+async def autonomy_status():
+    """Retourne l'état complet du moteur d'autonomie."""
+    return autonomy.get_status()
+
+@app.post("/api/autonomy/reset-budget", dependencies=[Depends(verify_token)])
+async def autonomy_reset_budget():
+    """Reset le compteur quotidien de routines autonomes (pour debug/observation)."""
+    old_count = autonomy.daily_count
+    autonomy.daily_count = 0
+    autonomy.error_streak = 0
+    autonomy._persist_state()
+    await bus.publish("THOUGHT_STREAM", {
+        "agent": "SYSTEM",
+        "content": f"Budget autonomie réinitialisé ({old_count} → 0). Routines relancées.",
+        "type": "info"
+    })
+    return {"status": "ok", "previous_count": old_count, "new_count": 0}
+
+@app.get("/api/journal")
+async def api_journal():
+    """Retourne le journal stratégique complet + métadonnées."""
+    return {
+        "entry_count": strat_journal.entry_count(),
+        "recent_context": strat_journal.get_recent_context(5, max_chars=3000),
+        "full_journal": strat_journal.get_full_journal(),
+    }
+
+@app.get("/api/psyche/status")
+async def psyche_status():
+    """Retourne l'état complet du moteur de personnalité PSYCHE."""
+    return {
+        "system_average": psyche.get_system_average(),
+        "agents": psyche.get_all_traits(),
+        "last_decay_day": psyche.last_decay_day,
+        "history_count": len(psyche.history),
+    }
+
+@app.get("/api/awareness/status")
+async def awareness_status():
+    """Retourne le dernier snapshot de conscience + patterns détectés."""
+    return {
+        "snapshot": awareness.get_latest_snapshot(),
+        "patterns": awareness.detect_patterns(),
+        "snapshot_count": len(awareness.get_all_snapshots()),
+    }
+
+@app.get("/api/awareness/history")
+async def awareness_history():
+    """Retourne l'historique complet des snapshots de conscience."""
+    return {"snapshots": awareness.get_all_snapshots()}
+
+@app.get("/api/objectives")
+async def api_objectives():
+    """Retourne les objectifs actifs + historique récent (10 derniers complétés/expirés)."""
+    all_objs = objectives_engine.get_all_objectives()
+    active = [o for o in all_objs if o["status"] == "active"]
+    recent_done = [o for o in all_objs if o["status"] in ("completed", "failed")][-10:]
+    return {"active": active, "recent": recent_done}
+
+@app.post("/api/objectives", dependencies=[Depends(verify_token)])
+async def api_create_objective(request: Request):
+    """Création manuelle d'un objectif (source=user)."""
+    data = await request.json()
+    active = objectives_engine.get_active_objectives()
+    if len(active) >= MAX_ACTIVE_OBJECTIVES:
+        raise HTTPException(status_code=409, detail=f"Maximum d'objectifs actifs atteint ({MAX_ACTIVE_OBJECTIVES})")
+    obj = objectives_engine.create_objective(
+        title=data.get("title", "Objectif utilisateur"),
+        obj_type=data.get("type", "performance"),
+        priority=data.get("priority", "medium"),
+        source="user",
+        criteria=data.get("criteria", {"metric": "success_rate", "operator": ">=", "target": 0.8}),
+        routine_affinities=data.get("routine_affinities", {}),
+        deadline_routines=data.get("deadline_routines", 30),
+    )
+    if obj is None:
+        raise HTTPException(status_code=409, detail="Création échouée")
+    return {"status": "created", "objective": obj}
 
 @app.post("/api/override", dependencies=[Depends(verify_token)])
 async def api_override(request: Request):
@@ -132,12 +421,25 @@ async def strategic_feedback_loop(agent_name: str, mission: str, result: str):
         "context": strategy_proposal
     })
 
-@app.post("/api/mission", dependencies=[Depends(verify_token)])
+@app.post("/api/mission", dependencies=[Depends(check_rate_limit), Depends(verify_token)])
 async def mission(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
     msn = data.get("mission", "")
     await bus.publish("USER_COMMAND", {"mission": msn})
-    
+
+    # Commande admin : reset budget autonomie
+    if msn.strip().lower() in ("reset budget", "reset autonomy", "relance autonomie"):
+        old_count = autonomy.daily_count
+        autonomy.daily_count = 0
+        autonomy.error_streak = 0
+        autonomy._persist_state()
+        await bus.publish("THOUGHT_STREAM", {
+            "agent": "SYSTEM",
+            "content": f"Budget autonomie réinitialisé ({old_count} → 0). Routines relancées.",
+            "type": "success"
+        })
+        return {"status": "ok", "target": "system", "action": "reset_budget"}
+
     # [V13.3] Utilisation du Router dédié
     target = await RouterAgent.classify_intent(msn)
 

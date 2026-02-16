@@ -1,6 +1,10 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from core.council import Council, parse_council_mission, _is_consensus
+from core.council import (
+    Council, parse_council_mission, _is_consensus, _strip_markdown_prefix,
+    MIN_ROUNDS_BEFORE_CONSENSUS, _COUNCIL_PROJECT_CONTEXT,
+    _get_project_structure,
+)
 from core.orchestrator import Orchestrator
 from core.event_bus.bus import bus
 
@@ -49,17 +53,23 @@ class TestParseCouncilMission:
 
 class TestConsensus:
 
+    # Contenu suffisant pour dépasser MIN_CONSENSUS_CONTENT_LENGTH (100 chars)
+    _SUBSTANCE = (
+        "L'implémentation proposée améliore significativement les performances du routeur "
+        "en ajoutant un cache LRU avec TTL de 5 minutes sur les classifications de niveau 1."
+    )
+
     def test_consensus_marqueur(self):
-        assert _is_consensus("CONSENSUS : le code est bon.") is True
+        assert _is_consensus(f"CONSENSUS : {self._SUBSTANCE}") is True
 
     def test_approuve_marqueur(self):
-        assert _is_consensus("APPROUVE. Tout est correct.") is True
+        assert _is_consensus(f"APPROUVE. {self._SUBSTANCE}") is True
 
     def test_approuve_accent_marqueur(self):
-        assert _is_consensus("APPROUVÉ. Rien à redire.") is True
+        assert _is_consensus(f"APPROUVÉ. {self._SUBSTANCE}") is True
 
     def test_accord_final_marqueur(self):
-        assert _is_consensus("ACCORD FINAL. Nous convergeons.") is True
+        assert _is_consensus(f"ACCORD FINAL. {self._SUBSTANCE}") is True
 
     def test_pas_de_marqueur(self):
         assert _is_consensus("Je pense qu'il y a des problèmes.") is False
@@ -69,10 +79,60 @@ class TestConsensus:
 
     def test_marqueur_en_minuscule_debut(self):
         # Le nettoyage passe en upper, donc "consensus" doit matcher
-        assert _is_consensus("consensus trouvé") is True
+        assert _is_consensus(f"consensus {self._SUBSTANCE}") is True
 
     def test_chaine_vide(self):
         assert _is_consensus("") is False
+
+    def test_shallow_consensus_rejected(self):
+        """Un consensus sans contenu substantiel est rejeté."""
+        assert _is_consensus("CONSENSUS : oui.") is False
+
+    # --- Variantes markdown (bug fix V24) ---
+
+    def test_consensus_markdown_bold(self):
+        """**CONSENSUS** en gras markdown."""
+        assert _is_consensus(f"**CONSENSUS** {self._SUBSTANCE}") is True
+
+    def test_consensus_markdown_bold_with_colon(self):
+        """**CONSENSUS :** gras + deux-points."""
+        assert _is_consensus(f"**CONSENSUS :** {self._SUBSTANCE}") is True
+
+    def test_consensus_markdown_h2(self):
+        """## CONSENSUS en header markdown."""
+        assert _is_consensus(f"## CONSENSUS {self._SUBSTANCE}") is True
+
+    def test_consensus_markdown_h3(self):
+        """### CONSENSUS en header markdown."""
+        assert _is_consensus(f"### CONSENSUS\n{self._SUBSTANCE}") is True
+
+    def test_consensus_markdown_h1(self):
+        """# CONSENSUS en header markdown."""
+        assert _is_consensus(f"# CONSENSUS {self._SUBSTANCE}") is True
+
+    def test_approuve_markdown_bold(self):
+        """**APPROUVÉ** en gras."""
+        assert _is_consensus(f"**APPROUVÉ** {self._SUBSTANCE}") is True
+
+    def test_consensus_markdown_italic(self):
+        """*CONSENSUS* en italique."""
+        assert _is_consensus(f"*CONSENSUS* {self._SUBSTANCE}") is True
+
+    def test_consensus_markdown_blockquote(self):
+        """> CONSENSUS en blockquote."""
+        assert _is_consensus(f"> CONSENSUS {self._SUBSTANCE}") is True
+
+    def test_non_consensus_markdown_bold(self):
+        """**Analyse** ne doit pas matcher."""
+        assert _is_consensus("**Analyse** détaillée du problème.") is False
+
+    def test_strip_markdown_prefix_double_bold(self):
+        """Vérifie le stripping de **texte**."""
+        assert _strip_markdown_prefix("**CONSENSUS**") == "CONSENSUS"
+
+    def test_strip_markdown_prefix_header(self):
+        """Vérifie le stripping de ## texte."""
+        assert _strip_markdown_prefix("## CONSENSUS final") == "CONSENSUS final"
 
 
 # ============================================================
@@ -105,25 +165,116 @@ class TestCouncilRun:
         assert len(result["transcript"]) == 6
 
     @pytest.mark.asyncio
-    async def test_consensus_au_tour_2(self):
-        # Tour 1 : pas de consensus. Tour 2 : consensus des deux.
-        coder_responses = ["Voici ma proposition.", "CONSENSUS : c'est bon."]
-        security_responses = ["Il y a un problème.", "CONSENSUS : corrigé, j'approuve."]
+    async def test_consensus_at_min_round(self):
+        # Consensus au premier tour autorisé (MIN_ROUNDS_BEFORE_CONSENSUS).
+        _S = TestConsensus._SUBSTANCE
+        non_consensus = "Voici mon analyse."
+        consensus_resp = f"CONSENSUS : {_S}"
+        # Réponses : non-consensus pour les tours < MIN, consensus au tour MIN
+        coder_responses = [non_consensus] * (MIN_ROUNDS_BEFORE_CONSENSUS - 1) + [consensus_resp]
+        security_responses = [non_consensus] * (MIN_ROUNDS_BEFORE_CONSENSUS - 1) + [consensus_resp]
 
         agents = {
             "coder": self._make_mock_agent(coder_responses),
             "security": self._make_mock_agent(security_responses),
         }
-        council = Council(agents, ["coder", "security"], "revois ce code", max_rounds=5)
+        council = Council(agents, ["coder", "security"], "revois ce code", max_rounds=10)
         result = await council.run()
 
         assert result["status"] == "consensus"
-        assert result["rounds_used"] == 2
+        assert result["rounds_used"] == MIN_ROUNDS_BEFORE_CONSENSUS
+
+    @pytest.mark.asyncio
+    async def test_consensus_markdown_stops_at_min_round(self):
+        """Bug fix V24: les agents envoient CONSENSUS en markdown, le débat doit s'arrêter."""
+        _S = TestConsensus._SUBSTANCE
+        non_consensus = "Voici mon analyse détaillée."
+        # Réponses non-consensus pour les tours < MIN, consensus markdown au tour MIN
+        researcher_responses = [non_consensus] * (MIN_ROUNDS_BEFORE_CONSENSUS - 1) + [f"## CONSENSUS\n{_S}"]
+        strategist_responses = [non_consensus] * (MIN_ROUNDS_BEFORE_CONSENSUS - 1) + [f"**CONSENSUS** {_S}"]
+        evolution_responses = [non_consensus] * (MIN_ROUNDS_BEFORE_CONSENSUS - 1) + [f"**CONSENSUS :** {_S}"]
+
+        agents = {
+            "researcher": self._make_mock_agent(researcher_responses),
+            "strategist": self._make_mock_agent(strategist_responses),
+            "evolution": self._make_mock_agent(evolution_responses),
+        }
+        council = Council(agents, ["researcher", "strategist", "evolution"], "test", max_rounds=10)
+        result = await council.run()
+
+        assert result["status"] == "consensus"
+        assert result["rounds_used"] == MIN_ROUNDS_BEFORE_CONSENSUS
+
+    @pytest.mark.asyncio
+    async def test_consensus_early_rounds_ignored(self):
+        """Anti-écho : CONSENSUS avant MIN_ROUNDS est ignoré."""
+        # Les deux agents disent CONSENSUS à chaque tour
+        _S = TestConsensus._SUBSTANCE
+        n = MIN_ROUNDS_BEFORE_CONSENSUS + 1  # assez de réponses
+        coder_responses = [f"CONSENSUS : {_S}"] * n
+        security_responses = [f"CONSENSUS : {_S}"] * n
+
+        agents = {
+            "coder": self._make_mock_agent(coder_responses),
+            "security": self._make_mock_agent(security_responses),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=n)
+        result = await council.run()
+
+        assert result["status"] == "consensus"
+        # Le consensus ne peut PAS arriver avant MIN_ROUNDS_BEFORE_CONSENSUS
+        assert result["rounds_used"] >= MIN_ROUNDS_BEFORE_CONSENSUS
+        assert result["rounds_used"] == MIN_ROUNDS_BEFORE_CONSENSUS
+
+    @pytest.mark.asyncio
+    async def test_prompt_tour_1_contient_critique_obligatoire(self):
+        """Le prompt du tour 1 demande la critique obligatoire."""
+        agents = {
+            "coder": self._make_mock_agent(),
+            "security": self._make_mock_agent(),
+        }
+        council = Council(agents, ["coder", "security"], "test mission", max_rounds=3)
+        prompt = council._build_prompt("coder", 1)
+
+        assert "CRITIQUE OBLIGATOIRE" in prompt
+        assert "CONSENSUS" in prompt  # Mentionne qu'on ne peut PAS donner CONSENSUS
+
+    @pytest.mark.asyncio
+    async def test_prompt_tour_2_autorise_consensus(self):
+        """Le prompt du tour 2+ autorise le consensus."""
+        agents = {
+            "coder": self._make_mock_agent(),
+            "security": self._make_mock_agent(),
+        }
+        council = Council(agents, ["coder", "security"], "test mission", max_rounds=3)
+        prompt = council._build_prompt("coder", MIN_ROUNDS_BEFORE_CONSENSUS)
+
+        assert "CRITIQUE OBLIGATOIRE" not in prompt
+        assert "CONSENSUS" in prompt  # Mentionne qu'on PEUT donner CONSENSUS
+
+    @pytest.mark.asyncio
+    async def test_prompt_contient_contexte_projet(self):
+        """Le prompt injecte le contexte projet PROMÉTHÉE."""
+        agents = {
+            "coder": self._make_mock_agent(),
+            "security": self._make_mock_agent(),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+        prompt = council._build_prompt("coder", 1)
+
+        assert "PROMÉTHÉE" in prompt
+        assert "Kubernetes" in prompt  # Dans la liste des exclusions
+
+    @pytest.mark.asyncio
+    async def test_min_rounds_before_consensus_value(self):
+        """La constante MIN_ROUNDS_BEFORE_CONSENSUS vaut 3."""
+        assert MIN_ROUNDS_BEFORE_CONSENSUS == 3
 
     @pytest.mark.asyncio
     async def test_consensus_partiel_ne_suffit_pas(self):
         """Un seul agent en consensus ne suffit pas, il faut tous."""
-        coder_responses = ["CONSENSUS : ok"] * 3
+        _S = TestConsensus._SUBSTANCE
+        coder_responses = [f"CONSENSUS : {_S}"] * 3
         security_responses = ["Non, je refuse."] * 3
 
         agents = {
@@ -215,13 +366,61 @@ class TestOrchestratorCouncil:
     @pytest.mark.asyncio
     async def test_dispatch_council_lance_debat(self, orch):
         mock_agent_1 = MagicMock()
-        mock_agent_1.generate_content = AsyncMock(return_value="CONSENSUS : ok")
+        _S = TestConsensus._SUBSTANCE
+        mock_agent_1.generate_content = AsyncMock(return_value=f"CONSENSUS : {_S}")
         mock_agent_2 = MagicMock()
-        mock_agent_2.generate_content = AsyncMock(return_value="CONSENSUS : ok")
+        mock_agent_2.generate_content = AsyncMock(return_value=f"CONSENSUS : {_S}")
 
         await orch.register_agent("coder", mock_agent_1)
         await orch.register_agent("security", mock_agent_2)
 
         result = await orch.dispatch_council(["coder", "security"], "test mission")
         assert result["status"] == "consensus"
-        assert result["rounds_used"] == 1
+        # Consensus ignoré avant MIN_ROUNDS_BEFORE_CONSENSUS, accepté au tour MIN
+        assert result["rounds_used"] == MIN_ROUNDS_BEFORE_CONSENSUS
+
+
+# ============================================================
+# TESTS STRUCTURE PROJET (Task #13)
+# ============================================================
+
+class TestProjectStructure:
+    """Vérifie l'injection de la structure projet réelle dans les prompts."""
+
+    def setup_method(self):
+        # Reset le cache pour chaque test
+        import core.council
+        core.council._PROJECT_STRUCTURE_CACHE = None
+
+    def test_get_project_structure_returns_string(self):
+        result = _get_project_structure()
+        assert isinstance(result, str)
+        assert "FICHIERS RÉELS DU PROJET" in result
+
+    def test_project_structure_contains_core(self):
+        result = _get_project_structure()
+        assert "core/" in result
+
+    def test_project_structure_contains_agents(self):
+        result = _get_project_structure()
+        assert "Agents/" in result
+
+    def test_project_structure_contains_python_files(self):
+        result = _get_project_structure()
+        assert ".py" in result
+
+    def test_project_structure_cached(self):
+        """La 2e appel utilise le cache."""
+        result1 = _get_project_structure()
+        result2 = _get_project_structure()
+        assert result1 is result2  # Même objet (cache)
+
+    def test_council_prompt_contains_project_files(self):
+        """Le prompt Council contient la structure projet."""
+        agents = {
+            "coder": MagicMock(),
+            "security": MagicMock(),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+        prompt = council._build_prompt("coder", 1)
+        assert "FICHIERS RÉELS" in prompt

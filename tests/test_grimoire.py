@@ -42,14 +42,102 @@ class TestSummoner:
 
 
 # ============================================================
-# ROUTER - NIVEAU 1.5 (GRIMOIRE)
+# ROUTER - NIVEAU 0.5 (GRIMOIRE-FIRST)
 # ============================================================
 
-class TestRouterGrimoire:
+class TestRouterGrimoireFirst:
+    """Le Grimoire est maintenant consulté AVANT les mots-clés N1."""
 
     def setup_method(self):
-        """Reset le cache Grimoire avant chaque test."""
         RouterAgent._grimoire_index_cache = None
+
+    @pytest.mark.asyncio
+    async def test_grimoire_before_n1_debug(self):
+        """'debug' matche dr_debug (Grimoire N0.5) et non coder (N1 via 'bug')."""
+        result = await RouterAgent.classify_intent("debug this code please")
+        assert result == "dr_debug"
+
+    @pytest.mark.asyncio
+    async def test_grimoire_before_n1_commit(self):
+        """'commit' matche git_keeper (Grimoire N0.5) et non coder/factory."""
+        result = await RouterAgent.classify_intent("fais un commit propre")
+        assert result == "git_keeper"
+
+    @pytest.mark.asyncio
+    async def test_grimoire_before_n1_log(self):
+        """'logs' matche log_analyst (Grimoire N0.5) et non researcher."""
+        result = await RouterAgent.classify_intent("analyse les logs système")
+        assert result == "log_analyst"
+
+    @pytest.mark.asyncio
+    async def test_n1_still_works_no_grimoire_match(self):
+        """Sans match Grimoire, N1 fonctionne toujours."""
+        result = await RouterAgent.classify_intent("montre moi le cpu")
+        assert result == "infra"
+
+    @pytest.mark.asyncio
+    async def test_blind_trust_still_overrides_grimoire(self):
+        """N0 (Blind Trust) reste prioritaire sur N0.5 (Grimoire)."""
+        result = await RouterAgent.classify_intent("coder: debug ce fichier")
+        assert result == "coder"  # Blind Trust, pas dr_debug
+
+
+# ============================================================
+# NORMALISATION UNICODE
+# ============================================================
+
+class TestRouterNormalization:
+
+    def test_normalize_accents(self):
+        assert RouterAgent._normalize("équation") == "equation"
+
+    def test_normalize_mixed(self):
+        assert RouterAgent._normalize("Résous-moi cette équation") == "resous-moi cette equation"
+
+    def test_normalize_already_ascii(self):
+        assert RouterAgent._normalize("traceback") == "traceback"
+
+    def test_normalize_uppercase(self):
+        assert RouterAgent._normalize("TRACEBACK") == "traceback"
+
+
+# ============================================================
+# SCORING GRIMOIRE (meilleur match gagne)
+# ============================================================
+
+class TestRouterGrimoireScoring:
+
+    def setup_method(self):
+        RouterAgent._grimoire_index_cache = None
+
+    @pytest.mark.asyncio
+    async def test_longer_keyword_wins(self):
+        """'erreur python' (13 chars) > 'crash' (5 chars) quand les deux matchent."""
+        # "erreur python" est keyword de dr_debug, "crash" aussi
+        result = await RouterAgent.classify_intent("j'ai une erreur python avec un crash")
+        assert result == "dr_debug"  # "erreur python" (13) bat "crash" (5)
+
+    @pytest.mark.asyncio
+    async def test_accented_keyword_matches(self):
+        """'équation' avec accents matche le keyword 'equation' sans accent."""
+        result = await RouterAgent.classify_intent("résous cette équation")
+        assert result == "math_wizard"
+
+    @pytest.mark.asyncio
+    async def test_min_length_threshold(self):
+        """Les mots-clés < 3 chars sont ignorés."""
+        # Injecter un index Grimoire avec un keyword court
+        RouterAgent._grimoire_index_cache = [
+            {"slug": "fake_agent", "name": "Fake", "keywords": ["ab", "x"], "file": "fake.py"}
+        ]
+        result = RouterAgent._check_grimoire_index("ab x test")
+        assert result is None  # "ab" (2) et "x" (1) sont trop courts
+
+    def test_no_match_returns_none(self):
+        """Mission sans match Grimoire → None."""
+        RouterAgent._grimoire_index_cache = None
+        result = RouterAgent._check_grimoire_index("quelle est la philosophie du système")
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_grimoire_keyword_equation(self):

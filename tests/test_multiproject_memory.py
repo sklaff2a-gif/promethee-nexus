@@ -6,9 +6,8 @@ from core.vector_store import ChromaMemoryManager
 
 
 @pytest.fixture(autouse=True)
-def isolate_chroma(monkeypatch, tmp_path):
-    """Force tous les tests à utiliser un répertoire temporaire pour éviter de toucher la vraie mémoire."""
-    monkeypatch.chdir(tmp_path)
+def isolate_chroma():
+    """Reset ChromaDB entre chaque test (chdir vers tmp_path déjà fait par conftest)."""
     ChromaMemoryManager.reset_all()
     yield
     ChromaMemoryManager.reset_all()

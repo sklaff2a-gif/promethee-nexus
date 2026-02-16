@@ -1480,6 +1480,7 @@ class TestTriggerTargetedLearning:
             assert not stored_topics[0].startswith("[MODE VEILLE]")
 
 
+
 # ═══════════════════════════════════════════════════════════
 # P2a — TestGrimoireSlugRotation (5 tests)
 # ═══════════════════════════════════════════════════════════

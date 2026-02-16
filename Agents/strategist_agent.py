@@ -30,26 +30,38 @@ RÈGLE D'OR :
 Ne sois pas passif. Tes réponses doivent commencer par "ANALYSE :" suivi de "RECOMMANDATION ACTIONNABLE :".
 """
 
+    def _get_project_files(self) -> str:
+        """Liste les fichiers réels du projet pour ancrer les analyses."""
+        try:
+            from core.council import _get_project_structure
+            return _get_project_structure()
+        except Exception:
+            return ""
+
     async def process_task(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
         mission = task_payload.get("mission", "")
         context = task_payload.get("context", "")
-        
-        # Le BaseAgent V13.3+ gère déjà le Routing de modèle (GPT-OSS ou Gemma)
-        # On renforce le contexte pour l'analyse
-        
+
+        # Structure projet réelle (anti-hallucination de chemins)
+        project_files = self._get_project_files()
+
         full_prompt = f"""
         {self.system_instructions}
-        
+
+        --- STRUCTURE DU PROJET ---
+        {project_files}
+
         --- DONNÉES À ANALYSER ---
         MISSION : {mission}
-        
-        CONTEXTE TECHNIQUE / RÉSULTATS PRÉCÉDENTS : 
+
+        CONTEXTE TECHNIQUE / RÉSULTATS PRÉCÉDENTS :
         {context}
         --------------------------
-        
+
+        IMPORTANT : Ne cite QUE des fichiers listés ci-dessus. N'invente PAS de chemins.
         Agis maintenant en tant que Stratège (COO). Quelle est la meilleure approche ?
         """
-        
+
         response = await self.generate_content(full_prompt)
-        
+
         return {"status": "success", "result": response, "agent": self.name}

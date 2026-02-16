@@ -49,7 +49,7 @@ class Config:
     # Configuration Locale (Ollama) inchangée
     OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
     AGENT_SPECIFIC_LOCAL_MODELS = {
-        "coder": "deepseek-r1:8b",
+        "coder": "qwen3-coder:30b",
         "factory": "qwen3:8b",
         "infra": "qwen3:8b",
         "security": "deepseek-r1:8b",

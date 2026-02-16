@@ -34,6 +34,13 @@ class Orchestrator:
         code_patterns = re.findall(r'^(import |from \w+ import|class \w+|def \w+\(|@\w+)', text, re.MULTILINE)
         return len(code_patterns) >= 2
 
+    # Marqueurs de contextes internes → forcer le mode local sur l'agent
+    _INTERNAL_CONTEXT_MARKERS = (
+        "PROTOCOLE_AUTONOMIE", "YOUTUBE_VEILLE", "DROPZONE_ANALYSIS",
+        "PROTOCOLE_AUTONOMIE_GRIMOIRE", "EVOLUTION_PIPELINE",
+        "COUNCIL_RESEARCH", "MEMORY_CLEANUP",
+    )
+
     async def dispatch_task(self, target_slug: str, task_payload: Dict[str, Any]):
         if self.kill_switch_active:
             return {"status": "BLOCKED", "reason": "KILL_SWITCH_ACTIVE"}
@@ -76,8 +83,28 @@ class Orchestrator:
             return {"status": "ERROR", "reason": f"AGENT_NOT_FOUND: {target_slug}"}
 
         try:
+            # --- DÉTECTION CONTEXTE INTERNE → FORCER LOCAL ---
+            context = str(task_payload.get("context", ""))
+            mission = str(task_payload.get("mission", ""))
+            if task_payload.get("force_local", False) or any(
+                m in context or m in mission for m in self._INTERNAL_CONTEXT_MARKERS
+            ):
+                if hasattr(agent, "_force_local_next"):
+                    agent._force_local_next = True
+
             # --- EXÉCUTION ---
             response = await agent.process_task(task_payload)
+
+            # Cleanup du flag (sécurité — normalement déjà reset par generate_content)
+            if hasattr(agent, "_force_local_next"):
+                agent._force_local_next = False
+
+            # --- Publication du statut pour SelfAwareness ---
+            from core.event_bus.bus import bus
+            await bus.publish("MISSION_COMPLETE", {
+                "agent": target_slug,
+                "status": response.get("status", "success") if isinstance(response, dict) else "success",
+            })
 
             # --- [V18.3] DISSIPATION D'EIDOLON ---
             if target_slug not in self.agents:
@@ -87,8 +114,17 @@ class Orchestrator:
                 del agent
                 logger.info(f"👻 [GRIMOIRE] Eidolon '{target_slug}' dissipé.")
 
+            # --- Guard : pas de réactions en chaîne pour les pipelines internes ---
+            # DROPZONE_ANALYSIS : le pipeline Dropzone gère son propre flux
+            # EVOLUTION_PIPELINE : l'agent Evolution gère Coder→Architect lui-même
+            task_context = str(task_payload.get("context", ""))
+            is_internal_pipeline = (
+                task_context.startswith("DROPZONE_ANALYSIS")
+                or task_context.startswith("EVOLUTION_PIPELINE")
+            )
+
             # --- [V17.0] LE PONT D'EXÉCUTION (Architecte -> Factory) ---
-            if target_slug == "architect" and response.get("status") == "success":
+            if target_slug == "architect" and response.get("status") == "success" and not is_internal_pipeline:
                 res_text = str(response.get("result", ""))
 
                 if self._is_validated(res_text):
@@ -105,7 +141,7 @@ class Orchestrator:
                         logger.warning("⚠️ [BRIDGE] Validation reçue mais aucun code Python structurel trouvé dans le contexte.")
 
             # --- [V16.3] RÉACTION EN CHAÎNE (Evolution/Coder -> Architecte) ---
-            if target_slug in ["evolution", "coder"] and response.get("status") == "success":
+            if target_slug in ["evolution", "coder"] and response.get("status") == "success" and not is_internal_pipeline:
                 result_text = str(response.get("result", ""))
                 if self._contains_python_code(result_text):
                     logger.info("⚡ DÉCLENCHEMENT ARCHITECTE...")

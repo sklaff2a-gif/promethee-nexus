@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import re
 from typing import Dict, Any
 from core.base_agent import BaseAgent
 
@@ -44,15 +45,79 @@ class DivineFormatter(BaseAgent):
                 target_file = response.split("FICHIER:")[1].split("\n")[0].strip()
             except Exception as e:
                 logger.warning(f"[FORMATTER] Échec parsing FICHIER: {e}")
-        
+
         has_code = "```" in response
         return target_file, has_code
+
+    def _extract_from_context(self, text: str):
+        """Extraction déterministe du fichier cible et du code depuis le texte brut.
+        Fallback quand le LLM ne produit pas le format FICHIER:/CODE attendu."""
+        target_file = None
+        code_content = None
+
+        # 1. Marqueur FICHIER: déjà présent dans le texte d'entrée
+        if "FICHIER:" in text:
+            try:
+                candidate = text.split("FICHIER:")[1].split("\n")[0].strip()
+                if self._is_valid_filename(candidate):
+                    target_file = candidate
+            except Exception:
+                pass
+
+        # 2. Chercher des chemins de fichiers Python explicites
+        if not target_file:
+            path_patterns = re.findall(
+                r'(?:core|Agents|tests|capabilities)[/\\][\w/\\]+\.py',
+                text
+            )
+            for candidate in path_patterns:
+                clean = candidate.replace("\\", "/")
+                if self._is_valid_filename(clean):
+                    target_file = clean
+                    break
+
+        # 3. Chercher un fichier .py isolé (ex: "agent_code_generator.py")
+        if not target_file:
+            simple_files = re.findall(r'(?<![/\\.\w])(\w[\w-]+\.py)(?!\w)', text)
+            for candidate in simple_files:
+                if self._is_valid_filename(candidate) and len(candidate) > 4:
+                    target_file = candidate
+                    break
+
+        # 4. Extraire les blocs de code ```python ... ```
+        code_blocks = re.findall(r'```(?:python)?\s*\n(.*?)```', text, re.DOTALL)
+        if code_blocks:
+            code_content = max(code_blocks, key=len)
+
+        return target_file, code_content
+
+    def _rebuild_formatted_response(self, target_file: str, code: str) -> str:
+        """Reconstruit une réponse formatée FICHIER:/CODE pour la Factory."""
+        return f"FICHIER: {target_file}\nCODE:\n```python\n{code}\n```"
+
+    def _has_formattable_code(self, text: str) -> bool:
+        """Vérifie si le texte contient du code Python exploitable."""
+        # 1. Bloc de code markdown
+        if "```" in text:
+            return True
+        # 2. Au moins 3 lignes qui ressemblent à du Python
+        code_patterns = re.compile(
+            r"^(import |from \w+ import |def \w+|class \w+|    (?:def |if |for |return |self\.))",
+            re.MULTILINE,
+        )
+        matches = code_patterns.findall(text)
+        return len(matches) >= 3
 
     async def process_task(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
         mission = task_payload.get("mission", "")
         context = task_payload.get("context", "")
         full_text = f"{mission}\n{context}"
-        
+
+        # Guard : pas de code exploitable → skip immédiat
+        if not self._has_formattable_code(full_text):
+            self.log_thought("ℹ️ Aucun code exploitable détecté — formatage ignoré.", type="info")
+            return {"status": "success", "result": "NO_CODE_TO_FORMAT"}
+
         self.log_thought("🧹 Nettoyage et formatage du code en cours...", type="thought")
 
         # Prompt Standard
@@ -92,17 +157,32 @@ class DivineFormatter(BaseAgent):
             # Re-validation
             is_valid = target_file and self._is_valid_filename(target_file) and has_code
 
+        # --- TENTATIVE 3 : EXTRACTION DÉTERMINISTE (si LLM a échoué) ---
+        if not is_valid:
+            self.log_thought("🔧 Fallback : extraction déterministe depuis le contexte...", type="info")
+            det_file, det_code = self._extract_from_context(full_text)
+
+            if det_file and det_code:
+                target_file = det_file
+                response = self._rebuild_formatted_response(det_file, det_code)
+                is_valid = True
+                self.log_thought(f"✅ Extraction déterministe réussie : {det_file}", type="success")
+            elif det_code and not det_file:
+                self.log_thought("⚠️ Code trouvé mais aucun fichier cible identifiable.", type="warning")
+            else:
+                self.log_thought("⚠️ Aucun bloc de code exploitable dans le contexte.", type="warning")
+
         # --- DÉCISION FINALE ---
         if is_valid:
             self.log_thought(f"✅ Formatage validé ({target_file}). Transmission Factory...", type="success")
             try:
                 from core.orchestrator import orchestrator
                 factory_payload = { "mission": "Exécute ce code propre.", "context": response }
-                
+
                 loop = asyncio.get_running_loop()
                 loop.create_task(orchestrator.dispatch_task("factory", factory_payload))
                 return {"status": "success", "result": "CODE_CLEAN_SENT_TO_FACTORY"}
-                
+
             except Exception as e:
                 return {"status": "error", "result": f"ERREUR RELAIS: {e}"}
 

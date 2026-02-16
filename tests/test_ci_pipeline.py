@@ -6,7 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from core.ci_pipeline import (
     extract_python_code,
+    _extract_api_signatures,
+    _validate_test_imports,
     _slugify_filename,
+    _build_import_hint,
     _rollback,
     _remember_failure,
     _remember_success,
@@ -64,6 +67,59 @@ class TestSlugifyFilename:
         assert _slugify_filename("core\\utils\\helper.py") == "helper"
 
 
+# --- Tests _build_import_hint ---
+
+class TestBuildImportHint:
+
+    def test_fichier_dans_agents(self):
+        hint = _build_import_hint(
+            "factory_agent.py",
+            "C:/MesProjets/PROMETHEE/Agents/factory_agent.py",
+            "class DivineFactory:\n    pass\ndef create_file():\n    pass\n"
+        )
+        assert "Agents.factory_agent" in hint
+        assert "DivineFactory" in hint
+        assert "create_file" in hint
+        assert "UNIQUEMENT" in hint
+
+    def test_fichier_dans_core(self):
+        hint = _build_import_hint(
+            "router.py",
+            "C:/MesProjets/PROMETHEE/core/router.py",
+            "class RouterAgent:\n    pass\n"
+        )
+        assert "core.router" in hint
+        assert "RouterAgent" in hint
+
+    def test_fichier_racine(self):
+        """Fichier à la racine du projet, pas dans un package connu."""
+        hint = _build_import_hint(
+            "merchant_code.py",
+            "C:/MesProjets/PROMETHEE/merchant_code.py",
+            "def calculate_profit():\n    return 42\n"
+        )
+        assert "merchant_code" in hint
+        assert "N'invente PAS" in hint
+
+    def test_chemin_windows_backslash(self):
+        hint = _build_import_hint(
+            "coder_agent.py",
+            "C:\\MesProjets\\PROMETHEE\\Agents\\coder_agent.py",
+            "class DivineCoder:\n    pass\n"
+        )
+        assert "Agents.coder_agent" in hint
+        assert "DivineCoder" in hint
+
+    def test_exclut_fonctions_privees(self):
+        hint = _build_import_hint(
+            "utils.py",
+            "core/utils.py",
+            "def public_func():\n    pass\ndef _private_func():\n    pass\n"
+        )
+        assert "public_func" in hint
+        assert "_private_func" not in hint
+
+
 # --- Tests anti-boucle ---
 
 class TestAntiLoopProtection:
@@ -116,11 +172,17 @@ class TestRollback:
         assert result is True
         assert original.read_text() == "code original"
 
-    def test_rollback_sans_bak(self, tmp_path):
+    def test_rollback_nouveau_fichier_supprime(self, tmp_path):
+        """Fichier nouveau (pas de .bak) : supprimé au lieu de laisser un orphelin."""
         original = tmp_path / "module.py"
-        original.write_text("code")
+        original.write_text("code défaillant")
 
         result = _rollback(str(original))
+        assert result is True
+        assert not original.exists()
+
+    def test_rollback_fichier_inexistant(self, tmp_path):
+        result = _rollback(str(tmp_path / "fantome.py"))
         assert result is False
 
 
@@ -432,3 +494,218 @@ class TestMemoryIntegrationPipeline:
         prompt_sent = coder.generate_content.call_args[0][0]
         assert "ATTENTION" in prompt_sent
         assert "Échecs CI/CD passés" in prompt_sent
+
+
+# --- Tests _extract_api_signatures ---
+
+class TestExtractApiSignatures:
+
+    def test_classe_avec_methodes(self):
+        code = "class MyAgent:\n    def __init__(self, name):\n        pass\n    def run(self, task):\n        pass\n    def _private(self):\n        pass\n"
+        result = _extract_api_signatures(code)
+        assert "class MyAgent" in result
+        assert "__init__(name)" in result
+        assert "run(task)" in result
+        assert "_private" not in result
+
+    def test_fonction_top_level(self):
+        code = "def hello(name):\n    return f'Hi {name}'\n\ndef _internal():\n    pass\n"
+        result = _extract_api_signatures(code)
+        assert "def hello(name)" in result
+        assert "_internal" not in result
+
+    def test_code_invalide_retourne_vide(self):
+        result = _extract_api_signatures("def broken(:\n    pass")
+        assert result == ""
+
+    def test_code_vide(self):
+        result = _extract_api_signatures("")
+        assert result == ""
+
+
+# --- Tests _validate_test_imports ---
+
+class TestValidateTestImports:
+
+    def test_imports_valides(self):
+        source = "class OrderGenerator:\n    pass\ndef process():\n    pass\n"
+        test = "from core.module import OrderGenerator, process\ndef test_ok(): pass\n"
+        ok, err = _validate_test_imports(test, source, "core.module")
+        assert ok is True
+
+    def test_imports_invalides_detectes(self):
+        source = "class OrderGenerator:\n    pass\n"
+        test = "from core.module import ResourceManager\ndef test_ok(): pass\n"
+        ok, err = _validate_test_imports(test, source, "core.module")
+        assert ok is False
+        assert "ResourceManager" in err
+
+    def test_imports_autre_module_ignores(self):
+        """Les imports vers d'autres modules (pas le source) sont ignorés."""
+        source = "class MyClass:\n    pass\n"
+        test = "import pytest\nfrom unittest.mock import MagicMock\nfrom core.module import MyClass\ndef test_ok(): pass\n"
+        ok, err = _validate_test_imports(test, source, "core.module")
+        assert ok is True
+
+    def test_source_invalide_passe(self):
+        """Si le source est invalide, on laisse pytest décider."""
+        ok, err = _validate_test_imports("def test(): pass", "def broken(:", "mod")
+        assert ok is True
+
+
+# --- Tests constantes dans _extract_api_signatures ---
+
+class TestApiSignaturesConstants:
+
+    def test_constantes_upper_extraites(self):
+        """Les constantes UPPER_CASE de module sont extraites."""
+        code = "MAX_RETRIES = 5\nDEFAULT_TIMEOUT = 30\n\ndef run(): pass\n"
+        result = _extract_api_signatures(code)
+        assert "MAX_RETRIES" in result
+        assert "DEFAULT_TIMEOUT" in result
+        assert "def run()" in result
+
+    def test_variables_lowercase_ignorees(self):
+        """Les variables lowercase ne sont pas extraites."""
+        code = "counter = 0\nlogger = logging.getLogger()\n\ndef func(): pass\n"
+        result = _extract_api_signatures(code)
+        assert "counter" not in result
+        assert "logger" not in result
+
+
+# --- Tests retry dans le pipeline ---
+
+class TestPipelineRetry:
+
+    @pytest.fixture
+    def setup_retry(self, tmp_path):
+        """Prépare un pipeline avec fichier source valide."""
+        src = tmp_path / "module.py"
+        src.write_text("class MyClass:\n    def run(self):\n        pass\n")
+        auto_dir = tmp_path / "auto"
+
+        coder = AsyncMock()
+        coder.has_memory = True
+        coder.remember = MagicMock()
+        coder.recall = MagicMock(return_value="")
+        architect = AsyncMock()
+        strategist = MagicMock()
+        strategist.has_memory = True
+        strategist.recall = MagicMock(return_value="")
+        agents = {"coder": coder, "architect": architect, "strategist": strategist}
+        return src, auto_dir, agents, coder, architect
+
+    @pytest.mark.asyncio
+    async def test_retry_on_syntax_error(self, setup_retry):
+        """Si la 1ère tentative a une SyntaxError, retry avec correction."""
+        src, auto_dir, agents, coder, architect = setup_retry
+
+        # 1ère tentative : SyntaxError, 2ème : OK
+        coder.generate_content = AsyncMock(side_effect=[
+            "```python\ndef test_broken( assert True\n```",  # SyntaxError
+            "```python\ndef test_ok():\n    assert True\n```",  # OK
+        ])
+        architect.generate_content = AsyncMock(return_value="VALIDÉ")
+
+        with patch("core.ci_pipeline.orchestrator") as mock_orch, \
+             patch("core.ci_pipeline._run_pytest", new_callable=AsyncMock, return_value=(True, "1 passed")), \
+             patch("core.ci_pipeline.AUTO_TESTS_DIR", str(auto_dir)), \
+             patch("core.ci_pipeline.sys"):
+            mock_orch.agents = agents
+            await run_pipeline("module.py", str(src))
+
+        # Le coder a été appelé 2 fois (retry)
+        assert coder.generate_content.call_count == 2
+        # Le 2ème prompt contient "CORRECTION"
+        second_prompt = coder.generate_content.call_args_list[1][0][0]
+        assert "CORRECTION" in second_prompt
+
+    @pytest.mark.asyncio
+    async def test_retry_on_bad_imports(self, setup_retry):
+        """Si la 1ère tentative a des imports fantômes, retry avec correction."""
+        src, auto_dir, agents, coder, architect = setup_retry
+
+        # 1ère tentative : import invalide, 2ème : OK
+        coder.generate_content = AsyncMock(side_effect=[
+            "```python\nfrom core.module import FakeClass\ndef test_x(): pass\n```",
+            "```python\nfrom core.module import MyClass\ndef test_ok():\n    assert True\n```",
+        ])
+        architect.generate_content = AsyncMock(return_value="VALIDÉ")
+
+        # Écrire le fichier en chemin reconnaissable (core/)
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            core_dir = os.path.join(td, "core")
+            os.makedirs(core_dir)
+            src_file = os.path.join(core_dir, "module.py")
+            with open(src_file, "w") as f:
+                f.write("class MyClass:\n    def run(self):\n        pass\n")
+            auto_dir_path = os.path.join(td, "auto")
+
+            with patch("core.ci_pipeline.orchestrator") as mock_orch, \
+                 patch("core.ci_pipeline._run_pytest", new_callable=AsyncMock, return_value=(True, "1 passed")), \
+                 patch("core.ci_pipeline.AUTO_TESTS_DIR", auto_dir_path), \
+                 patch("core.ci_pipeline.sys"):
+                mock_orch.agents = agents
+                await run_pipeline("module.py", src_file)
+
+        assert coder.generate_content.call_count == 2
+        second_prompt = coder.generate_content.call_args_list[1][0][0]
+        assert "imports invalides" in second_prompt
+
+    @pytest.mark.asyncio
+    async def test_no_retry_when_first_attempt_ok(self, setup_retry):
+        """Pas de retry quand la 1ère tentative réussit."""
+        src, auto_dir, agents, coder, architect = setup_retry
+
+        coder.generate_content = AsyncMock(
+            return_value="```python\ndef test_ok():\n    assert True\n```"
+        )
+        architect.generate_content = AsyncMock(return_value="VALIDÉ")
+
+        with patch("core.ci_pipeline.orchestrator") as mock_orch, \
+             patch("core.ci_pipeline._run_pytest", new_callable=AsyncMock, return_value=(True, "1 passed")), \
+             patch("core.ci_pipeline.AUTO_TESTS_DIR", str(auto_dir)), \
+             patch("core.ci_pipeline.sys"):
+            mock_orch.agents = agents
+            await run_pipeline("module.py", str(src))
+
+        # Le coder n'est appelé qu'une seule fois
+        assert coder.generate_content.call_count == 1
+
+
+# --- Tests prompt restructuré ---
+
+class TestPromptStructure:
+
+    @pytest.mark.asyncio
+    async def test_prompt_contient_regles_strictes(self, tmp_path):
+        """Le prompt envoyé au coder contient les RÈGLES STRICTES."""
+        src = tmp_path / "mod.py"
+        src.write_text("class Foo:\n    def bar(self): pass\n")
+        auto_dir = tmp_path / "auto"
+
+        coder = AsyncMock()
+        coder.has_memory = True
+        coder.remember = MagicMock()
+        coder.recall = MagicMock(return_value="")
+        coder.generate_content = AsyncMock(
+            return_value="```python\ndef test_foo(): assert True\n```"
+        )
+        architect = AsyncMock()
+        architect.generate_content = AsyncMock(return_value="VALIDÉ")
+        strategist = MagicMock()
+        strategist.has_memory = True
+        strategist.recall = MagicMock(return_value="")
+
+        with patch("core.ci_pipeline.orchestrator") as mock_orch, \
+             patch("core.ci_pipeline._run_pytest", new_callable=AsyncMock, return_value=(True, "1 passed")), \
+             patch("core.ci_pipeline.AUTO_TESTS_DIR", str(auto_dir)), \
+             patch("core.ci_pipeline.sys"):
+            mock_orch.agents = {"coder": coder, "architect": architect, "strategist": strategist}
+            await run_pipeline("mod.py", str(src))
+
+        prompt = coder.generate_content.call_args[0][0]
+        assert "RÈGLES STRICTES" in prompt
+        assert "MISSION" in prompt
+        assert "N'invente AUCUNE" in prompt

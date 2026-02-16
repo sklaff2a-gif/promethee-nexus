@@ -19,5 +19,40 @@
     "description": "Traduction multilingue de textes",
     "keywords": ["traduis", "traduction", "translate", "japonais", "anglais", "espagnol", "langue"],
     "file": "translator.py"
+  },
+  {
+    "slug": "git_keeper",
+    "name": "GitKeeper",
+    "description": "Expert Git : commandes, workflows, messages de commit, résolution de conflits",
+    "keywords": ["git", "commit", "merge", "branche", "branch", "rebase", "conflit", "pull request"],
+    "file": "git_keeper.py"
+  },
+  {
+    "slug": "doc_writer",
+    "name": "DocWriter",
+    "description": "Rédaction de documentation technique : README, docstrings, guides API, changelogs",
+    "keywords": ["readme", "documentation", "docstring", "changelog", "api doc", "guide", "tutoriel"],
+    "file": "doc_writer.py"
+  },
+  {
+    "slug": "data_analyst",
+    "name": "DataAnalyst",
+    "description": "Analyse de données : CSV/JSON, statistiques, tendances, visualisations",
+    "keywords": ["csv", "json", "dataset", "statistique", "moyenne", "graphique", "tendance", "analyse données"],
+    "file": "data_analyst.py"
+  },
+  {
+    "slug": "task_scheduler",
+    "name": "TaskScheduler",
+    "description": "Planification de tâches : décomposition, priorités, roadmaps, dépendances",
+    "keywords": ["planifie", "planning", "tâche", "priorité", "roadmap", "étapes", "deadline", "todo"],
+    "file": "task_scheduler.py"
+  },
+  {
+    "slug": "log_analyst",
+    "name": "LogAnalyst",
+    "description": "Analyse de logs : patterns d'erreur, diagnostic d'incidents, règles d'alerte",
+    "keywords": ["log", "logs", "erreur récurrente", "incident", "monitoring", "alerte", "pattern erreur"],
+    "file": "log_analyst.py"
   }
 ]

@@ -38,16 +38,31 @@ logger = logging.getLogger("BaseAgent")
 
 class BaseAgent:
     """
-    Classe Mère V21.0 - Full Architecture + Budget Cloud
+    Classe Mère V22.0 - Full Architecture + Budget Cloud + Cooldown 429
     - Stratégie : Local First & Cloud Escalation (Stricte)
-    - Mémoire : RAG & Anti-Spam
+    - Mémoire : RAG & Anti-Spam + Decay Temporel
     - Interface : Publication temps réel sur le Bus
-    - Budget : Compteur d'appels Cloud partagé entre agents
+    - Budget : Compteur d'appels Cloud partagé + cooldown 429 + quotas journaliers
     """
     # Compteur Cloud partagé entre toutes les instances
     _cloud_call_count = 0
     _cloud_call_reset_time = time.time()
     MAX_CLOUD_CALLS_PER_HOUR = 100
+
+    # Cooldown après erreur 429 (quota exceeded)
+    _cloud_cooldown_until = 0.0  # timestamp jusqu'auquel le Cloud est désactivé
+    CLOUD_COOLDOWN_SECONDS = 3600  # 1 heure de cooldown après un 429
+
+    # Quotas journaliers Gemini Free Tier (RPD = requests per day)
+    _daily_cloud_calls = 0
+    _daily_cloud_calls_evolution = 0  # Compteur séparé pour Evolution
+    _daily_cloud_reset_day = None
+    MAX_DAILY_CLOUD_CALLS = 50        # Budget total conservateur
+    MAX_DAILY_EVOLUTION_CALLS = 15    # Réservé pour Evolution (R&D)
+    # Les autres agents partagent MAX_DAILY_CLOUD_CALLS - MAX_DAILY_EVOLUTION_CALLS = 35
+
+    # Demi-vie mémoire en jours (surchargeable par agent)
+    MEMORY_HALF_LIFE_DAYS = 30
 
     def __init__(self, name: str, role: str, description: str):
         self.name = name
@@ -69,9 +84,12 @@ class BaseAgent:
                 project_id = getattr(Config, "PROJECT_ID", "default")
                 self.memory_manager = ChromaMemoryManager.get_instance(project_id=project_id)
                 self.has_memory = True
-            except Exception as e:
+            except BaseException as e:
                 logger.warning(f"[{name}] Connexion mémoire ChromaDB échouée (mode dégradé) : {e}")
         
+        # Flag one-shot : forcer le mode local pour la prochaine génération
+        self._force_local_next = False
+
         # Chargement Modèles Cloud (Pour l'escalade)
         routing = getattr(Config, "AGENT_MODEL_ROUTING", {})
         self.cloud_models = routing.get(self.name, routing.get("default", []))
@@ -90,24 +108,71 @@ class BaseAgent:
             except Exception as e:
                 logger.warning(f"[{self.name}] Échec chargement capability '{module_name}' : {e}")
 
-    # --- MÉTHODES MÉMOIRE (PROTECTION ANTI-SPAM) ---
+    # --- MÉTHODES MÉMOIRE (PROTECTION ANTI-SPAM + QUALITÉ) ---
+
+    # Seuil de similarité pour la déduplication (0 = identique, 1 = très différent)
+    _DEDUP_DISTANCE_THRESHOLD = 0.15
+    # Filtres qualité remember()
+    _MIN_REMEMBER_LENGTH = 100       # Ignore les textes trop courts (bruit)
+    _MAX_REMEMBER_LENGTH = 5000      # Tronque les textes trop longs
+    _MAX_NON_LATIN_RATIO = 0.10      # Rejette si >10% de caractères non-latin (hallucination)
+    # Seuil qualité recall()
+    _MIN_RECALL_SCORE = 0.15         # Ignore les résultats avec score < seuil
+
+    @staticmethod
+    def _non_latin_ratio(text: str) -> float:
+        """Calcule le ratio de caractères non-latin (hors ponctuation/espaces)."""
+        if not text:
+            return 0.0
+        alpha_chars = [c for c in text if c.isalpha()]
+        if not alpha_chars:
+            return 0.0
+        non_latin = sum(1 for c in alpha_chars if ord(c) > 0x024F)  # Au-delà du Latin Extended-B
+        return non_latin / len(alpha_chars)
 
     def remember(self, text: str, metadata: Dict = None, collection="collective_wisdom"):
         if not self.has_memory: return
         try:
-            # Check Anti-Doublon (Le Pare-Feu)
-            existing = self.memory_manager.query_documents([text], n_results=1, collection_name=collection)
+            # Filtre qualité : longueur minimale
+            if len(text.strip()) < self._MIN_REMEMBER_LENGTH:
+                return
+
+            # Filtre qualité : détection hallucination (caractères non-latin)
+            if self._non_latin_ratio(text) > self._MAX_NON_LATIN_RATIO:
+                self.log_thought(
+                    f"🚫 Mémoire rejetée : ratio non-latin trop élevé ({self._non_latin_ratio(text):.1%})",
+                    type="warning"
+                )
+                return
+
+            # Cap longueur
+            text = text[:self._MAX_REMEMBER_LENGTH]
+
+            # Check Anti-Doublon V2 : distance vectorielle + substring
+            existing = self.memory_manager.query_with_metadata(
+                [text], n_results=1, collection_name=collection
+            )
             if existing and existing['documents'] and existing['documents'][0]:
                 existing_text = existing['documents'][0][0]
-                # Si le texte est très similaire, on ignore
+                distance = existing['distances'][0][0] if existing.get('distances') else 1.0
+
+                # Doublon exact (substring)
                 if text.strip() in existing_text.strip() or existing_text.strip() in text.strip():
-                    return 
+                    return
+
+                # Doublon sémantique (distance vectorielle très proche)
+                if distance < self._DEDUP_DISTANCE_THRESHOLD:
+                    self.log_thought(
+                        f"🔄 Doublon RAG détecté (dist={distance:.3f} < {self._DEDUP_DISTANCE_THRESHOLD}), skip.",
+                        type="info"
+                    )
+                    return
 
             doc_id = str(uuid.uuid4())
             meta = metadata or {}
             meta["agent"] = self.name
             meta["timestamp"] = str(time.time())
-            
+
             self.log_thought(f"💾 Sauvegarde en mémoire ({collection})...", type="info")
             self.memory_manager.add_documents([text], [meta], [doc_id], collection)
         except Exception as e:
@@ -116,9 +181,31 @@ class BaseAgent:
     def recall(self, query: str, limit: int = 2, collection="collective_wisdom") -> str:
         if not self.has_memory: return ""
         try:
-            res = self.memory_manager.query_documents([query], n_results=limit, collection_name=collection)
-            if res and res['documents'] and res['documents'][0]:
-                return "\n".join(res['documents'][0])
+            import math
+            fetch_count = limit * 3
+            res = self.memory_manager.query_with_metadata(
+                [query], n_results=fetch_count, collection_name=collection
+            )
+            if not (res and res['documents'] and res['documents'][0]):
+                return ""
+
+            now = time.time()
+            scored = []
+            for doc, meta, dist in zip(
+                res['documents'][0], res['metadatas'][0], res['distances'][0]
+            ):
+                similarity = max(0.0, 1.0 - dist)
+                try:
+                    age_days = (now - float(meta.get("timestamp", 0))) / 86400
+                except (ValueError, TypeError):
+                    age_days = self.MEMORY_HALF_LIFE_DAYS
+                decay = math.exp(-age_days * 0.693 / self.MEMORY_HALF_LIFE_DAYS)
+                scored.append((doc, similarity * decay))
+
+            scored.sort(key=lambda x: x[1], reverse=True)
+            # Filtre qualité : exclure les résultats sous le seuil
+            scored = [(doc, s) for doc, s in scored if s >= self._MIN_RECALL_SCORE]
+            return "\n".join(doc for doc, _ in scored[:limit])
         except Exception as e:
             logger.warning(f"[{self.name}] Échec recall mémoire ({collection}) : {e}")
         return ""
@@ -162,13 +249,32 @@ class BaseAgent:
 
         return {"status": "success", "result": response_text}
 
+    # Marqueurs de missions internes → toujours local (économie Cloud)
+    _LOCAL_FORCE_MARKERS = (
+        "PROTOCOLE_AUTONOMIE",
+        "[MODE VEILLE]",
+        "YOUTUBE_VEILLE",
+        "DROPZONE_ANALYSIS",
+        "PROTOCOLE_AUTONOMIE_GRIMOIRE",
+        "CONSEIL multi-agents",
+        "EVOLUTION_PIPELINE",
+        "MEMORY_CLEANUP",
+        "COUNCIL_RESEARCH",
+    )
+
     async def _evaluate_complexity(self, prompt: str) -> bool:
         """
         Calibrage V2: "La Pince". On force le local pour tout ce qui est culture G.
         """
+        # Court-circuit : missions internes → toujours local (économie Cloud)
+        for marker in self._LOCAL_FORCE_MARKERS:
+            if marker in prompt:
+                self.log_thought("🏠 Mission interne → local forcé (économie Cloud)", type="info")
+                return False
+
         try:
             # On utilise le modèle local pour juger
-            eval_model = "gemma3:12b" 
+            eval_model = "gemma3:12b"
             
             # PROMPT RENDU BEAUCOUP PLUS STRICT
             eval_prompt = (
@@ -203,6 +309,8 @@ class BaseAgent:
 
         full_prompt = (
             f"\n[SYSTEM: Nexus V20 (Local First) | AGENT: {self.name.upper()}]\n"
+            f"[CONTRAINTE: Projet sur UN SEUL PC Windows + Ollama local. "
+            f"Pas de Kubernetes/Docker/Kafka/microservices/blockchain.]\n"
             f"{context_memory}"
             f"{prompt}"
         )
@@ -213,20 +321,51 @@ class BaseAgent:
         local_model = specific_locals.get(self.name, default_local)
 
         # Etape 2 : Évaluation de la nécessité du Cloud
-        needs_cloud = await self._evaluate_complexity(prompt)
+        if self._force_local_next:
+            self._force_local_next = False  # reset one-shot
+            needs_cloud = False
+            self.log_thought("🏠 Mode local forcé (flag orchestrateur)", type="info")
+        else:
+            needs_cloud = await self._evaluate_complexity(prompt)
 
         # Etape 3 : Exécution Conditionnelle
         
         # CAS A : Tâche Complexe -> On tente le Cloud d'abord
         if needs_cloud:
-            # Vérification budget Cloud
             now = time.time()
+
+            # Reset compteur horaire
             if now - BaseAgent._cloud_call_reset_time > 3600:
                 BaseAgent._cloud_call_count = 0
                 BaseAgent._cloud_call_reset_time = now
 
-            if BaseAgent._cloud_call_count >= BaseAgent.MAX_CLOUD_CALLS_PER_HOUR:
-                self.log_thought(f"💰 Budget Cloud atteint ({BaseAgent.MAX_CLOUD_CALLS_PER_HOUR}/h) -> Fallback Local", type="warning")
+            # Reset compteur journalier
+            from datetime import date
+            today = date.today()
+            if BaseAgent._daily_cloud_reset_day != today:
+                BaseAgent._daily_cloud_calls = 0
+                BaseAgent._daily_cloud_calls_evolution = 0
+                BaseAgent._daily_cloud_reset_day = today
+
+            # Budget Cloud séparé : Evolution a son propre quota réservé
+            is_evolution = self.name == "evolution"
+            if is_evolution:
+                daily_limit = BaseAgent.MAX_DAILY_EVOLUTION_CALLS
+                daily_used = BaseAgent._daily_cloud_calls_evolution
+            else:
+                daily_limit = BaseAgent.MAX_DAILY_CLOUD_CALLS - BaseAgent.MAX_DAILY_EVOLUTION_CALLS
+                daily_used = BaseAgent._daily_cloud_calls - BaseAgent._daily_cloud_calls_evolution
+
+            # Vérification cooldown 429
+            if now < BaseAgent._cloud_cooldown_until:
+                remaining = int(BaseAgent._cloud_cooldown_until - now)
+                self.log_thought(f"⏸️ Cloud en cooldown 429 ({remaining}s restantes) -> Fallback Local", type="warning")
+                needs_cloud = False
+            elif BaseAgent._cloud_call_count >= BaseAgent.MAX_CLOUD_CALLS_PER_HOUR:
+                self.log_thought(f"💰 Budget Cloud horaire atteint ({BaseAgent.MAX_CLOUD_CALLS_PER_HOUR}/h) -> Fallback Local", type="warning")
+                needs_cloud = False
+            elif daily_used >= daily_limit:
+                self.log_thought(f"💰 Budget Cloud {'Evolution' if is_evolution else 'général'} atteint ({daily_used}/{daily_limit}) -> Fallback Local", type="warning")
                 needs_cloud = False
             else:
                 cloud_response = None
@@ -239,6 +378,9 @@ class BaseAgent:
                         loop = asyncio.get_running_loop()
                         response = await loop.run_in_executor(None, client.generate_content, full_prompt)
                         BaseAgent._cloud_call_count += 1
+                        BaseAgent._daily_cloud_calls += 1
+                        if is_evolution:
+                            BaseAgent._daily_cloud_calls_evolution += 1
                         if response.text:
                             cloud_response = response.text
                             used_model = model_name.split('/')[-1]
@@ -246,8 +388,17 @@ class BaseAgent:
                             # Si succès Cloud sur tâche complexe, on apprend
                             if len(cloud_response) > 50:
                                 self.remember(f"Q: {prompt}\nA: {cloud_response}", metadata={"source": used_model, "trigger": "cloud_escalation"})
-                            return cloud_response
-                    except Exception:
+                            return self._strip_cot(cloud_response)
+                    except Exception as e:
+                        # Détecter les erreurs 429 (quota exceeded)
+                        err_str = str(e)
+                        if "429" in err_str or "quota" in err_str.lower() or "exceeded" in err_str.lower():
+                            BaseAgent._cloud_cooldown_until = now + BaseAgent.CLOUD_COOLDOWN_SECONDS
+                            self.log_thought(
+                                f"🚫 Quota Gemini épuisé (429) — cooldown {BaseAgent.CLOUD_COOLDOWN_SECONDS}s activé",
+                                type="warning"
+                            )
+                            break  # Stop la cascade, pas la peine d'essayer les autres modèles
                         continue
 
                 # Si le Cloud échoue, fallback sur le Local
@@ -258,7 +409,8 @@ class BaseAgent:
             self.log_thought(f"🏠 Traitement Local (Économie) : {local_model}", type="info")
 
         # Exécution Locale (avec streaming temps réel)
-        return await self._call_ollama_stream(full_prompt, local_model)
+        result = await self._call_ollama_stream(full_prompt, local_model)
+        return self._strip_cot(result)
 
     async def _call_ollama(self, prompt: str, model: str) -> str:
         try:
@@ -318,7 +470,7 @@ class BaseAgent:
             return full_text or "Ollama vide."
 
         except Exception as e:
-            logger.error(f"[{self.name}] Erreur streaming Ollama : {e}")
+            logger.error(f"[{self.name}] Erreur streaming Ollama ({type(e).__name__}): {e}")
             # Toujours envoyer le signal de fin pour fermer la bulle frontend
             try:
                 await bus.publish("AGENT_STREAM", {
@@ -328,6 +480,50 @@ class BaseAgent:
             except Exception:
                 pass
             return full_text or "ÉCHEC TOTAL SYSTÈME."
+
+    # Patterns de chain-of-thought internes que les LLMs locaux fuient
+    _COT_PATTERNS = re.compile(
+        r'^(?:'
+        r'(?:We|I) (?:need|should|can|will|must|have) '
+        r"|(?:The (?:assistant|user|system|code|task|question|problem|answer)'s)"
+        r'|(?:Ok |Okay |Alright |Sure |Well |So |Now |First|Second|Third|Let me )'
+        r"|(?:Here'?s? (?:my|the|a|what) )"
+        r"|(?:I'(?:ll|m|ve) )"
+        r"|(?:This (?:is|seems|looks|appears|means|requires) )"
+        r"|(?:Let's )"
+        r')',
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _strip_cot(cls, text: str) -> str:
+        """Retire les lignes de chain-of-thought et les blocs <think>."""
+        # Strip les blocs <think>...</think> (deepseek-r1)
+        cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+        if not cleaned:
+            # Texte = uniquement des blocs <think> : extraire le contenu comme fallback
+            think_content = re.findall(r'<think>(.*?)</think>', text, flags=re.DOTALL)
+            if think_content:
+                # Prendre les dernières lignes non-vides du think (souvent la conclusion)
+                all_lines = think_content[-1].strip().split('\n')
+                # Garder les 5 dernières lignes non-vides comme résumé
+                meaningful = [l.strip() for l in all_lines if l.strip()]
+                if meaningful:
+                    return '\n'.join(meaningful[-5:])
+            return text  # Fallback ultime : retourner tel quel
+        # Strip les lignes de raisonnement interne en tête de réponse
+        lines = cleaned.split('\n')
+        start = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if cls._COT_PATTERNS.match(stripped):
+                start = i + 1
+            else:
+                break
+        result = '\n'.join(lines[start:]).strip()
+        return result if result else cleaned
 
     def log_thought(self, message: str, type: str = "info"):
         self.logger.info(f"[{self.name.upper()}] {message[:100]}...")
