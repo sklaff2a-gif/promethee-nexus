@@ -49,6 +49,20 @@ _SPEC_OFFTOPIC_KEYWORDS = {
 }
 _SPEC_OFFTOPIC_THRESHOLD = 2
 
+# Imports étrangers au projet — si le code généré en contient, c'est une hallucination
+_ALIEN_IMPORTS = {
+    "django", "flask", "streamlit", "pygame", "tkinter",
+    "langchain", "langgraph", "crewai", "autogen",
+    "tensorflow", "torch", "keras", "sklearn",
+    "kubernetes", "docker", "terraform", "kafka",
+    "web3", "solidity", "brownie",
+    "sqlalchemy", "peewee", "mongoengine",
+    "fastapi_users", "starlette_admin",
+    "faiss", "pinecone", "weaviate", "qdrant",
+    "openai", "anthropic", "cohere",
+    "express", "react", "vue", "angular",
+}
+
 # Fichiers existants valides (préfixes) — la spec doit cibler un de ces chemins
 _VALID_TARGET_PREFIXES = ("core/", "Agents/", "config.py", "main.py")
 
@@ -61,6 +75,32 @@ def _is_spec_offtopic(spec: str) -> bool:
     spec_lower = spec.lower()
     count = sum(1 for kw in _SPEC_OFFTOPIC_KEYWORDS if kw in spec_lower)
     return count >= _SPEC_OFFTOPIC_THRESHOLD
+
+
+def _detect_alien_imports(code: str) -> list:
+    """Détecte les imports de frameworks étrangers au projet dans le code généré.
+    Retourne la liste des imports aliens trouvés."""
+    aliens_found = []
+    for line in code.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(("import ", "from ")):
+            continue
+        # Extraire le module racine
+        if stripped.startswith("from "):
+            parts = stripped.split()
+            if len(parts) >= 2:
+                module_root = parts[1].split(".")[0]
+            else:
+                continue
+        else:
+            parts = stripped.split()
+            if len(parts) >= 2:
+                module_root = parts[1].split(".")[0].split(",")[0]
+            else:
+                continue
+        if module_root in _ALIEN_IMPORTS:
+            aliens_found.append(module_root)
+    return list(set(aliens_found))
 
 
 def _spec_targets_existing_file(spec: str) -> bool:
@@ -257,6 +297,11 @@ class DivineEvolution(BaseAgent):
             # Extraction du code Python depuis les blocs markdown
             generated_code = self._extract_python_code(generated_code)
 
+            # Filtre anti-hallucination (imports étrangers)
+            aliens = _detect_alien_imports(generated_code)
+            if aliens:
+                return {"status": "warning", "result": f"R.A.S — hallucination Grimoire ({', '.join(aliens)})"}
+
             # Écrire via GrimoireWriter (les 7 validations sont intégrées)
             result = GrimoireWriter.write_recipe(
                 slug=slug,
@@ -404,6 +449,14 @@ class DivineEvolution(BaseAgent):
                 self.log_thought(f"❌ Syntaxe invalide (retry Cloud indisponible) : {e}", type="error")
                 return {"status": "error", "result": f"Spec [{spec.id}] rejetée : {reason}"}
 
+        # --- PHASE 4.5 : FILTRE ANTI-HALLUCINATION ---
+        aliens = _detect_alien_imports(generated_code)
+        if aliens:
+            reason = f"Hallucination LLM : imports étrangers détectés ({', '.join(aliens)})"
+            catalog.mark_failed(spec.id, reason)
+            self.log_thought(f"🚫 [{spec.id}] {reason}", type="warning")
+            return {"status": "warning", "result": f"R.A.S — {reason}"}
+
         # --- PHASE 5 : DÉPLOIEMENT SÉCURISÉ (Architecte) ---
         self.log_thought(f"🛡️ Phase 5 : Soumission [{spec.id}] à l'Architecte...", type="info")
 
@@ -417,6 +470,10 @@ class DivineEvolution(BaseAgent):
         })
 
         deploy_status = architect_response.get("status", "unknown")
+        # Vérifier que le code est structurel (même check que le Bridge)
+        if deploy_status == "success" and not orchestrator._contains_python_code(generated_code):
+            deploy_status = "rejected_no_code"
+            self.log_thought(f"⚠️ [{spec.id}] Architect a validé mais le code n'est pas structurel Python — rejeté.", type="warning")
         if deploy_status == "success":
             catalog.mark_deployed(spec.id)
             self.log_thought(f"✅ [{spec.id}] {spec.name} déployé avec succès !", type="info")
@@ -536,6 +593,12 @@ class DivineEvolution(BaseAgent):
         if not generated_code or "R.A.S" in generated_code:
             self.log_thought("💤 Coder n'a rien produit de pertinent.", type="info")
             return {"status": "success", "result": "R.A.S — code non pertinent."}
+
+        # Filtre anti-hallucination (imports étrangers)
+        aliens = _detect_alien_imports(generated_code)
+        if aliens:
+            self.log_thought(f"🚫 Hallucination Coder : imports étrangers ({', '.join(aliens)})", type="warning")
+            return {"status": "success", "result": f"R.A.S — hallucination détectée ({', '.join(aliens)})"}
 
         self.log_thought("🛡️ Phase 4 : Soumission à l'Architecte...", type="info")
 

@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from Agents.evolution_agent import (
     DivineEvolution, _is_spec_offtopic, _spec_targets_existing_file,
-    _SEARCH_QUERIES, _SPEC_OFFTOPIC_THRESHOLD
+    _detect_alien_imports, _SEARCH_QUERIES, _SPEC_OFFTOPIC_THRESHOLD
 )
 from core.evolution_catalog import EvolutionCatalog, ImprovementSpec
 
@@ -636,3 +636,162 @@ class TestProtectedFilesGuard:
 
         # La spec a été traitée (pas de rejet fichier protégé)
         assert "protégé" not in result.get("result", "").lower()
+
+
+class TestDetectAlienImports:
+    """Tests du filtre anti-hallucination (imports étrangers)."""
+
+    def test_clean_code_no_aliens(self):
+        code = "import os\nimport logging\nfrom core.base_agent import BaseAgent\n"
+        assert _detect_alien_imports(code) == []
+
+    def test_django_detected(self):
+        code = "from django.db import models\nclass Foo(models.Model): pass"
+        aliens = _detect_alien_imports(code)
+        assert "django" in aliens
+
+    def test_pygame_detected(self):
+        code = "import pygame\npygame.init()\nscreen = pygame.display.set_mode((800, 600))"
+        aliens = _detect_alien_imports(code)
+        assert "pygame" in aliens
+
+    def test_langchain_detected(self):
+        code = "from langchain.chains import LLMChain\nfrom langchain.llms import OpenAI"
+        aliens = _detect_alien_imports(code)
+        assert "langchain" in aliens
+
+    def test_flask_detected(self):
+        code = "from flask import Flask\napp = Flask(__name__)"
+        aliens = _detect_alien_imports(code)
+        assert "flask" in aliens
+
+    def test_multiple_aliens(self):
+        code = "import django\nimport flask\nimport pygame\n"
+        aliens = _detect_alien_imports(code)
+        assert len(aliens) == 3
+
+    def test_standard_lib_not_alien(self):
+        code = "import os\nimport sys\nimport json\nimport asyncio\nimport logging\n"
+        assert _detect_alien_imports(code) == []
+
+    def test_project_imports_not_alien(self):
+        code = "from core.orchestrator import orchestrator\nfrom core.base_agent import BaseAgent\n"
+        assert _detect_alien_imports(code) == []
+
+    def test_openai_detected(self):
+        """openai est alien (on utilise Gemini/Ollama, pas OpenAI)."""
+        code = "from openai import OpenAI\nclient = OpenAI(api_key='...')"
+        aliens = _detect_alien_imports(code)
+        assert "openai" in aliens
+
+    def test_comment_lines_ignored(self):
+        """Les lignes non-import ne sont pas analysées."""
+        code = "# import django\n# from flask import Flask\nimport os\n"
+        assert _detect_alien_imports(code) == []
+
+
+class TestAntiHallucinationCatalogPipeline:
+    """Tests d'intégration du filtre anti-hallucination dans le pipeline catalog V6."""
+
+    @pytest.fixture(autouse=True)
+    def disable_protected_files_guard(self):
+        with patch("Agents.factory_agent._PROTECTED_FILES", set()):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_alien_code_rejected_before_architect(self):
+        """Du code Django est rejeté avant d'être envoyé à l'Architecte."""
+        evo = DivineEvolution()
+
+        django_code = (
+            "from django.db import models\n"
+            "class User(models.Model):\n"
+            "    name = models.CharField(max_length=100)\n"
+            "    email = models.EmailField()\n"
+            "# padding for min 50 chars requirement here\n"
+        )
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=django_code), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # L'Architecte ne doit PAS avoir été appelé
+        architect_calls = [c for c in mock_orch.dispatch_task.call_args_list if c[0][0] == "architect"]
+        assert len(architect_calls) == 0
+        assert "hallucination" in result["result"].lower() or "R.A.S" in result["result"]
+
+    @pytest.mark.asyncio
+    async def test_pygame_code_rejected(self):
+        """Du code Pygame est rejeté."""
+        evo = DivineEvolution()
+
+        pygame_code = (
+            "import pygame\n"
+            "pygame.init()\n"
+            "screen = pygame.display.set_mode((800, 600))\n"
+            "running = True\nwhile running:\n    for event in pygame.event.get():\n        pass\n"
+        )
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=pygame_code):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        assert "R.A.S" in result["result"]
+
+    @pytest.mark.asyncio
+    async def test_valid_code_passes_filter(self):
+        """Du code Python valide avec des imports standard passe le filtre."""
+        evo = DivineEvolution()
+
+        valid_code = (
+            "import os\nimport logging\nfrom core.base_agent import BaseAgent\n\n"
+            "class ImprovedAgent(BaseAgent):\n"
+            "    def __init__(self):\n"
+            "        super().__init__('test', 'test', 'test')\n"
+        )
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
+        mock_orch._contains_python_code = MagicMock(return_value=True)
+
+        mock_bus = MagicMock()
+        mock_bus.publish = AsyncMock()
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=valid_code), \
+             patch("core.orchestrator.orchestrator", mock_orch), \
+             patch("core.event_bus.bus.bus", mock_bus):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # L'Architecte doit avoir été appelé
+        architect_calls = [c for c in mock_orch.dispatch_task.call_args_list if c[0][0] == "architect"]
+        assert len(architect_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_structural_code_not_marked_deployed(self):
+        """Si le code n'est pas structurel Python, ne pas marquer deployed."""
+        evo = DivineEvolution()
+
+        # Code valide syntaxiquement mais pas structurel (pas d'import/class/def)
+        non_structural = "x = 1\ny = 2\nz = x + y\nprint(z)\n# padding chars here to reach 50 minimum\n"
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "VALIDÉ"})
+        mock_orch._contains_python_code = MagicMock(return_value=False)
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=non_structural), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        cat = EvolutionCatalog()
+        deployed = cat.get_specs_by_status("deployed")
+        assert len(deployed) == 0
