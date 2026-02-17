@@ -202,9 +202,11 @@ class DivineEvolution(BaseAgent):
             except Exception as e:
                 err_str = str(e)
                 if "429" in err_str or "quota" in err_str.lower() or "exceeded" in err_str.lower():
-                    BaseAgent._cloud_cooldown_until = now + BaseAgent.CLOUD_COOLDOWN_SECONDS
+                    BaseAgent._activate_cloud_cooldown()
+                    remaining = int(BaseAgent._cloud_cooldown_until - time.time())
                     self.log_thought(
-                        f"🚫 Quota Gemini épuisé (429) — cooldown {BaseAgent.CLOUD_COOLDOWN_SECONDS}s activé",
+                        f"🚫 Quota Gemini épuisé (429 x{BaseAgent._cloud_429_count_today}) "
+                        f"— cooldown {remaining}s activé",
                         type="warning"
                     )
                     break

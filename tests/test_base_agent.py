@@ -268,3 +268,64 @@ class TestSanitizeResponse:
         code = "chmod 777 /etc/shadow"
         result = BaseAgent._sanitize_response(code, "test")
         assert "# [NEUTRALISÉ]" in result
+
+
+# ─── Tests Cooldown 429 avec escalade exponentielle ───
+
+class TestCloudCooldownEscalation:
+    """Vérifie que le cooldown 429 s'escalade après plusieurs tentatives le même jour."""
+
+    def setup_method(self):
+        """Reset l'état Cloud avant chaque test."""
+        BaseAgent._cloud_cooldown_until = 0.0
+        BaseAgent._cloud_429_count_today = 0
+        BaseAgent._cloud_429_reset_day = None
+
+    def test_first_429_standard_cooldown(self):
+        """1er 429 : cooldown de 1h (3600s)."""
+        import time
+        before = time.time()
+        BaseAgent._activate_cloud_cooldown()
+        assert BaseAgent._cloud_429_count_today == 1
+        assert BaseAgent._cloud_cooldown_until >= before + 3500  # ~1h
+        assert BaseAgent._cloud_cooldown_until <= before + 3700
+
+    def test_second_429_extended_cooldown(self):
+        """2e 429 : cooldown de 4h (14400s)."""
+        import time
+        BaseAgent._activate_cloud_cooldown()  # 1er
+        BaseAgent._activate_cloud_cooldown()  # 2e
+        assert BaseAgent._cloud_429_count_today == 2
+        expected = time.time() + 4 * 3600
+        assert abs(BaseAgent._cloud_cooldown_until - expected) < 5
+
+    def test_third_429_until_midnight(self):
+        """3e+ 429 : cooldown jusqu'à minuit (quota journalier épuisé)."""
+        from datetime import datetime, date, timedelta
+        BaseAgent._activate_cloud_cooldown()  # 1er
+        BaseAgent._activate_cloud_cooldown()  # 2e
+        BaseAgent._activate_cloud_cooldown()  # 3e
+        assert BaseAgent._cloud_429_count_today == 3
+        midnight = datetime.combine(date.today() + timedelta(days=1), datetime.min.time())
+        expected_remaining = (midnight - datetime.now()).total_seconds()
+        actual_remaining = BaseAgent._cloud_cooldown_until - __import__('time').time()
+        assert abs(actual_remaining - expected_remaining) < 10
+
+    def test_counter_resets_new_day(self):
+        """Le compteur 429 se reset si le jour change."""
+        from datetime import date, timedelta
+        BaseAgent._activate_cloud_cooldown()
+        BaseAgent._activate_cloud_cooldown()
+        assert BaseAgent._cloud_429_count_today == 2
+        # Simuler un nouveau jour
+        BaseAgent._cloud_429_reset_day = date.today() - timedelta(days=1)
+        BaseAgent._activate_cloud_cooldown()
+        assert BaseAgent._cloud_429_count_today == 1  # Reset + 1
+
+    def test_fourth_429_still_midnight(self):
+        """4e 429 garde le cooldown jusqu'à minuit."""
+        for _ in range(4):
+            BaseAgent._activate_cloud_cooldown()
+        assert BaseAgent._cloud_429_count_today == 4
+        remaining = BaseAgent._cloud_cooldown_until - __import__('time').time()
+        assert remaining > 0  # Toujours en cooldown

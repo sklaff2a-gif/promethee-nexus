@@ -56,6 +56,8 @@ class BaseAgent:
     # Cooldown après erreur 429 (quota exceeded)
     _cloud_cooldown_until = 0.0  # timestamp jusqu'auquel le Cloud est désactivé
     CLOUD_COOLDOWN_SECONDS = 3600  # 1 heure de cooldown après un 429
+    _cloud_429_count_today = 0    # Nombre de 429 reçus aujourd'hui
+    _cloud_429_reset_day = None   # Jour du dernier reset du compteur 429
 
     # Quotas journaliers Gemini Free Tier (RPD = requests per day)
     _daily_cloud_calls = 0
@@ -352,6 +354,8 @@ class BaseAgent:
             if BaseAgent._daily_cloud_reset_day != today:
                 BaseAgent._daily_cloud_calls = 0
                 BaseAgent._daily_cloud_calls_evolution = 0
+                BaseAgent._cloud_429_count_today = 0
+                BaseAgent._cloud_cooldown_until = 0.0  # Reset cooldown au nouveau jour
                 BaseAgent._daily_cloud_reset_day = today
 
             # Budget Cloud séparé : Evolution a son propre quota réservé
@@ -400,9 +404,11 @@ class BaseAgent:
                         # Détecter les erreurs 429 (quota exceeded)
                         err_str = str(e)
                         if "429" in err_str or "quota" in err_str.lower() or "exceeded" in err_str.lower():
-                            BaseAgent._cloud_cooldown_until = now + BaseAgent.CLOUD_COOLDOWN_SECONDS
+                            BaseAgent._activate_cloud_cooldown()
+                            remaining = int(BaseAgent._cloud_cooldown_until - time.time())
                             self.log_thought(
-                                f"🚫 Quota Gemini épuisé (429) — cooldown {BaseAgent.CLOUD_COOLDOWN_SECONDS}s activé",
+                                f"🚫 Quota Gemini épuisé (429 x{BaseAgent._cloud_429_count_today}) "
+                                f"— cooldown {remaining}s activé",
                                 type="warning"
                             )
                             break  # Stop la cascade, pas la peine d'essayer les autres modèles
@@ -418,6 +424,42 @@ class BaseAgent:
         # Exécution Locale (avec streaming temps réel)
         result = await self._call_ollama_stream(full_prompt, local_model)
         return self._strip_cot(result)
+
+    @classmethod
+    def _activate_cloud_cooldown(cls):
+        """Active le cooldown Cloud avec escalade exponentielle.
+        - 1er 429 du jour : cooldown 1h
+        - 2e 429 : cooldown 4h
+        - 3e+ 429 : cooldown jusqu'à minuit (quota journalier épuisé)
+        """
+        from datetime import date, datetime, timedelta
+        today = date.today()
+
+        # Reset compteur si nouveau jour
+        if cls._cloud_429_reset_day != today:
+            cls._cloud_429_count_today = 0
+            cls._cloud_429_reset_day = today
+
+        cls._cloud_429_count_today += 1
+        now = time.time()
+
+        if cls._cloud_429_count_today >= 3:
+            # 3e+ 429 : quota journalier épuisé, cooldown jusqu'à minuit
+            midnight = datetime.combine(today + timedelta(days=1), datetime.min.time())
+            cooldown_seconds = int((midnight - datetime.now()).total_seconds())
+            cls._cloud_cooldown_until = now + cooldown_seconds
+            logger.warning(
+                f"[CLOUD] 429 x{cls._cloud_429_count_today} — quota journalier épuisé, "
+                f"cooldown jusqu'à minuit ({cooldown_seconds}s)"
+            )
+        elif cls._cloud_429_count_today == 2:
+            # 2e 429 : cooldown 4h
+            cls._cloud_cooldown_until = now + 4 * 3600
+            logger.warning(f"[CLOUD] 429 x2 — cooldown étendu à 4h")
+        else:
+            # 1er 429 : cooldown standard 1h
+            cls._cloud_cooldown_until = now + cls.CLOUD_COOLDOWN_SECONDS
+            logger.warning(f"[CLOUD] 429 x1 — cooldown standard {cls.CLOUD_COOLDOWN_SECONDS}s")
 
     @classmethod
     def _get_ollama_semaphore(cls):
