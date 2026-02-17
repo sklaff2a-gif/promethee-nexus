@@ -7,3 +7,5 @@ memory/
 USER_DROPZONE/
 _FACTORY_HISTORY.txt
 log run copie/
+logs/
+.claude/settings.local.json
