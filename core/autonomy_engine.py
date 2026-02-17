@@ -388,13 +388,20 @@ class AutonomyEngine:
         result_text = str(response.get("result", ""))
         score = 1.0
 
+        # Routines où un résultat court est normal et valide
+        short_ok_intents = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "COUNCIL_DEBATE"}
+
         # 1. Pénalité longueur : résultat vide ou très court
-        if len(result_text.strip()) < 20:
+        stripped_len = len(result_text.strip())
+        if stripped_len == 0:
             return 0.0
-        elif len(result_text.strip()) < 50:
-            score -= 0.4
-        elif len(result_text.strip()) < 100:
-            score -= 0.2
+        if intent not in short_ok_intents:
+            if stripped_len < 20:
+                return 0.0
+            elif stripped_len < 50:
+                score -= 0.4
+            elif stripped_len < 100:
+                score -= 0.2
 
         # 2. Pénalité non-latin (hallucination)
         alpha_chars = [c for c in result_text if c.isalpha()]
