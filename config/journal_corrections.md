@@ -91,8 +91,10 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 | R11 | 2026-02-15 | Purge qualitative mémoire (`purge_low_quality()`) | 8d1b5b0 | Nettoyage des souvenirs dégradés |
 | R12 | 2026-02-17 | Filtre `_PROTECTED_FILES` dans sélection Evolution + REFACTOR_RANDOM | 691121b | Pas de gaspillage sur les fichiers intouchables |
 | R13 | 2026-02-17 | `_sanitize_response()` — regex anti-patterns (eval/exec/subprocess/rm -rf/setuid) | 6dac772 | Réponses agents neutralisées si code dangereux |
-| R14 | 2026-02-17 | Security RAG anti-doublon : skip "aucune vulnérabilité" + format distinctif `SECURITY_FINDING` | (pending) | Mémoire Security dépolluée : seuls les vrais findings sont stockés |
-| R15 | 2026-02-17 | Security audit cooldown 6h par fichier dans autonomy_engine | (pending) | Plus de ré-audit du même fichier toutes les heures |
+| R14 | 2026-02-18 | Security RAG anti-doublon : skip "aucune vulnérabilité" + format distinctif `SECURITY_FINDING` | 88d3f20 | Mémoire Security dépolluée : seuls les vrais findings sont stockés |
+| R15 | 2026-02-18 | Security audit cooldown 6h par fichier dans autonomy_engine | 88d3f20 | Plus de ré-audit du même fichier toutes les heures |
+| R16 | 2026-02-18 | Anti-troncature Factory : rejette si nouveau < 60% de l'existant (fichiers > 500B) | 367cdc7 | Plus de fichier tronqué par un LLM local qui coupe le code |
+| R17 | 2026-02-18 | Anti-troncature Evolution Phase 4d : compare `len(generated)` vs `len(source)` avant Architecte | 367cdc7 | Double verrou — troncature détectée avant même la soumission |
 
 ---
 
@@ -112,7 +114,7 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 | E10 | 2026-02-16 | Rotation Grimoire (slug le moins récemment invoqué) | 7dca5b2 | Diversité des agents éphémères |
 | E11 | 2026-02-17 | Journal des Councils (`config/council_journal.md`) auto-alimenté | 21cf1e8 | Mémoire des bonnes idées pour curation humaine |
 | E12 | 2026-02-17 | `_score_argument()` — scoring objectif des arguments Council | 6dac772 | Débats pondérés, pas traités à égalité |
-| E13 | 2026-02-17 | Réécriture test_divine_infra.py — import corrigé, mocks alignés, async | (pending) | Tests infra_agent fiables (10 tests vs 5 cassés) |
+| E13 | 2026-02-18 | Réécriture test_divine_infra.py — import corrigé, mocks alignés, async | 88d3f20 | Tests infra_agent fiables (10 tests vs 5 cassés) |
 
 ---
 
@@ -125,10 +127,10 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 | Tests écrits | 1043 |
 | Fichiers créés | ~25 |
 | Fichiers modifiés | ~40 |
-| Corrections totales | 62 |
+| Corrections totales | 64 |
 | Pilier le plus corrigé | Intelligence (23 corrections) |
 | Pilier le moins corrigé | Conscience (9 corrections) |
-| Tests | 1080 |
+| Tests | 1087 |
 
 ---
 
@@ -143,6 +145,7 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 - Débattre en council avec consensus profond
 - Transformer les débats en actions concrètes (specs Evolution)
 - Observer les déploiements et rollback si dégradation
+- Se protéger contre la troncature de fichiers par les LLMs locaux (double verrou Factory + Evolution)
 - Se monitorer toutes les 4h sans intervention humaine
 
 ### Ce que Prométhée NE SAIT PAS encore faire (lacunes identifiées) :
