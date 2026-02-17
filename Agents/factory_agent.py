@@ -10,6 +10,9 @@ logger = logging.getLogger("factory_agent")
 
 ALLOWED_EXTENSIONS = {".py", ".txt", ".md", ".json", ".js", ".html", ".css", ".yaml", ".yml", ".toml", ".cfg"}
 MAX_FILE_SIZE = 100 * 1024  # 100 KB
+# Seuil anti-troncature : rejeter si nouveau < X% de l'existant (pour fichiers > 500B)
+TRUNCATION_MIN_RATIO = 0.60
+TRUNCATION_MIN_FILE_SIZE = 500  # Ne pas vérifier pour les petits fichiers
 
 # Fichiers système critiques : le Factory ne doit JAMAIS les écraser via une chaîne automatique.
 # Seul un ordre utilisateur direct (Niveau 0 : "factory: écris ...") peut contourner cette protection.
@@ -207,7 +210,26 @@ class DivineFactory(BaseAgent):
                     return {"status": "error", "result": "Écriture hors-projet interdite."}
 
                 os.makedirs(os.path.dirname(full_path), exist_ok=True)
-                
+
+                # Anti-troncature : rejeter si le nouveau fichier est trop court par rapport à l'existant
+                if os.path.exists(full_path):
+                    existing_size = os.path.getsize(full_path)
+                    new_size = len(code_content.encode("utf-8"))
+                    if existing_size > TRUNCATION_MIN_FILE_SIZE and new_size < existing_size * TRUNCATION_MIN_RATIO:
+                        ratio_pct = int(new_size / existing_size * 100)
+                        logger.warning(
+                            f"[FACTORY] 🛡️ ANTI-TRONCATURE: {target_path} rejeté "
+                            f"({new_size}B vs {existing_size}B existant = {ratio_pct}% < {int(TRUNCATION_MIN_RATIO*100)}%)"
+                        )
+                        return {
+                            "status": "error",
+                            "result": (
+                                f"Anti-troncature : le nouveau code ({new_size}B) fait {ratio_pct}% "
+                                f"de l'existant ({existing_size}B). Écriture refusée. "
+                                f"Le code généré est probablement incomplet."
+                            )
+                        }
+
                 # Backup automatique avant écriture
                 self._backup(full_path)
                 

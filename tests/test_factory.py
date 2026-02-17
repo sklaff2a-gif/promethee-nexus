@@ -277,3 +277,87 @@ class TestFactoryProtectedFiles:
     @pytest.mark.asyncio
     async def test_protected_list_not_empty(self):
         assert len(_PROTECTED_FILES) >= 10
+
+
+class TestFactoryAntiTruncation:
+    """Vérifie que la Factory rejette les écritures qui tronquent un fichier existant."""
+
+    @pytest.fixture
+    def factory(self, tmp_path):
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            from Agents.factory_agent import DivineFactory
+            f = DivineFactory()
+            f.project_root = str(tmp_path)
+            return f
+
+    @pytest.mark.asyncio
+    async def test_truncation_rejected(self, factory, tmp_path):
+        """Un fichier réduit à < 60% de l'original est rejeté."""
+        target = tmp_path / "Agents" / "test_agent.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Écrire un fichier existant de 1000 bytes
+        target.write_text("x" * 1000, encoding="utf-8")
+
+        # Tenter d'écrire un fichier de 400 bytes (40% de l'original)
+        small_code = "import os\n" + "a = 1\n" * 50  # ~350 chars
+        payload = {
+            "mission": f"écris Agents/test_agent.py",
+            "context": f"```python\n{small_code}\n```"
+        }
+        result = await factory.process_task(payload)
+        assert result["status"] == "error"
+        assert "troncature" in result["result"].lower()
+
+    @pytest.mark.asyncio
+    async def test_larger_file_accepted(self, factory, tmp_path):
+        """Un fichier plus grand ou de taille similaire est accepté."""
+        target = tmp_path / "Agents" / "test_agent.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x" * 500, encoding="utf-8")
+
+        # Nouveau code de 600 bytes (120% — plus grand)
+        big_code = "import os\nimport sys\n" + "def func():\n    pass\n" * 30
+        payload = {
+            "mission": f"écris Agents/test_agent.py",
+            "context": f"```python\n{big_code}\n```"
+        }
+        with patch("core.event_bus.bus.bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+            result = await factory.process_task(payload)
+        assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_new_file_no_truncation_check(self, factory, tmp_path):
+        """Un nouveau fichier (qui n'existe pas) n'est pas soumis au check."""
+        code = "import os\ndef hello():\n    return 42\n"
+        payload = {
+            "mission": "écris Agents/new_agent.py",
+            "context": f"```python\n{code}\n```"
+        }
+        with patch("core.event_bus.bus.bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+            result = await factory.process_task(payload)
+        assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_small_file_no_truncation_check(self, factory, tmp_path):
+        """Les petits fichiers (< 500B) ne sont pas soumis au check."""
+        target = tmp_path / "Agents" / "tiny.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x = 1\n", encoding="utf-8")  # 6 bytes
+
+        code = "y = 2\n"  # Encore plus petit, mais fichier original trop petit pour le check
+        payload = {
+            "mission": "écris Agents/tiny.py",
+            "context": f"```python\n{code}\n```"
+        }
+        with patch("core.event_bus.bus.bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+            result = await factory.process_task(payload)
+        assert result["status"] == "success"
+
+    def test_truncation_constants(self):
+        """Les constantes anti-troncature sont définies."""
+        from Agents.factory_agent import TRUNCATION_MIN_RATIO, TRUNCATION_MIN_FILE_SIZE
+        assert TRUNCATION_MIN_RATIO == 0.60
+        assert TRUNCATION_MIN_FILE_SIZE == 500

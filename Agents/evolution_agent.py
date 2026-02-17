@@ -488,6 +488,19 @@ class DivineEvolution(BaseAgent):
             self.log_thought(f"🚫 [{spec.id}] {reason}", type="warning")
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
+        # --- PHASE 4d : ANTI-TRONCATURE ---
+        # Le code généré doit faire au moins 60% du code source original
+        if source_code and len(source_code) > 500:
+            ratio = len(generated_code) / len(source_code)
+            if ratio < 0.60:
+                reason = (
+                    f"Anti-troncature: code généré ({len(generated_code)} chars) = "
+                    f"{ratio:.0%} du source ({len(source_code)} chars) — fichier incomplet"
+                )
+                catalog.mark_failed(spec.id, reason)
+                self.log_thought(f"🛡️ [{spec.id}] {reason}", type="warning")
+                return {"status": "warning", "result": f"R.A.S — {reason}"}
+
         # --- PHASE 5 : DÉPLOIEMENT SÉCURISÉ (Architecte) ---
         self.log_thought(f"🛡️ Phase 5 : Soumission [{spec.id}] à l'Architecte...", type="info")
 

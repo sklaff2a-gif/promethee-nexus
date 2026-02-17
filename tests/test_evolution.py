@@ -795,3 +795,70 @@ class TestAntiHallucinationCatalogPipeline:
         cat = EvolutionCatalog()
         deployed = cat.get_specs_by_status("deployed")
         assert len(deployed) == 0
+
+
+class TestAntiTruncation:
+    """Vérifie que l'Evolution détecte le code tronqué avant soumission à l'Architecte."""
+
+    @pytest.fixture(autouse=True)
+    def disable_protected_files_guard(self):
+        with patch("Agents.factory_agent._PROTECTED_FILES", set()):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_truncated_code_rejected(self):
+        """Un code généré < 60% du source original est rejeté (Phase 4d)."""
+        evo = DivineEvolution()
+
+        # Source original : ~1200 chars
+        original_source = "import os\nimport sys\nimport logging\n" + "def func_x():\n    pass\n" * 50
+
+        # Code généré : ~200 chars (~17% du source → bien < 60%)
+        truncated_code = (
+            "import os\nimport sys\nimport logging\n\n"
+            "def hello():\n    return 42\n\n"
+            "def world():\n    return 'hello world from truncated code'\n\n"
+            "# fin du fichier tronqué\n"
+        )
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=original_source), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=truncated_code), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # L'Architecte ne doit PAS avoir été appelé
+        architect_calls = [c for c in mock_orch.dispatch_task.call_args_list if c[0][0] == "architect"]
+        assert len(architect_calls) == 0
+        assert "troncature" in result["result"].lower()
+
+    @pytest.mark.asyncio
+    async def test_full_code_passes_truncation_check(self):
+        """Un code généré >= 60% du source passe le check anti-troncature."""
+        evo = DivineEvolution()
+
+        original_source = "import os\ndef old_func():\n    return 1\n" * 3  # ~120 chars
+
+        # Code généré : même taille avec les améliorations
+        new_code = "import os\nimport asyncio\ndef new_func():\n    return 42\n" * 3
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
+        mock_orch._contains_python_code = MagicMock(return_value=True)
+
+        mock_bus = MagicMock()
+        mock_bus.publish = AsyncMock()
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=original_source), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=new_code), \
+             patch("core.orchestrator.orchestrator", mock_orch), \
+             patch("core.event_bus.bus.bus", mock_bus):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # L'Architecte DOIT avoir été appelé
+        architect_calls = [c for c in mock_orch.dispatch_task.call_args_list if c[0][0] == "architect"]
+        assert len(architect_calls) == 1
