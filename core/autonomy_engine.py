@@ -451,6 +451,11 @@ class AutonomyEngine:
         if len(stripped) < 10:
             return "technical"
 
+        # Routines sans LLM : un résultat court est normal, pas de l'ignorance
+        no_llm_intents = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP"}
+        if intent in no_llm_intents:
+            return "technical"
+
         ignorance_markers = [
             "je ne sais pas", "aucune information", "pas d'information",
             "je n'ai pas", "impossible de", "je ne peux pas",
@@ -739,7 +744,7 @@ class AutonomyEngine:
         # Reset du flag d'apprentissage pour ce cycle
         self._learning_done_this_cycle = False
 
-        if response and response.get("status") in ("success", "consensus"):
+        if response and response.get("status") in ("success", "consensus", "max_rounds"):
             if quality_score < 0.3:
                 # Succès technique mais résultat de mauvaise qualité
                 failure_type = self._diagnose_failure(response, quality_score, intent)

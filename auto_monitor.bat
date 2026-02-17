@@ -6,15 +6,15 @@ REM ============================================================
 
 setlocal
 set PYTHONIOENCODING=utf-8
+set CLAUDECODE=
 set PROJECT=C:\MesProjets\PROMETHEE_V11_restructuration2026
 
 REM Créer le dossier de rapports s'il n'existe pas
 if not exist "%PROJECT%\logs\autonomous_reports" mkdir "%PROJECT%\logs\autonomous_reports"
 
-REM Horodatage pour le log
-for /f "tokens=1-3 delims=/ " %%a in ('date /t') do set DATESTAMP=%%c-%%b-%%a
-for /f "tokens=1-2 delims=: " %%a in ('time /t') do set TIMESTAMP=%%a-%%b
-set LOGFILE=%PROJECT%\logs\autonomous_reports\%DATESTAMP%_%TIMESTAMP%.log
+REM Horodatage locale-indépendant via PowerShell
+for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HH-mm"') do set STAMP=%%i
+set LOGFILE=%PROJECT%\logs\autonomous_reports\%STAMP%.log
 
 echo [%date% %time%] Démarrage cycle autonome PROMETHEE >> "%LOGFILE%"
 
