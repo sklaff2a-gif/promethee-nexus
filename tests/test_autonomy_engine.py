@@ -906,11 +906,18 @@ class TestCouncilToAction:
     @pytest.fixture(autouse=True)
     def setup_engine(self, tmp_path):
         self.state_path = str(tmp_path / "state.json")
+        # Isoler le catalog : _load sur un fichier vide → pas de specs COUNCIL-* du disque
+        self._catalog_patch = patch(
+            "core.evolution_catalog.CATALOG_STATE_FILE",
+            str(tmp_path / "catalog_state.json")
+        )
+        self._catalog_patch.start()
         with patch("core.autonomy_engine.STATE_FILE", self.state_path):
             with patch("core.autonomy_engine.AutonomyStatePersistence.load",
                        return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
                 self.engine = AutonomyEngine(idle_threshold_seconds=300)
         yield
+        self._catalog_patch.stop()
 
     @pytest.mark.asyncio
     async def test_consensus_creates_spec(self):

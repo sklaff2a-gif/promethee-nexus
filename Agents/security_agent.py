@@ -1,3 +1,4 @@
+import re
 import logging
 from typing import Dict, Any
 from core.base_agent import BaseAgent
@@ -83,9 +84,19 @@ Analyse et réponds selon le format structuré ci-dessus.{guardrail_suffix}"""
 
         response = await self.generate_content(prompt)
 
-        # Mémoriser les findings significatifs
+        # Mémoriser uniquement les findings significatifs (anti-doublon)
         if response and len(response) > 100:
-            self.remember(f"AUDIT: {mission[:100]} — {response[:300]}")
+            # Skip les audits sans vulnérabilité (bruit RAG)
+            lower_resp = response.lower()
+            if "aucune vulnérabilité" in lower_resp or "rien à signaler" in lower_resp:
+                self.log_thought("🔒 Audit clean — pas de stockage RAG (aucune vulnérabilité).", type="info")
+            else:
+                # Extraire le nom du fichier audité pour un format distinctif
+                filename = "inconnu"
+                fn_match = re.search(r'fichier\s+(\S+)', mission)
+                if fn_match:
+                    filename = fn_match.group(1)
+                self.remember(f"SECURITY_FINDING [{filename}]: {response[:400]}")
 
         return {
             "status": "success",

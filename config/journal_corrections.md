@@ -91,6 +91,8 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 | R11 | 2026-02-15 | Purge qualitative mémoire (`purge_low_quality()`) | 8d1b5b0 | Nettoyage des souvenirs dégradés |
 | R12 | 2026-02-17 | Filtre `_PROTECTED_FILES` dans sélection Evolution + REFACTOR_RANDOM | 691121b | Pas de gaspillage sur les fichiers intouchables |
 | R13 | 2026-02-17 | `_sanitize_response()` — regex anti-patterns (eval/exec/subprocess/rm -rf/setuid) | 6dac772 | Réponses agents neutralisées si code dangereux |
+| R14 | 2026-02-17 | Security RAG anti-doublon : skip "aucune vulnérabilité" + format distinctif `SECURITY_FINDING` | (pending) | Mémoire Security dépolluée : seuls les vrais findings sont stockés |
+| R15 | 2026-02-17 | Security audit cooldown 6h par fichier dans autonomy_engine | (pending) | Plus de ré-audit du même fichier toutes les heures |
 
 ---
 
@@ -110,6 +112,7 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 | E10 | 2026-02-16 | Rotation Grimoire (slug le moins récemment invoqué) | 7dca5b2 | Diversité des agents éphémères |
 | E11 | 2026-02-17 | Journal des Councils (`config/council_journal.md`) auto-alimenté | 21cf1e8 | Mémoire des bonnes idées pour curation humaine |
 | E12 | 2026-02-17 | `_score_argument()` — scoring objectif des arguments Council | 6dac772 | Débats pondérés, pas traités à égalité |
+| E13 | 2026-02-17 | Réécriture test_divine_infra.py — import corrigé, mocks alignés, async | (pending) | Tests infra_agent fiables (10 tests vs 5 cassés) |
 
 ---
 
@@ -122,10 +125,10 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 | Tests écrits | 1043 |
 | Fichiers créés | ~25 |
 | Fichiers modifiés | ~40 |
-| Corrections totales | 59 |
+| Corrections totales | 62 |
 | Pilier le plus corrigé | Intelligence (23 corrections) |
 | Pilier le moins corrigé | Conscience (9 corrections) |
-| Tests | 1065 |
+| Tests | 1080 |
 
 ---
 
@@ -143,7 +146,7 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 - Se monitorer toutes les 4h sans intervention humaine
 
 ### Ce que Prométhée NE SAIT PAS encore faire (lacunes identifiées) :
-- **Adaptation stratégique** : changer de stratégie quand un pattern d'échec persiste (ex: "Security produit du bruit → réduire sa fréquence")
+- ~~**Adaptation stratégique** : changer de stratégie quand un pattern d'échec persiste (ex: "Security produit du bruit → réduire sa fréquence")~~ PARTIELLEMENT COMBLÉ (R14/R15 — Security anti-doublon + cooldown fichier)
 - **Mémoire sémantique profonde** : distinguer les souvenirs importants des anecdotiques
 - **Communication proactive** : alerter l'humain quand un problème dépasse ses capacités
 - **Créativité dirigée** : proposer des améliorations originales (pas juste exécuter le catalogue)

@@ -308,6 +308,8 @@ class AutonomyEngine:
         self._learning_done_this_cycle = False
         # Budget en points (chaque routine a un coût différent)
         self.daily_budget_used = persisted.get("daily_budget_used", 0)
+        # Cache des fichiers déjà audités par Security {filename: timestamp}
+        self._security_audited_files: dict = {}
 
         bus.subscribe("USER_COMMAND", self.reset_timer)
 
@@ -1098,6 +1100,24 @@ class AutonomyEngine:
             # Choisir un fichier en rotation
             target = py_files[self.total_routines_executed % len(py_files)]
             filename = os.path.basename(target)
+
+            # Anti-doublon : skip si ce fichier a été audité dans les dernières 6h
+            last_audit_ts = self._security_audited_files.get(filename, 0)
+            if time.time() - last_audit_ts < 6 * 3600:
+                # Avancer au prochain fichier non-audité récemment
+                found = False
+                for offset in range(1, len(py_files)):
+                    alt_target = py_files[(self.total_routines_executed + offset) % len(py_files)]
+                    alt_name = os.path.basename(alt_target)
+                    if time.time() - self._security_audited_files.get(alt_name, 0) >= 6 * 3600:
+                        target, filename = alt_target, alt_name
+                        found = True
+                        break
+                if not found:
+                    return {"status": "skipped", "result": "Tous les fichiers ont été audités récemment."}
+
+            # Marquer comme audité
+            self._security_audited_files[filename] = time.time()
 
             # Lire le contenu (limité à 3000 chars)
             with open(target, "r", encoding="utf-8") as f:
