@@ -49,6 +49,10 @@ class BaseAgent:
     _cloud_call_reset_time = time.time()
     MAX_CLOUD_CALLS_PER_HOUR = 100
 
+    # Sémaphore global : limite les appels Ollama concurrents (évite saturation RAM/CPU)
+    _ollama_semaphore = None  # Initialisé lazily (nécessite une event loop)
+    MAX_CONCURRENT_OLLAMA = 2
+
     # Cooldown après erreur 429 (quota exceeded)
     _cloud_cooldown_until = 0.0  # timestamp jusqu'auquel le Cloud est désactivé
     CLOUD_COOLDOWN_SECONDS = 3600  # 1 heure de cooldown après un 429
@@ -412,14 +416,22 @@ class BaseAgent:
         result = await self._call_ollama_stream(full_prompt, local_model)
         return self._strip_cot(result)
 
+    @classmethod
+    def _get_ollama_semaphore(cls):
+        """Initialisation lazy du sémaphore (nécessite une event loop active)."""
+        if cls._ollama_semaphore is None:
+            cls._ollama_semaphore = asyncio.Semaphore(cls.MAX_CONCURRENT_OLLAMA)
+        return cls._ollama_semaphore
+
     async def _call_ollama(self, prompt: str, model: str) -> str:
         try:
-            url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
-            payload = { "model": model, "prompt": prompt, "stream": False, "options": { "temperature": 0.7, "num_ctx": 4096 } }
-            async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=payload, timeout=300)
-            if response.status_code == 200: return response.json().get("response", "Ollama vide.")
-            else: return f"Erreur OLLAMA: {response.status_code}"
+            async with self._get_ollama_semaphore():
+                url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
+                payload = { "model": model, "prompt": prompt, "stream": False, "options": { "temperature": 0.7, "num_ctx": 4096 } }
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(url, json=payload, timeout=300)
+                if response.status_code == 200: return response.json().get("response", "Ollama vide.")
+                else: return f"Erreur OLLAMA: {response.status_code}"
         except Exception as e: return "ÉCHEC TOTAL SYSTÈME."
 
     async def _call_ollama_stream(self, prompt: str, model: str) -> str:
@@ -427,42 +439,43 @@ class BaseAgent:
         stream_id = str(uuid.uuid4())[:8]
         full_text = ""
         try:
-            url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
-            payload = { "model": model, "prompt": prompt, "stream": True, "options": { "temperature": 0.7, "num_ctx": 4096 } }
+            async with self._get_ollama_semaphore():
+                url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
+                payload = { "model": model, "prompt": prompt, "stream": True, "options": { "temperature": 0.7, "num_ctx": 4096 } }
 
-            # Signal de début
-            await bus.publish("AGENT_STREAM", {
-                "agent": self.name, "stream_id": stream_id,
-                "chunk": "", "done": False, "status": "start"
-            })
+                # Signal de début
+                await bus.publish("AGENT_STREAM", {
+                    "agent": self.name, "stream_id": stream_id,
+                    "chunk": "", "done": False, "status": "start"
+                })
 
-            async with httpx.AsyncClient() as client:
-                async with client.stream("POST", url, json=payload, timeout=300) as response:
-                    if response.status_code != 200:
-                        await bus.publish("AGENT_STREAM", {
-                            "agent": self.name, "stream_id": stream_id,
-                            "chunk": "", "done": True, "status": "end"
-                        })
-                        return f"Erreur OLLAMA: {response.status_code}"
-
-                    async for line in response.aiter_lines():
-                        if not line.strip():
-                            continue
-                        try:
-                            data = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        token = data.get("response", "")
-                        if token:
-                            full_text += token
+                async with httpx.AsyncClient() as client:
+                    async with client.stream("POST", url, json=payload, timeout=300) as response:
+                        if response.status_code != 200:
                             await bus.publish("AGENT_STREAM", {
                                 "agent": self.name, "stream_id": stream_id,
-                                "chunk": token, "done": False
+                                "chunk": "", "done": True, "status": "end"
                             })
-                        if data.get("done", False):
-                            break
+                            return f"Erreur OLLAMA: {response.status_code}"
 
-            # Signal de fin
+                        async for line in response.aiter_lines():
+                            if not line.strip():
+                                continue
+                            try:
+                                data = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            token = data.get("response", "")
+                            if token:
+                                full_text += token
+                                await bus.publish("AGENT_STREAM", {
+                                    "agent": self.name, "stream_id": stream_id,
+                                    "chunk": token, "done": False
+                                })
+                            if data.get("done", False):
+                                break
+
+            # Signal de fin (hors sémaphore — libère le slot dès la fin du streaming)
             await bus.publish("AGENT_STREAM", {
                 "agent": self.name, "stream_id": stream_id,
                 "chunk": "", "done": True, "status": "end"

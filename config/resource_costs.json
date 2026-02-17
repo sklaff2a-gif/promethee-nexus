@@ -1,0 +1,41 @@
+{
+  "_comment": "Coûts estimés par type de routine. Unité: 'points de budget' (1 point ~= 1 appel LLM simple).",
+  "_comment2": "Le budget quotidien total est configurable via DAILY_BUDGET_POINTS dans autonomy_engine.py.",
+
+  "EXPANSION_CODE": {
+    "cost": 5,
+    "description": "Evolution pipeline complet: sélection LLM + génération code + Architect + Formatter + Factory"
+  },
+  "COUNCIL_DEBATE": {
+    "cost": 4,
+    "description": "3-5 tours x N participants (chacun = 1 appel LLM) + recherche pré-débat optionnelle"
+  },
+  "REFACTOR_RANDOM": {
+    "cost": 4,
+    "description": "Coder génère + chaîne Architect → Formatter → Factory"
+  },
+  "SECURITY_AUDIT": {
+    "cost": 2,
+    "description": "1 appel LLM pour auditer un fichier + filtrage hallucinations"
+  },
+  "GRIMOIRE_INVOKE": {
+    "cost": 3,
+    "description": "Summoner charge le module + 1-2 appels LLM selon la recette"
+  },
+  "VEILLE_SILENCIEUSE": {
+    "cost": 2,
+    "description": "Researcher: recherche web + résumé LLM"
+  },
+  "DROPZONE_SCAN": {
+    "cost": 2,
+    "description": "Researcher: scan + résumé ou veille YouTube"
+  },
+  "AUDIT_STRUCTURE": {
+    "cost": 1,
+    "description": "Scan filesystem local, pas d'appel LLM"
+  },
+  "MEMORY_CLEANUP": {
+    "cost": 1,
+    "description": "Opérations ChromaDB locales, pas d'appel LLM"
+  }
+}

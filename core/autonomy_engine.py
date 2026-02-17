@@ -14,6 +14,22 @@ logger = logging.getLogger("AutonomyEngine")
 # Limite quotidienne de routines autonomes
 MAX_DAILY_ROUTINES = 80
 
+# Budget quotidien en points (chaque routine a un coût différent)
+DAILY_BUDGET_POINTS = 200
+
+def _load_resource_costs() -> dict:
+    """Charge les coûts par routine depuis config/resource_costs.json."""
+    costs_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "config", "resource_costs.json")
+    try:
+        with open(costs_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {k: v["cost"] for k, v in data.items() if isinstance(v, dict) and "cost" in v}
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        return {}
+
+RESOURCE_COSTS = _load_resource_costs()
+
 # Veille YouTube IA — rotation quand la dropzone est vide
 # Veille silencieuse — rotation de sujets (évite les doublons)
 VEILLE_TOPICS = [
@@ -215,9 +231,9 @@ class RoutineScorer:
             if cloud_in_cooldown and intent in ("EXPANSION_CODE", "REFACTOR_RANDOM"):
                 score -= 10.0
 
-            # Personality bias (PSYCHE) : bonus/malus basé sur les traits du système
+            # Personality bias (PSYCHE) : bonus/malus basé sur les traits du système (clampé [-2, +2])
             if personality_bias and intent in personality_bias:
-                score += personality_bias[intent]
+                score += max(-2.0, min(2.0, personality_bias[intent]))
 
             # Jitter aléatoire pour casser les égalités et favoriser la diversité
             score += random.uniform(-0.3, 0.3)
@@ -290,6 +306,8 @@ class AutonomyEngine:
         self._learning_history: dict = persisted.get("learning_history", {})
         # Flag : max 1 apprentissage par cycle de routine
         self._learning_done_this_cycle = False
+        # Budget en points (chaque routine a un coût différent)
+        self.daily_budget_used = persisted.get("daily_budget_used", 0)
 
         bus.subscribe("USER_COMMAND", self.reset_timer)
 
@@ -298,6 +316,7 @@ class AutonomyEngine:
         today = date.today()
         if today != self.last_reset_day:
             self.daily_count = 0
+            self.daily_budget_used = 0
             self.last_reset_day = today
 
             # Bilan et seed objectifs quotidiens
@@ -310,6 +329,9 @@ class AutonomyEngine:
 
         if self.daily_count >= MAX_DAILY_ROUTINES:
             logger.warning(f"[AUTONOMY] Budget quotidien atteint ({MAX_DAILY_ROUTINES} routines). Pause jusqu'à demain.")
+            return False
+        if self.daily_budget_used >= DAILY_BUDGET_POINTS:
+            logger.warning(f"[AUTONOMY] Budget points épuisé ({self.daily_budget_used}/{DAILY_BUDGET_POINTS}). Pause jusqu'à demain.")
             return False
         return True
 
@@ -340,6 +362,7 @@ class AutonomyEngine:
         state = {
             "version": "24.0",
             "daily_count": self.daily_count,
+            "daily_budget_used": self.daily_budget_used,
             "last_reset_day": self.last_reset_day.isoformat() if self.last_reset_day else None,
             "routine_history": self.routine_history,
             "last_health_check": self.last_health_check,
@@ -588,10 +611,18 @@ class AutonomyEngine:
             pass
 
         # --- Ajustements adaptatifs (conscience de soi) ---
+        # Clamping : les ajustements cumulatifs sont bornés pour éviter les valeurs extrêmes
+        ADAPTIVE_CLAMP_MIN = -10.0
+        ADAPTIVE_CLAMP_MAX = 5.0
         adaptive_adjustments = {}
         try:
             from core.self_awareness import awareness
-            adaptive_adjustments = awareness.compute_adaptive_scoring(self.routine_history)
+            raw_adjustments = awareness.compute_adaptive_scoring(self.routine_history)
+            # Clamping des ajustements dans [min, max]
+            adaptive_adjustments = {
+                intent: max(ADAPTIVE_CLAMP_MIN, min(ADAPTIVE_CLAMP_MAX, val))
+                for intent, val in raw_adjustments.items()
+            }
             if adaptive_adjustments:
                 for i, (routine, s) in enumerate(scored):
                     adj = adaptive_adjustments.get(routine["intent"], 0.0)
@@ -610,7 +641,8 @@ class AutonomyEngine:
         agent = selected["agent"]
         intent = selected["intent"]
 
-        print(f"   ✨ AUTONOMY: Routine [{intent}] (score={score:.1f}) -> [{agent.upper()}] ({self.daily_count + 1}/{MAX_DAILY_ROUTINES})")
+        routine_cost_preview = RESOURCE_COSTS.get(intent, 2)
+        print(f"   ✨ AUTONOMY: Routine [{intent}] (score={score:.1f}, coût={routine_cost_preview}pt) -> [{agent.upper()}] ({self.daily_count + 1}/{MAX_DAILY_ROUTINES}, budget: {self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt)")
 
         # Annonce de l'objectif associé
         try:
@@ -759,7 +791,10 @@ class AutonomyEngine:
 
         self.daily_count += 1
         self.total_routines_executed += 1
-        logger.info(f"[AUTONOMY] Routine {self.daily_count}/{MAX_DAILY_ROUTINES} du jour exécutée.")
+        # Décompter le coût en points de budget
+        routine_cost = RESOURCE_COSTS.get(intent, 2)
+        self.daily_budget_used += routine_cost
+        logger.info(f"[AUTONOMY] Routine {self.daily_count}/{MAX_DAILY_ROUTINES} du jour (coût: {routine_cost}pt, budget: {self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt)")
 
         # Snapshot conscience de soi périodique (toutes les 5 routines)
         if self.daily_count % 5 == 0:
@@ -924,7 +959,64 @@ class AutonomyEngine:
         except Exception as e:
             logger.warning(f"[COUNCIL] Écriture journal échouée: {e}")
 
+        # Écrire dans le journal des councils persistant (memory/council_journal.md)
+        try:
+            self._append_council_journal(topic, result)
+        except Exception as e:
+            logger.warning(f"[COUNCIL] Écriture council_journal échouée: {e}")
+
         return result
+
+    def _append_council_journal(self, topic: dict, result: dict):
+        """Ajoute une entrée au journal persistant des councils (memory/council_journal.md)."""
+        import re
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        journal_path = os.path.join(project_root, "config", "council_journal.md")
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        participants = ", ".join(topic.get("participants", []))
+        mission = topic.get("mission", "Sujet inconnu")
+        status = result.get("status", "inconnu")
+        rounds_used = result.get("rounds_used", "?")
+
+        # Extraire les propositions clés depuis le transcript du dernier tour
+        proposals = []
+        files_mentioned = set()
+        transcript = result.get("transcript", [])
+        if transcript:
+            last_round = max(e["round"] for e in transcript)
+            for entry in transcript:
+                if entry["round"] == last_round:
+                    content = entry["content"][:1000]
+                    # Extraire les fichiers mentionnés
+                    for f in re.findall(r'(?:core|Agents)/[\w/]+\.py', content):
+                        files_mentioned.add(f)
+                    # Extraire les éléments de liste (tirets)
+                    for line in content.split("\n"):
+                        line = line.strip()
+                        if line.startswith(("-", "•", "*")) and len(line) > 15:
+                            proposals.append(line[:120])
+
+        # Limiter à 5 propositions
+        proposals = proposals[:5]
+        proposals_text = "\n".join(f"  {p}" for p in proposals) if proposals else "  (Aucune proposition extraite automatiquement)"
+        files_text = ", ".join(f"`{f}`" for f in sorted(files_mentioned)) if files_mentioned else "(aucun fichier cité)"
+
+        entry = (
+            f"\n---\n\n"
+            f"## [{now}] {mission[:80]}\n\n"
+            f"**Participants** : {participants} | **Tours** : {rounds_used} | **Consensus** : {'oui' if status == 'consensus' else 'non'}\n\n"
+            f"**Propositions clés** :\n{proposals_text}\n\n"
+            f"**Fichiers cibles** : {files_text}\n"
+            f"**Verdict** : (à curé manuellement)\n"
+        )
+
+        # Append au fichier
+        os.makedirs(os.path.dirname(journal_path), exist_ok=True)
+        with open(journal_path, "a", encoding="utf-8") as f:
+            f.write(entry)
+
+        logger.info(f"[COUNCIL] Journal council_journal.md mis à jour : {mission[:50]}")
 
     async def _execute_memory_cleanup(self) -> dict:
         """Nettoie la mémoire RAG : purge les anciennes ET les mauvaise qualité."""
