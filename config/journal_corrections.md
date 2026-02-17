@@ -90,6 +90,7 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 | R10 | 2026-02-14 | Déduplication RAG par distance ChromaDB (seuil 0.15) | 4a9bbe5 | Mémoire sans doublons |
 | R11 | 2026-02-15 | Purge qualitative mémoire (`purge_low_quality()`) | 8d1b5b0 | Nettoyage des souvenirs dégradés |
 | R12 | 2026-02-17 | Filtre `_PROTECTED_FILES` dans sélection Evolution + REFACTOR_RANDOM | 691121b | Pas de gaspillage sur les fichiers intouchables |
+| R13 | 2026-02-17 | `_sanitize_response()` — regex anti-patterns (eval/exec/subprocess/rm -rf/setuid) | 6dac772 | Réponses agents neutralisées si code dangereux |
 
 ---
 
@@ -108,6 +109,7 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 | E09 | 2026-02-15 | Bonus objectifs dans le scoring du catalogue Evolution | d8c72f7 | Les objectifs influencent les choix d'évolution |
 | E10 | 2026-02-16 | Rotation Grimoire (slug le moins récemment invoqué) | 7dca5b2 | Diversité des agents éphémères |
 | E11 | 2026-02-17 | Journal des Councils (`config/council_journal.md`) auto-alimenté | 21cf1e8 | Mémoire des bonnes idées pour curation humaine |
+| E12 | 2026-02-17 | `_score_argument()` — scoring objectif des arguments Council | 6dac772 | Débats pondérés, pas traités à égalité |
 
 ---
 
@@ -120,9 +122,10 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 | Tests écrits | 1043 |
 | Fichiers créés | ~25 |
 | Fichiers modifiés | ~40 |
-| Corrections totales | 57 |
+| Corrections totales | 59 |
 | Pilier le plus corrigé | Intelligence (23 corrections) |
 | Pilier le moins corrigé | Conscience (9 corrections) |
+| Tests | 1065 |
 
 ---
 
