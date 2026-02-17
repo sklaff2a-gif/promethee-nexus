@@ -636,6 +636,8 @@ class AutonomyEngine:
             response = await self._execute_memory_cleanup()
         elif intent == "SECURITY_AUDIT":
             response = await self._execute_security_audit()
+        elif intent == "AUDIT_STRUCTURE":
+            response = await self._execute_audit_structure()
         elif intent == "REFACTOR_RANDOM":
             response = await self._execute_refactor_random()
         elif intent == "DROPZONE_SCAN" and dropzone_count == 0:
@@ -671,12 +673,19 @@ class AutonomyEngine:
                 purpose_ctx = awareness.get_purpose_context()
             except Exception:
                 pass
-            mission_text = f"[MODE VEILLE] {selected['mission']}\nAgis de ta propre initiative.{AUTONOMY_GUARDRAIL}"
-            if purpose_ctx:
-                mission_text = f"{purpose_ctx}\n{mission_text}"
+            # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)
+            raw_mission = selected["mission"]
+            # Retirer le préfixe [MODE VEILLE] déjà présent dans certaines missions
+            clean_mission = raw_mission.replace("[MODE VEILLE] ", "").replace("[MODE VEILLE]", "").strip()
+            mission_text = f"[MODE VEILLE] {clean_mission}\nAgis de ta propre initiative."
+            # Guardrails et purpose dans le context (pas dans la mission envoyée aux moteurs de recherche)
+            context_parts = ["PROTOCOLE_AUTONOMIE"]
+            if purpose_ctx and isinstance(purpose_ctx, str):
+                context_parts.append(purpose_ctx)
+            context_parts.append(AUTONOMY_GUARDRAIL)
             response = await orchestrator.dispatch_task(agent, {
                 "mission": mission_text,
-                "context": "PROTOCOLE_AUTONOMIE",
+                "context": "\n".join(context_parts),
                 "force_local": True,
             })
 
@@ -891,6 +900,9 @@ class AutonomyEngine:
             mission=f"[DÉBAT AUTONOME] {mission}",
         )
         result["participants"] = topic["participants"]
+        # Injecter "result" pour le scoring qualité (Council retourne final_summary, pas result)
+        if "result" not in result:
+            result["result"] = result.get("final_summary", "")
 
         # Pipeline Council → Action : si consensus, créer des specs Evolution
         if result.get("status") == "consensus":
@@ -1029,6 +1041,74 @@ class AutonomyEngine:
         except Exception as e:
             return {"status": "error", "result": str(e)}
 
+    async def _execute_audit_structure(self) -> dict:
+        """Audit structure réel : scanne le filesystem pour fichiers temporaires/orphelins."""
+        try:
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+            # Extensions à détecter à la racine du projet
+            temp_extensions = {".tmp", ".temp", ".bak", ".old", ".orig", ".swp", ".swo"}
+            log_extensions = {".log"}  # Séparé car certains sont légitimes
+            # Fichiers de log légitimes (à ne pas signaler)
+            legit_logs = {"promethee.log"}
+
+            temp_files = []
+            log_files = []
+            pycache_dirs = []
+            large_files = []  # > 10 MB
+
+            # Scan de la racine uniquement (pas récursif pour les .tmp/.log)
+            for entry in os.scandir(project_root):
+                if entry.is_file():
+                    ext = os.path.splitext(entry.name)[1].lower()
+                    if ext in temp_extensions:
+                        size_kb = entry.stat().st_size / 1024
+                        temp_files.append(f"{entry.name} ({size_kb:.0f} KB)")
+                    elif ext in log_extensions and entry.name not in legit_logs:
+                        size_kb = entry.stat().st_size / 1024
+                        log_files.append(f"{entry.name} ({size_kb:.0f} KB)")
+                    # Fichiers volumineux (> 10 MB)
+                    if entry.stat().st_size > 10 * 1024 * 1024:
+                        size_mb = entry.stat().st_size / (1024 * 1024)
+                        large_files.append(f"{entry.name} ({size_mb:.1f} MB)")
+                elif entry.is_dir() and entry.name == "__pycache__":
+                    pycache_dirs.append(entry.name)
+
+            # Scan récursif limité pour __pycache__ (profondeur 2)
+            for subdir in ["core", "Agents", "tests"]:
+                subpath = os.path.join(project_root, subdir)
+                if os.path.isdir(subpath):
+                    for entry in os.scandir(subpath):
+                        if entry.is_dir() and entry.name == "__pycache__":
+                            pycache_dirs.append(f"{subdir}/{entry.name}")
+
+            # Construire le rapport
+            issues = []
+            if temp_files:
+                issues.append(f"Fichiers temporaires à la racine : {', '.join(temp_files)}")
+            if log_files:
+                issues.append(f"Fichiers .log non-système à la racine : {', '.join(log_files)}")
+            if large_files:
+                issues.append(f"Fichiers volumineux (>10 MB) : {', '.join(large_files)}")
+            if pycache_dirs:
+                issues.append(f"Dossiers __pycache__ trouvés : {', '.join(pycache_dirs)}")
+
+            if issues:
+                report = f"AUDIT STRUCTURE — {len(issues)} problème(s) détecté(s) :\n" + "\n".join(f"- {i}" for i in issues)
+                report += "\n\nRecommandation : nettoyer les fichiers temporaires et les caches __pycache__ inutiles."
+            else:
+                report = (
+                    "AUDIT STRUCTURE — Aucun problème détecté.\n"
+                    "La racine du projet est propre : pas de fichiers .tmp/.bak/.log orphelins, "
+                    "pas de fichiers volumineux anormaux."
+                )
+
+            logger.info(f"[AUDIT_STRUCTURE] Scan terminé : {len(issues)} problème(s)")
+            return {"status": "success", "result": report}
+        except Exception as e:
+            logger.warning(f"[AUDIT_STRUCTURE] Erreur scan: {e}")
+            return {"status": "error", "result": f"Erreur lors du scan structure : {e}"}
+
     async def _execute_refactor_random(self) -> dict:
         """Propose un refactoring pour un fichier aléatoire."""
         try:
@@ -1037,14 +1117,24 @@ class AutonomyEngine:
                 os.path.join(project_root, "core"),
                 os.path.join(project_root, "Agents"),
             ]
+
+            # Charger la liste des fichiers protégés
+            try:
+                from Agents.factory_agent import _PROTECTED_FILES
+            except ImportError:
+                _PROTECTED_FILES = set()
+
             py_files = []
             for d in target_dirs:
                 if os.path.isdir(d):
-                    py_files.extend(
-                        os.path.join(d, f) for f in os.listdir(d) if f.endswith(".py")
-                    )
+                    for f in os.listdir(d):
+                        if f.endswith(".py"):
+                            # Calculer le chemin relatif pour vérifier la protection
+                            rel_path = os.path.relpath(os.path.join(d, f), project_root).replace("\\", "/")
+                            if rel_path not in _PROTECTED_FILES:
+                                py_files.append(os.path.join(d, f))
             if not py_files:
-                return {"status": "error", "result": "Aucun fichier Python trouvé."}
+                return {"status": "error", "result": "Aucun fichier Python non-protégé trouvé."}
 
             # Rotation différente du security audit (offset +7)
             target = py_files[(self.total_routines_executed + 7) % len(py_files)]
@@ -1087,17 +1177,56 @@ class AutonomyEngine:
             logger.info("[COUNCIL→ACTION] Déjà 4 specs Council en attente, skip.")
             return
 
-        # Extraire les fichiers cibles mentionnés dans le consensus
-        valid_prefixes = ("core/", "Agents/")
-        file_mentions = re.findall(r'((?:core|Agents)/[\w/]+\.py)', final_summary)
-        file_mentions = [f for f in file_mentions if any(f.startswith(p) for p in valid_prefixes)]
+        # Construire le texte d'analyse à partir du transcript COMPLET du dernier tour
+        # (le final_summary tronque à 200 chars/participant, perdant les détails concrets)
+        transcript = council_result.get("transcript", [])
+        if transcript:
+            participants = council_result.get("participants", [])
+            last_round = max(e["round"] for e in transcript)
+            last_round_entries = [e for e in transcript if e["round"] == last_round]
+            # Utiliser le contenu complet (max 1500 chars/participant au lieu de 200)
+            analysis_text = "\n".join(
+                f"[{e['agent'].upper()}] {e['content'][:1500]}" for e in last_round_entries
+            )
+        else:
+            analysis_text = final_summary
 
-        # Extraire les actions concrètes (lignes avec "ACTION", "IMPLÉMENTER", "AJOUTER", "MODIFIER")
+        # Extraire les fichiers cibles (avec ET sans préfixe de dossier)
+        file_mentions = re.findall(r'((?:core|Agents)/[\w/]+\.py)', analysis_text)
+        # Aussi capturer les .py mentionnés seuls (ex: "bus.py", "router.py")
+        standalone_py = re.findall(r'\b(\w+\.py)\b', analysis_text)
+        # Mapper les fichiers standalone vers leur chemin probable
+        known_dirs = {"core/": ["orchestrator", "router", "bus", "autonomy_engine", "council",
+                                "summoner", "base_agent", "event_bus", "self_awareness",
+                                "prompt_templates", "ci_pipeline", "grimoire_writer",
+                                "psyche", "evolution_catalog", "strategic_journal"],
+                      "Agents/": ["coder_agent", "architect_agent", "security_agent",
+                                  "evolution_agent", "factory_agent", "researcher_agent",
+                                  "strategist_agent", "writer_agent", "infra_agent",
+                                  "formatter_agent"]}
+        for py_file in standalone_py:
+            stem = py_file.replace(".py", "")
+            for prefix, known in known_dirs.items():
+                if stem in known:
+                    qualified = f"{prefix}{py_file}"
+                    if qualified not in file_mentions:
+                        file_mentions.append(qualified)
+
+        # Extraire les actions concrètes — regex élargie pour le langage naturel des LLMs
         action_patterns = re.findall(
-            r'(?:ACTION|IMPLÉMENTER|AJOUTER|MODIFIER|SUGGESTION|RECOMMANDATION)\s*[:\-]\s*(.+)',
-            final_summary,
+            r'(?:ACTION|IMPLÉMENTER|IMPL[ÉE]MENTATION|AJOUTER|AJOUT|MODIFIER|MODIFICATION'
+            r'|SUGGESTION|RECOMMANDATION|CRÉER|CRÉATION|AMÉLIORER|AMÉLIORATION'
+            r'|IMPLEMENT|ADD|MODIFY|CREATE|IMPROVE)\s*[:\-]\s*(.+)',
+            analysis_text,
             re.IGNORECASE,
         )
+        # Fallback : chercher des verbes d'action en début de ligne (tirets de liste)
+        if not action_patterns:
+            action_patterns = re.findall(
+                r'[-•]\s*(?:Ajouter|Créer|Modifier|Implémenter|Améliorer|Intégrer|Remplacer|Refactorer)\s+(.+)',
+                analysis_text,
+                re.IGNORECASE,
+            )
 
         if not action_patterns and not file_mentions:
             logger.info("[COUNCIL→ACTION] Pas d'action concrète dans le consensus.")
@@ -1113,7 +1242,7 @@ class AutonomyEngine:
         # Résumé des actions
         actions_text = "\n".join(f"- {a.strip()}" for a in action_patterns[:3])
         if not actions_text:
-            actions_text = final_summary[:500]
+            actions_text = analysis_text[:500]
 
         spec = ImprovementSpec(
             id=spec_id,

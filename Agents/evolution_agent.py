@@ -337,14 +337,25 @@ class DivineEvolution(BaseAgent):
         # --- PHASE 1 : SÉLECTION ---
         self.log_thought("📋 Phase 1 : Sélection depuis le catalogue...", type="thought")
 
-        candidates = catalog.get_top_candidates(5)
+        # Filtrer les specs ciblant des fichiers protégés (évite de gaspiller un appel LLM)
+        try:
+            from Agents.factory_agent import _PROTECTED_FILES
+        except ImportError:
+            _PROTECTED_FILES = set()
+
+        def _is_eligible(spec_tuple):
+            spec = spec_tuple[0]
+            target = spec.target_file.replace("\\", "/")
+            return target not in _PROTECTED_FILES
+
+        candidates = [c for c in catalog.get_top_candidates(8) if _is_eligible(c)][:5]
         if not candidates:
-            self.log_thought("📭 Catalogue épuisé : aucune spec éligible.", type="info")
+            self.log_thought("📭 Catalogue épuisé : aucune spec éligible (protégés exclus).", type="info")
             # Tenter la méta-évolution
             new_specs = catalog.generate_combinations()
             if new_specs:
                 self.log_thought(f"🧬 Méta-évolution : {len(new_specs)} nouvelles specs générées.", type="info")
-                candidates = catalog.get_top_candidates(5)
+                candidates = [c for c in catalog.get_top_candidates(8) if _is_eligible(c)][:5]
             if not candidates:
                 # Fallback : tenter la création d'une recette Grimoire
                 return await self._run_grimoire_creation()

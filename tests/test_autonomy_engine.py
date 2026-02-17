@@ -1074,16 +1074,12 @@ class TestAdaptiveScoringIntegration:
             "AUDIT_STRUCTURE": 5.0,
         }
 
-        dispatched_agents = []
-
-        async def capture_dispatch(agent, payload):
-            dispatched_agents.append(agent)
-            return {"status": "success", "result": "OK " * 50}
-
         with patch("core.autonomy_engine.orchestrator") as mock_orch, \
              patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
              patch.dict("sys.modules", {"core.self_awareness": MagicMock(awareness=mock_awareness)}):
-            mock_orch.dispatch_task = AsyncMock(side_effect=capture_dispatch)
+            mock_orch.dispatch_task = AsyncMock(return_value={
+                "status": "success", "result": "OK " * 50,
+            })
             routines = _get_routines()
             # EXPANSION en tête par défaut
             mock_scorer.return_value = [
@@ -1093,8 +1089,11 @@ class TestAdaptiveScoringIntegration:
                 (routines[3], 2.0),   # DROPZONE
             ]
             await self.engine._execute_scored_routine(health)
-            # AUDIT devrait être dispatché (score 4.0+5.0=9.0 > EXPANSION 5.0-10.0=-5.0)
-            assert dispatched_agents[0] == "architect"
+            # AUDIT_STRUCTURE a le meilleur score ajusté (4.0+5.0=9.0 > EXPANSION 5.0-10.0=-5.0)
+            # Vérifier que la routine exécutée est AUDIT_STRUCTURE (méthode dédiée, pas de dispatch)
+            assert self.engine.daily_count == 1
+            last = self.engine.routine_history[-1]
+            assert last["intent"] == "AUDIT_STRUCTURE"
 
     @pytest.mark.asyncio
     async def test_adaptive_scoring_graceful_on_error(self):

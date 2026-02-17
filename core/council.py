@@ -162,7 +162,10 @@ class Council:
             f"TON RÔLE : {agent_name.upper()}\n"
             f"{personality_line}\n"
             f"HISTORIQUE DU DÉBAT :\n{history}\n\n"
-            f"{round_instructions}"
+            f"{round_instructions}\n"
+            f"--- RAPPEL FINAL ---\n"
+            f"RÉPONDS EN FRANÇAIS UNIQUEMENT. Pas d'anglais, même pour les termes techniques courants.\n"
+            f"Cite des fichiers EXISTANTS du projet (core/, Agents/).\n"
         )
 
     async def run(self) -> Dict[str, Any]:
