@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from core.council import (
     Council, parse_council_mission, _is_consensus, _strip_markdown_prefix,
+    _score_argument,
     MIN_ROUNDS_BEFORE_CONSENSUS, _COUNCIL_PROJECT_CONTEXT,
     _get_project_structure,
 )
@@ -424,3 +425,112 @@ class TestProjectStructure:
         council = Council(agents, ["coder", "security"], "test", max_rounds=3)
         prompt = council._build_prompt("coder", 1)
         assert "FICHIERS RÉELS" in prompt
+
+
+# ============================================================
+# TESTS SCORING ARGUMENTS
+# ============================================================
+
+class TestScoreArgument:
+    """Vérifie que _score_argument évalue correctement les arguments du Council."""
+
+    def test_empty_content_scores_zero(self):
+        result = _score_argument("")
+        assert result["score"] == 0.0
+        assert result["confidence"] == 0.0
+
+    def test_short_content_scores_zero(self):
+        result = _score_argument("ok")
+        assert result["score"] == 0.0
+
+    def test_high_score_with_files_and_actions(self):
+        """Un argument riche (fichiers, actions, code) obtient un score élevé."""
+        content = (
+            "Je propose de modifier `core/autonomy_engine.py` pour ajouter un garde-fou.\n"
+            "Il faut aussi corriger `Agents/coder_agent.py` et vérifier `core/council.py`.\n"
+            "L'action consiste à implémenter une validation dans la méthode dispatch.\n"
+            "```python\ndef validate_budget(cost):\n    return cost <= DAILY_MAX\n```\n"
+            "Cela permettrait de refactorer le pipeline sans risque."
+        )
+        result = _score_argument(content)
+        assert result["score"] >= 0.5
+        assert result["confidence"] >= 0.4
+        assert result["breakdown"]["fichiers_cités"] >= 3
+        assert result["breakdown"]["actions_proposées"] >= 2
+
+    def test_vague_content_low_score(self):
+        """Un argument vague sans fichiers ni actions obtient un score bas."""
+        content = (
+            "Je pense que nous devrions peut-être envisager de revoir "
+            "notre approche générale pour mieux optimiser les performances "
+            "du système dans son ensemble."
+        )
+        result = _score_argument(content)
+        assert result["score"] < 0.3
+        assert result["breakdown"]["fichiers_cités"] == 0
+        assert result["breakdown"]["actions_proposées"] == 0
+
+    def test_code_block_increases_score(self):
+        """Un bloc de code augmente le score."""
+        without_code = "Il faut modifier core/router.py pour ajouter un filtre."
+        with_code = (
+            "Il faut modifier core/router.py pour ajouter un filtre.\n"
+            "```python\ndef filter_intent(intent):\n    return intent in ALLOWED\n```"
+        )
+        score_without = _score_argument(without_code)["score"]
+        score_with = _score_argument(with_code)["score"]
+        assert score_with > score_without
+
+    def test_english_penalty(self):
+        """Le contenu en anglais est pénalisé."""
+        english = (
+            "We should implement a new function. However, this would require "
+            "moreover some changes. The function should be implemented carefully "
+            "and could therefore improve performance significantly."
+        )
+        result = _score_argument(english)
+        assert result["breakdown"].get("pénalité_anglais", 0) >= 3
+
+    def test_file_pattern_detection(self):
+        """Les différents formats de chemins projet sont détectés."""
+        content = (
+            "Fichiers : core/base_agent.py, Agents/security_agent.py, "
+            "config.py et tests/test_council.py doivent être modifiés."
+        )
+        result = _score_argument(content)
+        assert result["breakdown"]["fichiers_cités"] >= 3
+
+    def test_action_verbs_detected(self):
+        """Les verbes d'action français sont détectés."""
+        content = (
+            "Il faut ajouter un garde-fou, modifier le scoring, "
+            "supprimer les doublons et valider le résultat."
+        )
+        result = _score_argument(content)
+        assert result["breakdown"]["actions_proposées"] >= 4
+
+    def test_score_range_0_to_1(self):
+        """Le score est toujours dans [0, 1]."""
+        # Score maximal théorique
+        content = (
+            "Modifier core/a.py, core/b.py, Agents/c.py pour implémenter, "
+            "ajouter, corriger, supprimer un système. "
+            "```python\ndef a():\n    pass\n```\n"
+            "```python\ndef b():\n    pass\n```\n" * 3 +
+            "x" * 500
+        )
+        result = _score_argument(content)
+        assert 0.0 <= result["score"] <= 1.0
+        assert 0.0 <= result["confidence"] <= 1.0
+
+    def test_transcript_includes_scores(self):
+        """Le transcript formaté inclut les scores de pertinence."""
+        agents = {"a": MagicMock(), "b": MagicMock()}
+        council = Council(agents, ["a", "b"], "test", max_rounds=3)
+        council.transcript = [
+            {"agent": "a", "round": 1, "content": "Je propose de modifier core/router.py", "score": 0.45, "confidence": 0.3},
+            {"agent": "b", "round": 1, "content": "Bonne idée", "score": 0.1, "confidence": 0.0},
+        ]
+        formatted = council._format_transcript()
+        assert "pertinence:" in formatted
+        assert "★★" in formatted  # 0.45 >= 0.3 → ★★

@@ -7,56 +7,44 @@ Ce fichier est maintenu automatiquement par le moteur d'autonomie et curé manue
 
 ---
 
-## [2026-02-17 01:25] Event Bus — Patterns de communication
+## [2026-02-17 01:25] Event Bus — Dead-letter queue
 
 **Participants** : architect, coder, infra | **Tours** : 3 | **Consensus** : oui
 
-**Propositions clés** :
-- Dead-letter queue pour les événements échoués (stockage + retraitement)
-- Rate limiting via sémaphore dans `core/event_bus/bus.py`
-- File de priorité pour les événements critiques
+**Proposition** :
+- Dead-letter queue pour les événements échoués (stockage + retraitement automatique)
 
-**Fichiers cibles** : `core/event_bus/bus.py`, `core/event_bus/subscriber.py`
-**Verdict** : Intéressant mais le bus actuel fonctionne bien pour 10 agents. Dead-letter queue serait utile pour le debug.
+**Fichiers cibles** : `core/event_bus/bus.py`
+**Verdict** : Utile pour le debug. Le bus actuel fonctionne mais les événements échoués sont silencieusement perdus.
 
 ---
 
-## [2026-02-17 03:30] Résilience et sécurité
+## [2026-02-17 03:30] Regex anti-patterns dans les réponses agents
 
 **Participants** : security, architect, strategist | **Tours** : 4 | **Consensus** : oui
 
-**Propositions clés** :
-- Regex anti-patterns dangereux (Base64, eval, cmd /c) dans les réponses des agents
-- Vérification d'intégrité SHA256 du security_agent au démarrage
-- Sanitisation d'environnement pour subprocess (`_clean_env()`)
-
-**Fichiers cibles** : `Agents/security_agent.py`, `core/capabilities/dropzone_indexer.py`
-**Verdict** : Les regex anti-patterns sont simples et utiles. Le SHA256 est faisable. Le sandbox subprocess est théorique (Prométhée n'exécute pas de commandes).
+~~**Propositions** : Regex anti-patterns dangereux (eval, exec, Base64, cmd /c)~~ IMPLÉMENTÉ (2026-02-17)
 
 ---
 
-## [2026-02-17 07:34] Gestion du budget et priorisation
-
-**Participants** : strategist, evolution | **Tours** : 3 | **Consensus** : oui | **Spec** : COUNCIL-10169
-
-**Propositions clés** :
-- ~~Fichier `config/resource_costs.json` avec coûts par agent~~ IMPLÉMENTÉ (2026-02-17)
-- ~~Vérification budget avant dispatch~~ IMPLÉMENTÉ (2026-02-17)
-- ~~Sémaphore Ollama (max 2 concurrents)~~ IMPLÉMENTÉ (2026-02-17)
-
-**Fichiers cibles** : `core/autonomy_engine.py`, `core/base_agent.py`, `config/resource_costs.json`
-**Verdict** : Implémenté dans le commit post-analyse.
-
----
-
-## [2026-02-17 12:12] Scalabilité autonome — Stabilité des poids
+## [2026-02-17 12:12] Stabilité des poids adaptatifs
 
 **Participants** : evolution, strategist, coder | **Tours** : 3 | **Consensus** : oui
 
-**Propositions clés** :
-- ~~Clamping des poids adaptatifs dans [-10, +5]~~ IMPLÉMENTÉ (2026-02-17)
+~~Clamping des poids adaptatifs [-10, +5]~~ IMPLÉMENTÉ (2026-02-17)
+
+**Propositions restantes** :
 - Logging des deltas de poids dans evolution_agent (traçabilité)
 - Persistance des poids stables (`stable_weights.json`) pour rollback
 
 **Fichiers cibles** : `core/autonomy_engine.py`, `Agents/evolution_agent.py`
-**Verdict** : Clamping implémenté. Le logging des deltas et stable_weights.json restent à faire.
+
+---
+
+## [2026-02-17 18:27] Arguments scorés dans les débats Council
+
+**Participants** : strategist, coder, writer | **Tours** : 3 | **Consensus** : oui
+
+~~**Proposition** : Scoring des arguments (fichiers cités, actions, code, longueur)~~ IMPLÉMENTÉ (2026-02-17)
+
+---

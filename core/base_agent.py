@@ -236,7 +236,10 @@ class BaseAgent:
         # 1. Génération de la réponse (via Cloud ou Local selon la complexité)
         response_text = await self.generate_content(f"Tu es {self.role}. Mission: {mission}")
         
-        # 2. 🚨 CORRECTIF UI : On publie la réponse sur le Bus pour l'interface Web 🚨
+        # 2. Sanitisation anti-patterns dangereux
+        response_text = self._sanitize_response(response_text, self.name)
+
+        # 3. 🚨 CORRECTIF UI : On publie la réponse sur le Bus pour l'interface Web 🚨
         try:
             # On formate le message pour que le frontend le comprenne
             ui_payload = {
@@ -507,6 +510,50 @@ class BaseAgent:
         r')',
         re.IGNORECASE,
     )
+
+    # --- Regex anti-patterns dangereux dans les réponses agents ---
+    _DANGEROUS_PATTERNS = re.compile(
+        r'(?:'
+        r'(?:^|\s)eval\s*\('                          # eval(...)
+        r'|(?:^|\s)exec\s*\('                          # exec(...)
+        r'|(?:^|\s)compile\s*\('                        # compile(...)
+        r'|subprocess\.(?:call|run|Popen|check_output)' # subprocess.*
+        r'|os\.(?:system|popen|exec[lv]?[pe]?)\s*\('   # os.system/popen/exec*
+        r'|__import__\s*\('                             # __import__(...)
+        r'|cmd\s*/c\s'                                  # cmd /c ...
+        r'|powershell\s+-[eE](?:nc)?\s'                 # powershell -enc/-e (encoded)
+        r'|base64\.(?:b64decode|decodebytes)\s*\('      # base64 decode
+        r'|rm\s+-rf\s+/'                                # rm -rf /
+        r'|shutil\.rmtree\s*\(\s*["\'/]'               # shutil.rmtree("/...")
+        r'|setuid\s*\(0\)'                              # setuid(0)
+        r'|chmod\s+[0-7]*777'                           # chmod 777
+        r')',
+        re.MULTILINE
+    )
+
+    @classmethod
+    def _sanitize_response(cls, text: str, agent_name: str = "") -> str:
+        """Détecte et neutralise les patterns dangereux dans les réponses agents.
+        Retourne le texte nettoyé + log un warning si des patterns sont trouvés."""
+        if not text:
+            return text
+        matches = cls._DANGEROUS_PATTERNS.findall(text)
+        if matches:
+            unique = list(set(m.strip() for m in matches))
+            logger.warning(
+                f"[{agent_name}] ANTI-PATTERN: {len(unique)} pattern(s) dangereux détecté(s): "
+                f"{', '.join(unique[:5])}"
+            )
+            # Neutraliser : commenter les lignes contenant les patterns
+            lines = text.split('\n')
+            sanitized = []
+            for line in lines:
+                if cls._DANGEROUS_PATTERNS.search(line):
+                    sanitized.append(f"# [NEUTRALISÉ] {line}")
+                else:
+                    sanitized.append(line)
+            return '\n'.join(sanitized)
+        return text
 
     @classmethod
     def _strip_cot(cls, text: str) -> str:

@@ -37,6 +37,75 @@ _COUNCIL_PROJECT_CONTEXT = (
 from core.prompt_templates import get_project_structure as _get_project_structure
 
 
+# --- Scoring des arguments du Council ---
+# Critères objectifs pour pondérer la force d'un argument
+_FILE_PATTERN = re.compile(r'(?:core/|Agents/|config[./]|tests/|main\.py)\S+')
+_ACTION_VERBS = re.compile(
+    r'(?:ajouter|modifier|créer|supprimer|remplacer|implémenter|refactorer|déplacer|'
+    r'renommer|corriger|injecter|extraire|vérifier|valider)',
+    re.IGNORECASE
+)
+_CODE_BLOCK = re.compile(r'```(?:python)?\s*\n.+?\n```', re.DOTALL)
+
+
+def _score_argument(content: str) -> dict:
+    """Score un argument de Council sur des critères objectifs.
+    Retourne {"score": 0.0-1.0, "confidence": 0.0-1.0, "breakdown": {...}}."""
+    if not content or len(content.strip()) < 20:
+        return {"score": 0.0, "confidence": 0.0, "breakdown": {}}
+
+    points = 0.0
+    breakdown = {}
+
+    # 1. Citations de fichiers réels du projet (0-3 pts)
+    files_cited = _FILE_PATTERN.findall(content)
+    unique_files = set(files_cited)
+    file_score = min(len(unique_files), 3)
+    points += file_score
+    breakdown["fichiers_cités"] = len(unique_files)
+
+    # 2. Verbes d'action concrets (0-2 pts)
+    actions = _ACTION_VERBS.findall(content)
+    action_score = min(len(actions), 2)
+    points += action_score
+    breakdown["actions_proposées"] = len(actions)
+
+    # 3. Blocs de code (0-2 pts)
+    code_blocks = _CODE_BLOCK.findall(content)
+    code_score = min(len(code_blocks), 2)
+    points += code_score
+    breakdown["blocs_code"] = len(code_blocks)
+
+    # 4. Longueur substantielle (0-2 pts) — plus c'est développé, mieux c'est
+    length = len(content.strip())
+    if length >= 500:
+        length_score = 2.0
+    elif length >= 200:
+        length_score = 1.0
+    else:
+        length_score = 0.5
+    points += length_score
+    breakdown["longueur"] = length
+
+    # 5. Pénalité : contenu en anglais (-1 pt)
+    english_markers = len(re.findall(
+        r'\b(?:should|would|could|implement|function|however|therefore|moreover)\b',
+        content, re.IGNORECASE
+    ))
+    if english_markers >= 3:
+        points -= 1.0
+        breakdown["pénalité_anglais"] = english_markers
+
+    # Normaliser sur [0, 1]
+    max_points = 9.0  # 3+2+2+2
+    score = max(0.0, min(points / max_points, 1.0))
+
+    # Confidence = à quel point le score est fiable (basé sur la richesse du contenu)
+    confidence = min(1.0, (len(unique_files) + len(actions) + len(code_blocks)) / 5.0)
+
+    return {"score": round(score, 2), "confidence": round(confidence, 2), "breakdown": breakdown}
+
+
 def _strip_markdown_prefix(text: str) -> str:
     """Retire les préfixes markdown courants (#, *, >, -) en début de texte."""
     cleaned = text.strip()
@@ -101,12 +170,18 @@ class Council:
         self.transcript: List[Dict[str, Any]] = []
 
     def _format_transcript(self) -> str:
-        """Formate le transcript pour l'injecter dans le prompt des agents."""
+        """Formate le transcript pour l'injecter dans le prompt des agents.
+        Inclut le score de pertinence de chaque argument."""
         if not self.transcript:
             return "(Aucune contribution précédente)"
         lines = []
         for entry in self.transcript:
-            lines.append(f"[Tour {entry['round']}] {entry['agent'].upper()} :\n{entry['content']}")
+            score = entry.get("score", 0)
+            score_label = "★★★" if score >= 0.6 else "★★" if score >= 0.3 else "★"
+            lines.append(
+                f"[Tour {entry['round']}] {entry['agent'].upper()} "
+                f"(pertinence: {score_label} {score:.0%}) :\n{entry['content']}"
+            )
         return "\n---\n".join(lines)
 
     def _build_prompt(self, agent_name: str, current_round: int) -> str:
@@ -201,22 +276,30 @@ class Council:
                 # Appel via generate_content (pas process_task)
                 content = await agent.generate_content(prompt)
 
+                # Scorer l'argument
+                arg_score = _score_argument(content)
+
                 # Enregistrer dans le transcript
                 entry = {
                     "agent": participant,
                     "round": round_num,
                     "content": content,
+                    "score": arg_score["score"],
+                    "confidence": arg_score["confidence"],
+                    "breakdown": arg_score["breakdown"],
                     "timestamp": time.time()
                 }
                 self.transcript.append(entry)
 
-                # Publication tour de parole
+                # Publication tour de parole (avec score)
                 await bus.publish("COUNCIL_TURN", {
                     "council_id": self.council_id,
                     "agent": participant,
                     "round": round_num,
                     "max_rounds": self.max_rounds,
-                    "content": content
+                    "content": content,
+                    "score": arg_score["score"],
+                    "confidence": arg_score["confidence"]
                 })
 
                 # Consensus ignoré avant MIN_ROUNDS_BEFORE_CONSENSUS
@@ -252,9 +335,19 @@ class Council:
             "timestamp": str(time.time())
         })
 
+        # Métriques de scoring agrégées
+        all_scores = [e.get("score", 0) for e in self.transcript if e.get("score") is not None]
+        avg_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
+        best_entry = max(self.transcript, key=lambda e: e.get("score", 0)) if self.transcript else {}
+
         return {
             "status": status,
             "rounds_used": rounds_used,
             "transcript": self.transcript,
-            "final_summary": final_summary
+            "final_summary": final_summary,
+            "scoring": {
+                "avg_score": round(avg_score, 2),
+                "best_agent": best_entry.get("agent", ""),
+                "best_score": best_entry.get("score", 0),
+            }
         }

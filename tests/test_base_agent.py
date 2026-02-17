@@ -195,3 +195,76 @@ class TestRememberDedup:
         agent.memory_manager.query_with_metadata.side_effect = Exception("ChromaDB error")
         agent.remember("test text")  # Ne doit pas lever d'exception
         agent.memory_manager.add_documents.assert_not_called()
+
+
+# ─── Tests Sanitize Response (anti-patterns dangereux) ───
+
+class TestSanitizeResponse:
+    """Vérifie que _sanitize_response détecte et neutralise les patterns dangereux."""
+
+    def test_eval_neutralized(self):
+        code = "result = eval('2+2')\nprint(result)"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+        assert "eval(" in result  # Le texte est là mais commenté
+
+    def test_exec_neutralized(self):
+        code = "exec('import os; os.system(\"dir\")')"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+
+    def test_subprocess_neutralized(self):
+        code = "import subprocess\nsubprocess.call(['rm', '-rf', '/'])"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert result.count("# [NEUTRALISÉ]") >= 1
+
+    def test_os_system_neutralized(self):
+        code = "os.system('shutdown -r -t 0')"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+
+    def test_cmd_c_neutralized(self):
+        code = "Exécuter cmd /c del /f /q C:\\*"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+
+    def test_base64_decode_neutralized(self):
+        code = "payload = base64.b64decode(encoded_string)"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+
+    def test_rm_rf_neutralized(self):
+        code = "rm -rf /etc/passwd"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+
+    def test_safe_code_unchanged(self):
+        """Le code normal n'est pas modifié."""
+        code = "def hello():\n    return 'world'\n\nresult = hello()"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert result == code
+        assert "# [NEUTRALISÉ]" not in result
+
+    def test_empty_text_unchanged(self):
+        assert BaseAgent._sanitize_response("", "test") == ""
+        assert BaseAgent._sanitize_response(None, "test") is None
+
+    def test_mixed_safe_and_dangerous(self):
+        """Seules les lignes dangereuses sont neutralisées."""
+        code = "import os\ndef clean():\n    os.system('rm -rf /')\n    return True"
+        result = BaseAgent._sanitize_response(code, "test")
+        lines = result.split('\n')
+        assert not lines[0].startswith("# [NEUTRALISÉ]")  # import os = safe
+        assert not lines[1].startswith("# [NEUTRALISÉ]")  # def clean = safe
+        assert lines[2].startswith("# [NEUTRALISÉ]")      # os.system = dangerous
+        assert not lines[3].startswith("# [NEUTRALISÉ]")  # return True = safe
+
+    def test_setuid_neutralized(self):
+        code = "os.setuid(0)"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+
+    def test_chmod_777_neutralized(self):
+        code = "chmod 777 /etc/shadow"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
