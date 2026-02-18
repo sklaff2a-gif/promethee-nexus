@@ -1,3 +1,4 @@
+import ast
 import logging
 import asyncio
 import re
@@ -172,12 +173,51 @@ class DivineFormatter(BaseAgent):
             else:
                 self.log_thought("⚠️ Aucun bloc de code exploitable dans le contexte.", type="warning")
 
+        # --- VALIDATION SYNTAXE (avant dispatch Factory) ---
+        if is_valid and target_file and target_file.endswith(".py"):
+            # Extraire le code du bloc markdown dans la réponse
+            code_blocks = re.findall(r'```(?:python)?\s*\n(.*?)```', response, re.DOTALL)
+            code_to_check = max(code_blocks, key=len) if code_blocks else ""
+            if code_to_check:
+                try:
+                    ast.parse(code_to_check)
+                except SyntaxError as e:
+                    self.log_thought(
+                        f"⚠️ LLM a cassé la syntaxe ({e.msg} ligne {e.lineno}). Fallback code original...",
+                        type="warning",
+                    )
+                    # Fallback : extraire le code original depuis le contexte d'entrée
+                    det_file, det_code = self._extract_from_context(full_text)
+                    if det_code:
+                        try:
+                            ast.parse(det_code)
+                            response = self._rebuild_formatted_response(
+                                target_file, det_code
+                            )
+                            self.log_thought("✅ Fallback code original valide.", type="info")
+                        except SyntaxError:
+                            self.log_thought("❌ Code original aussi invalide.", type="error")
+                            return {
+                                "status": "error",
+                                "result": "SYNTAXE_INVALIDE — LLM et original cassés.",
+                            }
+                    else:
+                        return {
+                            "status": "error",
+                            "result": "SYNTAXE_INVALIDE — pas de code original en fallback.",
+                        }
+
         # --- DÉCISION FINALE ---
         if is_valid:
             self.log_thought(f"✅ Formatage validé ({target_file}). Transmission Factory...", type="success")
             try:
                 from core.orchestrator import orchestrator
                 factory_payload = { "mission": "Exécute ce code propre.", "context": response }
+
+                # Propager evolution_spec_id si présent (pipeline Evolution)
+                evo_spec_id = task_payload.get("evolution_spec_id")
+                if evo_spec_id:
+                    factory_payload["evolution_spec_id"] = evo_spec_id
 
                 loop = asyncio.get_running_loop()
                 loop.create_task(orchestrator.dispatch_task("factory", factory_payload))

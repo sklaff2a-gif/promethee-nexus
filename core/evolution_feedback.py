@@ -55,6 +55,7 @@ class EvolutionFeedbackLoop:
             from core.event_bus.bus import bus
             bus.subscribe("EVOLUTION_DEPLOYED", self._on_evolution_deployed)
             bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
+            bus.subscribe("ARTIFACT_CREATED", self._on_artifact_created)
             self._subscribed = True
             logger.info("FEEDBACK: Boucle de feedback Evolution active.")
         except Exception as e:
@@ -142,6 +143,21 @@ class EvolutionFeedbackLoop:
 
         if completed:
             self._save()
+
+    async def _on_artifact_created(self, event: dict):
+        """Quand la Factory écrit un fichier, confirme le déploiement si spec_id présent."""
+        data = event.get("data", event)
+        spec_id = data.get("spec_id")
+        if not spec_id:
+            return
+        try:
+            from core.evolution_catalog import catalog
+            spec = catalog.get_spec(spec_id)
+            if spec and spec.status == "pending_deploy":
+                catalog.mark_deployed(spec_id)
+                logger.info(f"FEEDBACK: [{spec_id}] confirmé deployed via ARTIFACT_CREATED.")
+        except Exception as e:
+            logger.warning(f"FEEDBACK: Erreur confirmation deploy {spec_id}: {e}")
 
     # --- Évaluation ---
 

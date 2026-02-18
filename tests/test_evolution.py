@@ -314,7 +314,8 @@ class TestCatalogPipelineV6:
 
     @pytest.mark.asyncio
     async def test_catalog_pipeline_deployed_marks_catalog(self):
-        """Si l'Architecte valide, la spec est marquée deployed dans le catalogue."""
+        """Si l'Architecte valide, la spec est marquée pending_deploy (pas deployed)
+        car le déploiement réel est confirmé par ARTIFACT_CREATED de la Factory."""
         evo = DivineEvolution()
         cat = EvolutionCatalog()
 
@@ -334,8 +335,8 @@ class TestCatalogPipelineV6:
             result = await evo.process_task({"mission": "[MODE VEILLE]"})
 
         assert "CYCLE CATALOG V6" in result["result"]
-        deployed = cat.get_specs_by_status("deployed")
-        assert len(deployed) >= 1
+        pending = cat.get_specs_by_status("pending_deploy")
+        assert len(pending) >= 1
 
     @pytest.mark.asyncio
     async def test_catalog_pipeline_architect_rejects(self):
@@ -862,3 +863,53 @@ class TestAntiTruncation:
         # L'Architecte DOIT avoir été appelé
         architect_calls = [c for c in mock_orch.dispatch_task.call_args_list if c[0][0] == "architect"]
         assert len(architect_calls) == 1
+
+
+class TestPendingDeployPipeline:
+    """Le pipeline V6 doit marquer pending_deploy (pas deployed) — Fix run 2026-02-18."""
+
+    @pytest.fixture(autouse=True)
+    def isolate_catalog(self, tmp_path):
+        _state_file = str(tmp_path / "test_catalog.json")
+        with patch("core.evolution_catalog.CATALOG_STATE_FILE", _state_file):
+            EvolutionCatalog.reset_singleton()
+            yield
+            EvolutionCatalog.reset_singleton()
+
+    @pytest.mark.asyncio
+    async def test_pipeline_marks_pending_deploy_not_deployed(self):
+        """Après validation Architect, la spec est pending_deploy (pas deployed)."""
+        from core.evolution_catalog import EvolutionCatalog
+        cat = EvolutionCatalog()
+
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            from Agents.evolution_agent import DivineEvolution
+            evo = DivineEvolution()
+
+        # Le code généré doit être assez long pour passer l'anti-troncature (>60% du source)
+        original_source = "import os\ndef hello():\n    return 42\n"
+        valid_code = (
+            "import os\nimport logging\n\nlogger = logging.getLogger('test')\n\n"
+            "def hello():\n    return 42\n\nclass Helper:\n    pass\n"
+        )
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
+        mock_orch._contains_python_code = MagicMock(return_value=True)
+
+        mock_bus = MagicMock()
+        mock_bus.publish = AsyncMock()
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=original_source), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=valid_code), \
+             patch("core.orchestrator.orchestrator", mock_orch), \
+             patch("core.event_bus.bus.bus", mock_bus):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        assert "CYCLE CATALOG V6" in result["result"]
+        # Au moins une spec doit être en pending_deploy (pas deployed)
+        pending = cat.get_specs_by_status("pending_deploy")
+        deployed = cat.get_specs_by_status("deployed")
+        assert len(pending) >= 1, f"Aucune spec en pending_deploy. Deployed: {len(deployed)}"
+        assert len(deployed) == 0, "Aucune spec ne devrait être deployed directement"

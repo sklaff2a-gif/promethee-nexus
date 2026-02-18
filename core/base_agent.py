@@ -271,6 +271,15 @@ class BaseAgent:
         "COUNCIL_RESEARCH",
     )
 
+    @staticmethod
+    def _extract_model_size(model_name: str) -> int:
+        """Extrait la taille en milliards depuis le nom du modèle (ex: 'qwen3-coder:30b' → 30).
+        Retourne 0 si la taille n'est pas détectable."""
+        match = re.search(r':(\d+)b', model_name, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+        return 0
+
     async def _evaluate_complexity(self, prompt: str) -> bool:
         """
         Calibrage V2: "La Pince". On force le local pour tout ce qui est culture G.
@@ -328,6 +337,17 @@ class BaseAgent:
         specific_locals = getattr(Config, "AGENT_SPECIFIC_LOCAL_MODELS", {})
         default_local = "gemma3:12b"
         local_model = specific_locals.get(self.name, default_local)
+
+        # Enforcement MAX_LOCAL_MODEL_SIZE : fallback si le modèle est trop gros pour la VRAM
+        max_size = getattr(Config, "MAX_LOCAL_MODEL_SIZE", 0)
+        if max_size > 0:
+            model_size = self._extract_model_size(local_model)
+            if model_size > max_size:
+                self.log_thought(
+                    f"📏 Modèle {local_model} ({model_size}B) dépasse la limite ({max_size}B) → fallback {default_local}",
+                    type="warning",
+                )
+                local_model = default_local
 
         # Etape 2 : Évaluation de la nécessité du Cloud
         if self._force_local_next:

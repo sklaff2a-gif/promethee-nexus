@@ -146,16 +146,24 @@ class DivineFactory(BaseAgent):
         self.log_thought(f"Analyse Factory V25.0 : {mission[:50]}...", type="thought")
 
         # 1. DÉTECTION DU CHEMIN
-        path_match = re.search(r'(?:crée|écris|fichier|path|write|update|dans|cible)\s+[:\s]*([a-zA-Z0-9_/\.\\-]+)', mission + "\n" + context, re.IGNORECASE)
+        # Regex durcie : exige au moins un . / ou \ dans le groupe capturé (évite "les", "des", etc.)
+        _PATH_REGEX = re.compile(
+            r'(?:crée|écris|fichier|path|write|update|dans|cible)\s+[:\s]*'
+            r'([a-zA-Z0-9_/\\-]*[./\\][a-zA-Z0-9_/\\.\\-]+)',
+            re.IGNORECASE,
+        )
+        full_search_text = mission + "\n" + context
         target_path = None
-        
-        if path_match:
+
+        for path_match in _PATH_REGEX.finditer(full_search_text):
             candidate = path_match.group(1).strip().strip("'").strip('"')
             if self._is_valid_target_path(candidate):
                 target_path = candidate
+                break
             else:
                 logger.info(f"[FACTORY] Path rejeté (faux positif regex) : '{candidate}'")
-        elif "FICHIER:" in context:
+
+        if not target_path and "FICHIER:" in context:
             try:
                 candidate = context.split("FICHIER:")[1].split()[0].strip()
                 if self._is_valid_target_path(candidate):
@@ -245,7 +253,12 @@ class DivineFactory(BaseAgent):
                 await bus.publish("AGENT_RESPONSE", {"agent": "factory", "content": msg, "timestamp": str(datetime.now())})
 
                 # --- AMÉLIORATION A : TRIGGER QUALITÉ ---
-                await bus.publish("ARTIFACT_CREATED", {"filepath": full_path, "filename": target_path})
+                artifact_event = {"filepath": full_path, "filename": target_path}
+                # Propager evolution_spec_id si présent (pipeline Evolution)
+                evo_spec_id = task_payload.get("evolution_spec_id")
+                if evo_spec_id:
+                    artifact_event["spec_id"] = evo_spec_id
+                await bus.publish("ARTIFACT_CREATED", artifact_event)
                 
                 return {"status": "success", "result": msg}
             

@@ -27,8 +27,22 @@ _log_formatter = logging.Formatter(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 
+
+class _SafeTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
+    """Sous-classe qui catch PermissionError dans doRollover().
+    Sur Windows, _TeeStream tient un handle sur le fichier log,
+    ce qui empêche la rotation. On skip et on retente au prochain emit."""
+
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except PermissionError:
+            # Le fichier est verrouillé (probablement par _TeeStream) — on skip la rotation
+            pass
+
+
 # FileHandler rotatif : 1 fichier par jour, garde 14 jours
-_file_handler = logging.handlers.TimedRotatingFileHandler(
+_file_handler = _SafeTimedRotatingFileHandler(
     os.path.join(_LOGS_DIR, "promethee.log"),
     when="midnight", backupCount=14, encoding="utf-8"
 )

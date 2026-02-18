@@ -62,7 +62,25 @@ class Config:
     PROJECT_ID = os.getenv("PROJECT_ID", "default")
     CHROMA_PERSIST_PATH = os.getenv("CHROMA_DB_PATH", "./memory/chroma_db")
 
+    # --- MODE NUIT (modèles réduits pour éviter crash GPU) ---
+    NIGHT_MODE = os.getenv("NIGHT_MODE", "0") == "1"
+    NIGHT_MODE_LOCAL_MODELS = {
+        "coder": "qwen3-coder:14b",
+        "strategist": "gemma3:12b",
+    }
+    # Limite de taille modèle local (0 = pas de limite). Ex: 16 pour bloquer les 30b sur 16GB VRAM.
+    MAX_LOCAL_MODEL_SIZE = int(os.getenv("MAX_LOCAL_MODEL_SIZE", "0"))
+
+    if NIGHT_MODE:
+        for agent_name, night_model in NIGHT_MODE_LOCAL_MODELS.items():
+            if agent_name in AGENT_SPECIFIC_LOCAL_MODELS:
+                AGENT_SPECIFIC_LOCAL_MODELS[agent_name] = night_model
+
     if not GOOGLE_API_KEY:
         print(f"⚠️ [CONFIG] Mode 100% LOCAL activé.")
     else:
         print(f"✅ [CONFIG] Matrice Multi-Modèles : ACTIVE ({len(MODELS)} modèles chargés).")
+    if NIGHT_MODE:
+        print(f"🌙 [CONFIG] Mode Nuit : modèles réduits ({', '.join(f'{k}→{v}' for k, v in NIGHT_MODE_LOCAL_MODELS.items())})")
+    if MAX_LOCAL_MODEL_SIZE > 0:
+        print(f"📏 [CONFIG] Limite modèle local : {MAX_LOCAL_MODEL_SIZE}B max")

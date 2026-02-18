@@ -508,6 +508,7 @@ class DivineEvolution(BaseAgent):
             "mission": (
                 f"Analyse cette amélioration R&D [{spec.id}] {spec.name}.\n"
                 f"Fichier cible: {spec.target_file}\n"
+                f"EVOLUTION_SPEC_ID: {spec.id}\n"
                 f"S'il est sûr, valide-le pour déploiement (Envoi Formatter)."
             ),
             "context": generated_code
@@ -519,8 +520,8 @@ class DivineEvolution(BaseAgent):
             deploy_status = "rejected_no_code"
             self.log_thought(f"⚠️ [{spec.id}] Architect a validé mais le code n'est pas structurel Python — rejeté.", type="warning")
         if deploy_status == "success":
-            catalog.mark_deployed(spec.id)
-            self.log_thought(f"✅ [{spec.id}] {spec.name} déployé avec succès !", type="info")
+            catalog.mark_pending_deploy(spec.id)
+            self.log_thought(f"✅ [{spec.id}] {spec.name} soumis au pipeline Formatter→Factory (pending_deploy).", type="info")
 
             # Publier l'événement
             try:

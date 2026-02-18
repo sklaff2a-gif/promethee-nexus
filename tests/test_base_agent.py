@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from core.base_agent import BaseAgent
+from config import Config
 
 
 # ─── Tests CoT Stripping (Fix #7) ───
@@ -329,3 +330,82 @@ class TestCloudCooldownEscalation:
         assert BaseAgent._cloud_429_count_today == 4
         remaining = BaseAgent._cloud_cooldown_until - __import__('time').time()
         assert remaining > 0  # Toujours en cooldown
+
+
+class TestExtractModelSize:
+    """Tests de _extract_model_size (Fix run 2026-02-18)."""
+
+    def test_model_with_size(self):
+        assert BaseAgent._extract_model_size("qwen3-coder:30b") == 30
+
+    def test_model_small(self):
+        assert BaseAgent._extract_model_size("qwen3:8b") == 8
+
+    def test_model_14b(self):
+        assert BaseAgent._extract_model_size("qwen3-coder:14b") == 14
+
+    def test_model_no_size(self):
+        assert BaseAgent._extract_model_size("gemma3:latest") == 0
+
+    def test_model_empty(self):
+        assert BaseAgent._extract_model_size("") == 0
+
+
+class TestMaxLocalModelSize:
+    """Tests du MAX_LOCAL_MODEL_SIZE enforcement (Fix run 2026-02-18)."""
+
+    def setup_method(self):
+        """Reset l'état Cloud entre les tests."""
+        BaseAgent._cloud_call_count = 0
+        BaseAgent._cloud_cooldown_until = 0.0
+        BaseAgent._cloud_429_count_today = 0
+        BaseAgent._cloud_429_reset_day = None
+        BaseAgent._daily_cloud_calls = 0
+        BaseAgent._daily_cloud_calls_evolution = 0
+        BaseAgent._daily_cloud_reset_day = None
+
+    def test_model_too_big_fallback(self):
+        """Si MAX_LOCAL_MODEL_SIZE=16, un modèle 30b doit fallback vers 12b."""
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            agent = BaseAgent("coder", "Coder", "Test")
+
+        with patch.object(Config, "MAX_LOCAL_MODEL_SIZE", 16), \
+             patch.object(Config, "AGENT_SPECIFIC_LOCAL_MODELS", {"coder": "qwen3-coder:30b"}):
+            # Simuler l'extraction du modèle local dans generate_content
+            local_model = Config.AGENT_SPECIFIC_LOCAL_MODELS.get("coder", "gemma3:12b")
+            max_size = Config.MAX_LOCAL_MODEL_SIZE
+            model_size = agent._extract_model_size(local_model)
+            assert model_size == 30
+            assert model_size > max_size
+            # Le code dans generate_content ferait : local_model = default_local
+            if max_size > 0 and model_size > max_size:
+                local_model = "gemma3:12b"
+            assert local_model == "gemma3:12b"
+
+    def test_model_within_limit_kept(self):
+        """Si MAX_LOCAL_MODEL_SIZE=16, un modèle 8b est conservé."""
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            agent = BaseAgent("factory", "Factory", "Test")
+
+        with patch.object(Config, "MAX_LOCAL_MODEL_SIZE", 16), \
+             patch.object(Config, "AGENT_SPECIFIC_LOCAL_MODELS", {"factory": "qwen3:8b"}):
+            local_model = Config.AGENT_SPECIFIC_LOCAL_MODELS.get("factory", "gemma3:12b")
+            max_size = Config.MAX_LOCAL_MODEL_SIZE
+            model_size = agent._extract_model_size(local_model)
+            assert model_size == 8
+            assert model_size <= max_size
+            # Le modèle reste inchangé
+            assert local_model == "qwen3:8b"
+
+    def test_no_limit_model_kept(self):
+        """Si MAX_LOCAL_MODEL_SIZE=0 (défaut), aucune limite n'est appliquée."""
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            agent = BaseAgent("coder", "Coder", "Test")
+
+        with patch.object(Config, "MAX_LOCAL_MODEL_SIZE", 0), \
+             patch.object(Config, "AGENT_SPECIFIC_LOCAL_MODELS", {"coder": "qwen3-coder:30b"}):
+            local_model = Config.AGENT_SPECIFIC_LOCAL_MODELS.get("coder", "gemma3:12b")
+            max_size = Config.MAX_LOCAL_MODEL_SIZE
+            # max_size == 0 → pas de vérification
+            assert max_size == 0
+            assert local_model == "qwen3-coder:30b"

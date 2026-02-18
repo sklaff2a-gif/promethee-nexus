@@ -841,3 +841,47 @@ class TestSystemState:
             assert state["success_rate"] == 0.4
             assert state["cloud_budget_pct"] == 80.0
             assert state["health"] == "DEGRADED"
+
+
+class TestPendingDeploy:
+    """Tests pour mark_pending_deploy et timeout (Fix run 2026-02-18)."""
+
+    def setup_method(self):
+        EvolutionCatalog.reset_singleton()
+        self.cat = EvolutionCatalog()
+
+    def test_mark_pending_deploy(self):
+        """mark_pending_deploy met le status à pending_deploy."""
+        spec_id = "PERF-001"
+        self.cat.mark_attempted(spec_id)
+        self.cat.mark_pending_deploy(spec_id)
+        spec = self.cat.get_spec(spec_id)
+        assert spec.status == "pending_deploy"
+
+    def test_pending_deploy_not_eligible(self):
+        """Une spec en pending_deploy n'est PAS éligible."""
+        spec_id = "PERF-001"
+        self.cat.mark_pending_deploy(spec_id)
+        eligible_ids = [s.id for s in self.cat.get_eligible_specs()]
+        assert spec_id not in eligible_ids
+
+    def test_pending_deploy_timeout_reverts_to_available(self):
+        """Après >1h en pending_deploy, la spec redevient available."""
+        from datetime import datetime, timedelta
+        spec_id = "PERF-001"
+        self.cat.mark_pending_deploy(spec_id)
+        # Simuler un timestamp >1h dans le passé
+        spec = self.cat.get_spec(spec_id)
+        spec.last_attempt = (datetime.now() - timedelta(hours=2)).isoformat()
+        # get_eligible_specs devrait déclencher le timeout
+        self.cat.get_eligible_specs()
+        assert spec.status == "available"
+
+    def test_pending_deploy_within_timeout_stays(self):
+        """Si <1h en pending_deploy, la spec reste pending_deploy."""
+        spec_id = "PERF-001"
+        self.cat.mark_pending_deploy(spec_id)
+        spec = self.cat.get_spec(spec_id)
+        # Le timestamp est récent (vient d'être marqué)
+        self.cat.get_eligible_specs()
+        assert spec.status == "pending_deploy"

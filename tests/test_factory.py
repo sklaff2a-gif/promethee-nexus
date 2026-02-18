@@ -361,3 +361,57 @@ class TestFactoryAntiTruncation:
         from Agents.factory_agent import TRUNCATION_MIN_RATIO, TRUNCATION_MIN_FILE_SIZE
         assert TRUNCATION_MIN_RATIO == 0.60
         assert TRUNCATION_MIN_FILE_SIZE == 500
+
+
+class TestFactoryRegexFallback:
+    """Tests de la regex durcie et du fallback finditer (Fix run 2026-02-18)."""
+
+    @pytest.fixture
+    def factory(self):
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            from Agents.factory_agent import DivineFactory
+            return DivineFactory()
+
+    def test_dans_les_fichiers_not_captured(self, factory):
+        """'dans les fichiers' ne doit PAS capturer 'les' comme path."""
+        import re
+        _PATH_REGEX = re.compile(
+            r'(?:crée|écris|fichier|path|write|update|dans|cible)\s+[:\s]*'
+            r'([a-zA-Z0-9_/\\-]*[./\\][a-zA-Z0-9_/\\.\\-]+)',
+            re.IGNORECASE,
+        )
+        text = "dans les fichiers de configuration"
+        match = _PATH_REGEX.search(text)
+        # "les" ne contient ni . ni / ni \ → la regex ne le capture pas
+        assert match is None
+
+    def test_regex_captures_real_path(self, factory):
+        """La regex capture un vrai chemin avec extension."""
+        import re
+        _PATH_REGEX = re.compile(
+            r'(?:crée|écris|fichier|path|write|update|dans|cible)\s+[:\s]*'
+            r'([a-zA-Z0-9_/\\-]*[./\\][a-zA-Z0-9_/\\.\\-]+)',
+            re.IGNORECASE,
+        )
+        text = "écris dans core/test_module.py le code suivant"
+        match = _PATH_REGEX.search(text)
+        assert match is not None
+        assert match.group(1) == "core/test_module.py"
+
+    @pytest.mark.asyncio
+    async def test_finditer_fallback_skips_false_positive(self, factory, tmp_path):
+        """Si le 1er match est dans la stoplist, finditer cherche le suivant."""
+        # On construit un texte avec "dans les" (faux positif) suivi d'un vrai path
+        payload = {
+            "mission": "écris dans Agents/new_tool.py",
+            "context": "```python\nimport os\ndef hello():\n    return 42\n```"
+        }
+        factory.project_root = str(tmp_path)
+        agents_dir = tmp_path / "Agents"
+        agents_dir.mkdir(parents=True, exist_ok=True)
+
+        with patch("core.event_bus.bus.bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+            result = await factory.process_task(payload)
+        assert result["status"] == "success"
+        assert "Agents/new_tool.py" in result["result"]

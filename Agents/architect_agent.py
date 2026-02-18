@@ -170,6 +170,11 @@ FORMAT DE RÉPONSE :
                     "context": full_content
                 }
 
+                # Propager EVOLUTION_SPEC_ID si présent (pipeline Evolution → Factory)
+                spec_id_match = re.search(r'EVOLUTION_SPEC_ID:\s*(\S+)', mission)
+                if spec_id_match:
+                    formatter_payload["evolution_spec_id"] = spec_id_match.group(1)
+
                 loop = asyncio.get_running_loop()
                 loop.create_task(orchestrator.dispatch_task("formatter", formatter_payload))
 

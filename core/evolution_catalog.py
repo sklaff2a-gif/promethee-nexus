@@ -33,7 +33,7 @@ class ImprovementSpec:
     dependencies: list = field(default_factory=list)
     combinable_with: list = field(default_factory=list)
     # Tracking (persisté via JSON)
-    status: str = "available"  # available|attempted|deployed|failed|combined|generated|confirmed|rolled_back
+    status: str = "available"  # available|attempted|pending_deploy|deployed|failed|combined|generated|confirmed|rolled_back
     attempts: int = 0
     max_attempts: int = 3
     last_attempt: Optional[str] = None
@@ -1513,6 +1513,17 @@ class EvolutionCatalog:
     def get_eligible_specs(self) -> List[ImprovementSpec]:
         """Retourne les specs éligibles (filtre déterministe)."""
         now = datetime.now()
+        # Timeout pending_deploy : si >1h, revert à available
+        for spec in self.specs.values():
+            if spec.status == "pending_deploy" and spec.last_attempt:
+                try:
+                    last = datetime.fromisoformat(spec.last_attempt)
+                    if (now - last) > timedelta(hours=1):
+                        logger.warning(f"Catalogue: {spec.id} pending_deploy timeout (>1h) → available")
+                        spec.status = "available"
+                        self._save()
+                except (ValueError, TypeError):
+                    pass
         eligible = []
         for spec in self.specs.values():
             # Exclure : pas available
@@ -1699,6 +1710,16 @@ class EvolutionCatalog:
         self._stats["total_attempted"] += 1
         self._stats["last_cycle"] = datetime.now().isoformat()
         self._save()
+
+    def mark_pending_deploy(self, spec_id: str):
+        """Marque une spec comme en attente de confirmation Factory."""
+        spec = self.specs.get(spec_id)
+        if not spec:
+            return
+        spec.status = "pending_deploy"
+        spec.last_attempt = datetime.now().isoformat()
+        self._save()
+        logger.info(f"Catalogue: {spec_id} en attente de déploiement (pending_deploy).")
 
     def mark_deployed(self, spec_id: str):
         spec = self.specs.get(spec_id)
