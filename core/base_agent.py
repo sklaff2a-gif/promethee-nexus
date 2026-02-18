@@ -11,6 +11,7 @@ import pkgutil
 import inspect
 import warnings
 import time
+from collections import deque
 from typing import Dict, Any, List
 
 # Setup des chemins
@@ -44,10 +45,16 @@ class BaseAgent:
     - Interface : Publication temps réel sur le Bus
     - Budget : Compteur d'appels Cloud partagé + cooldown 429 + quotas journaliers
     """
-    # Compteur Cloud partagé entre toutes les instances
-    _cloud_call_count = 0
-    _cloud_call_reset_time = time.time()
-    MAX_CLOUD_CALLS_PER_HOUR = 100
+    # RPM tracking : fenêtre glissante de 60s par modèle
+    _rpm_windows: dict = {}  # model_name -> deque of timestamps
+
+    # Budget journalier par modèle (reset à minuit)
+    _daily_model_calls: dict = {}  # model_name -> int
+    _daily_model_reset_day = None
+
+    # Compteur spécifique Evolution (budget réservé R&D)
+    _daily_cloud_calls_evolution = 0
+    MAX_DAILY_EVOLUTION_CLOUD = 40  # Evolution peut utiliser max 40 appels Pro/jour
 
     # Sémaphore global : limite les appels Ollama concurrents (évite saturation RAM/CPU)
     _ollama_semaphore = None  # Initialisé lazily (nécessite une event loop)
@@ -55,17 +62,9 @@ class BaseAgent:
 
     # Cooldown après erreur 429 (quota exceeded)
     _cloud_cooldown_until = 0.0  # timestamp jusqu'auquel le Cloud est désactivé
-    CLOUD_COOLDOWN_SECONDS = 3600  # 1 heure de cooldown après un 429
+    CLOUD_COOLDOWN_SECONDS = 900  # 15 min de cooldown après un 429 (Tier 1)
     _cloud_429_count_today = 0    # Nombre de 429 reçus aujourd'hui
     _cloud_429_reset_day = None   # Jour du dernier reset du compteur 429
-
-    # Quotas journaliers Gemini Free Tier (RPD = requests per day)
-    _daily_cloud_calls = 0
-    _daily_cloud_calls_evolution = 0  # Compteur séparé pour Evolution
-    _daily_cloud_reset_day = None
-    MAX_DAILY_CLOUD_CALLS = 50        # Budget total conservateur
-    MAX_DAILY_EVOLUTION_CALLS = 15    # Réservé pour Evolution (R&D)
-    # Les autres agents partagent MAX_DAILY_CLOUD_CALLS - MAX_DAILY_EVOLUTION_CALLS = 35
 
     # Demi-vie mémoire en jours (surchargeable par agent)
     MEMORY_HALF_LIFE_DAYS = 30
@@ -216,6 +215,33 @@ class BaseAgent:
             logger.warning(f"[{self.name}] Échec recall mémoire ({collection}) : {e}")
         return ""
 
+    @classmethod
+    def _check_rpm(cls, model_name: str) -> bool:
+        """Vérifie si on est sous la limite RPM pour ce modèle."""
+        rpm_limits = getattr(Config, 'CLOUD_RPM_LIMITS', {})
+        rpm_default = getattr(Config, 'CLOUD_RPM_DEFAULT', 30)
+        limit = rpm_limits.get(model_name, rpm_default)
+
+        now = time.time()
+        window = cls._rpm_windows.setdefault(model_name, deque())
+        while window and window[0] < now - 60:
+            window.popleft()
+        return len(window) < limit
+
+    @classmethod
+    def _record_cloud_call(cls, model_name: str):
+        """Enregistre un appel pour RPM + budget journalier."""
+        cls._rpm_windows.setdefault(model_name, deque()).append(time.time())
+        cls._daily_model_calls[model_name] = cls._daily_model_calls.get(model_name, 0) + 1
+
+    @classmethod
+    def _check_daily_budget(cls, model_name: str) -> bool:
+        """Vérifie le budget journalier pour ce modèle."""
+        daily_limits = getattr(Config, 'CLOUD_DAILY_LIMITS', {})
+        limit = daily_limits.get(model_name, 500)  # défaut généreux
+        used = cls._daily_model_calls.get(model_name, 0)
+        return used < limit
+
     def _get_gemini_client(self, model_name):
         try:
             with warnings.catch_warnings():
@@ -363,53 +389,58 @@ class BaseAgent:
         if needs_cloud:
             now = time.time()
 
-            # Reset compteur horaire
-            if now - BaseAgent._cloud_call_reset_time > 3600:
-                BaseAgent._cloud_call_count = 0
-                BaseAgent._cloud_call_reset_time = now
-
-            # Reset compteur journalier
+            # Reset compteurs journaliers
             from datetime import date
             today = date.today()
-            if BaseAgent._daily_cloud_reset_day != today:
-                BaseAgent._daily_cloud_calls = 0
+            if BaseAgent._daily_model_reset_day != today:
+                BaseAgent._daily_model_calls = {}
                 BaseAgent._daily_cloud_calls_evolution = 0
                 BaseAgent._cloud_429_count_today = 0
                 BaseAgent._cloud_cooldown_until = 0.0  # Reset cooldown au nouveau jour
-                BaseAgent._daily_cloud_reset_day = today
+                BaseAgent._daily_model_reset_day = today
 
-            # Budget Cloud séparé : Evolution a son propre quota réservé
             is_evolution = self.name == "evolution"
-            if is_evolution:
-                daily_limit = BaseAgent.MAX_DAILY_EVOLUTION_CALLS
-                daily_used = BaseAgent._daily_cloud_calls_evolution
-            else:
-                daily_limit = BaseAgent.MAX_DAILY_CLOUD_CALLS - BaseAgent.MAX_DAILY_EVOLUTION_CALLS
-                daily_used = BaseAgent._daily_cloud_calls - BaseAgent._daily_cloud_calls_evolution
 
             # Vérification cooldown 429
             if now < BaseAgent._cloud_cooldown_until:
                 remaining = int(BaseAgent._cloud_cooldown_until - now)
                 self.log_thought(f"⏸️ Cloud en cooldown 429 ({remaining}s restantes) -> Fallback Local", type="warning")
                 needs_cloud = False
-            elif BaseAgent._cloud_call_count >= BaseAgent.MAX_CLOUD_CALLS_PER_HOUR:
-                self.log_thought(f"💰 Budget Cloud horaire atteint ({BaseAgent.MAX_CLOUD_CALLS_PER_HOUR}/h) -> Fallback Local", type="warning")
-                needs_cloud = False
-            elif daily_used >= daily_limit:
-                self.log_thought(f"💰 Budget Cloud {'Evolution' if is_evolution else 'général'} atteint ({daily_used}/{daily_limit}) -> Fallback Local", type="warning")
-                needs_cloud = False
             else:
                 cloud_response = None
                 used_model = "Aucun"
                 for model_name in self.cloud_models:
+                    # Vérifier RPM pour ce modèle
+                    if not BaseAgent._check_rpm(model_name):
+                        rpm_limits = getattr(Config, 'CLOUD_RPM_LIMITS', {})
+                        rpm_default = getattr(Config, 'CLOUD_RPM_DEFAULT', 30)
+                        limit = rpm_limits.get(model_name, rpm_default)
+                        self.log_thought(f"⏱️ RPM atteint pour {model_name.split('/')[-1]} ({limit}/min) -> modèle suivant", type="warning")
+                        continue
+
+                    # Vérifier budget journalier pour ce modèle
+                    if not BaseAgent._check_daily_budget(model_name):
+                        daily_limits = getattr(Config, 'CLOUD_DAILY_LIMITS', {})
+                        limit = daily_limits.get(model_name, 500)
+                        self.log_thought(f"💰 Budget journalier atteint pour {model_name.split('/')[-1]} ({limit}/jour) -> modèle suivant", type="warning")
+                        continue
+
+                    # Vérifier budget Evolution séparé (si applicable)
+                    if is_evolution and BaseAgent._daily_cloud_calls_evolution >= BaseAgent.MAX_DAILY_EVOLUTION_CLOUD:
+                        self.log_thought(f"💰 Budget Evolution épuisé ({BaseAgent._daily_cloud_calls_evolution}/{BaseAgent.MAX_DAILY_EVOLUTION_CLOUD})", type="warning")
+                        break
+
                     try:
                         client = self._get_gemini_client(model_name)
                         if not client: continue
-                        self.log_thought(f"🚀 Escalade Cloud (Tâche Complexe) : {model_name.split('/')[-1]}...", type="thought")
+                        rpm_w = BaseAgent._rpm_windows.get(model_name, deque())
+                        rpm_count = sum(1 for t in rpm_w if t > time.time() - 60)
+                        rpm_limits = getattr(Config, 'CLOUD_RPM_LIMITS', {})
+                        rpm_limit = rpm_limits.get(model_name, getattr(Config, 'CLOUD_RPM_DEFAULT', 30))
+                        self.log_thought(f"🚀 Escalade Cloud : {model_name.split('/')[-1]} ({rpm_count}/{rpm_limit} RPM)...", type="thought")
                         loop = asyncio.get_running_loop()
                         response = await loop.run_in_executor(None, client.generate_content, full_prompt)
-                        BaseAgent._cloud_call_count += 1
-                        BaseAgent._daily_cloud_calls += 1
+                        BaseAgent._record_cloud_call(model_name)
                         if is_evolution:
                             BaseAgent._daily_cloud_calls_evolution += 1
                         if response.text:
@@ -431,7 +462,7 @@ class BaseAgent:
                                 f"— cooldown {remaining}s activé",
                                 type="warning"
                             )
-                            break  # Stop la cascade, pas la peine d'essayer les autres modèles
+                            break  # Stop la cascade
                         continue
 
                 # Si le Cloud échoue, fallback sur le Local
@@ -447,12 +478,12 @@ class BaseAgent:
 
     @classmethod
     def _activate_cloud_cooldown(cls):
-        """Active le cooldown Cloud avec escalade exponentielle.
-        - 1er 429 du jour : cooldown 1h
-        - 2e 429 : cooldown 4h
-        - 3e+ 429 : cooldown jusqu'à minuit (quota journalier épuisé)
+        """Active le cooldown Cloud avec escalade (Tier 1 plus tolérant).
+        - 1er 429 du jour : cooldown 15 min
+        - 2e 429 : cooldown 1h
+        - 3e+ 429 : cooldown 4h
         """
-        from datetime import date, datetime, timedelta
+        from datetime import date
         today = date.today()
 
         # Reset compteur si nouveau jour
@@ -464,22 +495,17 @@ class BaseAgent:
         now = time.time()
 
         if cls._cloud_429_count_today >= 3:
-            # 3e+ 429 : quota journalier épuisé, cooldown jusqu'à minuit
-            midnight = datetime.combine(today + timedelta(days=1), datetime.min.time())
-            cooldown_seconds = int((midnight - datetime.now()).total_seconds())
-            cls._cloud_cooldown_until = now + cooldown_seconds
-            logger.warning(
-                f"[CLOUD] 429 x{cls._cloud_429_count_today} — quota journalier épuisé, "
-                f"cooldown jusqu'à minuit ({cooldown_seconds}s)"
-            )
-        elif cls._cloud_429_count_today == 2:
-            # 2e 429 : cooldown 4h
+            # 3e+ 429 : cooldown 4h
             cls._cloud_cooldown_until = now + 4 * 3600
-            logger.warning(f"[CLOUD] 429 x2 — cooldown étendu à 4h")
+            logger.warning(f"[CLOUD] 429 x{cls._cloud_429_count_today} — cooldown 4h")
+        elif cls._cloud_429_count_today == 2:
+            # 2e 429 : cooldown 1h
+            cls._cloud_cooldown_until = now + 3600
+            logger.warning(f"[CLOUD] 429 x2 — cooldown 1h")
         else:
-            # 1er 429 : cooldown standard 1h
+            # 1er 429 : cooldown 15 min (Tier 1)
             cls._cloud_cooldown_until = now + cls.CLOUD_COOLDOWN_SECONDS
-            logger.warning(f"[CLOUD] 429 x1 — cooldown standard {cls.CLOUD_COOLDOWN_SECONDS}s")
+            logger.warning(f"[CLOUD] 429 x1 — cooldown {cls.CLOUD_COOLDOWN_SECONDS}s")
 
     @classmethod
     def _get_ollama_semaphore(cls):

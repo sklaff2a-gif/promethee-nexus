@@ -156,13 +156,15 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
-        # Budget Cloud
+        # Budget Cloud (résumé RPM + quotas journaliers par modèle)
         cloud_used = 0
-        cloud_max = 100
+        cloud_max = 0
         try:
             from core.base_agent import BaseAgent
-            cloud_used = BaseAgent._cloud_call_count
-            cloud_max = BaseAgent.MAX_CLOUD_CALLS_PER_HOUR
+            from config import Config as _Cfg
+            cloud_used = sum(BaseAgent._daily_model_calls.values())
+            daily_limits = getattr(_Cfg, 'CLOUD_DAILY_LIMITS', {})
+            cloud_max = sum(daily_limits.values()) if daily_limits else 500
         except Exception:
             pass
 

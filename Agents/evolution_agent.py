@@ -160,7 +160,7 @@ class DivineEvolution(BaseAgent):
     async def _generate_code_cloud(self, prompt: str) -> str:
         """Génère du code via Gemini Cloud (bypass évaluateur de complexité).
         Cascade : essaie tous les modèles Cloud configurés.
-        Respecte le cooldown 429 et le budget quotidien Evolution.
+        Respecte le cooldown 429, les limites RPM et le budget quotidien Evolution.
         """
         now = time.time()
 
@@ -170,23 +170,33 @@ class DivineEvolution(BaseAgent):
             self.log_thought(f"⏸️ Cloud en cooldown 429 ({remaining}s restantes) → pas de génération Cloud", type="warning")
             return ""
 
-        # Vérifier et reset compteur journalier
+        # Reset compteurs journaliers si nouveau jour
         from datetime import date
         today = date.today()
-        if BaseAgent._daily_cloud_reset_day != today:
-            BaseAgent._daily_cloud_calls = 0
+        if BaseAgent._daily_model_reset_day != today:
+            BaseAgent._daily_model_calls = {}
             BaseAgent._daily_cloud_calls_evolution = 0
-            BaseAgent._daily_cloud_reset_day = today
+            BaseAgent._daily_model_reset_day = today
 
         # Vérifier budget quotidien Evolution
-        if BaseAgent._daily_cloud_calls_evolution >= BaseAgent.MAX_DAILY_EVOLUTION_CALLS:
+        if BaseAgent._daily_cloud_calls_evolution >= BaseAgent.MAX_DAILY_EVOLUTION_CLOUD:
             self.log_thought(
-                f"💰 Budget Cloud Evolution épuisé ({BaseAgent._daily_cloud_calls_evolution}/{BaseAgent.MAX_DAILY_EVOLUTION_CALLS})",
+                f"💰 Budget Cloud Evolution épuisé ({BaseAgent._daily_cloud_calls_evolution}/{BaseAgent.MAX_DAILY_EVOLUTION_CLOUD})",
                 type="warning"
             )
             return ""
 
         for model_name in self.cloud_models:
+            # Vérifier RPM pour ce modèle
+            if not BaseAgent._check_rpm(model_name):
+                self.log_thought(f"⏱️ RPM atteint pour {model_name.split('/')[-1]} -> modèle suivant", type="warning")
+                continue
+
+            # Vérifier budget journalier pour ce modèle
+            if not BaseAgent._check_daily_budget(model_name):
+                self.log_thought(f"💰 Budget journalier atteint pour {model_name.split('/')[-1]} -> modèle suivant", type="warning")
+                continue
+
             try:
                 client = self._get_gemini_client(model_name)
                 if not client:
@@ -194,8 +204,7 @@ class DivineEvolution(BaseAgent):
                 self.log_thought(f"☁️ Gemini ({model_name.split('/')[-1]}) — génération de code...", type="thought")
                 loop = asyncio.get_running_loop()
                 response = await loop.run_in_executor(None, client.generate_content, prompt)
-                BaseAgent._cloud_call_count += 1
-                BaseAgent._daily_cloud_calls += 1
+                BaseAgent._record_cloud_call(model_name)
                 BaseAgent._daily_cloud_calls_evolution += 1
                 if response.text and len(response.text) > 50:
                     return response.text

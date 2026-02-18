@@ -13,37 +13,41 @@ class Config:
     
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     
-    # --- CATALOGUE DES MODÈLES DISPONIBLES (Selon ton audit 2026) ---
+    # --- CATALOGUE DES MODÈLES DISPONIBLES (Tier 1 Google AI Pro) ---
     MODELS = {
-        "FAST": "models/gemini-2.5-flash",          # Le standard rapide
-        "SMART": "models/gemini-2.5-pro",           # Le cerveau (Raisonnement)
-        "STABLE": "models/gemini-2.0-flash",        # Le vieux fiable (Fallback)
-        "RESEARCH": "models/deep-research-pro-preview-12-2025", # Spécialiste Web
-        "VISION": "models/gemini-2.5-flash-image",  # Spécialiste Image
-        "CODE": "models/gemma-3-27b-it",            # Spécialiste Code (via API)
-        "AGENTIC": "models/gemini-2.5-computer-use-preview-10-2025" # Spécialiste Actions
+        "FAST": "models/gemini-2.5-flash",      # Rapide + économique (gros du trafic)
+        "SMART": "models/gemini-3.0-pro",        # Puissant (à économiser, coûte cher)
+    }
+
+    # --- Limites RPM Tier 1 (valeurs conservatrices à 80% du max) ---
+    CLOUD_RPM_LIMITS = {
+        "models/gemini-3.0-pro": 50,       # API: 60-150, on prend 50 (marge)
+        "models/gemini-2.5-flash": 250,    # API: 300-500, on prend 250 (marge)
+    }
+    CLOUD_RPM_DEFAULT = 30  # Pour tout modèle inconnu
+
+    # Budget journalier par modèle (protection $10/mois)
+    CLOUD_DAILY_LIMITS = {
+        "models/gemini-3.0-pro": 100,      # Pro: économiser (coûte ~10x plus que Flash)
+        "models/gemini-2.5-flash": 2000,   # Flash: quasi-illimité dans le budget
     }
 
     # --- STRATÉGIE D'ATTRIBUTION (Cascade de repli) ---
-    # Chaque agent reçoit une liste : [Choix 1 (Idéal), Choix 2 (Rapide), Choix 3 (Secours)]
     AGENT_MODEL_ROUTING = {
-        # Les Cerveaux (Besoin de QI élevé)
-        "strategist": [MODELS["SMART"], MODELS["FAST"], MODELS["STABLE"]],
-        "architect":  [MODELS["SMART"], MODELS["FAST"], MODELS["STABLE"]],
-        
-        # Les Spécialistes
-        "researcher": [MODELS["RESEARCH"], MODELS["SMART"], MODELS["FAST"]], # Utilise Deep Research !
-        "coder":      [MODELS["CODE"], MODELS["SMART"], MODELS["FAST"]],     # Utilise Gemma 3 27B !
-        "writer":     [MODELS["SMART"], MODELS["FAST"], MODELS["STABLE"]],
-        
-        # Les Ouvriers (Besoin de vitesse)
-        "factory":    [MODELS["FAST"], MODELS["STABLE"]],
-        "infra":      [MODELS["FAST"], MODELS["STABLE"]],
-        "security":   [MODELS["FAST"], MODELS["STABLE"]],
-        "evolution":  [MODELS["AGENTIC"], MODELS["SMART"], MODELS["FAST"]], # Test l'agentic
-        
-        # Par défaut (Fallback global)
-        "default":    [MODELS["FAST"], MODELS["STABLE"]]
+        # Cerveaux → Pro en premier, Flash en fallback
+        "strategist": [MODELS["SMART"], MODELS["FAST"]],
+        "architect":  [MODELS["SMART"], MODELS["FAST"]],
+        "writer":     [MODELS["SMART"], MODELS["FAST"]],
+        # Spécialistes → Flash par défaut, Pro en escalade (économie budget)
+        "researcher": [MODELS["FAST"], MODELS["SMART"]],
+        "coder":      [MODELS["FAST"], MODELS["SMART"]],
+        "evolution":  [MODELS["SMART"], MODELS["FAST"]],
+        # Ouvriers → Flash uniquement (pas besoin de Pro)
+        "factory":    [MODELS["FAST"]],
+        "infra":      [MODELS["FAST"]],
+        "security":   [MODELS["FAST"]],
+        # Fallback global
+        "default":    [MODELS["FAST"]],
     }
 
     # Configuration Locale (Ollama) inchangée
@@ -79,7 +83,7 @@ class Config:
     if not GOOGLE_API_KEY:
         print(f"⚠️ [CONFIG] Mode 100% LOCAL activé.")
     else:
-        print(f"✅ [CONFIG] Matrice Multi-Modèles : ACTIVE ({len(MODELS)} modèles chargés).")
+        print(f"✅ [CONFIG] Tier 1 Google AI Pro : ACTIVE ({len(MODELS)} modèles).")
     if NIGHT_MODE:
         print(f"🌙 [CONFIG] Mode Nuit : modèles réduits ({', '.join(f'{k}→{v}' for k, v in NIGHT_MODE_LOCAL_MODELS.items())})")
     if MAX_LOCAL_MODEL_SIZE > 0:
