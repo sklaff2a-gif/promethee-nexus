@@ -3,7 +3,6 @@ import logging
 import inspect
 import re
 import sys
-import traceback
 from typing import Dict, Any
 
 logger = logging.getLogger("Orchestrator")
@@ -35,10 +34,12 @@ class Orchestrator:
         return len(code_patterns) >= 2
 
     # Marqueurs de contextes internes → forcer le mode local sur l'agent
+    # DOIT rester synchronisé avec BaseAgent._LOCAL_FORCE_MARKERS
     _INTERNAL_CONTEXT_MARKERS = (
-        "PROTOCOLE_AUTONOMIE", "YOUTUBE_VEILLE", "DROPZONE_ANALYSIS",
-        "PROTOCOLE_AUTONOMIE_GRIMOIRE", "EVOLUTION_PIPELINE",
-        "COUNCIL_RESEARCH", "MEMORY_CLEANUP",
+        "PROTOCOLE_AUTONOMIE", "[MODE VEILLE]", "YOUTUBE_VEILLE",
+        "DROPZONE_ANALYSIS", "PROTOCOLE_AUTONOMIE_GRIMOIRE",
+        "CONSEIL multi-agents", "EVOLUTION_PIPELINE",
+        "MEMORY_CLEANUP", "COUNCIL_RESEARCH",
     )
 
     async def dispatch_task(self, target_slug: str, task_payload: Dict[str, Any]):
@@ -101,10 +102,21 @@ class Orchestrator:
 
             # --- Publication du statut pour SelfAwareness ---
             from core.event_bus.bus import bus
-            await bus.publish("MISSION_COMPLETE", {
+            resp_status = response.get("status", "success") if isinstance(response, dict) else "success"
+            await bus.publish("MISSION_FINISHED", {
                 "agent": target_slug,
-                "status": response.get("status", "success") if isinstance(response, dict) else "success",
+                "status": resp_status,
             })
+
+            # --- Publication AGENT_RESPONSE pour le frontend WebSocket ---
+            import time as _time
+            result_text = response.get("result", "") if isinstance(response, dict) else str(response)
+            if result_text and resp_status != "BLOCKED":
+                await bus.publish("AGENT_RESPONSE", {
+                    "agent": target_slug,
+                    "content": str(result_text)[:2000],
+                    "timestamp": str(_time.time()),
+                })
 
             # --- [V18.3] DISSIPATION D'EIDOLON ---
             if target_slug not in self.agents:

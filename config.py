@@ -50,8 +50,9 @@ class Config:
         "default":    [MODELS["FAST"]],
     }
 
-    # Configuration Locale (Ollama) inchangée
+    # Configuration Locale (Ollama)
     OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+    DEFAULT_LOCAL_MODEL = "gemma3:12b"  # Modèle local par défaut (évaluation complexité + routing + fallback)
     AGENT_SPECIFIC_LOCAL_MODELS = {
         "coder": "qwen3-coder:30b",
         "factory": "qwen3:8b",
@@ -63,6 +64,9 @@ class Config:
         "researcher": "qwen3-vl:8b"
     }
     
+    # Matériel du serveur (utilisé par infra_agent pour les seuils d'alerte)
+    HARDWARE = {"RAM_GB": 32, "VRAM_GB": 16}
+
     PROJECT_ID = os.getenv("PROJECT_ID", "default")
     CHROMA_PERSIST_PATH = os.getenv("CHROMA_DB_PATH", "./memory/chroma_db")
 

@@ -56,6 +56,8 @@ def _extract_api_signatures(source_code: str) -> str:
                 if name and name.isupper():
                     lines.append(f"  {name} = ...")
 
+    _func_types = (ast.FunctionDef, ast.AsyncFunctionDef)
+
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.ClassDef):
             bases = ", ".join(
@@ -63,16 +65,18 @@ def _extract_api_signatures(source_code: str) -> str:
             )
             lines.append(f"  class {node.name}({bases}):")
             for item in node.body:
-                if isinstance(item, ast.FunctionDef) and item.name == "__init__":
+                if isinstance(item, _func_types) and item.name == "__init__":
                     args = ", ".join(a.arg for a in item.args.args if a.arg != "self")
                     lines.append(f"    def __init__({args})")
-                elif isinstance(item, ast.FunctionDef) and not item.name.startswith("_"):
+                elif isinstance(item, _func_types) and not item.name.startswith("_"):
                     args = ", ".join(a.arg for a in item.args.args if a.arg != "self")
-                    lines.append(f"    def {item.name}({args})")
-        elif isinstance(node, ast.FunctionDef):
+                    prefix = "async def" if isinstance(item, ast.AsyncFunctionDef) else "def"
+                    lines.append(f"    {prefix} {item.name}({args})")
+        elif isinstance(node, _func_types):
             if not node.name.startswith("_"):
                 args = ", ".join(a.arg for a in node.args.args)
-                lines.append(f"  def {node.name}({args})")
+                prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+                lines.append(f"  {prefix} {node.name}({args})")
 
     return "\n".join(lines) if lines else ""
 
@@ -561,12 +565,11 @@ async def run_pipeline(filename: str, filepath: str):
         "detail": f"Pipeline complet — {filename} déployé avec succès"
     })
 
-    # Smart Restart si fichier système
+    # Smart Restart si fichier système — via bus pour un arrêt propre
     is_system_file = any(k in filepath for k in ["Agents", "core", "main.py", "config.py"])
     if is_system_file:
         logger.info(f"[SMART RESTART] Modification système détectée ({filename})")
-        await asyncio.sleep(3)
-        sys.exit(65)
+        await bus.publish("SMART_RESTART_REQUESTED", {"filename": filename})
 
 
 # --- Listener bus ---

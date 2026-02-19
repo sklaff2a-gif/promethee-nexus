@@ -294,13 +294,18 @@ class EvolutionFeedbackLoop:
                 f"FEEDBACK: Pas de .bak pour {target_file}, rollback impossible."
             )
 
-        # Publier l'événement rollback (pas de Smart Restart)
+        # Publier l'événement rollback + Smart Restart pour recharger le code restauré
         try:
             from core.event_bus.bus import bus
             await bus.publish("EVOLUTION_ROLLED_BACK", {
                 "spec_id": obs["spec_id"],
                 "spec_name": obs["spec_name"],
                 "target_file": target_file,
+            })
+            # Smart Restart : le fichier sur disque est l'ancien, mais le code en mémoire est le nouveau
+            await bus.publish("SMART_RESTART_REQUESTED", {
+                "filename": target_file,
+                "reason": f"rollback spec {obs.get('spec_name', '?')}",
             })
         except Exception:
             pass

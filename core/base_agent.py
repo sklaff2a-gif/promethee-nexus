@@ -58,6 +58,7 @@ class BaseAgent:
 
     # Sémaphore global : limite les appels Ollama concurrents (évite saturation RAM/CPU)
     _ollama_semaphore = None  # Initialisé lazily (nécessite une event loop)
+    _ollama_loop_id = None    # Détecte si l'event loop a changé (Smart Restart)
     MAX_CONCURRENT_OLLAMA = 2
 
     # Cooldown après erreur 429 (quota exceeded)
@@ -318,7 +319,7 @@ class BaseAgent:
 
         try:
             # On utilise le modèle local pour juger
-            eval_model = "gemma3:12b"
+            eval_model = getattr(Config, "DEFAULT_LOCAL_MODEL", "gemma3:12b")
             
             # PROMPT RENDU BEAUCOUP PLUS STRICT
             eval_prompt = (
@@ -351,6 +352,7 @@ class BaseAgent:
             self.log_thought("🧠 Souvenirs trouvés !", type="info")
             context_memory = f"\n[SOUVENIRS]:\n{mem1}\n"
 
+        # Note: council.py injecte aussi un contexte projet (_COUNCIL_PROJECT_CONTEXT) — garder cohérent
         full_prompt = (
             f"\n[SYSTEM: Nexus V20 (Local First) | AGENT: {self.name.upper()}]\n"
             f"[CONTRAINTE: Projet sur UN SEUL PC Windows + Ollama local. "
@@ -361,7 +363,7 @@ class BaseAgent:
 
         # Modèles Locaux
         specific_locals = getattr(Config, "AGENT_SPECIFIC_LOCAL_MODELS", {})
-        default_local = "gemma3:12b"
+        default_local = getattr(Config, "DEFAULT_LOCAL_MODEL", "gemma3:12b")
         local_model = specific_locals.get(self.name, default_local)
 
         # Enforcement MAX_LOCAL_MODEL_SIZE : fallback si le modèle est trop gros pour la VRAM
@@ -450,7 +452,7 @@ class BaseAgent:
                             # Si succès Cloud sur tâche complexe, on apprend
                             if len(cloud_response) > 50:
                                 self.remember(f"Q: {prompt}\nA: {cloud_response}", metadata={"source": used_model, "trigger": "cloud_escalation"})
-                            return self._strip_cot(cloud_response)
+                            return self._sanitize_response(self._strip_cot(cloud_response), self.name)
                     except Exception as e:
                         # Détecter les erreurs 429 (quota exceeded)
                         err_str = str(e)
@@ -474,7 +476,7 @@ class BaseAgent:
 
         # Exécution Locale (avec streaming temps réel)
         result = await self._call_ollama_stream(full_prompt, local_model)
-        return self._strip_cot(result)
+        return self._sanitize_response(self._strip_cot(result), self.name)
 
     @classmethod
     def _activate_cloud_cooldown(cls):
@@ -509,9 +511,14 @@ class BaseAgent:
 
     @classmethod
     def _get_ollama_semaphore(cls):
-        """Initialisation lazy du sémaphore (nécessite une event loop active)."""
-        if cls._ollama_semaphore is None:
+        """Initialisation lazy du sémaphore. Recréé si l'event loop a changé."""
+        try:
+            loop_id = id(asyncio.get_running_loop())
+        except RuntimeError:
+            return asyncio.Semaphore(cls.MAX_CONCURRENT_OLLAMA)
+        if cls._ollama_semaphore is None or cls._ollama_loop_id != loop_id:
             cls._ollama_semaphore = asyncio.Semaphore(cls.MAX_CONCURRENT_OLLAMA)
+            cls._ollama_loop_id = loop_id
         return cls._ollama_semaphore
 
     async def _call_ollama(self, prompt: str, model: str) -> str:

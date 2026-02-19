@@ -728,7 +728,7 @@ for agent, m in self._per_agent_metrics.items():
     }
 snapshot["per_agent_metrics"] = per_agent
 """,
-        validation="Publier 3 MISSION_COMPLETE avec agents différents, vérifier que le snapshot contient les métriques séparées.",
+        validation="Publier 3 MISSION_FINISHED avec agents différents, vérifier que le snapshot contient les métriques séparées.",
         tags=["observability", "metrics", "per-agent"],
         combinable_with=["OBS-002"],
     )
@@ -1778,9 +1778,10 @@ class EvolutionCatalog:
     # --- Meta-Evolution ---
 
     def generate_combinations(self) -> List[ImprovementSpec]:
-        """Génère des specs combinées à partir des specs déployées."""
+        """Génère des specs combinées à partir des specs déployées.
+        Seuil abaissé à 1 pour que le cross-target fonctionne même avec peu de déploiements."""
         deployed = [s for s in self.specs.values() if s.status == "deployed"]
-        if len(deployed) < 3:
+        if len(deployed) < 1:
             return []
 
         new_specs = []

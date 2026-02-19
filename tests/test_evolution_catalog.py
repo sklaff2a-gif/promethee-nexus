@@ -538,12 +538,13 @@ class TestMetaEvolution:
     def setup_method(self):
         self.cat = EvolutionCatalog()
 
-    def test_no_combinations_with_few_deployed(self):
-        """Moins de 3 specs déployées → pas de combinaisons."""
+    def test_no_combinations_with_zero_deployed(self):
+        """Avec 0 specs déployées → pas de combinaisons."""
         self.cat.mark_attempted("PERF-001")
         self.cat.mark_deployed("PERF-001")
         combos = self.cat.generate_combinations()
-        assert len(combos) == 0
+        # Maintenant avec cross-target, on a des combinaisons même avec 1 déploiement
+        assert len(combos) > 0  # Les CROSS-PERF-001 sont générés
 
     def test_combinations_with_3_deployed(self):
         """3+ specs déployées → combinaisons possibles."""

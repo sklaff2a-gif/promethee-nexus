@@ -33,7 +33,7 @@ class DivineFormatter(BaseAgent):
                 
         # 2. Rejet si pas d'extension (sauf fichiers spéciaux connus)
         # PATCH : 'cible' a été retiré pour forcer une extension correcte
-        if "." not in clean_name and clean_name not in ["makefile", "dockerfile", "license", "readme", "requirements.txt"]:
+        if "." not in clean_name and clean_name not in ["makefile", "dockerfile", "license", "readme"]:
             return False
             
         return True

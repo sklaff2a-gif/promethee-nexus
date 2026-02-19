@@ -64,7 +64,11 @@ class _TeeStream:
         self.log_handler = log_handler
 
     def write(self, text):
-        self.original.write(text)
+        try:
+            self.original.write(text)
+        except UnicodeEncodeError:
+            # Fallback: encode with errors='replace' for problematic characters
+            self.original.write(text.encode('utf-8', errors='replace').decode('utf-8', errors='replace'))
         if text.strip():
             record = logging.LogRecord(
                 name="stdout", level=logging.INFO, pathname="", lineno=0,
@@ -176,6 +180,14 @@ AGENTS_CONFIG = [
     ("formatter", "DivineFormatter", "formatter_agent"), # <--- AJOUT VITAL : L'Agent Formatter
 ]
 
+async def _on_smart_restart(data: dict):
+    """Smart Restart propre : laisse les opérations en cours finir, puis exit(65)."""
+    filename = data.get("filename", "?")
+    logger.info(f"[SMART RESTART] Programmé suite à modification: {filename}")
+    await asyncio.sleep(3)
+    os._exit(65)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tracemalloc.start()
@@ -217,6 +229,9 @@ async def lifespan(app: FastAPI):
 
     # --- CI/CD Pipeline (remplace quality_control_listener) ---
     ci_pipeline.start()
+
+    # --- Smart Restart via bus (propre, pas de sys.exit dans une Task) ---
+    bus.subscribe("SMART_RESTART_REQUESTED", _on_smart_restart)
 
     talk_logger.start()
     interface_logger.start()
@@ -271,6 +286,14 @@ async def ready():
     from config import Config
     from core.vector_store import ChromaMemoryManager
 
+    # Kill switch actif → système bloqué, pas prêt
+    if orchestrator.kill_switch_active:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={"ready": False, "reason": "kill_switch_active"},
+        )
+
     checks = {}
 
     # --- Ollama ---
@@ -295,9 +318,15 @@ async def ready():
             checks["chromadb"] = {"status": "error", "detail": "no_instance"}
         else:
             mgr = next(iter(instances.values()))
-            col = mgr._get_collection("collective_wisdom")
-            doc_count = col.count()
-            checks["chromadb"] = {"status": "ok", "project": mgr.project_id, "documents": doc_count}
+            mem_health = mgr.check_health()
+            checks["chromadb"] = {
+                "status": "ok" if mem_health["status"] == "healthy" else "error",
+                "detail": mem_health["status"],
+                "persistent": mem_health.get("persistent", False),
+                "collections": mem_health.get("collections", {}),
+                "probe_ok": mem_health.get("probe_ok", False),
+                "warnings": mem_health.get("warnings", []),
+            }
     except Exception as e:
         checks["chromadb"] = {"status": "error", "detail": str(e)}
 

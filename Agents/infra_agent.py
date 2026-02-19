@@ -1,6 +1,5 @@
 import logging
 import psutil
-import time
 from typing import Dict, Any
 from core.base_agent import BaseAgent
 from core.event_bus.bus import bus 
@@ -26,7 +25,10 @@ class DivineInfra(BaseAgent):
             description="Gère l'infrastructure et protège les limites physiques du serveur."
         )
         self.limits = getattr(Config, "HARDWARE", {"RAM_GB": 32, "VRAM_GB": 16})
-        self.system_instructions = "..." 
+        self.system_instructions = """Tu es le gardien infrastructure du projet Prométhée.
+CONTEXTE : Système multi-agents Python sur UN SEUL PC Windows (Ollama local, ChromaDB, FastAPI).
+TON RÔLE : Monitorer CPU/RAM/VRAM, diagnostiquer les problèmes de performance, recommander des optimisations.
+RÈGLES : Réponds en français. Base tes analyses sur les métriques réelles. Pas de Docker/Kubernetes/Cloud."""
 
     async def process_task(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
         mission = task_payload.get("mission", "")

@@ -18,7 +18,7 @@ STATE_FILE = os.path.join(
 )
 
 MAX_SNAPSHOTS = 50
-MAX_DAILY_ROUTINES_REF = 20  # Copie locale pour éviter import circulaire
+MAX_DAILY_ROUTINES_REF = 80  # Doit correspondre à autonomy_engine.MAX_DAILY_ROUTINES
 
 # --- Humeur synthétique (déterministe, premier match gagne) ---
 MOOD_MAP = [
@@ -70,6 +70,9 @@ class SelfAwarenessEngine:
         self._council_aborted = 0
         # Lacunes de connaissances détectées
         self._knowledge_gaps: List[Dict[str, Any]] = []
+        # Santé mémoire vectorielle (mise à jour via bus)
+        self._memory_status = "unknown"
+        self._memory_warnings: List[str] = []
         self._load()
 
     # --- Init & Reset ---
@@ -91,6 +94,8 @@ class SelfAwarenessEngine:
         self._ci_fail = 0
         self._council_aborted = 0
         self._knowledge_gaps = []
+        self._memory_status = "unknown"
+        self._memory_warnings = []
 
     @classmethod
     def reset_singleton(cls):
@@ -104,9 +109,10 @@ class SelfAwarenessEngine:
         if self._subscribed:
             return
         self._subscribed = True
-        bus.subscribe("MISSION_COMPLETE", self._on_agent_response)
+        bus.subscribe("MISSION_FINISHED", self._on_agent_response)
         bus.subscribe("COUNCIL_END", self._on_council_end)
         bus.subscribe("CI_PIPELINE_RESULT", self._on_ci_result)
+        bus.subscribe("MEMORY_HEALTH_ALERT", self._on_memory_alert)
 
     async def _on_agent_response(self, event: dict):
         self._mission_count += 1
@@ -126,6 +132,10 @@ class SelfAwarenessEngine:
             self._ci_pass += 1
         else:
             self._ci_fail += 1
+
+    async def _on_memory_alert(self, event: dict):
+        self._memory_status = event.get("status", "unknown")
+        self._memory_warnings = event.get("warnings", [])
 
     # --- Snapshot ---
 
@@ -190,6 +200,22 @@ class SelfAwarenessEngine:
                 "ollama_alive": last_health_check.get("ollama_alive", False),
             }
 
+        # Mémoire vectorielle
+        memory_health = {"status": self._memory_status}
+        if self._memory_warnings:
+            memory_health["warnings"] = self._memory_warnings
+        try:
+            from core.vector_store import ChromaMemoryManager
+            instances = ChromaMemoryManager._instances
+            if instances:
+                mgr = next(iter(instances.values()))
+                memory_health["persistent"] = mgr.is_persistent
+                memory_health["doc_count"] = sum(
+                    mgr.count_documents(c) for c in mgr.collections
+                )
+        except Exception:
+            pass
+
         # Performance
         total_missions = self._mission_count
         success_rate = (self._mission_success / total_missions) if total_missions > 0 else 1.0
@@ -237,6 +263,7 @@ class SelfAwarenessEngine:
                 "dead_letters": bus.dead_letter_count,
             },
             "health": health,
+            "memory": memory_health,
             "knowledge": {"journal_entries": journal_entries},
             "objectives": active_objectives,
             "trend": trend,
@@ -509,6 +536,21 @@ class SelfAwarenessEngine:
             bad_count = sum(1 for h in last_10_refactor if h.get("status") in ("low_quality", "error"))
             if bad_count / len(last_10_refactor) > 0.5:
                 _add("REFACTOR_RANDOM", -2.0)
+
+        # --- Règle 8 : Routine performante (anti-passivité) ---
+        # Si une routine a >60% de succès sur ses 10 dernières, bonus
+        for intent, statuses in intent_results.items():
+            last_10 = statuses[-10:]
+            if len(last_10) >= 4:
+                success_count = sum(1 for s in last_10 if s == "success")
+                if success_count / len(last_10) > 0.6:
+                    _add(intent, 2.0)
+
+        # --- Règle 9 : Councils productifs ---
+        if len(last_5_councils) >= 3:
+            consensus_count = sum(1 for h in last_5_councils if h.get("status") == "success")
+            if consensus_count / len(last_5_councils) >= 0.5:
+                _add("COUNCIL_DEBATE", 2.0)
 
         return adjustments
 

@@ -23,6 +23,7 @@ PRESIDENT_AGENT_NAME = "architect"
 MIN_ROUNDS_BEFORE_PRESIDENT = 2
 
 # Contexte projet injecté dans tous les prompts Council
+# Note: base_agent.generate_content() injecte aussi un header projet court — garder cohérent
 _COUNCIL_PROJECT_CONTEXT = (
     "CONTEXTE PROJET PROMÉTHÉE :\n"
     "Système multi-agents IA autonome. Stack : Python 3.11, FastAPI, Ollama (LLM local), "

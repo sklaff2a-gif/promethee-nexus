@@ -59,7 +59,7 @@ class DivineFactory(BaseAgent):
     def __init__(self):
         super().__init__(name="factory", role="System Executor", description="La Main de Prométhée.")
         self.manifest_path = "_FACTORY_HISTORY.txt"
-        self.project_root = os.path.abspath(".")
+        self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     def _log_to_manifest(self, action, path):
         try:
@@ -250,7 +250,8 @@ class DivineFactory(BaseAgent):
                 
                 # Feedback UI
                 from core.event_bus.bus import bus
-                await bus.publish("AGENT_RESPONSE", {"agent": "factory", "content": msg, "timestamp": str(datetime.now())})
+                import time as _time
+                await bus.publish("AGENT_RESPONSE", {"agent": "factory", "content": msg, "timestamp": str(_time.time())})
 
                 # --- AMÉLIORATION A : TRIGGER QUALITÉ ---
                 artifact_event = {"filepath": full_path, "filename": target_path}

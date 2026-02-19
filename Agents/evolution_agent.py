@@ -283,8 +283,7 @@ class DivineEvolution(BaseAgent):
         try:
             spec_response = await self.generate_content(spec_prompt)
 
-            # Extraire le JSON de la réponse
-            import re
+            # Extraire le JSON de la réponse (re importé en top-level)
             json_match = re.search(r'\{[^}]+\}', spec_response)
             if not json_match:
                 return {"status": "warning", "result": "R.A.S — format spec invalide."}
@@ -377,7 +376,13 @@ class DivineEvolution(BaseAgent):
             target = spec.target_file.replace("\\", "/")
             return target not in _PROTECTED_FILES
 
-        candidates = [c for c in catalog.get_top_candidates(8) if _is_eligible(c)][:5]
+        # Filtrer aussi via les insights d'apprentissage (specs qui échouent systématiquement)
+        registry = ExperienceRegistry()
+        insights = registry.get_learning_insights()
+        stuck_specs = {i["spec_id"] for i in insights if i["type"] == "repeated_phase_failure" and i["count"] >= 3}
+
+        candidates = [c for c in catalog.get_top_candidates(8)
+                      if _is_eligible(c) and c[0].id not in stuck_specs][:5]
         if not candidates:
             self.log_thought("📭 Catalogue épuisé : aucune spec éligible (protégés exclus).", type="info")
             # Tenter la méta-évolution
@@ -428,29 +433,25 @@ class DivineEvolution(BaseAgent):
                 pass
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
-        # Vérifier que le fichier n'est pas protégé par la Factory
-        try:
-            from Agents.factory_agent import _PROTECTED_FILES
-            normalized_target = spec.target_file.replace("\\", "/")
-            if normalized_target in _PROTECTED_FILES:
-                reason = f"Fichier protégé par Factory: {spec.target_file}"
-                self.log_thought(f"🛡️ {reason} — skip spec [{spec.id}]", type="warning")
-                catalog.mark_failed(spec.id, reason)
-                try:
-                    registry.record(Experience(
-                        id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
-                        spec_id=spec.id, spec_name=spec.name,
-                        attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
-                        phase_reached="phase2", outcome="failed", failure_reason=reason,
-                        code_source="", code_length=0,
-                        system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
-                        error_streak_at_attempt=ctx["error_streak"],
-                    ))
-                except Exception:
-                    pass
-                return {"status": "warning", "result": f"R.A.S — {reason}"}
-        except ImportError:
-            pass
+        # Vérifier que le fichier n'est pas protégé par la Factory (_PROTECTED_FILES importé en Phase 1)
+        normalized_target = spec.target_file.replace("\\", "/")
+        if normalized_target in _PROTECTED_FILES:
+            reason = f"Fichier protégé par Factory: {spec.target_file}"
+            self.log_thought(f"🛡️ {reason} — skip spec [{spec.id}]", type="warning")
+            catalog.mark_failed(spec.id, reason)
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase2", outcome="failed", failure_reason=reason,
+                    code_source="", code_length=0,
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
+            return {"status": "warning", "result": f"R.A.S — {reason}"}
 
         # --- PHASE 3 : MATÉRIALISATION (Gemini Cloud) ---
         self.log_thought(f"🛠️ Phase 3 : Génération du code via Gemini Cloud [{spec.id}]...", type="info")

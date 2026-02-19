@@ -6,6 +6,8 @@ import logging
 import unicodedata
 from typing import Optional
 
+logger = logging.getLogger("router")
+
 # Configuration minimale pour l'appel LLM autonome du routeur
 try:
     from config import Config
@@ -46,7 +48,7 @@ class RouterAgent:
         # Les recettes Grimoire sont spécialisées et matchent avant les mots-clés génériques.
         grimoire_match = RouterAgent._check_grimoire_index(m_low)
         if grimoire_match:
-            print(f"📖 ROUTER: Grimoire match -> {grimoire_match.upper()}")
+            logger.info(f"📖 ROUTER: Grimoire match -> {grimoire_match.upper()}")
             return grimoire_match
 
         # --- NIVEAU 1 : SYSTÈME RÉFLEXE (Règles strictes sur Agents Connus) ---
@@ -73,7 +75,7 @@ class RouterAgent:
 
         # --- NIVEAU 2 : AUTO-RÉFLEXION (Appel LLM Local) ---
         # Si aucune règle ne matche, on demande au LLM de trancher
-        print(f"🤔 ROUTER: Ambiguïté détectée sur '{mission[:30]}...'. Analyse Sémantique en cours...")
+        logger.info(f"🤔 ROUTER: Ambiguïté détectée sur '{mission[:30]}...'. Analyse Sémantique en cours...")
         return await RouterAgent._semantic_reflection(mission)
 
     @staticmethod
@@ -117,7 +119,7 @@ class RouterAgent:
 
             return best_slug
         except Exception as e:
-            print(f"⚠️ ROUTER: Erreur lecture index Grimoire : {e}")
+            logger.warning(f"⚠️ ROUTER: Erreur lecture index Grimoire : {e}")
         return None
 
     @staticmethod
@@ -142,7 +144,8 @@ class RouterAgent:
         """Demande à un petit modèle local de classer l'intention."""
         try:
             # On utilise un petit modèle rapide pour le routing
-            model = "gemma3:12b"
+            from config import Config
+            model = getattr(Config, "DEFAULT_LOCAL_MODEL", "gemma3:12b")
 
             # Ajout des agents Grimoire dans la liste
             grimoire_slugs = RouterAgent._get_grimoire_slugs()
@@ -173,12 +176,12 @@ class RouterAgent:
                 valid_agents = all_agents
                 for agent in valid_agents:
                     if agent in choice:
-                        print(f"💡 ROUTER: Décision IA -> {agent.upper()}")
+                        logger.info(f"💡 ROUTER: Décision IA -> {agent.upper()}")
                         return agent
 
-            print("⚠️ ROUTER: Echec réflexion IA, repli sur STRATEGIST.")
+            logger.warning("⚠️ ROUTER: Echec réflexion IA, repli sur STRATEGIST.")
             return "strategist"
 
         except Exception as e:
-            print(f"❌ ROUTER ERROR: {e}")
+            logger.error(f"❌ ROUTER ERROR: {e}")
             return "strategist"

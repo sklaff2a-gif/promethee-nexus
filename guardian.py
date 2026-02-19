@@ -64,8 +64,10 @@ def main():
                     retries += 1
                 else:
                     log("Crash tardif -> Redémarrage simple.", "WARN")
-                    # Pas de restore nécessaire, juste un reboot (peut-être une erreur réseau/Ollama)
-                    # Mais si ça boucle, on restore quand même au bout de 3 essais
+                    # Fonctionnement stable (>30s) → reset partiel du compteur de crashs
+                    if retries > 0:
+                        retries = max(0, retries - 1)
+                    # Mais si ça boucle quand même, on restore au bout de 3 essais
                     if retries > 2:
                         run_restore()
                 
