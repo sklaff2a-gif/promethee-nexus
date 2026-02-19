@@ -7,21 +7,30 @@ from Agents.evolution_agent import (
     _detect_alien_imports, _SEARCH_QUERIES, _SPEC_OFFTOPIC_THRESHOLD
 )
 from core.evolution_catalog import EvolutionCatalog, ImprovementSpec
+from core.experience_registry import ExperienceRegistry
 
 _FAKE_STATE_FILE = os.path.join(tempfile.gettempdir(), "test_evolution_state.json")
+_FAKE_REGISTRY_FILE = os.path.join(tempfile.gettempdir(), "test_evo_registry.json")
 
 
 @pytest.fixture(autouse=True)
 def isolate_catalog():
-    """Isole le catalogue entre chaque test."""
+    """Isole le catalogue et le registre d'expériences entre chaque test."""
     if os.path.exists(_FAKE_STATE_FILE):
         os.remove(_FAKE_STATE_FILE)
-    with patch("core.evolution_catalog.CATALOG_STATE_FILE", _FAKE_STATE_FILE):
+    if os.path.exists(_FAKE_REGISTRY_FILE):
+        os.remove(_FAKE_REGISTRY_FILE)
+    with patch("core.evolution_catalog.CATALOG_STATE_FILE", _FAKE_STATE_FILE), \
+         patch("core.experience_registry.REGISTRY_FILE", _FAKE_REGISTRY_FILE):
         EvolutionCatalog.reset_singleton()
+        ExperienceRegistry.reset_singleton()
         yield
         EvolutionCatalog.reset_singleton()
+        ExperienceRegistry.reset_singleton()
     if os.path.exists(_FAKE_STATE_FILE):
         os.remove(_FAKE_STATE_FILE)
+    if os.path.exists(_FAKE_REGISTRY_FILE):
+        os.remove(_FAKE_REGISTRY_FILE)
 
 
 class TestSpecOfftopic:
@@ -871,10 +880,14 @@ class TestPendingDeployPipeline:
     @pytest.fixture(autouse=True)
     def isolate_catalog(self, tmp_path):
         _state_file = str(tmp_path / "test_catalog.json")
-        with patch("core.evolution_catalog.CATALOG_STATE_FILE", _state_file):
+        _reg_file = str(tmp_path / "test_registry.json")
+        with patch("core.evolution_catalog.CATALOG_STATE_FILE", _state_file), \
+             patch("core.experience_registry.REGISTRY_FILE", _reg_file):
             EvolutionCatalog.reset_singleton()
+            ExperienceRegistry.reset_singleton()
             yield
             EvolutionCatalog.reset_singleton()
+            ExperienceRegistry.reset_singleton()
 
     @pytest.mark.asyncio
     async def test_pipeline_marks_pending_deploy_not_deployed(self):

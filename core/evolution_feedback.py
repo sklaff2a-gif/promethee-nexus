@@ -207,9 +207,21 @@ class EvolutionFeedbackLoop:
             "reasons": reasons,
         }
 
-        # Actions selon le verdict
+        # Mettre à jour l'expérience dans le registre
         spec_id = obs["spec_id"]
+        try:
+            from core.experience_registry import ExperienceRegistry
+            exp_registry = ExperienceRegistry()
+            exp_history = exp_registry.get_spec_history(spec_id)
+            if exp_history:
+                latest = exp_history[-1]
+                latest["post_deploy_verdict"] = verdict
+                latest["post_deploy_delta"] = round(delta_success, 4)
+                exp_registry._save()
+        except Exception as e:
+            logger.warning(f"FEEDBACK: Erreur mise à jour registre: {e}")
 
+        # Actions selon le verdict
         try:
             from core.evolution_catalog import catalog
             if verdict == "degraded":

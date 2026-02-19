@@ -4,9 +4,11 @@ import asyncio
 import os
 import re
 import time
+from datetime import datetime
 from typing import Dict, Any
 from core.base_agent import BaseAgent
 from core.prompt_templates import CODE_GENERATION_GUARDRAIL
+from core.experience_registry import ExperienceRegistry, Experience
 
 logger = logging.getLogger("evolution")
 
@@ -223,6 +225,22 @@ class DivineEvolution(BaseAgent):
                 continue
         return ""
 
+    @staticmethod
+    def _capture_system_context() -> dict:
+        """Capture le contexte système pour enrichir les Experience."""
+        ctx = {"mood": "", "success_rate": 1.0, "error_streak": 0}
+        try:
+            from core.self_awareness import awareness
+            snap = awareness.get_latest_snapshot()
+            if snap:
+                ctx["mood"] = snap.get("mood", "")
+                perf = snap.get("performance", {})
+                ctx["success_rate"] = perf.get("success_rate", 1.0)
+                ctx["error_streak"] = perf.get("error_streak", 0)
+        except Exception:
+            pass
+        return ctx
+
     def _read_target_file(self, target_file: str) -> str:
         """Lit le fichier cible depuis le projet."""
         file_path = os.path.join(_PROJECT_ROOT, target_file.replace("/", os.sep))
@@ -382,6 +400,12 @@ class DivineEvolution(BaseAgent):
 
         self.log_thought(f"🎯 Spec sélectionnée : [{spec.id}] {spec.name}", type="info")
 
+        # Variables de tracking pour le registre d'expériences
+        registry = ExperienceRegistry()
+        ctx = self._capture_system_context()
+        code_source = ""
+        generated_code = ""
+
         # --- PHASE 2 : PRÉPARATION ---
         self.log_thought(f"📖 Phase 2 : Lecture de {spec.target_file}...", type="thought")
         catalog.mark_attempted(spec.id)
@@ -390,6 +414,18 @@ class DivineEvolution(BaseAgent):
         if not source_code:
             reason = f"Fichier cible introuvable: {spec.target_file}"
             catalog.mark_failed(spec.id, reason)
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase2", outcome="failed", failure_reason=reason,
+                    code_source="", code_length=0,
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
         # Vérifier que le fichier n'est pas protégé par la Factory
@@ -400,12 +436,27 @@ class DivineEvolution(BaseAgent):
                 reason = f"Fichier protégé par Factory: {spec.target_file}"
                 self.log_thought(f"🛡️ {reason} — skip spec [{spec.id}]", type="warning")
                 catalog.mark_failed(spec.id, reason)
+                try:
+                    registry.record(Experience(
+                        id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                        spec_id=spec.id, spec_name=spec.name,
+                        attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                        phase_reached="phase2", outcome="failed", failure_reason=reason,
+                        code_source="", code_length=0,
+                        system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                        error_streak_at_attempt=ctx["error_streak"],
+                    ))
+                except Exception:
+                    pass
                 return {"status": "warning", "result": f"R.A.S — {reason}"}
         except ImportError:
             pass
 
         # --- PHASE 3 : MATÉRIALISATION (Gemini Cloud) ---
         self.log_thought(f"🛠️ Phase 3 : Génération du code via Gemini Cloud [{spec.id}]...", type="info")
+
+        # Consulter le registre d'expériences
+        past_failures = registry.get_failure_summary(spec.id)
 
         code_prompt = (
             f"Applique cette amélioration au fichier {spec.target_file} (méthode: {spec.target_method}).\n"
@@ -422,7 +473,12 @@ class DivineEvolution(BaseAgent):
             f"{CODE_GENERATION_GUARDRAIL}"
         )
 
+        if past_failures:
+            code_prompt += f"\n\nATTENTION — {past_failures}\nÉVITE de reproduire ces erreurs.\n"
+
         generated_code = await self._generate_code_cloud(code_prompt)
+        if generated_code and len(generated_code) >= 50:
+            code_source = "cloud"
 
         if not generated_code or len(generated_code) < 50:
             # Fallback : dispatch au Coder local
@@ -432,11 +488,25 @@ class DivineEvolution(BaseAgent):
                 "context": f"EVOLUTION_PIPELINE\nSPEC_ID: {spec.id}"
             })
             generated_code = coder_response.get("result", "")
+            if generated_code and len(generated_code) >= 50:
+                code_source = "local"
 
         if not generated_code or len(generated_code) < 50:
             reason = "Aucun code produit (Cloud + Local)"
             catalog.mark_failed(spec.id, reason)
             self.log_thought(f"💤 {reason}.", type="info")
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase3", outcome="failed", failure_reason=reason,
+                    code_source=code_source, code_length=len(generated_code) if generated_code else 0,
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
             return {"status": "warning", "result": f"R.A.S — {reason}."}
 
         # --- PHASE 4 : VALIDATION SYNTAXE ---
@@ -461,16 +531,43 @@ class DivineEvolution(BaseAgent):
                 try:
                     ast.parse(retry_code)
                     generated_code = retry_code
+                    code_source = "cloud+retry"
                     self.log_thought("✅ Code corrigé avec succès après retry !", type="info")
                 except SyntaxError as e2:
                     reason = f"ast.parse error (après retry): {e2}"
                     catalog.mark_failed(spec.id, reason)
                     self.log_thought(f"❌ Syntaxe toujours invalide après retry : {e2}", type="error")
+                    try:
+                        registry.record(Experience(
+                            id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                            spec_id=spec.id, spec_name=spec.name,
+                            attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                            phase_reached="phase4", outcome="failed", failure_reason=reason,
+                            code_source=code_source, code_length=len(generated_code),
+                            syntax_error=str(e2),
+                            system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                            error_streak_at_attempt=ctx["error_streak"],
+                        ))
+                    except Exception:
+                        pass
                     return {"status": "error", "result": f"Spec [{spec.id}] rejetée : {reason}"}
             else:
                 reason = f"ast.parse error: {e}"
                 catalog.mark_failed(spec.id, reason)
                 self.log_thought(f"❌ Syntaxe invalide (retry Cloud indisponible) : {e}", type="error")
+                try:
+                    registry.record(Experience(
+                        id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                        spec_id=spec.id, spec_name=spec.name,
+                        attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                        phase_reached="phase4", outcome="failed", failure_reason=reason,
+                        code_source=code_source, code_length=len(generated_code),
+                        syntax_error=str(e),
+                        system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                        error_streak_at_attempt=ctx["error_streak"],
+                    ))
+                except Exception:
+                    pass
                 return {"status": "error", "result": f"Spec [{spec.id}] rejetée : {reason}"}
 
         # --- PHASE 4b : FILTRE ANTI-HALLUCINATION (imports aliens) ---
@@ -479,6 +576,19 @@ class DivineEvolution(BaseAgent):
             reason = f"Imports aliens détectés ({', '.join(aliens)}) — hallucination LLM"
             catalog.mark_failed(spec.id, reason)
             self.log_thought(f"🚫 [{spec.id}] {reason}", type="warning")
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase4b", outcome="failed", failure_reason=reason,
+                    code_source=code_source, code_length=len(generated_code),
+                    alien_imports=aliens,
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
         # --- PHASE 4c : VALIDATION STRUCTURELLE ---
@@ -495,6 +605,18 @@ class DivineEvolution(BaseAgent):
             reason = "Code non-structurel (pas de def/class/import) — hallucination probable"
             catalog.mark_failed(spec.id, reason)
             self.log_thought(f"🚫 [{spec.id}] {reason}", type="warning")
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase4c", outcome="failed", failure_reason=reason,
+                    code_source=code_source, code_length=len(generated_code),
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
         # --- PHASE 4d : ANTI-TRONCATURE ---
@@ -508,6 +630,19 @@ class DivineEvolution(BaseAgent):
                 )
                 catalog.mark_failed(spec.id, reason)
                 self.log_thought(f"🛡️ [{spec.id}] {reason}", type="warning")
+                try:
+                    registry.record(Experience(
+                        id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                        spec_id=spec.id, spec_name=spec.name,
+                        attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                        phase_reached="phase4d", outcome="failed", failure_reason=reason,
+                        code_source=code_source, code_length=len(generated_code),
+                        truncation_ratio=round(ratio, 3),
+                        system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                        error_streak_at_attempt=ctx["error_streak"],
+                    ))
+                except Exception:
+                    pass
                 return {"status": "warning", "result": f"R.A.S — {reason}"}
 
         # --- PHASE 5 : DÉPLOIEMENT SÉCURISÉ (Architecte) ---
@@ -532,6 +667,21 @@ class DivineEvolution(BaseAgent):
             catalog.mark_pending_deploy(spec.id)
             self.log_thought(f"✅ [{spec.id}] {spec.name} soumis au pipeline Formatter→Factory (pending_deploy).", type="info")
 
+            # Enregistrer le succès dans le registre
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase5", outcome="deployed", failure_reason="",
+                    code_source=code_source, code_length=len(generated_code),
+                    architect_verdict="success",
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
+
             # Publier l'événement
             try:
                 from core.event_bus.bus import bus
@@ -555,6 +705,19 @@ class DivineEvolution(BaseAgent):
             reason = f"Architect: {deploy_status}"
             catalog.mark_failed(spec.id, reason)
             self.log_thought(f"⚠️ [{spec.id}] non validé par l'Architecte ({deploy_status}).", type="warning")
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase5", outcome="failed", failure_reason=reason,
+                    code_source=code_source, code_length=len(generated_code),
+                    architect_verdict=deploy_status,
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
 
         return {
             "status": "success",

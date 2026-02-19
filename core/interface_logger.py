@@ -42,6 +42,7 @@ TRACKED_EVENTS = {
     "CI_PIPELINE_START",
     "CI_PIPELINE_STEP",
     "CI_PIPELINE_RESULT",
+    "EXPERIENCE_RECORDED",
 }
 
 
@@ -195,6 +196,18 @@ def _format_event(event_type: str, data: dict):
         level = "success" if success else "err"
         _write(f"[{ts}] [DIALOGUE] [SYSTEM] CI/CD [{verdict}] {filename} : {detail}")
         _write(f"[{ts}] [LOG:{level}] [CI/CD] RESULTAT [{verdict}] {filename}")
+
+    # --- EXPERIENCE_RECORDED ---
+    elif event_type == "EXPERIENCE_RECORDED":
+        spec_id = data.get("spec_id", "?")
+        phase = data.get("phase_reached", "?")
+        outcome = data.get("outcome", "?")
+        fail_reason = data.get("failure_reason", "")[:80]
+        level = "success" if outcome == "deployed" else "info"
+        line = f"[{ts}] [LOG:{level}] [REGISTRY] {spec_id} Phase {phase}: {outcome}"
+        if fail_reason:
+            line += f" — {fail_reason}"
+        _write(line)
 
 
 def _on_bus_event(event: dict):
