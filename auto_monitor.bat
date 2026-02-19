@@ -21,7 +21,7 @@ echo [%date% %time%] Démarrage cycle autonome PROMETHEE >> "%LOGFILE%"
 REM Lancer Claude Code en mode headless avec le prompt du fichier auto_monitor.md
 cd /d "%PROJECT%"
 claude -p "Lis le fichier auto_monitor.md et exécute le protocole décrit. Sois concis." ^
-  --allowedTools "Bash(PYTHONIOENCODING=utf-8 python:*)" "Bash(python:*)" "Bash(git:*)" "Bash(cp:*)" "Bash(mkdir:*)" "Bash(ls:*)" "Read" "Edit" "Glob" "Grep" ^
+  --allowedTools "Bash(PYTHONIOENCODING=utf-8 python:*)" "Bash(python:*)" "Bash(git:*)" "Bash(cp:*)" "Bash(mkdir:*)" "Bash(ls:*)" "Read" "Write" "Edit" "Glob" "Grep" ^
   >> "%LOGFILE%" 2>&1
 
 echo [%date% %time%] Cycle terminé >> "%LOGFILE%"
