@@ -18,6 +18,10 @@ MIN_ROUNDS_BEFORE_CONSENSUS = 3
 # Longueur minimale du contenu d'un consensus pour qu'il soit considéré substantiel
 MIN_CONSENSUS_CONTENT_LENGTH = 100
 
+# --- Président évaluateur (architect) ---
+PRESIDENT_AGENT_NAME = "architect"
+MIN_ROUNDS_BEFORE_PRESIDENT = 2
+
 # Contexte projet injecté dans tous les prompts Council
 _COUNCIL_PROJECT_CONTEXT = (
     "CONTEXTE PROJET PROMÉTHÉE :\n"
@@ -137,6 +141,33 @@ def _is_consensus(text: str) -> bool:
     return False
 
 
+def _parse_president_verdict(response: str) -> Dict[str, str]:
+    """Parse la réponse du président (architect) pour extraire le verdict.
+    Retourne {"verdict": "PERTINENT"|"REDIRECT"|"ABORT", "feedback": str}."""
+    if not response or not response.strip():
+        return {"verdict": "PERTINENT", "feedback": ""}
+
+    cleaned = _strip_markdown_prefix(response.strip())
+    first_line = cleaned.split("\n", 1)[0].strip()
+    first_word = first_line.split()[0].upper().rstrip(":") if first_line.split() else ""
+
+    for verdict in ("PERTINENT", "REDIRECT", "ABORT"):
+        if first_word == verdict:
+            feedback = first_line[len(verdict):].strip(" :\t—-")
+            if not feedback and "\n" in cleaned:
+                feedback = cleaned.split("\n", 1)[1].strip()
+            return {"verdict": verdict, "feedback": feedback}
+
+    # Fallback : scanner les 100 premiers caractères
+    head = cleaned[:100].upper()
+    for verdict in ("ABORT", "REDIRECT", "PERTINENT"):
+        if verdict in head:
+            feedback = cleaned[head.index(verdict) + len(verdict):].strip(" :\t—-\n")
+            return {"verdict": verdict, "feedback": feedback[:200]}
+
+    return {"verdict": "PERTINENT", "feedback": ""}
+
+
 def parse_council_mission(raw_mission: str) -> Optional[Dict[str, Any]]:
     """
     Parse la syntaxe 'agent1, agent2 - mission' ou 'agent1, agent2 : mission'.
@@ -184,7 +215,7 @@ class Council:
             )
         return "\n---\n".join(lines)
 
-    def _build_prompt(self, agent_name: str, current_round: int) -> str:
+    def _build_prompt(self, agent_name: str, current_round: int, president_feedback: str = "") -> str:
         """Construit le prompt pour un agent à un tour donné."""
         history = self._format_transcript()
 
@@ -226,6 +257,15 @@ class Council:
         except Exception:
             project_files = ""
 
+        # Feedback du président (si REDIRECT au tour précédent)
+        president_block = ""
+        if president_feedback:
+            president_block = (
+                f"\n⚠️ FEEDBACK DU PRÉSIDENT (architect) :\n"
+                f"{president_feedback}\n"
+                f"Tu DOIS prendre en compte ce feedback dans ta réponse.\n\n"
+            )
+
         return (
             f"Tu participes à un CONSEIL multi-agents.\n"
             f"LANGUE OBLIGATOIRE : Réponds UNIQUEMENT en français. Pas d'anglais.\n"
@@ -238,10 +278,74 @@ class Council:
             f"{personality_line}\n"
             f"HISTORIQUE DU DÉBAT :\n{history}\n\n"
             f"{round_instructions}\n"
+            f"{president_block}"
             f"--- RAPPEL FINAL ---\n"
             f"RÉPONDS EN FRANÇAIS UNIQUEMENT. Pas d'anglais, même pour les termes techniques courants.\n"
             f"Cite des fichiers EXISTANTS du projet (core/, Agents/).\n"
         )
+
+    def _build_president_prompt(self, round_num: int) -> str:
+        """Construit le prompt court pour le président (architect) évaluateur."""
+        # Contributions du tour courant (tronquées)
+        round_entries = [e for e in self.transcript if e["round"] == round_num]
+        contributions = "\n".join(
+            f"- {e['agent'].upper()} : {e['content'][:300]}"
+            for e in round_entries
+        )
+
+        return (
+            f"Tu es le PRÉSIDENT du conseil. Tu évalues la QUALITÉ du débat (tu ne participes PAS).\n"
+            f"MISSION : {self.mission}\n"
+            f"TOUR {round_num}/{self.max_rounds}\n\n"
+            f"CONTRIBUTIONS DE CE TOUR :\n{contributions}\n\n"
+            f"CRITÈRES D'ÉVALUATION :\n"
+            f"1. Les propositions sont-elles pertinentes pour la mission ?\n"
+            f"2. Y a-t-il des technologies HORS PÉRIMÈTRE (Kubernetes, Docker, Kafka, blockchain, microservices) ?\n"
+            f"3. Les fichiers mentionnés existent-ils réellement dans le projet ?\n"
+            f"4. Le débat tourne-t-il en rond (répétitions entre tours) ?\n\n"
+            f"VERDICT — Réponds par UN SEUL MOT en première ligne :\n"
+            f"- PERTINENT : le débat avance bien, continuer\n"
+            f"- REDIRECT : le débat dérive, suivi d'une consigne de recadrage\n"
+            f"- ABORT : le débat est irrémédiablement hors-sujet, arrêter\n"
+        )
+
+    async def _evaluate_round(self, round_num: int) -> Dict[str, str]:
+        """Évalue le tour via le président (architect). Retourne le verdict."""
+        # Skip si trop tôt
+        if round_num < MIN_ROUNDS_BEFORE_PRESIDENT:
+            return {"verdict": "PERTINENT", "feedback": ""}
+
+        # Skip si architect est participant (double rôle)
+        if PRESIDENT_AGENT_NAME in self.participants:
+            return {"verdict": "PERTINENT", "feedback": ""}
+
+        # Skip si architect absent
+        if PRESIDENT_AGENT_NAME not in self.agents:
+            return {"verdict": "PERTINENT", "feedback": ""}
+
+        try:
+            architect = self.agents[PRESIDENT_AGENT_NAME]
+            prompt = self._build_president_prompt(round_num)
+            response = await architect.generate_content(prompt)
+            result = _parse_president_verdict(response)
+
+            # Publication événement
+            await bus.publish("COUNCIL_PRESIDENT_VERDICT", {
+                "council_id": self.council_id,
+                "round": round_num,
+                "verdict": result["verdict"],
+                "feedback": result["feedback"],
+            })
+
+            logger.info(
+                f"Council {self.council_id} Tour {round_num} — "
+                f"Président: {result['verdict']}"
+            )
+            return result
+
+        except Exception as e:
+            logger.warning(f"Council {self.council_id} — Erreur président: {e}")
+            return {"verdict": "PERTINENT", "feedback": ""}
 
     async def run(self) -> Dict[str, Any]:
         """Exécute le débat multi-tours."""
@@ -264,6 +368,9 @@ class Council:
 
         rounds_used = 0
         consensus_reached = False
+        aborted = False
+        abort_reason = ""
+        president_feedback = ""
 
         for round_num in range(1, self.max_rounds + 1):
             rounds_used = round_num
@@ -271,7 +378,7 @@ class Council:
 
             for participant in self.participants:
                 agent = self.agents[participant]
-                prompt = self._build_prompt(participant, round_num)
+                prompt = self._build_prompt(participant, round_num, president_feedback)
 
                 # Appel via generate_content (pas process_task)
                 content = await agent.generate_content(prompt)
@@ -306,6 +413,17 @@ class Council:
                 if round_num >= MIN_ROUNDS_BEFORE_CONSENSUS and _is_consensus(content):
                     round_consensus_count += 1
 
+            # --- Évaluation présidentielle ---
+            verdict = await self._evaluate_round(round_num)
+            if verdict["verdict"] == "ABORT":
+                aborted = True
+                abort_reason = verdict["feedback"]
+                break
+            elif verdict["verdict"] == "REDIRECT":
+                president_feedback = verdict["feedback"]
+            else:
+                president_feedback = ""
+
             # Consensus = majorité qualifiée (>= 2/3 des participants)
             quorum = max(2, (len(self.participants) * 2 + 2) // 3)  # ceil(2/3)
             if round_consensus_count >= quorum:
@@ -313,11 +431,18 @@ class Council:
                 break
 
         # Résumé final
-        status = "consensus" if consensus_reached else "max_rounds"
+        if aborted:
+            status = "aborted"
+        elif consensus_reached:
+            status = "consensus"
+        else:
+            status = "max_rounds"
         last_contributions = self.transcript[-len(self.participants):]
         final_summary = "\n".join(
             f"[{e['agent'].upper()}] {e['content'][:200]}" for e in last_contributions
         )
+        if aborted:
+            final_summary = f"[PRÉSIDENT — ABORT] {abort_reason}\n\n{final_summary}"
 
         # Publication fin
         await bus.publish("COUNCIL_END", {
@@ -340,7 +465,7 @@ class Council:
         avg_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
         best_entry = max(self.transcript, key=lambda e: e.get("score", 0)) if self.transcript else {}
 
-        return {
+        result = {
             "status": status,
             "rounds_used": rounds_used,
             "transcript": self.transcript,
@@ -351,3 +476,6 @@ class Council:
                 "best_score": best_entry.get("score", 0),
             }
         }
+        if abort_reason:
+            result["abort_reason"] = abort_reason
+        return result

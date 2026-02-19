@@ -67,6 +67,7 @@ class SelfAwarenessEngine:
         self._council_consensus = 0
         self._ci_pass = 0
         self._ci_fail = 0
+        self._council_aborted = 0
         # Lacunes de connaissances détectées
         self._knowledge_gaps: List[Dict[str, Any]] = []
         self._load()
@@ -88,6 +89,7 @@ class SelfAwarenessEngine:
         self._council_consensus = 0
         self._ci_pass = 0
         self._ci_fail = 0
+        self._council_aborted = 0
         self._knowledge_gaps = []
 
     @classmethod
@@ -116,6 +118,8 @@ class SelfAwarenessEngine:
         self._council_count += 1
         if event.get("status") == "consensus":
             self._council_consensus += 1
+        elif event.get("status") == "aborted":
+            self._council_aborted += 1
 
     async def _on_ci_result(self, event: dict):
         if event.get("success"):
@@ -227,6 +231,7 @@ class SelfAwarenessEngine:
                 "cloud_budget_max": cloud_max,
                 "council_count": self._council_count,
                 "council_consensus_rate": round(council_consensus_rate, 2),
+                "council_aborted": self._council_aborted,
                 "ci_pass": self._ci_pass,
                 "ci_fail": self._ci_fail,
                 "dead_letters": bus.dead_letter_count,
@@ -415,6 +420,16 @@ class SelfAwarenessEngine:
                 "message": f"Taux de consensus Council bas: {perf['council_consensus_rate']:.0%} sur {self._council_count} débats.",
             })
 
+        # 7. High council abort rate
+        if self._council_count >= 3 and self._council_aborted > 0:
+            abort_rate = self._council_aborted / self._council_count
+            if abort_rate > 0.3:
+                patterns.append({
+                    "type": "high_council_abort",
+                    "severity": "high",
+                    "message": f"Taux d'abort Council élevé: {abort_rate:.0%} ({self._council_aborted}/{self._council_count}).",
+                })
+
         return patterns
 
     # --- Scoring adaptatif ---
@@ -577,6 +592,7 @@ class SelfAwarenessEngine:
             self._council_consensus = data.get("council_consensus", 0)
             self._ci_pass = data.get("ci_pass", 0)
             self._ci_fail = data.get("ci_fail", 0)
+            self._council_aborted = data.get("council_aborted", 0)
             self._knowledge_gaps = data.get("knowledge_gaps", [])
         except (FileNotFoundError, json.JSONDecodeError):
             pass
@@ -592,6 +608,7 @@ class SelfAwarenessEngine:
             "council_consensus": self._council_consensus,
             "ci_pass": self._ci_pass,
             "ci_fail": self._ci_fail,
+            "council_aborted": self._council_aborted,
             "knowledge_gaps": self._knowledge_gaps,
         }
         tmp_path = STATE_FILE + ".tmp"

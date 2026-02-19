@@ -2,8 +2,9 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from core.council import (
     Council, parse_council_mission, _is_consensus, _strip_markdown_prefix,
-    _score_argument,
-    MIN_ROUNDS_BEFORE_CONSENSUS, _COUNCIL_PROJECT_CONTEXT,
+    _score_argument, _parse_president_verdict,
+    MIN_ROUNDS_BEFORE_CONSENSUS, MIN_ROUNDS_BEFORE_PRESIDENT,
+    PRESIDENT_AGENT_NAME, _COUNCIL_PROJECT_CONTEXT,
     _get_project_structure,
 )
 from core.orchestrator import Orchestrator
@@ -534,3 +535,162 @@ class TestScoreArgument:
         formatted = council._format_transcript()
         assert "pertinence:" in formatted
         assert "★★" in formatted  # 0.45 >= 0.3 → ★★
+
+
+# ============================================================
+# TESTS PRÉSIDENT — PARSING
+# ============================================================
+
+class TestPresidentParsing:
+    """Tests de _parse_president_verdict."""
+
+    def test_parse_verdict_pertinent(self):
+        result = _parse_president_verdict("PERTINENT")
+        assert result["verdict"] == "PERTINENT"
+
+    def test_parse_verdict_redirect_with_feedback(self):
+        result = _parse_president_verdict("REDIRECT : Le débat dérive vers Kubernetes, recentrez sur Ollama local.")
+        assert result["verdict"] == "REDIRECT"
+        assert "Kubernetes" in result["feedback"]
+
+    def test_parse_verdict_abort(self):
+        result = _parse_president_verdict("ABORT : Hors-sujet total, aucune proposition viable.")
+        assert result["verdict"] == "ABORT"
+        assert "Hors-sujet" in result["feedback"]
+
+    def test_parse_verdict_markdown_wrapped(self):
+        result = _parse_president_verdict("**REDIRECT** : Recentrez le débat.")
+        assert result["verdict"] == "REDIRECT"
+        assert "Recentrez" in result["feedback"]
+
+    def test_parse_verdict_fallback_on_garbage(self):
+        result = _parse_president_verdict("Bla bla bla sans rapport avec un verdict.")
+        assert result["verdict"] == "PERTINENT"
+
+    def test_parse_verdict_empty(self):
+        result = _parse_president_verdict("")
+        assert result["verdict"] == "PERTINENT"
+
+
+# ============================================================
+# TESTS PRÉSIDENT — ÉVALUATION
+# ============================================================
+
+class TestPresidentEvaluation:
+    """Tests de l'évaluation par le président (architect)."""
+
+    def _make_mock_agent(self, responses=None):
+        agent = MagicMock()
+        if responses:
+            agent.generate_content = AsyncMock(side_effect=responses)
+        else:
+            agent.generate_content = AsyncMock(return_value="Voici mon analyse.")
+        return agent
+
+    @pytest.mark.asyncio
+    async def test_president_not_called_round_1(self):
+        """Pas d'appel architect au tour 1 (< MIN_ROUNDS_BEFORE_PRESIDENT)."""
+        architect_mock = self._make_mock_agent()
+        agents = {
+            "coder": self._make_mock_agent(),
+            "security": self._make_mock_agent(),
+            "architect": architect_mock,
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=1)
+        await council.run()
+        # architect ne doit PAS avoir été appelé (tour 1 < MIN_ROUNDS_BEFORE_PRESIDENT)
+        architect_mock.generate_content.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_abort_stops_debate(self):
+        """ABORT → status='aborted', débat s'arrête."""
+        n = MIN_ROUNDS_BEFORE_PRESIDENT + 1
+        agents = {
+            "coder": self._make_mock_agent(["analyse"] * n),
+            "security": self._make_mock_agent(["critique"] * n),
+            "architect": self._make_mock_agent(
+                # Appelé à partir du tour MIN_ROUNDS_BEFORE_PRESIDENT
+                ["ABORT : Technologies hors-périmètre mentionnées."]
+            ),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=n)
+        result = await council.run()
+        assert result["status"] == "aborted"
+        assert result["rounds_used"] == MIN_ROUNDS_BEFORE_PRESIDENT
+        assert "PRÉSIDENT — ABORT" in result["final_summary"]
+        assert "abort_reason" in result
+
+    @pytest.mark.asyncio
+    async def test_redirect_injects_feedback(self):
+        """REDIRECT → feedback injecté dans le prompt du tour suivant."""
+        n = MIN_ROUNDS_BEFORE_PRESIDENT + 2
+        architect_responses = ["REDIRECT : Recentrez sur les fichiers core/"]
+        # Après REDIRECT, le tour suivant reçoit PERTINENT pour ne pas reboucler
+        architect_responses.append("PERTINENT")
+        agents = {
+            "coder": self._make_mock_agent(["analyse"] * n),
+            "security": self._make_mock_agent(["critique"] * n),
+            "architect": self._make_mock_agent(architect_responses),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=n)
+        await council.run()
+
+        # Vérifier que le prompt du tour après REDIRECT contient le feedback
+        # On capture les appels à generate_content du coder
+        coder_calls = agents["coder"].generate_content.call_args_list
+        # Le tour après REDIRECT (tour MIN_ROUNDS_BEFORE_PRESIDENT+1) doit contenir le feedback
+        prompt_after_redirect = coder_calls[MIN_ROUNDS_BEFORE_PRESIDENT].args[0]
+        assert "FEEDBACK DU PRÉSIDENT" in prompt_after_redirect
+        assert "Recentrez" in prompt_after_redirect
+
+    @pytest.mark.asyncio
+    async def test_pertinent_resets_feedback(self):
+        """PERTINENT après REDIRECT → feedback disparaît du prompt."""
+        n = MIN_ROUNDS_BEFORE_PRESIDENT + 3
+        architect_responses = [
+            "REDIRECT : Recentrez sur core/",
+            "PERTINENT",
+            "PERTINENT",
+        ]
+        agents = {
+            "coder": self._make_mock_agent(["analyse"] * n),
+            "security": self._make_mock_agent(["critique"] * n),
+            "architect": self._make_mock_agent(architect_responses),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=n)
+        await council.run()
+
+        coder_calls = agents["coder"].generate_content.call_args_list
+        # Tour après PERTINENT (2 tours après le REDIRECT) → pas de feedback
+        if len(coder_calls) > MIN_ROUNDS_BEFORE_PRESIDENT + 1:
+            prompt_after_pertinent = coder_calls[MIN_ROUNDS_BEFORE_PRESIDENT + 1].args[0]
+            assert "FEEDBACK DU PRÉSIDENT" not in prompt_after_pertinent
+
+    @pytest.mark.asyncio
+    async def test_president_fallback_on_error(self):
+        """Exception architect → débat continue (PERTINENT par défaut)."""
+        n = MIN_ROUNDS_BEFORE_PRESIDENT + 1
+        architect_mock = MagicMock()
+        architect_mock.generate_content = AsyncMock(side_effect=RuntimeError("Ollama down"))
+        agents = {
+            "coder": self._make_mock_agent(["analyse"] * n),
+            "security": self._make_mock_agent(["critique"] * n),
+            "architect": architect_mock,
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=n)
+        result = await council.run()
+        # Le débat continue malgré l'erreur
+        assert result["status"] == "max_rounds"
+        assert result["rounds_used"] == n
+
+    @pytest.mark.asyncio
+    async def test_president_absent_debate_continues(self):
+        """Pas d'architect dans agents → aucune évaluation, débat normal."""
+        agents = {
+            "coder": self._make_mock_agent(),
+            "security": self._make_mock_agent(),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+        result = await council.run()
+        assert result["status"] == "max_rounds"
+        assert result["rounds_used"] == 3

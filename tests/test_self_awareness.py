@@ -684,3 +684,63 @@ class TestPurposeContext:
         self.engine.record_knowledge_gap("s3", "V")
         ctx = self.engine.get_purpose_context()
         assert "3 lacune" in ctx
+
+
+class TestCouncilAborted:
+    """Tests du compteur council_aborted et du pattern high_council_abort."""
+
+    def setup_method(self):
+        SelfAwarenessEngine.reset_singleton()
+        self.engine = SelfAwarenessEngine()
+
+    def teardown_method(self):
+        SelfAwarenessEngine.reset_singleton()
+
+    @pytest.mark.asyncio
+    async def test_on_council_end_aborted_increments_counter(self):
+        """status='aborted' incrémente _council_aborted."""
+        await self.engine._on_council_end({"status": "aborted"})
+        assert self.engine._council_aborted == 1
+        assert self.engine._council_count == 1
+        assert self.engine._council_consensus == 0
+
+    @pytest.mark.asyncio
+    async def test_on_council_end_consensus_does_not_increment_aborted(self):
+        """status='consensus' n'incrémente PAS _council_aborted."""
+        await self.engine._on_council_end({"status": "consensus"})
+        assert self.engine._council_aborted == 0
+        assert self.engine._council_consensus == 1
+
+    def test_detect_high_council_abort_pattern(self):
+        """Taux d'abort > 30% → pattern 'high_council_abort' détecté."""
+        self.engine._council_count = 5
+        self.engine._council_aborted = 3  # 60%
+        self.engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {
+                "error_streak": 0, "mission_count": 1, "success_rate": 0.8,
+                "cloud_budget_used": 5, "cloud_budget_max": 100,
+                "council_consensus_rate": 0.5, "council_aborted": 3,
+            },
+            "health": {"verdict": "GO"},
+        })
+        patterns = self.engine.detect_patterns()
+        types = [p["type"] for p in patterns]
+        assert "high_council_abort" in types
+
+    def test_no_high_abort_pattern_below_threshold(self):
+        """Taux d'abort <= 30% → pas de pattern."""
+        self.engine._council_count = 10
+        self.engine._council_aborted = 2  # 20%
+        self.engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {
+                "error_streak": 0, "mission_count": 1, "success_rate": 0.8,
+                "cloud_budget_used": 5, "cloud_budget_max": 100,
+                "council_consensus_rate": 0.5, "council_aborted": 2,
+            },
+            "health": {"verdict": "GO"},
+        })
+        patterns = self.engine.detect_patterns()
+        types = [p["type"] for p in patterns]
+        assert "high_council_abort" not in types

@@ -38,6 +38,7 @@ TRACKED_EVENTS = {
     "COUNCIL_START",
     "COUNCIL_TURN",
     "COUNCIL_END",
+    "COUNCIL_PRESIDENT_VERDICT",
     "CI_PIPELINE_START",
     "CI_PIPELINE_STEP",
     "CI_PIPELINE_RESULT",
@@ -147,9 +148,26 @@ def _format_event(event_type: str, data: dict):
             _write(f"[{ts}] [DIALOGUE] [{agent}] [CONSEIL Tour {round_n}/{max_r}] {content}")
         _write(f"[{ts}] [LOG:info] [{agent}] Conseil T{round_n}: contribution envoyée")
 
+    # --- COUNCIL_PRESIDENT_VERDICT ---
+    elif event_type == "COUNCIL_PRESIDENT_VERDICT":
+        round_n = data.get("round", "?")
+        pres_verdict = data.get("verdict", "?")
+        feedback = data.get("feedback", "")
+        icon = {"PERTINENT": "\u2705", "REDIRECT": "\u21a9\ufe0f", "ABORT": "\U0001f6d1"}.get(pres_verdict, "?")
+        line = f"[{ts}] [LOG:info] [PRESIDENT] Tour {round_n}: {icon} {pres_verdict}"
+        if pres_verdict in ("REDIRECT", "ABORT") and feedback:
+            line += f" — {feedback[:150]}"
+        _write(line)
+
     # --- COUNCIL_END ---
     elif event_type == "COUNCIL_END":
-        verdict = "CONSENSUS ATTEINT" if data.get("status") == "consensus" else "LIMITE DE TOURS"
+        status = data.get("status", "")
+        if status == "consensus":
+            verdict = "CONSENSUS ATTEINT"
+        elif status == "aborted":
+            verdict = "ABORT PAR LE PRÉSIDENT"
+        else:
+            verdict = "LIMITE DE TOURS"
         rounds = data.get("rounds_used", "?")
         _write(f"[{ts}] [DIALOGUE] [SYSTEM] CONSEIL FERME [{verdict}] après {rounds} tour(s).")
 
