@@ -347,26 +347,26 @@ class TestRpmEnforcement:
 
     def test_check_rpm_allows_under_limit(self):
         """RPM sous la limite → autorisé."""
-        assert BaseAgent._check_rpm("models/gemini-3.0-pro") is True
+        assert BaseAgent._check_rpm("models/gemini-2.5-pro") is True
 
     def test_check_rpm_blocks_at_limit(self):
         """RPM à la limite → bloqué."""
         from collections import deque
         now = time.time()
         # Remplir la fenêtre à la limite (50 pour Pro)
-        BaseAgent._rpm_windows["models/gemini-3.0-pro"] = deque(
+        BaseAgent._rpm_windows["models/gemini-2.5-pro"] = deque(
             [now - i * 0.5 for i in range(50)]
         )
-        assert BaseAgent._check_rpm("models/gemini-3.0-pro") is False
+        assert BaseAgent._check_rpm("models/gemini-2.5-pro") is False
 
     def test_check_rpm_unblocks_after_expiry(self):
         """Après 60s, les timestamps expirent et le RPM se libère."""
         from collections import deque
         old = time.time() - 61  # Plus de 60s
-        BaseAgent._rpm_windows["models/gemini-3.0-pro"] = deque(
+        BaseAgent._rpm_windows["models/gemini-2.5-pro"] = deque(
             [old - i for i in range(50)]
         )
-        assert BaseAgent._check_rpm("models/gemini-3.0-pro") is True
+        assert BaseAgent._check_rpm("models/gemini-2.5-pro") is True
 
     def test_record_cloud_call_increments_rpm_and_daily(self):
         """_record_cloud_call incrémente RPM et daily."""
@@ -396,12 +396,12 @@ class TestDailyBudgetPerModel:
 
     def test_budget_allows_under_limit(self):
         """Budget sous la limite → autorisé."""
-        assert BaseAgent._check_daily_budget("models/gemini-3.0-pro") is True
+        assert BaseAgent._check_daily_budget("models/gemini-2.5-pro") is True
 
     def test_budget_blocks_at_limit(self):
         """Budget Pro à 100 → bloqué."""
-        BaseAgent._daily_model_calls["models/gemini-3.0-pro"] = 100
-        assert BaseAgent._check_daily_budget("models/gemini-3.0-pro") is False
+        BaseAgent._daily_model_calls["models/gemini-2.5-pro"] = 100
+        assert BaseAgent._check_daily_budget("models/gemini-2.5-pro") is False
 
     def test_budget_flash_higher_limit(self):
         """Flash a une limite de 2000, bien plus haute que Pro."""

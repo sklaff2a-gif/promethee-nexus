@@ -16,19 +16,19 @@ class Config:
     # --- CATALOGUE DES MODÈLES DISPONIBLES (Tier 1 Google AI Pro) ---
     MODELS = {
         "FAST": "models/gemini-2.5-flash",      # Rapide + économique (gros du trafic)
-        "SMART": "models/gemini-3.0-pro",        # Puissant (à économiser, coûte cher)
+        "SMART": "models/gemini-2.5-pro",        # Puissant (à économiser, coûte cher)
     }
 
     # --- Limites RPM Tier 1 (valeurs conservatrices à 80% du max) ---
     CLOUD_RPM_LIMITS = {
-        "models/gemini-3.0-pro": 50,       # API: 60-150, on prend 50 (marge)
+        "models/gemini-2.5-pro": 50,       # API: 60-150, on prend 50 (marge)
         "models/gemini-2.5-flash": 250,    # API: 300-500, on prend 250 (marge)
     }
     CLOUD_RPM_DEFAULT = 30  # Pour tout modèle inconnu
 
     # Budget journalier par modèle (protection $10/mois)
     CLOUD_DAILY_LIMITS = {
-        "models/gemini-3.0-pro": 100,      # Pro: économiser (coûte ~10x plus que Flash)
+        "models/gemini-2.5-pro": 100,      # Pro: économiser (coûte ~10x plus que Flash)
         "models/gemini-2.5-flash": 2000,   # Flash: quasi-illimité dans le budget
     }
 
