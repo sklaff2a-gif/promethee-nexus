@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from core.event_bus.bus import InMemoryEventBus, bus
+from core.event_bus.bus import InMemoryEventBus, DeadLetter, bus
 
 
 class TestSingleton:
@@ -149,3 +149,141 @@ class TestErrorHandling:
 
         await bus.publish("ERR_TEST", {"test": True})
         assert len(received) == 1
+
+
+class TestDeadLetterQueue:
+
+    def setup_method(self):
+        bus.reset()
+
+    @pytest.mark.asyncio
+    async def test_failed_sync_callback_creates_dead_letter(self):
+        """Un callback sync qui raise crée une entrée DLQ."""
+        def bad_cb(data):
+            raise ValueError("boom")
+
+        bus.subscribe("DLQ_TEST", bad_cb)
+        await bus.publish("DLQ_TEST", {"key": "val"})
+
+        assert bus.dead_letter_count == 1
+
+    @pytest.mark.asyncio
+    async def test_dead_letter_contains_metadata(self):
+        """Le dead letter contient toutes les métadonnées attendues."""
+        def bad_cb(data):
+            raise TypeError("type error")
+
+        bus.subscribe("META_TEST", bad_cb)
+        await bus.publish("META_TEST", {"data": 42})
+
+        letters = bus.get_dead_letters()
+        assert len(letters) == 1
+        dl = letters[0]
+        assert dl.event_type == "META_TEST"
+        assert dl.payload == {"data": 42}
+        assert "bad_cb" in dl.callback_name
+        assert dl.error == "type error"
+        assert dl.error_type == "TypeError"
+        assert dl.timestamp > 0
+
+    @pytest.mark.asyncio
+    async def test_failed_callback_does_not_block_others(self):
+        """Un callback en erreur ne bloque pas les autres ET crée un dead letter."""
+        received = []
+
+        def bad_cb(data):
+            raise RuntimeError("fail")
+
+        def good_cb(data):
+            received.append(data)
+
+        bus.subscribe("MIXED_TEST", bad_cb)
+        bus.subscribe("MIXED_TEST", good_cb)
+        await bus.publish("MIXED_TEST", {"ok": True})
+
+        assert len(received) == 1
+        assert bus.dead_letter_count == 1
+
+    @pytest.mark.asyncio
+    async def test_max_dead_letters_fifo(self):
+        """Après MAX_DEAD_LETTERS erreurs, seules les plus récentes sont conservées."""
+        def bad_cb(data):
+            raise ValueError(f"error-{data['i']}")
+
+        bus.subscribe("FIFO_TEST", bad_cb)
+
+        for i in range(bus.MAX_DEAD_LETTERS + 20):
+            await bus.publish("FIFO_TEST", {"i": i})
+
+        assert bus.dead_letter_count == bus.MAX_DEAD_LETTERS
+        # Le plus ancien conservé est le 20e (index 20)
+        first = bus.get_dead_letters()[0]
+        assert first.error == "error-20"
+
+    def test_get_dead_letters_returns_copy(self):
+        """Modifier la liste retournée ne modifie pas l'original."""
+        # Injecter manuellement un dead letter pour le test
+        dl = DeadLetter("TEST", {}, "cb", "err", "Error", 0.0)
+        bus._dead_letters.append(dl)
+
+        copy = bus.get_dead_letters()
+        copy.clear()
+        assert bus.dead_letter_count == 1
+
+    def test_clear_dead_letters(self):
+        """clear_dead_letters() vide la DLQ et retourne le count."""
+        for i in range(5):
+            bus._dead_letters.append(
+                DeadLetter("T", {}, "cb", "e", "E", 0.0)
+            )
+        count = bus.clear_dead_letters()
+        assert count == 5
+        assert bus.dead_letter_count == 0
+
+    @pytest.mark.asyncio
+    async def test_retry_dead_letter_success(self):
+        """Retry un dead letter dont le callback est maintenant corrigé."""
+        call_count = 0
+
+        def flaky_cb(data):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise ValueError("first call fails")
+            # Deuxième appel réussit
+
+        bus.subscribe("RETRY_TEST", flaky_cb)
+        await bus.publish("RETRY_TEST", {"val": 1})
+
+        assert bus.dead_letter_count == 1
+        assert call_count == 1
+
+        result = await bus.retry_dead_letter(0)
+        assert result is True
+        assert bus.dead_letter_count == 0
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_dead_letter_invalid_index(self):
+        """Index hors bornes retourne False."""
+        assert await bus.retry_dead_letter(-1) is False
+        assert await bus.retry_dead_letter(0) is False
+        assert await bus.retry_dead_letter(999) is False
+
+    def test_reset_clears_dead_letters(self):
+        """reset() vide aussi la DLQ."""
+        bus._dead_letters.append(
+            DeadLetter("T", {}, "cb", "e", "E", 0.0)
+        )
+        assert bus.dead_letter_count == 1
+        bus.reset()
+        assert bus.dead_letter_count == 0
+
+    def test_dead_letter_count_property(self):
+        """.dead_letter_count retourne le bon nombre."""
+        assert bus.dead_letter_count == 0
+        for i in range(3):
+            bus._dead_letters.append(
+                DeadLetter("T", {}, "cb", "e", "E", 0.0)
+            )
+        assert bus.dead_letter_count == 3

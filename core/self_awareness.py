@@ -229,6 +229,7 @@ class SelfAwarenessEngine:
                 "council_consensus_rate": round(council_consensus_rate, 2),
                 "ci_pass": self._ci_pass,
                 "ci_fail": self._ci_fail,
+                "dead_letters": bus.dead_letter_count,
             },
             "health": health,
             "knowledge": {"journal_entries": journal_entries},
@@ -302,6 +303,10 @@ class SelfAwarenessEngine:
             f"routines jour: {perf.get('daily_routines', 0)}/{MAX_DAILY_ROUTINES_REF}.",
             f"Sante: {health.get('verdict', '?')} (CPU {health.get('cpu_percent', 0)}%, RAM {health.get('ram_percent', 0)}%).",
         ]
+        dlq = perf.get("dead_letters", 0)
+        if dlq > 0:
+            parts.append(f"⚠️ Dead letters: {dlq}.")
+
         if rising:
             parts.append(f"Traits en hausse: {', '.join(rising)}.")
         if falling:
