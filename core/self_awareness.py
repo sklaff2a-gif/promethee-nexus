@@ -465,7 +465,7 @@ class SelfAwarenessEngine:
         """Analyse l'historique des routines et les snapshots pour retourner
         un dict {intent: float} d'ajustements de scoring adaptatifs.
 
-        7 règles cumulatives :
+        10 règles cumulatives :
         1. Routine bruyante : intent >50% low_quality sur ses 10 dernières → -3.0
         2. Councils stériles : <30% consensus sur les 5 derniers COUNCIL_DEBATE → -4.0
         3. Evolution bloquée : 0 success sur 15 derniers EXPANSION_CODE → -2.0 EXP, +1.0 GRIMOIRE
@@ -473,6 +473,9 @@ class SelfAwarenessEngine:
         5. Humeur fatigue/instable → -2.0 EXP, +1.0 AUDIT
         6. Humeur productif → +0.5 EXP, +0.5 GRIMOIRE
         7. Refactor stérile : >50% low_quality/error sur REFACTOR_RANDOM récents → -2.0
+        8. Routine performante : >60% success sur 10 dernières → +2.0 (générique)
+        9. Councils productifs : >=50% consensus → +1.0 COUNCIL_DEBATE
+        10. Diversité Evolution : EXPANSION_CODE absent des 10 dernières routines → +2.0
         """
         adjustments: Dict[str, float] = {}
 
@@ -550,7 +553,14 @@ class SelfAwarenessEngine:
         if len(last_5_councils) >= 3:
             consensus_count = sum(1 for h in last_5_councils if h.get("status") == "success")
             if consensus_count / len(last_5_councils) >= 0.5:
-                _add("COUNCIL_DEBATE", 2.0)
+                _add("COUNCIL_DEBATE", 1.0)
+
+        # --- Règle 10 : Diversité Evolution ---
+        # Si EXPANSION_CODE n'a pas été exécuté récemment, forcer une rotation
+        last_10_all = routine_history[-10:]
+        expansion_in_last_10 = sum(1 for h in last_10_all if h.get("intent") == "EXPANSION_CODE")
+        if expansion_in_last_10 == 0 and len(routine_history) >= 10:
+            _add("EXPANSION_CODE", 2.0)
 
         return adjustments
 

@@ -414,7 +414,7 @@ class PsycheEngine:
             idx = (debate_index + offset) % n_themes
             theme = RESEARCH_THEMES[idx]
             theme_key = theme["query"][:30].lower()
-            if theme_key not in recent[-3:]:
+            if theme_key not in recent[-5:]:
                 break
         else:
             # Tous les thèmes ont été débattus récemment — prendre le suivant en rotation

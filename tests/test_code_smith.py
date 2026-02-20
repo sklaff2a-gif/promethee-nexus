@@ -453,10 +453,15 @@ class TestSpecToActions:
 
     def test_get_supported_specs(self):
         supported = get_supported_specs()
-        assert len(supported) >= 10
+        assert len(supported) >= 33  # 18 Phase A + 15 Phase B
         assert "PERF-003" in supported
         assert "RES-003" in supported
         assert "SEC-001" in supported
+        # Phase B
+        assert "PERF-002" in supported
+        assert "RES-002" in supported
+        assert "INT-004" in supported
+        assert "SEC-003" in supported
 
 
 # =====================================================================
@@ -886,6 +891,336 @@ class TestIntegrationFichiersReels:
             actions = spec_to_actions(spec, base_agent_source)
             if actions is None:
                 continue
+            result = CodeSmith.apply(base_agent_source, actions)
+            assert result.success, f"{spec_id}: {result.error}"
+            try:
+                ast.parse(result.modified_source)
+            except SyntaxError as e:
+                pytest.fail(f"{spec_id} produit du code avec syntaxe invalide: {e}")
+
+    # --- Fixtures fichiers additionnels Phase B ---
+
+    @pytest.fixture
+    def infra_source(self):
+        path = os.path.join(project_root, "Agents", "infra_agent.py")
+        if not os.path.exists(path):
+            pytest.skip("Agents/infra_agent.py non trouvé")
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    @pytest.fixture
+    def coder_source(self):
+        path = os.path.join(project_root, "Agents", "coder_agent.py")
+        if not os.path.exists(path):
+            pytest.skip("Agents/coder_agent.py non trouvé")
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    @pytest.fixture
+    def talk_logger_source(self):
+        path = os.path.join(project_root, "core", "talk_logger.py")
+        if not os.path.exists(path):
+            pytest.skip("core/talk_logger.py non trouvé")
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    @pytest.fixture
+    def dropzone_source(self):
+        path = os.path.join(project_root, "core", "dropzone_pipeline.py")
+        if not os.path.exists(path):
+            pytest.skip("core/dropzone_pipeline.py non trouvé")
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    @pytest.fixture
+    def self_awareness_source(self):
+        path = os.path.join(project_root, "core", "self_awareness.py")
+        if not os.path.exists(path):
+            pytest.skip("core/self_awareness.py non trouvé")
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    # ===================================================================
+    # Tests d'intégration Phase B (15 specs)
+    # ===================================================================
+
+    def test_perf002_sur_base_agent(self, base_agent_source):
+        """PERF-002 : timeout Ollama — constante + méthode wrapper."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="PERF-002", name="Timeout Ollama", description="",
+            category="performance", target_file="core/base_agent.py",
+            target_method="_call_ollama", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, base_agent_source)
+        assert actions is not None
+        result = CodeSmith.apply(base_agent_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_OLLAMA_TIMEOUT" in result.modified_source
+        assert "_call_ollama_with_timeout" in result.modified_source
+
+    def test_perf009_sur_researcher(self, researcher_source):
+        """PERF-009 : lazy init WebSurfer Researcher."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="PERF-009", name="Lazy init WebSurfer", description="",
+            category="performance", target_file="Agents/researcher_agent.py",
+            target_method="__init__", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, researcher_source)
+        assert actions is not None
+        result = CodeSmith.apply(researcher_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_get_surfer" in result.modified_source
+        assert "_get_ingestor" in result.modified_source
+
+    def test_res002_sur_base_agent(self, base_agent_source):
+        """RES-002 : circuit breaker Ollama."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="RES-002", name="Circuit breaker Ollama", description="",
+            category="resilience", target_file="core/base_agent.py",
+            target_method="_call_ollama", difficulty=2,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, base_agent_source)
+        assert actions is not None
+        result = CodeSmith.apply(base_agent_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_ollama_circuit_open" in result.modified_source
+        assert "_check_ollama_circuit" in result.modified_source
+        assert "_record_ollama_failure" in result.modified_source
+        assert "_record_ollama_success" in result.modified_source
+
+    def test_res006_sur_researcher(self, researcher_source):
+        """RES-006 : fallback recherche locale Researcher."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="RES-006", name="Fallback recherche locale", description="",
+            category="resilience", target_file="Agents/researcher_agent.py",
+            target_method="process_task", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, researcher_source)
+        assert actions is not None
+        result = CodeSmith.apply(researcher_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_safe_web_search" in result.modified_source
+
+    def test_res007_sur_infra(self, infra_source):
+        """RES-007 : timeout sub-checks Infra."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="RES-007", name="Timeout sub-checks Infra", description="",
+            category="resilience", target_file="Agents/infra_agent.py",
+            target_method="_perform_health_check", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, infra_source)
+        assert actions is not None
+        result = CodeSmith.apply(infra_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_safe_check" in result.modified_source
+
+    def test_int004_sur_base_agent(self, base_agent_source):
+        """INT-004 : prompt adaptatif PSYCHE."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="INT-004", name="Prompt adaptatif PSYCHE", description="",
+            category="intelligence", target_file="core/base_agent.py",
+            target_method="generate_content", difficulty=2,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, base_agent_source)
+        assert actions is not None
+        result = CodeSmith.apply(base_agent_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_get_psyche_context" in result.modified_source
+
+    def test_int006_sur_coder(self, coder_source):
+        """INT-006 : post-filtre code Coder."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="INT-006", name="Post-filtre code Coder", description="",
+            category="intelligence", target_file="Agents/coder_agent.py",
+            target_method="process_task", difficulty=2,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, coder_source)
+        assert actions is not None
+        result = CodeSmith.apply(coder_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_has_code_structure" in result.modified_source
+
+    def test_int008_sur_infra(self, infra_source):
+        """INT-008 : sonde latence Ollama Infra."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="INT-008", name="Sonde latence Ollama", description="",
+            category="intelligence", target_file="Agents/infra_agent.py",
+            target_method="_perform_health_check", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, infra_source)
+        assert actions is not None
+        result = CodeSmith.apply(infra_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_probe_ollama_latency" in result.modified_source
+
+    def test_int009_sur_psyche(self, psyche_source):
+        """INT-009 : évolution traits par résultat Psyche."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="INT-009", name="Évolution traits", description="",
+            category="intelligence", target_file="core/psyche.py",
+            target_method="_on_routine_complete", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, psyche_source)
+        assert actions is not None
+        result = CodeSmith.apply(psyche_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "apply_routine_result" in result.modified_source
+
+    def test_obs005_sur_talk_logger(self, talk_logger_source):
+        """OBS-005 : talk log structuré JSON."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="OBS-005", name="Talk log JSON", description="",
+            category="observability", target_file="core/talk_logger.py",
+            target_method="_format_entry", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, talk_logger_source)
+        assert actions is not None
+        result = CodeSmith.apply(talk_logger_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_format_structured_entry" in result.modified_source
+
+    def test_obs006_sur_strategic_journal(self, strategic_journal_source):
+        """OBS-006 : dédup recherches journal."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="OBS-006", name="Dédup recherches", description="",
+            category="observability", target_file="core/strategic_journal.py",
+            target_method="append_research_entry", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, strategic_journal_source)
+        assert actions is not None
+        result = CodeSmith.apply(strategic_journal_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_is_duplicate_topic" in result.modified_source
+
+    def test_obs007_sur_self_awareness(self, self_awareness_source):
+        """OBS-007 : détection cycles debug."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="OBS-007", name="Détection cycles debug", description="",
+            category="observability", target_file="core/self_awareness.py",
+            target_method="detect_patterns", difficulty=2,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, self_awareness_source)
+        assert actions is not None
+        result = CodeSmith.apply(self_awareness_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_detect_debug_loops" in result.modified_source
+
+    def test_obs008_sur_dropzone(self, dropzone_source):
+        """OBS-008 : métriques processing Dropzone."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="OBS-008", name="Métriques Dropzone", description="",
+            category="observability", target_file="core/dropzone_pipeline.py",
+            target_method="run", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, dropzone_source)
+        assert actions is not None
+        result = CodeSmith.apply(dropzone_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_compute_dropzone_stats" in result.modified_source
+
+    def test_sec003_sur_orchestrator(self, orchestrator_source):
+        """SEC-003 : rate limit par agent."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="SEC-003", name="Rate limit", description="",
+            category="security", target_file="core/orchestrator.py",
+            target_method="dispatch_task", difficulty=2,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, orchestrator_source)
+        assert actions is not None
+        result = CodeSmith.apply(orchestrator_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_dispatch_counts" in result.modified_source
+        assert "_check_rate_limit" in result.modified_source
+
+    def test_sec004_sur_coder(self, coder_source):
+        """SEC-004 : sanitization secrets Coder."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="SEC-004", name="Sanitization secrets", description="",
+            category="security", target_file="Agents/coder_agent.py",
+            target_method="process_task", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, coder_source)
+        assert actions is not None
+        result = CodeSmith.apply(coder_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_SECRET_PATTERNS" in result.modified_source
+        assert "_sanitize_secrets" in result.modified_source
+
+    def test_mem004_sur_base_agent(self, base_agent_source):
+        """MEM-004 : mémoire partagée inter-agents."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="MEM-004", name="Mémoire partagée", description="",
+            category="memory", target_file="core/base_agent.py",
+            target_method="remember", difficulty=2,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, base_agent_source)
+        assert actions is not None
+        result = CodeSmith.apply(base_agent_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "share_insight" in result.modified_source
+        assert "recall_shared" in result.modified_source
+
+    def test_phase_b_toutes_specs_base_agent(self, base_agent_source):
+        """Vérifie que les specs Phase B ciblant base_agent produisent du code valide."""
+        from core.evolution_catalog import ImprovementSpec
+        phase_b_base = ["PERF-002", "RES-002", "INT-004", "MEM-004"]
+        for spec_id in phase_b_base:
+            spec = ImprovementSpec(
+                id=spec_id, name="test", description="",
+                category="test", target_file="core/base_agent.py",
+                target_method="", difficulty=1,
+                code_template="", validation="",
+            )
+            actions = spec_to_actions(spec, base_agent_source)
+            assert actions is not None, f"{spec_id}: handler retourne None"
             result = CodeSmith.apply(base_agent_source, actions)
             assert result.success, f"{spec_id}: {result.error}"
             try:

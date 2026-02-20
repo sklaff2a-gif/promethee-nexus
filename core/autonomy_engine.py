@@ -896,6 +896,20 @@ class AutonomyEngine:
 
     async def _execute_council_debate(self) -> dict:
         """Lance un débat autonome Council : Recherche web → Débat éclairé."""
+        # --- Guard : skip si trop de specs Council en attente ---
+        try:
+            from core.evolution_catalog import EvolutionCatalog
+            catalog = EvolutionCatalog()
+            pending_council = [
+                s for s in catalog.specs.values()
+                if s.id.startswith("COUNCIL-") and s.status == "available"
+            ]
+            if len(pending_council) >= 3:
+                logger.info(f"[COUNCIL] {len(pending_council)} specs en attente — débat reporté.")
+                return {"status": "skipped", "reason": "council_specs_saturated"}
+        except Exception:
+            pass  # Catalogue inaccessible — laisser tourner
+
         # Extraire les sujets des derniers councils pour la déduplication
         recent_subjects = [
             h.get("subject", "")
@@ -1328,8 +1342,8 @@ class AutonomyEngine:
             s for s in catalog.specs.values()
             if s.id.startswith("COUNCIL-") and s.status == "available"
         ]
-        if len(existing_council_specs) >= 4:
-            logger.info("[COUNCIL→ACTION] Déjà 4 specs Council en attente, skip.")
+        if len(existing_council_specs) >= 3:
+            logger.info("[COUNCIL→ACTION] Déjà 3 specs Council en attente, skip.")
             return
 
         # Construire le texte d'analyse à partir du transcript COMPLET du dernier tour

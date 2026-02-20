@@ -969,6 +969,522 @@ def _mem_006(spec, source):
     ]
 
 
+# ===========================================================================
+# Phase B — 15 handlers supplémentaires (difficulté 1–2)
+# ===========================================================================
+
+# --- PERFORMANCE (Phase B) ---
+
+@_register("PERF-002")
+def _perf_002(spec, source):
+    """Timeout Ollama — constante + méthode wrapper avec asyncio.wait_for."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_IMPORT,
+            import_line="import asyncio",
+        ),
+        TransformAction(
+            type=TransformType.ADD_MODULE_CONSTANT,
+            code='_OLLAMA_TIMEOUT = 60.0',
+        ),
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="BaseAgent",
+            code=textwrap.dedent('''\
+                async def _call_ollama_with_timeout(self, prompt: str, model: str = ""):
+                    """Appelle Ollama avec un timeout asyncio."""
+                    try:
+                        result = await asyncio.wait_for(
+                            self._raw_ollama_call(prompt, model),
+                            timeout=_OLLAMA_TIMEOUT
+                        )
+                        return result
+                    except asyncio.TimeoutError:
+                        logger.warning(f"[{self.name}] Ollama timeout après {_OLLAMA_TIMEOUT}s")
+                        return ""
+            '''),
+        ),
+    ]
+
+
+@_register("PERF-009")
+def _perf_009(spec, source):
+    """Lazy init WebSurfer Researcher — accesseurs lazy."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="DivineResearcher",
+            code=textwrap.dedent('''\
+                def _get_surfer(self):
+                    """Accesseur lazy pour WebSurfer."""
+                    if not hasattr(self, '_surfer') or self._surfer is None:
+                        try:
+                            from core.capabilities.web_surfer import WebSurfer
+                            self._surfer = WebSurfer()
+                        except Exception as e:
+                            logger.warning(f"[Researcher] WebSurfer init failed: {e}")
+                            self._surfer = None
+                    return self._surfer
+            '''),
+        ),
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="DivineResearcher",
+            code=textwrap.dedent('''\
+                def _get_ingestor(self):
+                    """Accesseur lazy pour KnowledgeIngestor."""
+                    if not hasattr(self, '_ingestor') or self._ingestor is None:
+                        try:
+                            from core.capabilities.knowledge_ingestor import KnowledgeIngestor
+                            self._ingestor = KnowledgeIngestor()
+                        except Exception as e:
+                            logger.warning(f"[Researcher] KnowledgeIngestor init failed: {e}")
+                            self._ingestor = None
+                    return self._ingestor
+            '''),
+        ),
+    ]
+
+
+# --- RESILIENCE (Phase B) ---
+
+@_register("RES-002")
+def _res_002(spec, source):
+    """Circuit breaker Ollama — attributs classe + 3 méthodes."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_IMPORT,
+            import_line="import time",
+        ),
+        TransformAction(
+            type=TransformType.ADD_CLASS_ATTRIBUTE,
+            target_class="BaseAgent",
+            code='_ollama_circuit_open = False\n_ollama_circuit_until = 0.0\n_ollama_consecutive_failures = 0\n_OLLAMA_CIRCUIT_THRESHOLD = 3\n_OLLAMA_CIRCUIT_COOLDOWN = 60',
+        ),
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="BaseAgent",
+            code=textwrap.dedent('''\
+                @classmethod
+                def _check_ollama_circuit(cls) -> bool:
+                    """Retourne True si le circuit est ouvert (Ollama indisponible)."""
+                    if cls._ollama_circuit_open:
+                        if time.time() >= cls._ollama_circuit_until:
+                            cls._ollama_circuit_open = False
+                            cls._ollama_consecutive_failures = 0
+                            logger.info("Circuit breaker Ollama: FERMÉ (reset)")
+                            return False
+                        return True
+                    return False
+            '''),
+        ),
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="BaseAgent",
+            code=textwrap.dedent('''\
+                @classmethod
+                def _record_ollama_failure(cls):
+                    """Enregistre un échec Ollama et ouvre le circuit si seuil atteint."""
+                    cls._ollama_consecutive_failures += 1
+                    if cls._ollama_consecutive_failures >= cls._OLLAMA_CIRCUIT_THRESHOLD:
+                        cls._ollama_circuit_open = True
+                        cls._ollama_circuit_until = time.time() + cls._OLLAMA_CIRCUIT_COOLDOWN
+                        logger.warning(f"Circuit breaker Ollama: OUVERT pour {cls._OLLAMA_CIRCUIT_COOLDOWN}s")
+            '''),
+        ),
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="BaseAgent",
+            code=textwrap.dedent('''\
+                @classmethod
+                def _record_ollama_success(cls):
+                    """Reset le compteur d'échecs Ollama."""
+                    cls._ollama_consecutive_failures = 0
+            '''),
+        ),
+    ]
+
+
+@_register("RES-006")
+def _res_006(spec, source):
+    """Fallback recherche locale Researcher."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="DivineResearcher",
+            code=textwrap.dedent('''\
+                async def _safe_web_search(self, query: str) -> str:
+                    """Recherche web avec fallback sur mémoire locale."""
+                    try:
+                        surfer = self._get_surfer() if hasattr(self, '_get_surfer') else getattr(self, 'surfer', None)
+                        if surfer:
+                            return await surfer.search(query)
+                    except Exception as e:
+                        logger.warning(f"[Researcher] WebSurfer failed, fallback RAG local: {e}")
+                    local = self.recall(query) if hasattr(self, 'recall') else ""
+                    if local:
+                        return f"(Résultats mémoire locale)\\n{local}"
+                    return ""
+            '''),
+        ),
+    ]
+
+
+@_register("RES-007")
+def _res_007(spec, source):
+    """Timeout sub-checks Infra — fonction helper avec timeout."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_IMPORT,
+            import_line="import asyncio",
+        ),
+        TransformAction(
+            type=TransformType.ADD_MODULE_FUNCTION,
+            code=textwrap.dedent('''\
+                async def _safe_check(func, timeout=5.0, default=None):
+                    """Exécute un check synchrone avec timeout asyncio."""
+                    try:
+                        loop = asyncio.get_event_loop()
+                        return await asyncio.wait_for(
+                            loop.run_in_executor(None, func),
+                            timeout=timeout
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Health check timeout après {timeout}s")
+                        return default
+                    except Exception as e:
+                        logger.warning(f"Health check error: {e}")
+                        return default
+            '''),
+        ),
+    ]
+
+
+# --- INTELLIGENCE (Phase B) ---
+
+@_register("INT-004")
+def _int_004(spec, source):
+    """Prompt adaptatif PSYCHE — méthode _get_psyche_context."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="BaseAgent",
+            code=textwrap.dedent('''\
+                def _get_psyche_context(self) -> str:
+                    """Injecte le mood et le trait dominant dans le prompt."""
+                    try:
+                        from core.psyche import psyche
+                        traits = psyche.get_agent_traits(self.name)
+                        if traits:
+                            dominant = max(traits.items(), key=lambda x: x[1])
+                            from core.self_awareness import awareness
+                            snap = awareness.get_latest_snapshot()
+                            mood = snap.get("mood", "équilibré") if snap else "équilibré"
+                            return f"[Mode {mood}. Trait dominant: {dominant[0]} ({dominant[1]:.0f}/100)]"
+                    except Exception:
+                        pass
+                    return ""
+            '''),
+        ),
+    ]
+
+
+@_register("INT-006")
+def _int_006(spec, source):
+    """Post-filtre code Coder — vérification structure Python."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_IMPORT,
+            import_line="import re",
+        ),
+        TransformAction(
+            type=TransformType.ADD_MODULE_FUNCTION,
+            code=textwrap.dedent('''\
+                def _has_code_structure(text: str) -> bool:
+                    """Vérifie la présence de structures Python (def, class, import)."""
+                    patterns = [r'^\\s*def\\s+', r'^\\s*class\\s+', r'^\\s*import\\s+', r'^\\s*from\\s+']
+                    count = sum(1 for p in patterns if re.search(p, text, re.MULTILINE))
+                    return count >= 2
+            '''),
+        ),
+    ]
+
+
+@_register("INT-008")
+def _int_008(spec, source):
+    """Sonde latence Ollama Infra — fonction async de probe."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_IMPORT,
+            import_line="import time",
+        ),
+        TransformAction(
+            type=TransformType.ADD_MODULE_FUNCTION,
+            code=textwrap.dedent('''\
+                async def _probe_ollama_latency() -> dict:
+                    """Mesure la latence Ollama via /api/tags."""
+                    import httpx
+                    try:
+                        start = time.time()
+                        async with httpx.AsyncClient(timeout=5.0) as client:
+                            resp = await client.get("http://localhost:11434/api/tags")
+                            latency_ms = (time.time() - start) * 1000
+                            models = len(resp.json().get("models", []))
+                            return {"status": "up", "latency_ms": round(latency_ms, 1), "models_loaded": models}
+                    except Exception as e:
+                        return {"status": "down", "error": str(e)[:100]}
+            '''),
+        ),
+    ]
+
+
+@_register("INT-009")
+def _int_009(spec, source):
+    """Évolution traits par résultat Psyche."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="PsycheEngine",
+            code=textwrap.dedent('''\
+                def apply_routine_result(self, agent: str, status: str):
+                    """Ajuste les traits selon le résultat d'une routine."""
+                    if agent not in self.agents:
+                        return
+                    if status == "success":
+                        deltas = {"créativité": 1.5, "prudence": -0.5}
+                    elif status == "error":
+                        deltas = {"prudence": 1.5, "créativité": -0.5}
+                    else:
+                        return
+                    for trait, delta in deltas.items():
+                        if trait in self.agents[agent]:
+                            self.agents[agent][trait] = max(0, min(100, self.agents[agent][trait] + delta))
+            '''),
+        ),
+    ]
+
+
+# --- OBSERVABILITY (Phase B) ---
+
+@_register("OBS-005")
+def _obs_005(spec, source):
+    """Talk log structuré JSON — fonction de formatage."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_IMPORT,
+            import_line="import json",
+        ),
+        TransformAction(
+            type=TransformType.ADD_MODULE_FUNCTION,
+            code=textwrap.dedent('''\
+                def _format_structured_entry(event_type: str, data: dict) -> str:
+                    """Format structuré : ligne JSON + texte lisible."""
+                    meta = {
+                        "type": event_type,
+                        "ts": data.get("timestamp", ""),
+                        "agent": data.get("agent", "system"),
+                    }
+                    json_line = json.dumps(meta, ensure_ascii=False)
+                    content = data.get("content", str(data))[:500]
+                    return f"[JSON]{json_line}[/JSON]\\n{content}\\n"
+            '''),
+        ),
+    ]
+
+
+@_register("OBS-006")
+def _obs_006(spec, source):
+    """Dédup recherches journal — méthode de vérification."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="StrategicJournal",
+            code=textwrap.dedent('''\
+                def _is_duplicate_topic(self, topic: str) -> bool:
+                    """Vérifie si le topic existe dans les 5 dernières entrées research."""
+                    topic_lower = topic.strip().lower()
+                    recent = self._entries[-5:] if len(self._entries) >= 5 else self._entries
+                    for entry in recent:
+                        if entry.get("type") == "research":
+                            if entry.get("topic", "").strip().lower() == topic_lower:
+                                return True
+                    return False
+            '''),
+        ),
+    ]
+
+
+@_register("OBS-007")
+def _obs_007(spec, source):
+    """Détection cycles debug SelfAwareness."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="SelfAwarenessEngine",
+            code=textwrap.dedent('''\
+                def _detect_debug_loops(self, recent_events: list) -> list:
+                    """Détecte les boucles error→success→error sur un même agent."""
+                    patterns = []
+                    by_agent = {}
+                    for ev in recent_events[-50:]:
+                        agent = ev.get("agent", "unknown")
+                        by_agent.setdefault(agent, []).append(ev)
+                    for agent, events in by_agent.items():
+                        alternances = 0
+                        for i in range(1, len(events)):
+                            prev_ok = events[i-1].get("status") == "success"
+                            curr_ok = events[i].get("status") == "success"
+                            if prev_ok != curr_ok:
+                                alternances += 1
+                        if alternances >= 3:
+                            patterns.append({
+                                "type": "debug_loop",
+                                "agent": agent,
+                                "alternances": alternances,
+                                "severity": "warning",
+                            })
+                    return patterns
+            '''),
+        ),
+    ]
+
+
+@_register("OBS-008")
+def _obs_008(spec, source):
+    """Métriques processing Dropzone — fonction de stats."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_IMPORT,
+            import_line="import time",
+        ),
+        TransformAction(
+            type=TransformType.ADD_MODULE_FUNCTION,
+            code=textwrap.dedent('''\
+                def _compute_dropzone_stats(files_count: int, total_chars: int, start_time: float) -> dict:
+                    """Calcule les métriques d'un run Dropzone."""
+                    duration = time.time() - start_time
+                    return {
+                        "files_processed": files_count,
+                        "total_chars": total_chars,
+                        "duration_s": round(duration, 1),
+                        "avg_chars_per_file": round(total_chars / max(files_count, 1)),
+                    }
+            '''),
+        ),
+    ]
+
+
+# --- SECURITY (Phase B) ---
+
+@_register("SEC-003")
+def _sec_003(spec, source):
+    """Rate limit par agent — attributs + méthode check."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_IMPORT,
+            import_line="import time",
+        ),
+        TransformAction(
+            type=TransformType.ADD_CLASS_ATTRIBUTE,
+            target_class="Orchestrator",
+            code='_dispatch_counts: dict = {}\n_RATE_LIMIT = 10\n_RATE_WINDOW = 300',
+        ),
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="Orchestrator",
+            code=textwrap.dedent('''\
+                def _check_rate_limit(self, agent_name: str) -> bool:
+                    """Vérifie le rate limit par agent (max 10/5min)."""
+                    now = time.time()
+                    timestamps = self._dispatch_counts.get(agent_name, [])
+                    timestamps = [ts for ts in timestamps if now - ts < self._RATE_WINDOW]
+                    self._dispatch_counts[agent_name] = timestamps
+                    if len(timestamps) >= self._RATE_LIMIT:
+                        logger.warning(f"Rate limit atteint pour {agent_name}: {len(timestamps)}/{self._RATE_LIMIT}")
+                        return True
+                    timestamps.append(now)
+                    return False
+            '''),
+        ),
+    ]
+
+
+@_register("SEC-004")
+def _sec_004(spec, source):
+    """Sanitization secrets Coder — constantes + fonction."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_IMPORT,
+            import_line="import re",
+        ),
+        TransformAction(
+            type=TransformType.ADD_MODULE_CONSTANT,
+            code=textwrap.dedent('''\
+                _SECRET_PATTERNS = [
+                    (r'["\\'](?:sk-[a-zA-Z0-9]{20,})["\\']', '"<API_KEY>"'),
+                    (r'["\\'](?:AIza[a-zA-Z0-9_-]{30,})["\\']', '"<GOOGLE_API_KEY>"'),
+                    (r'password\\s*=\\s*["\\']([^"\\']*)["\\']', 'password = "<REDACTED>"'),
+                    (r'token\\s*=\\s*["\\']([^"\\']*)["\\']', 'token = "<REDACTED>"'),
+                ]
+            '''),
+        ),
+        TransformAction(
+            type=TransformType.ADD_MODULE_FUNCTION,
+            code=textwrap.dedent('''\
+                def _sanitize_secrets(code: str) -> str:
+                    """Remplace les patterns de secrets par des placeholders."""
+                    for pattern, replacement in _SECRET_PATTERNS:
+                        code = re.sub(pattern, replacement, code)
+                    return code
+            '''),
+        ),
+    ]
+
+
+# --- MEMORY (Phase B) ---
+
+@_register("MEM-004")
+def _mem_004(spec, source):
+    """Mémoire partagée inter-agents — 2 méthodes."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="BaseAgent",
+            code=textwrap.dedent('''\
+                def share_insight(self, content: str, metadata: dict = None):
+                    """Partage un insight dans la mémoire partagée."""
+                    try:
+                        memory = self._get_memory() if hasattr(self, '_get_memory') else getattr(self, '_memory_manager', None)
+                        if memory:
+                            from datetime import datetime
+                            meta = {"agent": self.name, "ts": datetime.now().isoformat()}
+                            if metadata:
+                                meta.update(metadata)
+                            memory.add_to_collection("shared_insights", content, meta)
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] share_insight failed: {e}")
+            '''),
+        ),
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="BaseAgent",
+            code=textwrap.dedent('''\
+                def recall_shared(self, query: str, limit: int = 3) -> str:
+                    """Rappelle des insights partagés par d'autres agents."""
+                    try:
+                        memory = self._get_memory() if hasattr(self, '_get_memory') else getattr(self, '_memory_manager', None)
+                        if memory:
+                            results = memory.query_collection("shared_insights", query, n_results=limit)
+                            if results and results.get("documents"):
+                                return "\\n".join(results["documents"][0])
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] recall_shared failed: {e}")
+                    return ""
+            '''),
+        ),
+    ]
+
+
 # --- API publique ---
 
 def spec_to_actions(spec, source: str) -> Optional[List[TransformAction]]:
