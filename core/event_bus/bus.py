@@ -61,11 +61,11 @@ class InMemoryEventBus:
     async def _safe_call(self, callback, data, event_type: str = ""):
         try:
             if asyncio.iscoroutinefunction(callback):
-                asyncio.create_task(callback(data))
+                await callback(data)
             else:
                 callback(data)
         except Exception as e:
-            logger.error(f"Bus Error: {e}")
+            logger.error(f"Bus Error [{event_type}]: {e}")
             dl = DeadLetter(
                 event_type=event_type,
                 payload=data,

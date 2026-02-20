@@ -44,6 +44,10 @@ ROUTINE_AFFINITY: Dict[str, Dict[str, float]] = {
     "VEILLE_SILENCIEUSE": {"curiosite": 0.5, "savoir": 0.4, "creativite": 0.1},
     "DROPZONE_SCAN":      {"savoir": 0.4, "curiosite": 0.3, "respect": 0.3},
     "COUNCIL_DEBATE":     {"respect": 0.3, "curiosite": 0.3, "creativite": 0.2, "audace": 0.2},
+    "GRIMOIRE_INVOKE":    {"savoir": 0.4, "curiosite": 0.3, "creativite": 0.3},
+    "SECURITY_AUDIT":     {"survie": 0.5, "respect": 0.3, "savoir": 0.2},
+    "MEMORY_CLEANUP":     {"survie": 0.4, "respect": 0.4, "savoir": 0.2},
+    "REFACTOR_RANDOM":    {"respect": 0.4, "creativite": 0.3, "savoir": 0.3},
 }
 
 # Decay quotidien : 2% de retour vers la baseline

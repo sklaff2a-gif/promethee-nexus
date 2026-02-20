@@ -50,7 +50,8 @@ FORMAT DE RÉPONSE :
 
     @staticmethod
     def _contains_python_code(text: str) -> bool:
-        """Détecte du vrai code Python structurel (pas une simple mention)."""
+        """Détecte du vrai code Python structurel (pas une simple mention).
+        NB: même logique que Orchestrator._contains_python_code — synchroniser si modifié."""
         code_patterns = re.findall(r'^(import |from \w+ import|class \w+|def \w+\(|@\w+)', text, re.MULTILINE)
         return len(code_patterns) >= 2
 

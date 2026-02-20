@@ -90,8 +90,7 @@ class TestPublish:
         bus.subscribe("ASYNC_TEST", async_cb)
         await bus.publish("ASYNC_TEST", {"msg": "async"})
 
-        # Laisser le temps au create_task de s'exécuter
-        await asyncio.sleep(0.05)
+        # Callbacks async sont désormais awaités directement (pas de fire-and-forget)
         assert len(received) == 1
 
     @pytest.mark.asyncio
@@ -165,6 +164,39 @@ class TestDeadLetterQueue:
         bus.subscribe("DLQ_TEST", bad_cb)
         await bus.publish("DLQ_TEST", {"key": "val"})
 
+        assert bus.dead_letter_count == 1
+
+    @pytest.mark.asyncio
+    async def test_failed_async_callback_creates_dead_letter(self):
+        """Un callback async qui raise crée aussi une entrée DLQ (fix C1)."""
+        async def bad_async_cb(data):
+            raise RuntimeError("async boom")
+
+        bus.subscribe("DLQ_ASYNC", bad_async_cb)
+        await bus.publish("DLQ_ASYNC", {"key": "val"})
+
+        assert bus.dead_letter_count == 1
+        dl = bus.get_dead_letters()[0]
+        assert dl.event_type == "DLQ_ASYNC"
+        assert dl.error == "async boom"
+        assert dl.error_type == "RuntimeError"
+
+    @pytest.mark.asyncio
+    async def test_failed_async_does_not_block_others(self):
+        """Un callback async en erreur ne bloque pas les suivants."""
+        received = []
+
+        async def bad_async_cb(data):
+            raise ValueError("fail")
+
+        async def good_async_cb(data):
+            received.append(data)
+
+        bus.subscribe("ASYNC_MIX", bad_async_cb)
+        bus.subscribe("ASYNC_MIX", good_async_cb)
+        await bus.publish("ASYNC_MIX", {"ok": True})
+
+        assert len(received) == 1
         assert bus.dead_letter_count == 1
 
     @pytest.mark.asyncio

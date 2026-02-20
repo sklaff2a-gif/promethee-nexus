@@ -43,6 +43,7 @@ TRACKED_EVENTS = {
     "CI_PIPELINE_STEP",
     "CI_PIPELINE_RESULT",
     "EXPERIENCE_RECORDED",
+    "MEMORY_HEALTH_ALERT",
 }
 
 
@@ -196,6 +197,16 @@ def _format_event(event_type: str, data: dict):
         level = "success" if success else "err"
         _write(f"[{ts}] [DIALOGUE] [SYSTEM] CI/CD [{verdict}] {filename} : {detail}")
         _write(f"[{ts}] [LOG:{level}] [CI/CD] RESULTAT [{verdict}] {filename}")
+
+    # --- MEMORY_HEALTH_ALERT ---
+    elif event_type == "MEMORY_HEALTH_ALERT":
+        status = data.get("status", "unknown")
+        warnings = data.get("warnings", [])
+        level = "critical" if status == "down" else "warning"
+        line = f"[{ts}] [LOG:{level}] [MÉMOIRE] Status: {status.upper()}"
+        if warnings:
+            line += f" — {'; '.join(str(w)[:60] for w in warnings[:3])}"
+        _write(line)
 
     # --- EXPERIENCE_RECORDED ---
     elif event_type == "EXPERIENCE_RECORDED":

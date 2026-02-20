@@ -3,7 +3,6 @@ import logging
 from typing import Dict, Any, List
 from core.base_agent import BaseAgent
 from core.capabilities.web_surfer import WebSurfer
-from core.capabilities.knowledge_ingestor import KnowledgeIngestor
 
 logger = logging.getLogger("researcher")
 
@@ -19,9 +18,7 @@ class DivineResearcher(BaseAgent):
             role="Analyste de Données & Veilleur Stratégique",
             description="Scanne le web via Google/DDG et les documents locaux pour extraire du savoir."
         )
-        # On charge les outils externes
         self.surfer = WebSurfer()
-        self.ingestor = KnowledgeIngestor()
 
     async def process_task(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
         mission = task_payload.get("mission", "")

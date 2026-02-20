@@ -14,6 +14,9 @@ logger = logging.getLogger("TalkLogger")
 # Dossier d'archivage (relatif à la racine du projet)
 TALKS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "talks")
 
+# Buffer pour accumuler les chunks de stream par agent
+_stream_buffers: dict = {}  # agent_name -> list[str]
+
 # Événements à archiver et leur formateur
 TRACKED_EVENTS = {
     "USER_COMMAND",
@@ -51,15 +54,24 @@ def _format_entry(event_type: str, data: dict) -> str:
         return f"[{ts}] {agent} > {content}\n[{ts}] --- FIN {agent} ---"
 
     elif event_type == "AGENT_STREAM":
-        # On archive uniquement le signal de fin (texte complet reconstruit côté frontend)
-        # et le signal de début pour le contexte
         status = data.get("status", "")
+        agent_key = agent or "unknown"
         if status == "start":
+            _stream_buffers[agent_key] = []
             return f"[{ts}] {agent} [STREAM START]"
         elif status == "end":
+            # Archiver le contenu accumulé
+            chunks = _stream_buffers.pop(agent_key, [])
+            if chunks:
+                full_text = "".join(chunks)
+                return f"[{ts}] {agent} [STREAM CONTENT] {full_text}\n[{ts}] {agent} [STREAM END]"
             return f"[{ts}] {agent} [STREAM END]"
         else:
-            return ""  # Chunks intermédiaires ignorés dans l'archive
+            # Accumuler les chunks
+            chunk = data.get("chunk", data.get("content", ""))
+            if chunk and agent_key in _stream_buffers:
+                _stream_buffers[agent_key].append(str(chunk))
+            return ""  # Pas d'écriture fichier pour chaque chunk
 
     elif event_type == "AGENT_TASK_DISPATCH":
         target = data.get("target", "").upper()
