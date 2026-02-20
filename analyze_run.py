@@ -27,7 +27,7 @@ from pathlib import Path
 RE_TIMESTAMP = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]")
 
 RE_AUTONOMY_ROUTINE = re.compile(
-    r"✨ AUTONOMY: Routine \[(.+?)\] \(score=([0-9.e+-]+)\) -> \[(.+?)\] \((\d+)/(\d+)\)"
+    r"✨ AUTONOMY: Routine \[(.+?)\] \(score=([0-9.e+-]+)[^)]*\) -> \[(.+?)\] \((\d+)/(\d+)"
 )
 
 RE_ROUTINE_END = re.compile(
@@ -465,10 +465,28 @@ def analyze_timeline(events: list) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Filtrage par date
+# ---------------------------------------------------------------------------
+
+def _resolve_date(date_arg: str) -> str:
+    """Resout 'today'/'yesterday'/YYYY-MM-DD en YYYY-MM-DD."""
+    if not date_arg:
+        return None
+    if date_arg == "today":
+        return datetime.now().strftime("%Y-%m-%d")
+    if date_arg == "yesterday":
+        from datetime import timedelta
+        return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    # Validation format
+    datetime.strptime(date_arg, "%Y-%m-%d")  # leve ValueError si invalide
+    return date_arg
+
+
+# ---------------------------------------------------------------------------
 # Auto-détection et chargement des fichiers
 # ---------------------------------------------------------------------------
 
-def discover_logs(path: str) -> dict:
+def discover_logs(path: str, date_filter: str = None) -> dict:
     """Découvre et charge les logs depuis un chemin (fichier ou dossier)."""
     path = os.path.abspath(path)
     files = {"promethee": [], "talk": [], "interface": []}
@@ -497,8 +515,12 @@ def discover_logs(path: str) -> dict:
                 elif "promethee.log" in fname_lower:
                     files["promethee"].append(fpath)
                 elif fname_lower.startswith("talk") and fname_lower.endswith(".txt"):
+                    if date_filter and date_filter not in fname_lower:
+                        continue
                     files["talk"].append(fpath)
                 elif fname_lower.startswith("interface") and fname_lower.endswith(".txt"):
+                    if date_filter and date_filter not in fname_lower:
+                        continue
                     files["interface"].append(fpath)
 
         # Attraper aussi les fichiers rotatés (promethee.log.2026-02-XX)
@@ -679,11 +701,18 @@ def main():
         "--output", "-o",
         help="Fichier de sortie (defaut: stdout)"
     )
+    parser.add_argument(
+        "--date", "-d",
+        help="Filtrer par date (YYYY-MM-DD, 'today', 'yesterday'). Defaut: tout."
+    )
 
     args = parser.parse_args()
 
+    # Filtrage par date si demande
+    date_filter = _resolve_date(args.date) if args.date else None
+
     # Découverte des fichiers
-    files = discover_logs(args.path)
+    files = discover_logs(args.path, date_filter=date_filter)
 
     total_files = sum(len(v) for v in files.values())
     if total_files == 0:
@@ -708,6 +737,14 @@ def main():
     interface_events = []
     for fp in files["interface"]:
         interface_events.extend(parse_interface_log(fp))
+
+    # Post-filtre : ne garder que les evenements de la date cible
+    if date_filter:
+        all_events = [
+            e for e in all_events
+            if e.get("timestamp", "").startswith(date_filter)
+        ]
+        print(f"  Filtre date={date_filter} : {len(all_events)} evenements retenus", file=sys.stderr)
 
     if not all_events:
         print("Aucun evenement parse depuis les logs.", file=sys.stderr)
