@@ -70,6 +70,10 @@ class Config:
     PROJECT_ID = os.getenv("PROJECT_ID", "default")
     CHROMA_PERSIST_PATH = os.getenv("CHROMA_DB_PATH", "./memory/chroma_db")
 
+    # --- RAG (Retrieval-Augmented Generation) ---
+    RAG_DEFAULT_N_RESULTS = int(os.getenv("RAG_N_RESULTS", "3"))
+    RAG_RECALL_LIMIT = int(os.getenv("RAG_RECALL_LIMIT", "2"))
+
     # --- MODE NUIT (modèles réduits pour éviter crash GPU) ---
     NIGHT_MODE = os.getenv("NIGHT_MODE", "0") == "1"
     NIGHT_MODE_LOCAL_MODELS = {

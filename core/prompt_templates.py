@@ -43,6 +43,20 @@ AUTONOMY_GUARDRAIL = (
 )
 
 # ---------------------------------------------------------------------------
+# Guardrail : DÉBATS COUNCIL (recency bias — en fin de prompt)
+# ---------------------------------------------------------------------------
+COUNCIL_GUARDRAIL = (
+    "\n\n--- RAPPEL CRITIQUE (DÉBAT COUNCIL) ---\n"
+    "Tu débats pour le projet PROMÉTHÉE (Python/FastAPI/Ollama sur UN SEUL PC Windows).\n"
+    "RÈGLES ABSOLUES :\n"
+    "1. Cite UNIQUEMENT des fichiers listés dans la STRUCTURE DU PROJET ci-dessus.\n"
+    "2. TECHNOLOGIES INTERDITES : Kubernetes, Docker, Kafka, microservices, blockchain, "
+    "load balancing, cluster, conteneurs, cloud infra, Redis, RabbitMQ.\n"
+    "3. Toute proposition DOIT cibler des fichiers EXISTANTS (core/, Agents/).\n"
+    "4. RÉPONDS EN FRANÇAIS UNIQUEMENT.\n"
+)
+
+# ---------------------------------------------------------------------------
 # Guardrail : GÉNÉRATION DE TESTS (CI pipeline)
 # ---------------------------------------------------------------------------
 TEST_GENERATION_GUARDRAIL = (

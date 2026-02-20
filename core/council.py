@@ -40,6 +40,7 @@ _COUNCIL_PROJECT_CONTEXT = (
 
 
 from core.prompt_templates import get_project_structure as _get_project_structure
+from core.prompt_templates import COUNCIL_GUARDRAIL
 
 
 # --- Scoring des arguments du Council ---
@@ -280,9 +281,7 @@ class Council:
             f"HISTORIQUE DU DÉBAT :\n{history}\n\n"
             f"{round_instructions}\n"
             f"{president_block}"
-            f"--- RAPPEL FINAL ---\n"
-            f"RÉPONDS EN FRANÇAIS UNIQUEMENT. Pas d'anglais, même pour les termes techniques courants.\n"
-            f"Cite des fichiers EXISTANTS du projet (core/, Agents/).\n"
+            f"{COUNCIL_GUARDRAIL}"
         )
 
     def _build_president_prompt(self, round_num: int) -> str:
@@ -294,19 +293,27 @@ class Council:
             for e in round_entries
         )
 
+        # Structure projet réelle pour que le président vérifie les fichiers cités
+        try:
+            project_files = _get_project_structure()
+        except Exception:
+            project_files = ""
+
         return (
             f"Tu es le PRÉSIDENT du conseil. Tu évalues la QUALITÉ du débat (tu ne participes PAS).\n"
             f"MISSION : {self.mission}\n"
             f"TOUR {round_num}/{self.max_rounds}\n\n"
+            f"{project_files}\n\n"
             f"CONTRIBUTIONS DE CE TOUR :\n{contributions}\n\n"
             f"CRITÈRES D'ÉVALUATION :\n"
             f"1. Les propositions sont-elles pertinentes pour la mission ?\n"
             f"2. Y a-t-il des technologies HORS PÉRIMÈTRE (Kubernetes, Docker, Kafka, blockchain, microservices) ?\n"
-            f"3. Les fichiers mentionnés existent-ils réellement dans le projet ?\n"
+            f"3. Les fichiers mentionnés existent-ils dans la STRUCTURE DU PROJET CI-DESSUS ? "
+            f"Si un participant cite un fichier qui N'EXISTE PAS dans cette liste → REDIRECT.\n"
             f"4. Le débat tourne-t-il en rond (répétitions entre tours) ?\n\n"
             f"VERDICT — Réponds par UN SEUL MOT en première ligne :\n"
             f"- PERTINENT : le débat avance bien, continuer\n"
-            f"- REDIRECT : le débat dérive, suivi d'une consigne de recadrage\n"
+            f"- REDIRECT : le débat dérive ou cite des fichiers inexistants, suivi d'une consigne de recadrage\n"
             f"- ABORT : le débat est irrémédiablement hors-sujet, arrêter\n"
         )
 

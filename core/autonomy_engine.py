@@ -120,6 +120,19 @@ class SystemHealthCheck:
         except Exception as e:
             warnings.append(f"Ollama error: {e}")
 
+        # Ping ChromaDB
+        memory_status = {"status": "unknown"}
+        try:
+            from core.vector_store import ChromaMemoryManager
+            instances = ChromaMemoryManager._instances
+            if instances:
+                mgr = next(iter(instances.values()))
+                memory_status = mgr.check_health()
+            else:
+                memory_status = {"status": "down", "warnings": ["Aucune instance ChromaDB"]}
+        except Exception as e:
+            memory_status = {"status": "down", "warnings": [str(e)]}
+
         # Verdict
         if cpu_percent >= SystemHealthCheck.CPU_CRIT or ram_percent >= SystemHealthCheck.RAM_CRIT or not ollama_alive:
             verdict = "NO_GO"
@@ -133,6 +146,10 @@ class SystemHealthCheck:
         if ram_percent >= SystemHealthCheck.RAM_WARN:
             warnings.append(f"RAM élevée: {ram_percent}%")
 
+        # Warning mémoire (ne bloque pas les routines)
+        if memory_status.get("status") in ("degraded", "down"):
+            warnings.append(f"Mémoire ChromaDB: {memory_status['status']}")
+
         return {
             "verdict": verdict,
             "cpu_percent": cpu_percent,
@@ -141,6 +158,7 @@ class SystemHealthCheck:
             "ram_total_gb": ram_total_gb,
             "ollama_alive": ollama_alive,
             "ollama_models": ollama_models,
+            "memory": memory_status,
             "warnings": warnings,
             "timestamp": datetime.now().isoformat(),
         }
@@ -388,20 +406,13 @@ class AutonomyEngine:
         result_text = str(response.get("result", ""))
         score = 1.0
 
-        # Routines où un résultat court est normal et valide
-        short_ok_intents = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "COUNCIL_DEBATE"}
-
         # 1. Pénalité longueur : résultat vide ou très court
-        stripped_len = len(result_text.strip())
-        if stripped_len == 0:
+        if len(result_text.strip()) < 20:
             return 0.0
-        if intent not in short_ok_intents:
-            if stripped_len < 20:
-                return 0.0
-            elif stripped_len < 50:
-                score -= 0.4
-            elif stripped_len < 100:
-                score -= 0.2
+        elif len(result_text.strip()) < 50:
+            score -= 0.4
+        elif len(result_text.strip()) < 100:
+            score -= 0.2
 
         # 2. Pénalité non-latin (hallucination)
         alpha_chars = [c for c in result_text if c.isalpha()]
@@ -509,7 +520,7 @@ class AutonomyEngine:
         # Dispatcher une recherche ciblée au Researcher
         print(f"   📚 APPRENTISSAGE: Recherche ciblée sur '{topic[:60]}...'")
         try:
-            await orchestrator.dispatch_task("researcher", {
+            result = await orchestrator.dispatch_task("researcher", {
                 "mission": f"[APPRENTISSAGE CIBLÉ] Recherche approfondie sur: {topic}",
                 "context": (
                     "APPRENTISSAGE_CIBLE — Le système a détecté une lacune de connaissance "
@@ -525,7 +536,14 @@ class AutonomyEngine:
             try:
                 from core.self_awareness import awareness
                 awareness.record_knowledge_gap(topic, intent)
-                awareness.mark_gap_learned(topic)
+                # Ne marquer comme appris que si le Researcher a réellement répondu
+                researcher_ok = (
+                    result and isinstance(result, dict)
+                    and result.get("status") == "success"
+                    and len(str(result.get("result", ""))) > 50
+                )
+                if researcher_ok:
+                    awareness.mark_gap_learned(topic)
             except Exception:
                 pass
 
@@ -754,11 +772,16 @@ class AutonomyEngine:
         self._learning_done_this_cycle = False
 
         if response and response.get("status") in ("success", "consensus", "max_rounds"):
+            # Distinguer consensus réel vs max_rounds (timeout sans accord)
+            actual_status = response.get("status", "success")
+            is_max_rounds = actual_status == "max_rounds"
+
             if quality_score < 0.3:
                 # Succès technique mais résultat de mauvaise qualité
                 failure_type = self._diagnose_failure(response, quality_score, intent)
+                record_status = "max_rounds_low" if is_max_rounds else "low_quality"
                 print(f"   ⚠️ Routine {intent} terminée mais qualité basse ({quality_score:.2f}) [{failure_type}]")
-                self._record_routine(agent, intent, "low_quality", subject=council_subject,
+                self._record_routine(agent, intent, record_status, subject=council_subject,
                                      quality_score=quality_score, failure_type=failure_type,
                                      result_preview=result_preview, grimoire_slug=grimoire_slug)
                 self.error_streak += 1
@@ -771,8 +794,10 @@ class AutonomyEngine:
                         pass
                     await self._trigger_targeted_learning(selected["mission"], agent, intent)
             else:
-                print(f"   ✅ Fin Routine {agent.upper() if agent != '_council' else 'COUNCIL'} (qualité: {quality_score:.2f})")
-                self._record_routine(agent, intent, "success", subject=council_subject,
+                record_status = "max_rounds" if is_max_rounds else "success"
+                emoji = "⚖️" if is_max_rounds else "✅"
+                print(f"   {emoji} Fin Routine {agent.upper() if agent != '_council' else 'COUNCIL'} (qualité: {quality_score:.2f}{', max_rounds' if is_max_rounds else ''})")
+                self._record_routine(agent, intent, record_status, subject=council_subject,
                                      quality_score=quality_score, result_preview=result_preview,
                                      grimoire_slug=grimoire_slug)
                 self.error_streak = 0
@@ -1167,6 +1192,12 @@ class AutonomyEngine:
 
     async def _execute_audit_structure(self) -> dict:
         """Audit structure réel : scanne le filesystem pour fichiers temporaires/orphelins."""
+        # Rafraîchir le cache de structure projet (anti-hallucination basé sur des données fraîches)
+        try:
+            from core.prompt_templates import reset_project_structure_cache
+            reset_project_structure_cache()
+        except Exception:
+            pass
         try:
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -1336,6 +1367,17 @@ class AutonomyEngine:
                     if qualified not in file_mentions:
                         file_mentions.append(qualified)
 
+        # Valider que les fichiers mentionnés existent réellement (anti-hallucination)
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        verified_files = []
+        for f in file_mentions:
+            full_path = os.path.join(project_root, f.replace("/", os.sep))
+            if os.path.exists(full_path):
+                verified_files.append(f)
+            else:
+                logger.warning(f"[COUNCIL→ACTION] Fichier halluciné ignoré : {f}")
+        file_mentions = verified_files
+
         # Extraire les actions concrètes — regex élargie pour le langage naturel des LLMs
         action_patterns = re.findall(
             r'(?:ACTION|IMPLÉMENTER|IMPL[ÉE]MENTATION|AJOUTER|AJOUT|MODIFIER|MODIFICATION'
@@ -1360,13 +1402,34 @@ class AutonomyEngine:
         mission_short = topic.get("mission", "amélioration")[:80]
         spec_id = f"COUNCIL-{int(time.time()) % 100000}"
 
-        # Prendre le premier fichier cible mentionné, ou un générique
-        target_file = file_mentions[0] if file_mentions else "core/base_agent.py"
+        # Prendre le premier fichier cible vérifié (pas de fallback générique)
+        if not file_mentions:
+            logger.info("[COUNCIL→ACTION] Aucun fichier vérifié — spec non créée.")
+            return
+        target_file = file_mentions[0]
 
         # Résumé des actions
         actions_text = "\n".join(f"- {a.strip()}" for a in action_patterns[:3])
         if not actions_text:
             actions_text = analysis_text[:500]
+
+        # Extraire la méthode cible depuis l'analyse (ou fallback générique)
+        import re as _re
+        method_match = _re.search(r'(?:méthode|method|def)\s+(\w+)', analysis_text, _re.IGNORECASE)
+        target_method = method_match.group(1) if method_match else ""
+
+        # code_template valide (doit contenir def/class/import pour passer Phase 4c)
+        code_template = (
+            f"import logging\n\n"
+            f"def council_improvement():\n"
+            f"    \"\"\"Amélioration issue du consensus Council.\n"
+            f"    Mission: {mission_short}\n"
+            f"    \"\"\"\n"
+            f"    # Actions identifiées:\n"
+        )
+        for action_line in actions_text.split("\n")[:5]:
+            code_template += f"    {action_line}\n"
+        code_template += "    pass\n"
 
         spec = ImprovementSpec(
             id=spec_id,
@@ -1374,9 +1437,9 @@ class AutonomyEngine:
             description=f"Issu d'un consensus Council.\n{actions_text}",
             category="intelligence",
             target_file=target_file,
-            target_method="process_task",
+            target_method=target_method,
             difficulty=2,
-            code_template=f"# Spec générée par consensus Council\n# Mission: {mission_short}\n# Actions:\n{actions_text}",
+            code_template=code_template,
             validation="Vérifier que l'amélioration proposée par le Council fonctionne.",
             tags=["council", "consensus", "auto-generated"],
             status="available",
@@ -1392,11 +1455,14 @@ class AutonomyEngine:
         print(f"   🧠 AUTONOMY: Moteur V24 (Health-Aware Sentinel) activé. Limite: {MAX_DAILY_ROUTINES} routines/jour.")
 
         while self.is_running:
-            # Sleep adaptatif : doublé si error_streak >= 3
+            # Sleep adaptatif : modéré si error_streak >= 3 (max 1.5× pour éviter spirale)
             sleep_time = random.randint(600, 1200)
             if self.error_streak >= 3:
-                sleep_time *= 2
-                logger.warning(f"[AUTONOMY] Mode prudent (error_streak={self.error_streak}), sleep doublé: {sleep_time}s")
+                sleep_time = int(sleep_time * 1.5)
+                logger.warning(f"[AUTONOMY] Mode prudent (error_streak={self.error_streak}), sleep: {sleep_time}s")
+                # Décroissance progressive : réduire l'error_streak de 1 à chaque cycle pour sortir de la spirale
+                if self.error_streak > 5:
+                    self.error_streak -= 1
 
             await asyncio.sleep(sleep_time)
 
@@ -1418,6 +1484,17 @@ class AutonomyEngine:
                     logger.warning(f"[AUTONOMY] Health check échoué: {e}")
 
                 self.last_health_check = health
+
+                # Alerte mémoire
+                memory = health.get("memory", {})
+                if memory.get("status") in ("degraded", "down"):
+                    await bus.publish("MEMORY_HEALTH_ALERT", {
+                        "status": memory["status"],
+                        "warnings": memory.get("warnings", []),
+                        "persistent": memory.get("persistent", False),
+                        "collections": memory.get("collections", {}),
+                    })
+                    logger.warning(f"[AUTONOMY] MÉMOIRE {memory['status'].upper()}: {memory.get('warnings', [])}")
 
                 # Heartbeat publié à chaque cycle (même si NO_GO)
                 await bus.publish("AUTONOMY_HEARTBEAT", {

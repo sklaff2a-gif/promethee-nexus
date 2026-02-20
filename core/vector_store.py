@@ -4,6 +4,7 @@ import os
 import shutil
 import uuid
 import time
+from datetime import datetime
 from typing import List, Dict, Any
 
 logger = logging.getLogger("VectorStore")
@@ -35,8 +36,13 @@ class ChromaMemoryManager:
                 shutil.move(old_path, new_path)
                 print(f"✅ [MÉMOIRE] Migration terminée.")
 
-        # Chemin persistant isolé par projet
-        self.db_path = os.path.join(".", "memory", project_id, "chroma_db")
+        # Chemin persistant isolé par projet (utilise Config.CHROMA_PERSIST_PATH comme base)
+        try:
+            from config import Config
+            base_dir = os.path.dirname(getattr(Config, "CHROMA_PERSIST_PATH", os.path.join(".", "memory", "chroma_db")))
+        except ImportError:
+            base_dir = os.path.join(".", "memory")
+        self.db_path = os.path.join(base_dir, project_id, "chroma_db")
         os.makedirs(self.db_path, exist_ok=True)
 
         # Initialisation du client (fallback EphemeralClient si PersistentClient échoue)
@@ -46,10 +52,9 @@ class ChromaMemoryManager:
             logger.warning(f"PersistentClient échoué ({e}), fallback EphemeralClient (mémoire non persistante)")
             self.client = chromadb.EphemeralClient()
 
-        # On prépare les collections de base (casiers de mémoire)
+        # Collections de base (casiers de mémoire)
         self.collections = {
             "collective_wisdom": self.client.get_or_create_collection(name="collective_wisdom"),
-            "finance_vault": self.client.get_or_create_collection(name="finance_vault"),
             "code_snippets": self.client.get_or_create_collection(name="code_snippets")
         }
         print(f"🧠 [MÉMOIRE] ChromaDB chargé (projet={project_id}) : {list(self.collections.keys())}")
@@ -60,9 +65,30 @@ class ChromaMemoryManager:
             self.collections[collection_name] = self.client.get_or_create_collection(name=collection_name)
         return self.collections[collection_name]
 
+    @staticmethod
+    def _sanitize_metadata(metadatas: List[Dict]) -> List[Dict]:
+        """Assure que toutes les valeurs metadata sont str/int/float/bool (exigence ChromaDB)."""
+        clean = []
+        for meta in metadatas:
+            sanitized = {}
+            for k, v in meta.items():
+                if isinstance(v, (str, int, float, bool)):
+                    sanitized[k] = v
+                elif v is None:
+                    sanitized[k] = ""
+                else:
+                    sanitized[k] = str(v)
+            clean.append(sanitized)
+        return clean
+
+    @property
+    def is_persistent(self) -> bool:
+        return getattr(self.client.get_settings(), "is_persistent", False)
+
     def add_documents(self, documents: List[str], metadatas: List[Dict], ids: List[str], collection_name: str = "collective_wisdom"):
         """Ajoute des souvenirs dans une collection spécifique."""
         try:
+            metadatas = self._sanitize_metadata(metadatas)
             col = self._get_collection(collection_name)
             col.add(documents=documents, metadatas=metadatas, ids=ids)
             return True
@@ -70,18 +96,24 @@ class ChromaMemoryManager:
             print(f"❌ Erreur Mémoire (Add): {e}")
             return False
 
-    def query_documents(self, query_texts: List[str], n_results: int = 3, collection_name: str = "collective_wisdom"):
+    def query_documents(self, query_texts: List[str], n_results: int = None, collection_name: str = "collective_wisdom"):
         """Recherche dans une collection spécifique."""
         try:
+            if n_results is None:
+                from config import Config
+                n_results = getattr(Config, "RAG_DEFAULT_N_RESULTS", 3)
             col = self._get_collection(collection_name)
             return col.query(query_texts=query_texts, n_results=n_results)
         except Exception as e:
             print(f"❌ Erreur Mémoire (Query): {e}")
             return None
 
-    def query_with_metadata(self, query_texts: List[str], n_results: int = 3, collection_name: str = "collective_wisdom"):
+    def query_with_metadata(self, query_texts: List[str], n_results: int = None, collection_name: str = "collective_wisdom"):
         """Comme query_documents mais inclut distances et metadatas."""
         try:
+            if n_results is None:
+                from config import Config
+                n_results = getattr(Config, "RAG_DEFAULT_N_RESULTS", 3)
             col = self._get_collection(collection_name)
             return col.query(
                 query_texts=query_texts,
@@ -130,6 +162,57 @@ class ChromaMemoryManager:
         except Exception as e:
             print(f"❌ Erreur Mémoire (Count): {e}")
             return 0
+
+    def check_health(self) -> dict:
+        """Diagnostic de santé ChromaDB. Léger, pas de LLM."""
+        result = {
+            "status": "healthy",
+            "persistent": True,
+            "collections": {},
+            "probe_ok": False,
+            "warnings": [],
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        # 1. Vérifier si on est en mode persistent
+        result["persistent"] = getattr(self.client.get_settings(), "is_persistent", False)
+        if not result["persistent"]:
+            result["warnings"].append("Mode EphemeralClient (mémoire non persistante)")
+            result["status"] = "degraded"
+
+        # 2. Count par collection
+        for name in list(self.collections.keys()):
+            try:
+                count = self.collections[name].count()
+                result["collections"][name] = count
+            except Exception as e:
+                result["collections"][name] = -1
+                result["warnings"].append(f"Collection {name} inaccessible: {e}")
+                result["status"] = "degraded"
+
+        # 3. Probe write/read/delete
+        probe_id = "__health_probe__"
+        try:
+            probe_col = self.client.get_or_create_collection("health-probe")
+            probe_col.add(
+                documents=["health check probe"],
+                metadatas=[{"type": "probe", "timestamp": str(time.time())}],
+                ids=[probe_id],
+            )
+            read = probe_col.get(ids=[probe_id])
+            if read and read["ids"] and read["ids"][0] == probe_id:
+                result["probe_ok"] = True
+            probe_col.delete(ids=[probe_id])
+            self.client.delete_collection("health-probe")
+        except Exception as e:
+            result["warnings"].append(f"Probe échoué: {e}")
+            result["status"] = "down" if not result["probe_ok"] else "degraded"
+
+        # Si aucune collection accessible → down
+        if result["collections"] and all(v == -1 for v in result["collections"].values()):
+            result["status"] = "down"
+
+        return result
 
     def purge_low_quality(self, min_length: int = 100, max_non_latin_ratio: float = 0.10,
                           collection_name: str = None) -> int:

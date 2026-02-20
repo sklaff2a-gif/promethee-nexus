@@ -184,10 +184,12 @@ class BaseAgent:
         except Exception as e:
             self.log_thought(f"Erreur Sauvegarde: {e}", type="error")
 
-    def recall(self, query: str, limit: int = 2, collection="collective_wisdom") -> str:
+    def recall(self, query: str, limit: int = None, collection="collective_wisdom") -> str:
         if not self.has_memory: return ""
         try:
             import math
+            if limit is None:
+                limit = getattr(Config, "RAG_RECALL_LIMIT", 2)
             fetch_count = limit * 3
             res = self.memory_manager.query_with_metadata(
                 [query], n_results=fetch_count, collection_name=collection
