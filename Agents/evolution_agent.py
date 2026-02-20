@@ -453,47 +453,68 @@ class DivineEvolution(BaseAgent):
                 pass
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
-        # --- PHASE 3 : MATÉRIALISATION (Gemini Cloud) ---
-        self.log_thought(f"🛠️ Phase 3 : Génération du code via Gemini Cloud [{spec.id}]...", type="info")
+        # --- PHASE 3 : MATÉRIALISATION ---
+        # Tentative 1 : CodeSmith (déterministe, pas de LLM)
+        try:
+            from core.code_smith import CodeSmith, spec_to_actions
+            cs_actions = spec_to_actions(spec, source_code)
+        except Exception as _cs_err:
+            logger.warning(f"CodeSmith import/init error: {_cs_err}")
+            cs_actions = None
 
-        # Consulter le registre d'expériences
-        past_failures = registry.get_failure_summary(spec.id)
+        if cs_actions is not None:
+            self.log_thought(f"[CodeSmith] Transformation déterministe [{spec.id}]...", type="info")
+            cs_result = CodeSmith.apply(source_code, cs_actions)
+            if cs_result.success:
+                generated_code = cs_result.modified_source
+                code_source = "deterministic"
+                self.log_thought(f"[CodeSmith] {cs_result.actions_applied} actions appliquées.", type="info")
+            else:
+                self.log_thought(f"[CodeSmith] Échec: {cs_result.error}. Fallback LLM...", type="warning")
+                generated_code = ""
 
-        code_prompt = (
-            f"Applique cette amélioration au fichier {spec.target_file} (méthode: {spec.target_method}).\n"
-            f"AMÉLIORATION [{spec.id}] : {spec.name}\n"
-            f"DESCRIPTION : {spec.description}\n"
-            f"TEMPLATE DE CODE À INTÉGRER :\n{spec.code_template}\n\n"
-            f"CODE SOURCE ACTUEL DU FICHIER :\n{source_code[:3000]}\n\n"
-            f"INSTRUCTIONS :\n"
-            f"- Intègre le template dans le code existant\n"
-            f"- Conserve TOUT le code existant fonctionnel\n"
-            f"- Adapte les noms de variables si nécessaire\n"
-            f"- Retourne LE FICHIER COMPLET modifié (pas juste le diff)\n"
-            f"- Donne UNIQUEMENT le code Python, sans explication ni commentaire hors-code."
-            f"{CODE_GENERATION_GUARDRAIL}"
-        )
-
-        if past_failures:
-            code_prompt += f"\n\nATTENTION — {past_failures}\nÉVITE de reproduire ces erreurs.\n"
-
-        generated_code = await self._generate_code_cloud(code_prompt)
-        if generated_code and len(generated_code) >= 50:
-            code_source = "cloud"
-
+        # Tentative 2 : LLM Cloud/Local (si CodeSmith n'a pas produit de résultat)
         if not generated_code or len(generated_code) < 50:
-            # Fallback : dispatch au Coder local
-            self.log_thought("⚠️ Cloud indisponible, tentative via Coder local...", type="warning")
-            coder_response = await orchestrator.dispatch_task("coder", {
-                "mission": code_prompt,
-                "context": f"EVOLUTION_PIPELINE\nSPEC_ID: {spec.id}"
-            })
-            generated_code = coder_response.get("result", "")
+            self.log_thought(f"🛠️ Phase 3 : Génération du code via Gemini Cloud [{spec.id}]...", type="info")
+
+            # Consulter le registre d'expériences
+            past_failures = registry.get_failure_summary(spec.id)
+
+            code_prompt = (
+                f"Applique cette amélioration au fichier {spec.target_file} (méthode: {spec.target_method}).\n"
+                f"AMÉLIORATION [{spec.id}] : {spec.name}\n"
+                f"DESCRIPTION : {spec.description}\n"
+                f"TEMPLATE DE CODE À INTÉGRER :\n{spec.code_template}\n\n"
+                f"CODE SOURCE ACTUEL DU FICHIER :\n{source_code[:3000]}\n\n"
+                f"INSTRUCTIONS :\n"
+                f"- Intègre le template dans le code existant\n"
+                f"- Conserve TOUT le code existant fonctionnel\n"
+                f"- Adapte les noms de variables si nécessaire\n"
+                f"- Retourne LE FICHIER COMPLET modifié (pas juste le diff)\n"
+                f"- Donne UNIQUEMENT le code Python, sans explication ni commentaire hors-code."
+                f"{CODE_GENERATION_GUARDRAIL}"
+            )
+
+            if past_failures:
+                code_prompt += f"\n\nATTENTION — {past_failures}\nÉVITE de reproduire ces erreurs.\n"
+
+            generated_code = await self._generate_code_cloud(code_prompt)
             if generated_code and len(generated_code) >= 50:
-                code_source = "local"
+                code_source = "cloud"
+
+            if not generated_code or len(generated_code) < 50:
+                # Fallback : dispatch au Coder local
+                self.log_thought("⚠️ Cloud indisponible, tentative via Coder local...", type="warning")
+                coder_response = await orchestrator.dispatch_task("coder", {
+                    "mission": code_prompt,
+                    "context": f"EVOLUTION_PIPELINE\nSPEC_ID: {spec.id}"
+                })
+                generated_code = coder_response.get("result", "")
+                if generated_code and len(generated_code) >= 50:
+                    code_source = "local"
 
         if not generated_code or len(generated_code) < 50:
-            reason = "Aucun code produit (Cloud + Local)"
+            reason = "Aucun code produit (CodeSmith + Cloud + Local)"
             catalog.mark_failed(spec.id, reason)
             self.log_thought(f"💤 {reason}.", type="info")
             try:
