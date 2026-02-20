@@ -7,44 +7,44 @@ Ce fichier est maintenu automatiquement par le moteur d'autonomie et curé manue
 
 ---
 
-## [2026-02-17 01:25] Event Bus — Dead-letter queue ✅ IMPLÉMENTÉ (2026-02-19)
+## [2026-02-20 07:56] asyncio.Lock dans core/memory.py — Thread-safety mémoire
 
-**Participants** : architect, coder, infra | **Tours** : 3 | **Consensus** : oui
+**Participants** : researcher, evolution, coder | **Tours** : 3 | **Consensus** : oui
 
-**Proposition** :
-- Dead-letter queue pour les événements échoués (stockage + retraitement automatique)
+**Propositions clés** :
+  - `asyncio.Lock` dans `core/memory.py` pour thread-safety de la mémoire partagée
+  - Résout le problème de mutation non contrôlée du memory store
+  - Overhead négligeable sur un seul PC
 
-**Fichiers cibles** : `core/event_bus/bus.py`
-**Verdict** : Implémenté — DeadLetter dataclass, DLQ in-memory (max 100, FIFO), inspection + retry.
+**Fichiers cibles** : `core/memory.py`
+**Verdict** : (à implémenter)
 
 ---
 
-## [2026-02-19 15:04] Le Researcher a trouvé des techniques d'optimisation des ressources pour les age
+## [2026-02-20 13:58] Module centralisé core/prompt_validation.py — Anti-injection
 
-**Participants** : infra, strategist, architect | **Tours** : 3 | **Consensus** : oui
+**Participants** : security, architect, strategist | **Tours** : 3 | **Consensus** : oui
 
 **Propositions clés** :
-  - **Fichier modifié** : `core/memory/vector_store.py` (fonction `load_model` ligne ~45)
-  - Ajouter une logique pour convertir les embeddings en `np.float32` avant de les stocker dans ChromaDB.
-  - **Raison** : ChromaDB attend des `float32`, et la conversion naïve évite de modifier ChromaDB (hors-périmètre).
-  - **Fichier modifié** : `core/memory/vector_store.py` (fonction `load_model` ligne ~45)
-  - Ajouter une vérification du format du fichier (`.gguf`) et charger le modèle quantifié.
+  - Module centralisé `core/prompt_validation.py` pour validation anti-injection
+  - Décodage URL, détection patterns malveillants, sanitisation avant envoi à Ollama
+  - Intégration dans chaque agent via appel au module avant `generate_content()`
 
-**Fichiers cibles** : `core/memory/vector_store.py`
-**Verdict** : (à curé manuellement)
+**Fichiers cibles** : `core/prompt_validation.py`, agents concernés
+**Verdict** : (à implémenter)
 
 ---
 
-## [2026-02-19 23:20] Le Researcher a identifié des stratégies de scalabilité autonome. Comment Promét
+## [2026-02-20 15:22] Le Researcher a trouvé des méthodes pour améliorer les débats entre agents IA. C
 
-**Participants** : evolution, strategist, coder | **Tours** : 4 | **Consensus** : oui
+**Participants** : strategist, coder, writer | **Tours** : 3 | **Consensus** : oui
 
 **Propositions clés** :
-  **Problème potentiel
-  **Fichier concerné** : `core/autonomy_engine.py`
-  - Ajout d’un dictionnaire `PROMPT_SIMPLIFICATION_THRESHOLDS` (configurable via un simple fichier `.json` ou directement 
-  - La fonction `adjust_prompt(errors: int, metrics: dict)` est modifiée pour :
-  - `core/autonomy_engine.py`
+  **Fichier concerné :** `core/orchestrator.py`
+  - Déclarer un verrou global `active_debates_lock = threading.Lock()` (standard Python, donc autorisé).
+  - Encadrer l’incrémentation et la décrémentation de `active_debates` avec ce verrou :
+  - Le problème de *race condition* sur `active_debates` a été résolu avec un `threading.Lock()` et une logique d’attente 
+  - La protection du compteur empêche toute surcharge CPU liée à un dépassement de parallélisme.
 
-**Fichiers cibles** : `Agents/base_agent.py`, `core/autonomy_engine.py`, `core/evolution_feedback.py`
+**Fichiers cibles** : `core/council.py`, `core/orchestrator.py`, `core/performance_utils.py`
 **Verdict** : (à curé manuellement)

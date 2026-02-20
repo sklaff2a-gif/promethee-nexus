@@ -604,11 +604,278 @@ class TestIntegrationFichiersReels:
         assert "_get_cached_intent" in result.modified_source
         assert "_set_cached_intent" in result.modified_source
 
+    # --- Fixtures fichiers additionnels ---
+
+    @pytest.fixture
+    def strategist_source(self):
+        path = os.path.join(project_root, "Agents", "strategist_agent.py")
+        if not os.path.exists(path):
+            pytest.skip("Agents/strategist_agent.py non trouvé")
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    @pytest.fixture
+    def researcher_source(self):
+        path = os.path.join(project_root, "Agents", "researcher_agent.py")
+        if not os.path.exists(path):
+            pytest.skip("Agents/researcher_agent.py non trouvé")
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    @pytest.fixture
+    def strategic_journal_source(self):
+        path = os.path.join(project_root, "core", "strategic_journal.py")
+        if not os.path.exists(path):
+            pytest.skip("core/strategic_journal.py non trouvé")
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    @pytest.fixture
+    def evolution_source(self):
+        path = os.path.join(project_root, "Agents", "evolution_agent.py")
+        if not os.path.exists(path):
+            pytest.skip("Agents/evolution_agent.py non trouvé")
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    @pytest.fixture
+    def writer_source(self):
+        path = os.path.join(project_root, "Agents", "writer_agent.py")
+        if not os.path.exists(path):
+            pytest.skip("Agents/writer_agent.py non trouvé")
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    @pytest.fixture
+    def orchestrator_source(self):
+        path = os.path.join(project_root, "core", "orchestrator.py")
+        if not os.path.exists(path):
+            pytest.skip("core/orchestrator.py non trouvé")
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    @pytest.fixture
+    def factory_source(self):
+        path = os.path.join(project_root, "Agents", "factory_agent.py")
+        if not os.path.exists(path):
+            pytest.skip("Agents/factory_agent.py non trouvé")
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    @pytest.fixture
+    def psyche_source(self):
+        path = os.path.join(project_root, "core", "psyche.py")
+        if not os.path.exists(path):
+            pytest.skip("core/psyche.py non trouvé")
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    # --- Tests d'intégration specs sur fichiers réels ---
+
+    def test_perf008_sur_strategist(self, strategist_source):
+        """PERF-008 : cache listing projet Strategist."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="PERF-008", name="Cache listing projet", description="",
+            category="performance", target_file="Agents/strategist_agent.py",
+            target_method="", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, strategist_source)
+        assert actions is not None
+        result = CodeSmith.apply(strategist_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_project_files_cache" in result.modified_source
+        assert "_PROJECT_FILES_TTL" in result.modified_source
+
+    def test_perf010_sur_researcher(self, researcher_source):
+        """PERF-010 : skip binaires Dropzone."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="PERF-010", name="Skip binaires", description="",
+            category="performance", target_file="Agents/researcher_agent.py",
+            target_method="", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, researcher_source)
+        assert actions is not None
+        result = CodeSmith.apply(researcher_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_is_binary" in result.modified_source
+
+    def test_res005_sur_base_agent(self, base_agent_source):
+        """RES-005 : heartbeat Ollama."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="RES-005", name="Heartbeat Ollama", description="",
+            category="resilience", target_file="core/base_agent.py",
+            target_method="", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, base_agent_source)
+        assert actions is not None
+        result = CodeSmith.apply(base_agent_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_OLLAMA_HEALTH_URL" in result.modified_source
+        assert "_check_ollama_heartbeat" in result.modified_source
+
+    def test_res008_sur_strategic_journal(self, strategic_journal_source):
+        """RES-008 : auto-trim journal stratégique."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="RES-008", name="Auto-trim journal", description="",
+            category="resilience", target_file="core/strategic_journal.py",
+            target_method="append_council_entry", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, strategic_journal_source)
+        assert actions is not None
+        result = CodeSmith.apply(strategic_journal_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_MAX_JOURNAL_ENTRIES" in result.modified_source
+        assert "_auto_trim" in result.modified_source
+
+    def test_int005_sur_evolution(self, evolution_source):
+        """INT-005 : résumé échecs CI/CD."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="INT-005", name="Résumé échecs CI/CD", description="",
+            category="intelligence", target_file="Agents/evolution_agent.py",
+            target_method="", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, evolution_source)
+        assert actions is not None
+        result = CodeSmith.apply(evolution_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_get_recent_failures" in result.modified_source
+
+    def test_int007_sur_writer(self, writer_source):
+        """INT-007 : métriques lisibilité Writer."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="INT-007", name="Métriques lisibilité", description="",
+            category="intelligence", target_file="Agents/writer_agent.py",
+            target_method="", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, writer_source)
+        assert actions is not None
+        result = CodeSmith.apply(writer_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_compute_readability" in result.modified_source
+
+    def test_obs003_sur_orchestrator(self, orchestrator_source):
+        """OBS-003 : profiling pipelines."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="OBS-003", name="Profiling pipelines", description="",
+            category="observability", target_file="core/orchestrator.py",
+            target_method="dispatch_task", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, orchestrator_source)
+        assert actions is not None
+        result = CodeSmith.apply(orchestrator_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_publish_pipeline_timing" in result.modified_source
+
+    def test_sec001_sur_factory(self, factory_source):
+        """SEC-001 : sanitization output Factory."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="SEC-001", name="Sanitization output", description="",
+            category="security", target_file="Agents/factory_agent.py",
+            target_method="", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, factory_source)
+        assert actions is not None
+        result = CodeSmith.apply(factory_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_DANGEROUS_PATTERNS" in result.modified_source
+        assert "_scan_code_safety" in result.modified_source
+
+    def test_sec002_sur_router(self, router_source):
+        """SEC-002 : détection injection prompt."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="SEC-002", name="Détection injection", description="",
+            category="security", target_file="core/router.py",
+            target_method="classify_intent", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, router_source)
+        assert actions is not None
+        result = CodeSmith.apply(router_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_INJECTION_PATTERNS" in result.modified_source
+        assert "_check_injection" in result.modified_source
+
+    def test_sec005_sur_researcher(self, researcher_source):
+        """SEC-005 : whitelist extensions Dropzone."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="SEC-005", name="Whitelist extensions", description="",
+            category="security", target_file="Agents/researcher_agent.py",
+            target_method="", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, researcher_source)
+        assert actions is not None
+        result = CodeSmith.apply(researcher_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_ALLOWED_EXTENSIONS" in result.modified_source
+        assert "_is_allowed_file" in result.modified_source
+
+    def test_mem005_sur_researcher(self, researcher_source):
+        """MEM-005 : mémoire structurée Researcher."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="MEM-005", name="Mémoire structurée", description="",
+            category="memory", target_file="Agents/researcher_agent.py",
+            target_method="", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, researcher_source)
+        assert actions is not None
+        result = CodeSmith.apply(researcher_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_format_research_memory" in result.modified_source
+
+    def test_mem006_sur_psyche(self, psyche_source):
+        """MEM-006 : snapshot traits Psyche."""
+        from core.evolution_catalog import ImprovementSpec
+        spec = ImprovementSpec(
+            id="MEM-006", name="Snapshot traits", description="",
+            category="memory", target_file="core/psyche.py",
+            target_method="save", difficulty=1,
+            code_template="", validation="",
+        )
+        actions = spec_to_actions(spec, psyche_source)
+        assert actions is not None
+        result = CodeSmith.apply(psyche_source, actions)
+        assert result.success, f"Erreur: {result.error}"
+        ast.parse(result.modified_source)
+        assert "_MAX_TRAIT_HISTORY" in result.modified_source
+        assert "_take_trait_snapshot" in result.modified_source
+
     def test_resultat_passe_ast_parse(self, base_agent_source):
         """Vérifie que toutes les specs supportées produisent du code valide sur base_agent.py."""
         from core.evolution_catalog import ImprovementSpec
         # Tester seulement les specs ciblant base_agent
-        base_agent_specs = ["PERF-003", "PERF-004", "RES-003", "INT-001", "OBS-002"]
+        base_agent_specs = ["PERF-003", "PERF-004", "RES-003", "RES-005", "INT-001", "OBS-002"]
         for spec_id in base_agent_specs:
             spec = ImprovementSpec(
                 id=spec_id, name="test", description="",

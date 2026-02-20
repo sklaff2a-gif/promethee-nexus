@@ -545,7 +545,7 @@ def _perf_003(spec, source):
 
 @_register("PERF-004")
 def _perf_004(spec, source):
-    """Cache recall RAG — attribut d'instance + guard en début de recall."""
+    """Cache recall RAG — méthodes helper + guard en début de recall + cache après résultat."""
     return [
         TransformAction(
             type=TransformType.ADD_METHOD,
@@ -573,6 +573,17 @@ def _perf_004(spec, source):
                     if len(self._recall_cache) > 20:
                         oldest_key = min(self._recall_cache, key=lambda k: self._recall_cache[k]["ts"])
                         del self._recall_cache[oldest_key]
+            '''),
+        ),
+        TransformAction(
+            type=TransformType.INSERT_EARLY_RETURN,
+            target_class="BaseAgent",
+            target_method="recall",
+            code=textwrap.dedent('''\
+                _cache_key = query.strip().lower()[:200]
+                _cached = self._get_recall_cache(_cache_key)
+                if _cached is not None:
+                    return _cached
             '''),
         ),
     ]
@@ -631,22 +642,58 @@ def _res_003(spec, source):
 
 @_register("RES-005")
 def _res_005(spec, source):
-    """Heartbeat Ollama — publie OLLAMA_DOWN si pas de réponse."""
+    """Heartbeat Ollama — constante + méthode async pour publier OLLAMA_DOWN."""
     return [
         TransformAction(
             type=TransformType.ADD_MODULE_CONSTANT,
             code='_OLLAMA_HEALTH_URL = "http://localhost:11434/api/tags"',
+        ),
+        TransformAction(
+            type=TransformType.ADD_MODULE_FUNCTION,
+            code=textwrap.dedent('''\
+                async def _check_ollama_heartbeat():
+                    """Vérifie si Ollama répond. Publie OLLAMA_DOWN si non."""
+                    import httpx
+                    try:
+                        async with httpx.AsyncClient(timeout=5.0) as client:
+                            resp = await client.get(_OLLAMA_HEALTH_URL)
+                            return resp.status_code == 200
+                    except Exception:
+                        try:
+                            from core.event_bus.bus import bus
+                            from datetime import datetime
+                            await bus.publish("OLLAMA_DOWN", {
+                                "timestamp": datetime.now().isoformat(),
+                                "message": "Ollama ne répond pas au health check"
+                            })
+                        except Exception:
+                            pass
+                        return False
+            '''),
         ),
     ]
 
 
 @_register("RES-008")
 def _res_008(spec, source):
-    """Auto-trim journal stratégique."""
+    """Auto-trim journal stratégique — constante + méthode _auto_trim."""
     return [
         TransformAction(
             type=TransformType.ADD_MODULE_CONSTANT,
             code='_MAX_JOURNAL_ENTRIES = 100',
+        ),
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="StrategicJournal",
+            code=textwrap.dedent('''\
+                def _auto_trim(self):
+                    """Supprime les entrées anciennes si > _MAX_JOURNAL_ENTRIES."""
+                    if len(self._entries) > _MAX_JOURNAL_ENTRIES:
+                        overflow = len(self._entries) - _MAX_JOURNAL_ENTRIES
+                        self._entries = self._entries[overflow:]
+                        logger.info(f"[JOURNAL] auto-trim: {overflow} entrées anciennes supprimées")
+                        self._save()
+            '''),
         ),
     ]
 
@@ -751,11 +798,31 @@ def _obs_002(spec, source):
 
 @_register("OBS-003")
 def _obs_003(spec, source):
-    """Profiling pipelines."""
+    """Profiling pipelines — import + méthode de publication timing."""
     return [
         TransformAction(
             type=TransformType.ADD_IMPORT,
             import_line="import time",
+        ),
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="Orchestrator",
+            code=textwrap.dedent('''\
+                async def _publish_pipeline_timing(self, agent_name: str, start_time: float):
+                    """Publie un événement PIPELINE_TIMING avec la durée du dispatch."""
+                    duration_ms = (time.time() - start_time) * 1000
+                    try:
+                        from core.event_bus.bus import bus
+                        from datetime import datetime
+                        await bus.publish("PIPELINE_TIMING", {
+                            "agent": agent_name,
+                            "duration_ms": round(duration_ms, 1),
+                            "timestamp": datetime.now().isoformat(),
+                        })
+                    except Exception:
+                        pass
+                    logger.info(f"Pipeline {agent_name}: {duration_ms:.0f}ms")
+            '''),
         ),
     ]
 
@@ -867,11 +934,37 @@ def _mem_005(spec, source):
 
 @_register("MEM-006")
 def _mem_006(spec, source):
-    """Snapshot traits Psyche."""
+    """Snapshot traits Psyche — constante + méthode snapshot + insertion dans save()."""
     return [
         TransformAction(
             type=TransformType.ADD_MODULE_CONSTANT,
             code='_MAX_TRAIT_HISTORY = 10',
+        ),
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="PsycheEngine",
+            code=textwrap.dedent('''\
+                def _take_trait_snapshot(self):
+                    """Prend un snapshot des traits dominants pour le suivi historique."""
+                    snapshot = {}
+                    for agent_name, traits in self.agents.items():
+                        if traits:
+                            dominant = max(traits.items(), key=lambda x: x[1])
+                            snapshot[agent_name] = {"trait": dominant[0], "value": round(dominant[1], 1)}
+                    if not hasattr(self, '_trait_history'):
+                        self._trait_history = []
+                    self._trait_history.append({
+                        "ts": datetime.now().isoformat(),
+                        "dominant_traits": snapshot,
+                    })
+                    self._trait_history = self._trait_history[-_MAX_TRAIT_HISTORY:]
+            '''),
+        ),
+        TransformAction(
+            type=TransformType.INSERT_BEFORE_RETURN,
+            target_class="PsycheEngine",
+            target_method="save",
+            code='self._take_trait_snapshot()',
         ),
     ]
 
