@@ -327,7 +327,7 @@ class AutonomyEngine:
         # Budget en points (chaque routine a un coût différent)
         self.daily_budget_used = persisted.get("daily_budget_used", 0)
         # Cache des fichiers déjà audités par Security {filename: timestamp}
-        self._security_audited_files: dict = {}
+        self._security_audited_files: dict = persisted.get("security_audited_files", {})
 
         bus.subscribe("USER_COMMAND", self.reset_timer)
 
@@ -389,17 +389,38 @@ class AutonomyEngine:
             "error_streak": self.error_streak,
             "total_routines_executed": self.total_routines_executed,
             "learning_history": self._learning_history,
+            "security_audited_files": self._security_audited_files,
         }
         AutonomyStatePersistence.save(state)
 
-    def _score_result_quality(self, response: dict, intent: str) -> float:
-        """Score qualité du résultat d'une routine (0.0 = garbage, 1.0 = excellent).
+    def _analyze_result_text(self, result_text: str) -> dict:
+        """Analyse partagée du texte de résultat : non-latin ratio + répétition.
 
-        Critères :
-        - Longueur du résultat (trop court = mauvais)
-        - Ratio caractères non-latin (hallucination)
-        - Répétition avec les résultats précédents
+        Retourne {"non_latin_ratio": float, "is_repetition": bool}.
         """
+        # Ratio non-latin
+        non_latin_ratio = 0.0
+        alpha_chars = [c for c in result_text if c.isalpha()]
+        if alpha_chars:
+            non_latin = sum(1 for c in alpha_chars if ord(c) > 0x024F)
+            non_latin_ratio = non_latin / len(alpha_chars)
+
+        # Répétition avec les résultats précédents
+        is_repetition = False
+        recent_previews = [
+            str(h.get("result_preview", ""))
+            for h in self.routine_history[-5:]
+            if h.get("result_preview")
+        ]
+        for prev in recent_previews:
+            if prev and len(result_text) >= 200 and result_text[:200] == prev[:200]:
+                is_repetition = True
+                break
+
+        return {"non_latin_ratio": non_latin_ratio, "is_repetition": is_repetition}
+
+    def _score_result_quality(self, response: dict, intent: str) -> float:
+        """Score qualité du résultat d'une routine (0.0 = garbage, 1.0 = excellent)."""
         if not response or not isinstance(response, dict):
             return 0.0
 
@@ -407,37 +428,22 @@ class AutonomyEngine:
         score = 1.0
 
         # 1. Pénalité longueur : résultat vide ou très court
-        if len(result_text.strip()) < 20:
+        stripped_len = len(result_text.strip())
+        if stripped_len < 20:
             return 0.0
-        elif len(result_text.strip()) < 50:
+        elif stripped_len < 50:
             score -= 0.4
-        elif len(result_text.strip()) < 100:
+        elif stripped_len < 100:
             score -= 0.2
 
-        # 2. Pénalité non-latin (hallucination)
-        alpha_chars = [c for c in result_text if c.isalpha()]
-        if alpha_chars:
-            non_latin = sum(1 for c in alpha_chars if ord(c) > 0x024F)
-            ratio = non_latin / len(alpha_chars)
-            if ratio > 0.15:
-                score -= 0.5  # Forte pénalité
-            elif ratio > 0.05:
-                score -= 0.2
-
-        # 3. Pénalité répétition avec les résultats précédents
-        recent_results = [
-            str(h.get("result_preview", ""))
-            for h in self.routine_history[-5:]
-            if h.get("result_preview")
-        ]
-        for prev in recent_results:
-            if prev and result_text[:200] == prev[:200]:
-                score -= 0.4
-                break
-
-        # Stocker un aperçu pour la comparaison future
-        if hasattr(self, 'routine_history') and self.routine_history:
-            pass  # Le preview sera ajouté dans _record_routine
+        # 2-3. Analyse partagée (non-latin + répétition)
+        analysis = self._analyze_result_text(result_text)
+        if analysis["non_latin_ratio"] > 0.15:
+            score -= 0.5
+        elif analysis["non_latin_ratio"] > 0.05:
+            score -= 0.2
+        if analysis["is_repetition"]:
+            score -= 0.4
 
         return max(0.0, min(1.0, score))
 
@@ -448,25 +454,14 @@ class AutonomyEngine:
 
         result_text = str(response.get("result", ""))
 
-        # 1. Hallucination : ratio non-latin > 15%
-        alpha_chars = [c for c in result_text if c.isalpha()]
-        if alpha_chars:
-            non_latin = sum(1 for c in alpha_chars if ord(c) > 0x024F)
-            if non_latin / len(alpha_chars) > 0.15:
-                return "hallucination"
-
-        # 2. Répétition : 200 premiers chars identiques à un résultat précédent
-        recent_previews = [
-            str(h.get("result_preview", ""))
-            for h in self.routine_history[-5:]
-            if h.get("result_preview")
-        ]
-        for prev in recent_previews:
-            if prev and len(result_text) >= 200 and result_text[:200] == prev[:200]:
-                return "repetition"
+        # 1-2. Analyse partagée (non-latin + répétition)
+        analysis = self._analyze_result_text(result_text)
+        if analysis["non_latin_ratio"] > 0.15:
+            return "hallucination"
+        if analysis["is_repetition"]:
+            return "repetition"
 
         # 3. Ignorance : résultat court/vague + patterns linguistiques
-        #    Exclure les résultats vides/quasi-vides (c'est technique, pas de l'ignorance)
         stripped = result_text.strip()
         if len(stripped) < 10:
             return "technical"
@@ -753,6 +748,14 @@ class AutonomyEngine:
                 "force_local": True,
             })
 
+        # --- Guard : routines "skipped" (council saturé, etc.) — pas de budget consommé ---
+        if response and response.get("status") == "skipped":
+            reason = response.get("reason", "unknown")
+            print(f"   ⏭️ Routine {intent} skippée ({reason})")
+            self._record_routine(agent, intent, "skipped", quality_score=0.0)
+            # Pas d'incrémentation daily_count, budget, error_streak
+            return
+
         # Sujet du council (pour la déduplication)
         council_subject = getattr(self, "_current_council_subject", "")
 
@@ -878,14 +881,13 @@ class AutonomyEngine:
                 f"[MODE VEILLE] En tant que spécialiste ({description}), "
                 f"effectue une analyse ou action pertinente pour le système Prométhée. "
                 f"Agis de ta propre initiative."
-                f"{AUTONOMY_GUARDRAIL}"
             )
 
             print(f"   📖 GRIMOIRE INVOKE: {best_slug} — {description[:60]}")
             self._last_grimoire_slug = best_slug
             response = await orchestrator.dispatch_task(best_slug, {
                 "mission": mission,
-                "context": "PROTOCOLE_AUTONOMIE_GRIMOIRE",
+                "context": f"PROTOCOLE_AUTONOMIE_GRIMOIRE\n{AUTONOMY_GUARDRAIL}",
                 "force_local": True,
             })
             return response or {"status": "error", "result": "Pas de réponse du Grimoire."}
@@ -1083,7 +1085,7 @@ class AutonomyEngine:
             removed_quality = 0
 
             # Phase 1 : Purge des entrées anciennes (>60 jours)
-            for coll_name in ["collective_wisdom"]:
+            for coll_name in ["collective_wisdom", "code_snippets"]:
                 try:
                     coll = getattr(mgr, coll_name, None) or mgr.client.get_collection(coll_name)
                     count = coll.count()
@@ -1109,14 +1111,15 @@ class AutonomyEngine:
                     logger.warning(f"[MEMORY_CLEANUP] Erreur collection {coll_name}: {e}")
 
             # Phase 2 : Purge qualitative (textes courts, hallucinations non-latin)
-            try:
-                removed_quality = mgr.purge_low_quality(
-                    min_length=100,
-                    max_non_latin_ratio=0.10,
-                    collection_name="collective_wisdom"
-                )
-            except Exception as e:
-                logger.warning(f"[MEMORY_CLEANUP] Erreur purge qualitative: {e}")
+            for coll_name in ["collective_wisdom", "code_snippets"]:
+                try:
+                    removed_quality += mgr.purge_low_quality(
+                        min_length=100,
+                        max_non_latin_ratio=0.10,
+                        collection_name=coll_name
+                    )
+                except Exception as e:
+                    logger.warning(f"[MEMORY_CLEANUP] Erreur purge qualitative {coll_name}: {e}")
 
             total = removed_old + removed_quality
             msg = f"Nettoyage mémoire : {removed_old} anciennes + {removed_quality} basse qualité = {total} supprimées."
@@ -1428,8 +1431,7 @@ class AutonomyEngine:
             actions_text = analysis_text[:500]
 
         # Extraire la méthode cible depuis l'analyse (ou fallback générique)
-        import re as _re
-        method_match = _re.search(r'(?:méthode|method|def)\s+(\w+)', analysis_text, _re.IGNORECASE)
+        method_match = re.search(r'(?:méthode|method|def)\s+(\w+)', analysis_text, re.IGNORECASE)
         target_method = method_match.group(1) if method_match else ""
 
         # code_template valide (doit contenir def/class/import pour passer Phase 4c)
