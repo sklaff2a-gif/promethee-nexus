@@ -174,6 +174,24 @@ class BaseAgent:
                     )
                     return
 
+            # Gatekeeper : filtre qualite avance (reutilise existing_text/distance deja calcules)
+            try:
+                from core.memory_gatekeeper import evaluate as gatekeeper_evaluate
+                _ext_text = None
+                _ext_dist = 1.0
+                if existing and existing.get('documents') and existing['documents'][0]:
+                    _ext_text = existing['documents'][0][0]
+                    if existing.get('distances') and existing['distances'][0]:
+                        _ext_dist = existing['distances'][0][0]
+                gk = gatekeeper_evaluate(text, metadata, _ext_text, _ext_dist)
+                if not gk["accept"]:
+                    self.log_thought(f"Memoire filtree (gatekeeper): {gk['reason']}", type="info")
+                    return
+            except ImportError:
+                pass
+            except Exception:
+                pass
+
             doc_id = str(uuid.uuid4())
             meta = metadata or {}
             meta["agent"] = self.name
@@ -238,6 +256,33 @@ class BaseAgent:
         except Exception as e:
             logger.warning(f"[{self.name}] Échec recall mémoire ({collection}) : {e}")
         return ""
+
+    # --- PROTOCOLE D'ESCALADE UNIFIE ---
+    _ESCALATION_MAP = {
+        "hallucination": "hallucination_doctor",
+        "rejection": "code_reviewer",
+        "loop": "loop_breaker",
+    }
+
+    async def _request_help(self, failure_type: str, context: dict) -> dict:
+        """Demande l'aide d'un specialiste Grimoire via le protocole d'escalade unifie."""
+        specialist = self._ESCALATION_MAP.get(failure_type)
+        if not specialist:
+            return {"action": "skip", "reason": f"no specialist for {failure_type}"}
+        try:
+            from core.orchestrator import orchestrator
+            response = await orchestrator.dispatch_task(specialist, {
+                "mission": f"AIDE: {failure_type}",
+                "context": json.dumps(context, default=str)
+            })
+            if not response or not isinstance(response, dict):
+                return {"action": "skip", "reason": "reponse invalide"}
+            action = response.get("action") or response.get("verdict", "skip")
+            response["action"] = action
+            return response
+        except Exception as e:
+            self.log_thought(f"Escalade {failure_type} echouee: {e}", type="warning")
+            return {"action": "skip", "reason": str(e)}
 
     @classmethod
     def _check_rpm(cls, model_name: str) -> bool:

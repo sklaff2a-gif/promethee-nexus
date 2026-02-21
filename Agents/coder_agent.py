@@ -96,6 +96,22 @@ RÈGLES ABSOLUES :
         # 3. FILTRE DE PERTINENCE POST-GÉNÉRATION
         offtopic_count = _count_offtopic(response)
         if offtopic_count >= _OFFTOPIC_THRESHOLD:
+            # Tentative de correction via hallucination_doctor
+            try:
+                help_response = await self._request_help("hallucination", {
+                    "type": "offtopic", "mission": mission,
+                    "keywords_found": [kw for kw in _OFFTOPIC_KEYWORDS if kw in response.lower()],
+                })
+                if help_response.get("action") == "retry" and help_response.get("corrected_prompt"):
+                    self.log_thought("🔄 Retry doctor (offtopic)...", type="info")
+                    retry_response = await self.generate_content(help_response["corrected_prompt"])
+                    retry_count = _count_offtopic(retry_response)
+                    if retry_count < _OFFTOPIC_THRESHOLD:
+                        self.log_thought("✅ Doctor retry reussi (offtopic corrige)", type="info")
+                        return {"status": "success", "result": retry_response, "agent": self.name}
+            except Exception as e:
+                logger.warning(f"Doctor retry echoue: {e}")
+
             self.log_thought(
                 f"⚠️ Code rejeté : {offtopic_count} mots-clés hors-sujet détectés (trading/blockchain/RSS/etc.)",
                 type="warning"

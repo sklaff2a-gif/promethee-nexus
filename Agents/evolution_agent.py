@@ -595,6 +595,28 @@ class DivineEvolution(BaseAgent):
         # --- PHASE 4b : FILTRE ANTI-HALLUCINATION (imports aliens) ---
         aliens = _detect_alien_imports(generated_code)
         if aliens:
+            # Tentative de correction via hallucination_doctor
+            try:
+                help_response = await self._request_help("hallucination", {
+                    "type": "alien_imports", "aliens": aliens,
+                    "spec_name": spec.name, "spec_description": spec.description,
+                    "target_file": spec.target_file, "source_code": source_code[:3000],
+                })
+                if help_response.get("action") == "retry" and help_response.get("corrected_prompt"):
+                    self.log_thought(f"🔄 [{spec.id}] Retry doctor (alien_imports)...", type="info")
+                    retry_code = await self._generate_code_cloud(help_response["corrected_prompt"])
+                    if retry_code:
+                        retry_code = self._extract_python_code(retry_code)
+                        retry_aliens = _detect_alien_imports(retry_code)
+                        if not retry_aliens:
+                            generated_code = retry_code
+                            code_source = f"{code_source}+doctor_retry"
+                            self.log_thought(f"✅ [{spec.id}] Doctor retry reussi (aliens corriges)", type="info")
+                            aliens = []  # Reset pour ne pas tomber dans le rejet ci-dessous
+            except Exception as e:
+                logger.warning(f"[{spec.id}] Doctor retry echoue: {e}")
+
+        if aliens:
             reason = f"Imports aliens détectés ({', '.join(aliens)}) — hallucination LLM"
             catalog.mark_failed(spec.id, reason)
             self.log_thought(f"🚫 [{spec.id}] {reason}", type="warning")
@@ -624,6 +646,35 @@ class DivineEvolution(BaseAgent):
         except SyntaxError:
             _has_structure = False
         if not _has_structure:
+            # Tentative de correction via hallucination_doctor
+            try:
+                help_response = await self._request_help("hallucination", {
+                    "type": "non_structural",
+                    "spec_name": spec.name, "spec_description": spec.description,
+                    "target_file": spec.target_file, "source_code": source_code[:3000],
+                })
+                if help_response.get("action") == "retry" and help_response.get("corrected_prompt"):
+                    self.log_thought(f"🔄 [{spec.id}] Retry doctor (non_structural)...", type="info")
+                    retry_code = await self._generate_code_cloud(help_response["corrected_prompt"])
+                    if retry_code:
+                        retry_code = self._extract_python_code(retry_code)
+                        try:
+                            _retry_tree = ast.parse(retry_code)
+                            _retry_ok = any(
+                                isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom))
+                                for n in ast.walk(_retry_tree)
+                            )
+                        except SyntaxError:
+                            _retry_ok = False
+                        if _retry_ok:
+                            generated_code = retry_code
+                            code_source = f"{code_source}+doctor_retry"
+                            _has_structure = True
+                            self.log_thought(f"✅ [{spec.id}] Doctor retry reussi (structure corrigee)", type="info")
+            except Exception as e:
+                logger.warning(f"[{spec.id}] Doctor retry echoue: {e}")
+
+        if not _has_structure:
             reason = "Code non-structurel (pas de def/class/import) — hallucination probable"
             catalog.mark_failed(spec.id, reason)
             self.log_thought(f"🚫 [{spec.id}] {reason}", type="warning")
@@ -650,6 +701,18 @@ class DivineEvolution(BaseAgent):
                     f"Anti-troncature: code généré ({len(generated_code)} chars) = "
                     f"{ratio:.0%} du source ({len(source_code)} chars) — fichier incomplet"
                 )
+                # Enrichir le diagnostic via le doctor (verdict toujours "abandon" pour truncation)
+                try:
+                    help_response = await self._request_help("hallucination", {
+                        "type": "truncation", "ratio": ratio,
+                        "source_length": len(source_code),
+                        "generated_length": len(generated_code),
+                    })
+                    diag = help_response.get("diagnosis", {})
+                    if diag:
+                        reason = f"{reason} [doctor: {diag.get('details', '')}]"
+                except Exception:
+                    pass
                 catalog.mark_failed(spec.id, reason)
                 self.log_thought(f"🛡️ [{spec.id}] {reason}", type="warning")
                 try:

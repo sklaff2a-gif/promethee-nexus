@@ -328,6 +328,10 @@ class AutonomyEngine:
         self.daily_budget_used = persisted.get("daily_budget_used", 0)
         # Cache des fichiers déjà audités par Security {filename: timestamp}
         self._security_audited_files: dict = persisted.get("security_audited_files", {})
+        # Loop breaker : intents a eviter au prochain cycle
+        self._temp_blacklist: set = set()
+        # Loop breaker : intent force par le loop_breaker (bypass scoring)
+        self._forced_next_intent: str = ""
 
         bus.subscribe("USER_COMMAND", self.reset_timer)
 
@@ -587,7 +591,29 @@ class AutonomyEngine:
 
     async def _execute_scored_routine(self, health: dict):
         """Scoring → dispatch → record → persist."""
+        # Loop breaker : si un intent est force, bypass le scoring
+        if self._forced_next_intent:
+            forced = self._forced_next_intent
+            self._forced_next_intent = ""
+            routines = self._get_routines()
+            forced_routine = next((r for r in routines if r["intent"] == forced), None)
+            if forced_routine:
+                print(f"   🔀 LOOP_BREAKER: Intent force -> [{forced}]")
+                # Deleguer l'execution directe (sauter tout le scoring)
+                return await self._execute_forced_routine(forced_routine, health)
+
         routines = self._get_routines()
+
+        # Loop breaker : filtrer les routines blacklistees
+        if self._temp_blacklist:
+            filtered = [r for r in routines if r["intent"] not in self._temp_blacklist]
+            if filtered:
+                blacklisted = self._temp_blacklist.copy()
+                self._temp_blacklist.clear()
+                print(f"   🚫 LOOP_BREAKER: Blacklist temporaire: {', '.join(blacklisted)}")
+                routines = filtered
+            else:
+                self._temp_blacklist.clear()  # Eviter de bloquer tout
 
         # Compter les fichiers en dropzone
         try:
@@ -830,6 +856,35 @@ class AutonomyEngine:
                     pass
                 await self._trigger_targeted_learning(selected["mission"], agent, intent)
 
+        # Loop breaker : si repetition ou error_streak eleve -> consulter le specialiste
+        _lb_failure = locals().get("failure_type", "")
+        if _lb_failure == "repetition" or self.error_streak >= 5:
+            try:
+                loop_response = await orchestrator.dispatch_task("loop_breaker", {
+                    "mission": "AIDE: loop",
+                    "context": json.dumps({
+                        "history": self.routine_history[-10:],
+                        "error_streak": self.error_streak,
+                    }, default=str)
+                })
+                if loop_response and isinstance(loop_response, dict):
+                    loop_action = loop_response.get("action", "skip")
+                    if loop_action == "skip" and loop_response.get("blacklist"):
+                        self._temp_blacklist = set(loop_response["blacklist"])
+                        print(f"   🔀 LOOP_BREAKER: Blacklist {self._temp_blacklist}")
+                    elif loop_action == "redirect" and loop_response.get("forced_intent"):
+                        self._forced_next_intent = loop_response["forced_intent"]
+                        print(f"   🔀 LOOP_BREAKER: Redirect -> {self._forced_next_intent}")
+                    elif loop_action == "cooldown":
+                        extra = loop_response.get("extra_sleep", 120)
+                        print(f"   ⏸️ LOOP_BREAKER: Cooldown {extra}s")
+                        await asyncio.sleep(extra)
+                    elif loop_action == "escalate":
+                        print(f"   🚨 LOOP_BREAKER: Escalade Council recommandee (streak={self.error_streak})")
+                        self._forced_next_intent = "COUNCIL_DEBATE"
+            except Exception as e:
+                logger.warning(f"[AUTONOMY] Loop breaker echoue: {e}")
+
         # Alimentation spreading activation (non bloquant)
         if result_preview and len(result_preview) > 50:
             try:
@@ -875,6 +930,44 @@ class AutonomyEngine:
                 activation_engine.cleanup()
             except Exception:
                 pass
+
+    async def _execute_forced_routine(self, routine: dict, health: dict):
+        """Execute une routine forcee par le loop_breaker (bypass scoring)."""
+        agent = routine["agent"]
+        intent = routine["intent"]
+        routine_cost = RESOURCE_COSTS.get(intent, 2)
+        print(f"   ✨ AUTONOMY [FORCED]: [{intent}] -> [{agent.upper()}] (cout={routine_cost}pt)")
+
+        # Reutiliser la logique standard de dispatch
+        if intent == "COUNCIL_DEBATE":
+            response = await self._execute_council_debate()
+        elif intent == "GRIMOIRE_INVOKE":
+            response = await self._execute_grimoire_routine()
+        elif intent == "MEMORY_CLEANUP":
+            response = await self._execute_memory_cleanup()
+        elif intent == "SECURITY_AUDIT":
+            response = await self._execute_security_audit()
+        elif intent == "AUDIT_STRUCTURE":
+            response = await self._execute_audit_structure()
+        elif intent == "REFACTOR_RANDOM":
+            response = await self._execute_refactor_random()
+        else:
+            response = await orchestrator.dispatch_task(agent, {
+                "mission": f"[MODE VEILLE] {routine['mission']}",
+                "context": f"PROTOCOLE_AUTONOMIE\n{AUTONOMY_GUARDRAIL}",
+                "force_local": True,
+            })
+
+        quality = self._score_result_quality(response, intent)
+        status = "success" if response and response.get("status") in ("success", "consensus") else "error"
+        self._record_routine(agent, intent, status, quality_score=quality)
+        if status == "success" and quality >= 0.3:
+            self.error_streak = 0
+        else:
+            self.error_streak += 1
+        self.daily_count += 1
+        self.total_routines_executed += 1
+        self.daily_budget_used += routine_cost
 
     async def _execute_grimoire_routine(self) -> dict:
         """Invoque un agent Grimoire en rotation (le moins récemment utilisé)."""
