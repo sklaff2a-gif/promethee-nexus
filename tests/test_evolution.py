@@ -216,7 +216,7 @@ class TestCatalogPipelineV6:
     @pytest.fixture(autouse=True)
     def disable_protected_files_guard(self):
         """Désactive le guard fichiers protégés (testé dans TestProtectedFilesGuard)."""
-        with patch("Agents.factory_agent._PROTECTED_FILES", set()):
+        with patch("Agents.factory_agent._CRITICAL_FILES", set()):
             yield
 
     @pytest.mark.asyncio
@@ -536,7 +536,7 @@ class TestGeminiCodeGeneration:
     @pytest.fixture(autouse=True)
     def disable_protected_files_guard(self):
         """Désactive le guard fichiers protégés (testé dans TestProtectedFilesGuard)."""
-        with patch("Agents.factory_agent._PROTECTED_FILES", set()):
+        with patch("Agents.factory_agent._CRITICAL_FILES", set()):
             yield
 
     @pytest.mark.asyncio
@@ -593,20 +593,20 @@ class TestGeminiCodeGeneration:
 # --- Tests fichiers protégés (Fix Evolution→Factory) ---
 
 class TestProtectedFilesGuard:
-    """Vérifie que l'Evolution refuse les specs ciblant des fichiers protégés."""
+    """Vérifie que l'Evolution refuse les specs ciblant des fichiers critiques
+    mais autorise celles ciblant des fichiers supervisés."""
 
     @pytest.mark.asyncio
-    async def test_protected_file_skipped(self):
-        """Une spec ciblant core/router.py (protégé) est rejetée avant Phase 3."""
+    async def test_critical_file_skipped(self):
+        """Une spec ciblant core/orchestrator.py (critique) est rejetée avant Phase 3."""
         evo = DivineEvolution()
 
-        # Créer une spec ciblant un fichier protégé
         catalog = EvolutionCatalog()
         spec = ImprovementSpec(
-            id="TEST-PROT", name="Cache Router", description="test",
-            category="performance", target_file="core/router.py",
-            target_method="classify_intent", difficulty=3,
-            code_template="# cache", validation="test", status="available",
+            id="TEST-CRIT", name="Refactor Orch", description="test",
+            category="performance", target_file="core/orchestrator.py",
+            target_method="dispatch_task", difficulty=3,
+            code_template="# code", validation="test", status="available",
         )
         catalog.specs[spec.id] = spec
 
@@ -614,7 +614,37 @@ class TestProtectedFilesGuard:
              patch.object(evo, "_read_target_file", return_value="# code existant\npass"):
             result = await evo.process_task({"mission": "[MODE VEILLE]"})
 
-        assert "protégé" in result.get("result", "").lower() or "warning" in result.get("status", "")
+        assert "critique" in result.get("result", "").lower() or "warning" in result.get("status", "")
+
+    @pytest.mark.asyncio
+    async def test_supervised_file_proceeds(self):
+        """Une spec ciblant core/router.py (supervisé, plus critique) passe normalement."""
+        evo = DivineEvolution()
+
+        catalog = EvolutionCatalog()
+        catalog.specs.clear()
+        spec = ImprovementSpec(
+            id="TEST-SUP", name="Cache Router", description="test",
+            category="performance", target_file="core/router.py",
+            target_method="classify_intent", difficulty=3,
+            code_template="# cache", validation="test", status="available",
+        )
+        catalog.specs[spec.id] = spec
+
+        valid_code = "import os\nimport sys\nprint('hello world minimum chars padded')"
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={
+            "result": "VALIDÉ", "status": "success"
+        })
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value="# existing code\npass"), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=valid_code), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # La spec a été traitée (pas de rejet fichier critique)
+        assert "critique" not in result.get("result", "").lower()
 
     @pytest.mark.asyncio
     async def test_non_protected_file_proceeds(self):
@@ -622,7 +652,6 @@ class TestProtectedFilesGuard:
         evo = DivineEvolution()
 
         catalog = EvolutionCatalog()
-        # Nettoyer toutes les specs par défaut et n'en garder qu'une non-protégée
         catalog.specs.clear()
         spec = ImprovementSpec(
             id="TEST-OK", name="Amélioration custom", description="test",
@@ -644,8 +673,7 @@ class TestProtectedFilesGuard:
              patch("core.orchestrator.orchestrator", mock_orch):
             result = await evo.process_task({"mission": "[MODE VEILLE]"})
 
-        # La spec a été traitée (pas de rejet fichier protégé)
-        assert "protégé" not in result.get("result", "").lower()
+        assert "critique" not in result.get("result", "").lower()
 
 
 class TestDetectAlienImports:
@@ -705,7 +733,7 @@ class TestAntiHallucinationCatalogPipeline:
 
     @pytest.fixture(autouse=True)
     def disable_protected_files_guard(self):
-        with patch("Agents.factory_agent._PROTECTED_FILES", set()):
+        with patch("Agents.factory_agent._CRITICAL_FILES", set()):
             yield
 
     @pytest.mark.asyncio
@@ -812,7 +840,7 @@ class TestAntiTruncation:
 
     @pytest.fixture(autouse=True)
     def disable_protected_files_guard(self):
-        with patch("Agents.factory_agent._PROTECTED_FILES", set()):
+        with patch("Agents.factory_agent._CRITICAL_FILES", set()):
             yield
 
     @pytest.mark.asyncio

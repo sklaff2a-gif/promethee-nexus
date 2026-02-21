@@ -365,16 +365,16 @@ class DivineEvolution(BaseAgent):
         # --- PHASE 1 : SÉLECTION ---
         self.log_thought("📋 Phase 1 : Sélection depuis le catalogue...", type="thought")
 
-        # Filtrer les specs ciblant des fichiers protégés (évite de gaspiller un appel LLM)
+        # Filtrer les specs ciblant des fichiers critiques (les supervisés sont autorisés)
         try:
-            from Agents.factory_agent import _PROTECTED_FILES
+            from Agents.factory_agent import _CRITICAL_FILES
         except ImportError:
-            _PROTECTED_FILES = set()
+            _CRITICAL_FILES = set()
 
         def _is_eligible(spec_tuple):
             spec = spec_tuple[0]
             target = spec.target_file.replace("\\", "/")
-            return target not in _PROTECTED_FILES
+            return target not in _CRITICAL_FILES
 
         # Filtrer aussi via les insights d'apprentissage (specs qui échouent systématiquement)
         registry = ExperienceRegistry()
@@ -384,7 +384,7 @@ class DivineEvolution(BaseAgent):
         candidates = [c for c in catalog.get_top_candidates(8)
                       if _is_eligible(c) and c[0].id not in stuck_specs][:5]
         if not candidates:
-            self.log_thought("📭 Catalogue épuisé : aucune spec éligible (protégés exclus).", type="info")
+            self.log_thought("📭 Catalogue épuisé : aucune spec éligible (critiques exclus).", type="info")
             # Tenter la méta-évolution
             new_specs = catalog.generate_combinations()
             if new_specs:
@@ -433,10 +433,10 @@ class DivineEvolution(BaseAgent):
                 pass
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
-        # Vérifier que le fichier n'est pas protégé par la Factory (_PROTECTED_FILES importé en Phase 1)
+        # Vérifier que le fichier n'est pas critique (_CRITICAL_FILES importé en Phase 1)
         normalized_target = spec.target_file.replace("\\", "/")
-        if normalized_target in _PROTECTED_FILES:
-            reason = f"Fichier protégé par Factory: {spec.target_file}"
+        if normalized_target in _CRITICAL_FILES:
+            reason = f"Fichier critique : {spec.target_file}"
             self.log_thought(f"🛡️ {reason} — skip spec [{spec.id}]", type="warning")
             catalog.mark_failed(spec.id, reason)
             try:

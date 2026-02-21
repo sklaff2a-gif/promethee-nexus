@@ -2,7 +2,7 @@ import pytest
 import os
 import tempfile
 from unittest.mock import patch, AsyncMock, MagicMock
-from Agents.factory_agent import _FILENAME_STOPLIST, _PROTECTED_FILES
+from Agents.factory_agent import _FILENAME_STOPLIST, _PROTECTED_FILES, _CRITICAL_FILES, _SUPERVISED_FILES
 
 
 class TestFactorySandboxing:
@@ -258,25 +258,97 @@ class TestFactoryProtectedFiles:
             return DivineFactory()
 
     @pytest.mark.parametrize("protected", [
-        "core/base_agent.py",
         "core/orchestrator.py",
         "main.py",
         "config.py",
     ])
     @pytest.mark.asyncio
-    async def test_reject_protected_file(self, factory, protected):
-        """L'écriture dans un fichier protégé doit être refusée."""
+    async def test_reject_critical_file(self, factory, protected):
+        """L'écriture dans un fichier critique doit être refusée."""
         payload = {
             "mission": f"écris {protected}",
             "context": "```python\nimport os\nprint('pwned')\n```"
         }
         result = await factory.process_task(payload)
         assert result["status"] == "error"
-        assert "protégé" in result["result"].lower() or "Protégé" in result["result"]
+        assert "critique" in result["result"].lower()
 
     @pytest.mark.asyncio
     async def test_protected_list_not_empty(self):
         assert len(_PROTECTED_FILES) >= 10
+
+    @pytest.mark.asyncio
+    async def test_protected_files_is_union(self):
+        """_PROTECTED_FILES doit être l'union de _CRITICAL_FILES et _SUPERVISED_FILES."""
+        assert _PROTECTED_FILES == _CRITICAL_FILES | _SUPERVISED_FILES
+
+    @pytest.mark.asyncio
+    async def test_critical_file_always_rejected(self, factory):
+        """Un fichier critique est toujours rejeté, même avec evolution_spec_id."""
+        payload = {
+            "mission": "écris main.py",
+            "context": "```python\nimport os\nprint('pwned')\n```",
+            "evolution_spec_id": "SPEC-TEST-001",
+        }
+        result = await factory.process_task(payload)
+        assert result["status"] == "error"
+        assert "critique" in result["result"].lower()
+
+    @pytest.mark.asyncio
+    async def test_supervised_file_rejected_without_spec_id(self, factory):
+        """Un fichier supervisé sans evolution_spec_id est rejeté."""
+        payload = {
+            "mission": "écris core/base_agent.py",
+            "context": "```python\nimport os\nprint('pwned')\n```"
+        }
+        result = await factory.process_task(payload)
+        assert result["status"] == "error"
+        assert "supervisé" in result["result"].lower()
+
+    @pytest.mark.asyncio
+    async def test_supervised_file_allowed_with_spec_id(self, factory, tmp_path):
+        """Un fichier supervisé avec spec_id + tests qui passent → succès."""
+        factory.project_root = str(tmp_path)
+        core_dir = tmp_path / "core"
+        core_dir.mkdir(parents=True, exist_ok=True)
+        target = core_dir / "base_agent.py"
+        target.write_text("# original", encoding="utf-8")
+
+        code = "import os\nimport logging\nclass BaseAgent:\n    pass\n"
+        payload = {
+            "mission": "écris core/base_agent.py",
+            "context": f"```python\n{code}\n```",
+            "evolution_spec_id": "SPEC-TEST-002",
+        }
+        with patch.object(factory, 'remember'), \
+             patch("core.event_bus.bus.bus") as mock_bus, \
+             patch("core.ci_pipeline.run_existing_tests_for_file", new_callable=AsyncMock, return_value=(True, "46 passed")):
+            mock_bus.publish = AsyncMock()
+            result = await factory.process_task(payload)
+        assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_supervised_file_rollback_on_test_failure(self, factory, tmp_path):
+        """Un fichier supervisé qui casse les tests → rollback automatique."""
+        factory.project_root = str(tmp_path)
+        core_dir = tmp_path / "core"
+        core_dir.mkdir(parents=True, exist_ok=True)
+        target = core_dir / "base_agent.py"
+        target.write_text("# original content", encoding="utf-8")
+
+        code = "import os\nimport logging\nclass BrokenAgent:\n    pass\n"
+        payload = {
+            "mission": "écris core/base_agent.py",
+            "context": f"```python\n{code}\n```",
+            "evolution_spec_id": "SPEC-TEST-003",
+        }
+        with patch("core.ci_pipeline.run_existing_tests_for_file", new_callable=AsyncMock,
+                    return_value=(False, "FAILED: test_base_agent.py::test_init")):
+            result = await factory.process_task(payload)
+        assert result["status"] == "error"
+        assert "rollback" in result["result"].lower()
+        # Le fichier original doit être restauré via .bak
+        assert target.read_text(encoding="utf-8") == "# original content"
 
 
 class TestFactoryAntiTruncation:

@@ -17,9 +17,17 @@ from core.prompt_templates import TEST_GENERATION_GUARDRAIL
 
 logger = logging.getLogger("CIPipeline")
 
-AUTO_TESTS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tests", "auto"
-)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+AUTO_TESTS_DIR = os.path.join(PROJECT_ROOT, "tests", "auto")
+
+# Mapping fichiers supervisés → fichiers de tests spécifiques
+# (pour les fichiers dont le nom de test ne suit pas la convention core/foo.py → tests/test_foo.py)
+_SUPERVISED_TEST_MAP = {
+    "core/vector_store.py": ["tests/test_memory_health.py", "tests/test_multiproject_memory.py"],
+    "core/grimoire_writer.py": ["tests/test_grimoire.py"],
+    "core/event_bus/bus.py": ["tests/test_event_bus.py"],
+}
 
 
 # --- Fonctions utilitaires ---
@@ -258,6 +266,40 @@ async def _run_pytest(test_file: str) -> tuple[bool, str]:
         return False, "TIMEOUT: pytest a dépassé 60 secondes"
     except Exception as e:
         return False, f"Erreur exécution pytest: {e}"
+
+
+async def run_existing_tests_for_file(filepath: str) -> tuple[bool, str]:
+    """Lance les tests existants liés à un fichier source.
+    Retourne (success, output). Si aucun test trouvé → (True, "no tests")."""
+    normalized = filepath.replace("\\", "/")
+    # Extraire le chemin relatif au projet
+    proj_norm = PROJECT_ROOT.replace("\\", "/")
+    if normalized.startswith(proj_norm):
+        normalized = normalized[len(proj_norm):].lstrip("/")
+
+    # Chercher dans le mapping spécial
+    test_files = _SUPERVISED_TEST_MAP.get(normalized)
+    if test_files:
+        test_files = [os.path.join(PROJECT_ROOT, tf) for tf in test_files]
+    else:
+        # Mapping par défaut : core/foo.py → tests/test_foo.py
+        basename = os.path.basename(normalized.replace("/", os.sep))
+        name_no_ext = basename.replace(".py", "")
+        default_test = os.path.join(PROJECT_ROOT, "tests", f"test_{name_no_ext}.py")
+        test_files = [default_test] if os.path.exists(default_test) else []
+
+    if not test_files:
+        return True, "Aucun test existant trouvé"
+
+    # Lancer chaque fichier de test
+    all_output = []
+    for tf in test_files:
+        if os.path.exists(tf):
+            ok, out = await _run_pytest(tf)
+            all_output.append(out)
+            if not ok:
+                return False, "\n".join(all_output)
+    return True, "\n".join(all_output)
 
 
 async def run_pipeline(filename: str, filepath: str):

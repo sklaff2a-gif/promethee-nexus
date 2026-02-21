@@ -14,15 +14,23 @@ MAX_FILE_SIZE = 100 * 1024  # 100 KB
 TRUNCATION_MIN_RATIO = 0.60
 TRUNCATION_MIN_FILE_SIZE = 500  # Ne pas vérifier pour les petits fichiers
 
-# Fichiers système critiques : le Factory ne doit JAMAIS les écraser via une chaîne automatique.
+# Fichiers système CRITIQUES : JAMAIS modifiables automatiquement.
 # Seul un ordre utilisateur direct (Niveau 0 : "factory: écris ...") peut contourner cette protection.
-_PROTECTED_FILES = {
+_CRITICAL_FILES = {
     "main.py", "config.py", "guardian.py", "start_nexus.py", "emergency_restore.py",
-    "core/orchestrator.py", "core/base_agent.py", "core/router.py",
-    "core/summoner.py", "core/event_bus/bus.py", "core/autonomy_engine.py",
-    "core/council.py", "core/vector_store.py", "core/grimoire_writer.py",
-    "core/ci_pipeline.py",
+    "core/orchestrator.py", "core/summoner.py",
 }
+
+# Fichiers SUPERVISÉS : modifiables par le pipeline Evolution uniquement,
+# avec gate de tests existants obligatoire.
+_SUPERVISED_FILES = {
+    "core/base_agent.py", "core/router.py", "core/council.py",
+    "core/event_bus/bus.py", "core/autonomy_engine.py",
+    "core/vector_store.py", "core/grimoire_writer.py", "core/ci_pipeline.py",
+}
+
+# Rétro-compatibilité : union pour les imports externes
+_PROTECTED_FILES = _CRITICAL_FILES | _SUPERVISED_FILES
 
 # Mots français/anglais courants que la regex de détection capture par erreur
 # quand elle parse du texte LLM libre (ex: "fichier de données" → capture "de")
@@ -77,6 +85,17 @@ class DivineFactory(BaseAgent):
                 shutil.copy2(path, path + ".bak")
             except Exception as e:
                 logger.warning(f"[FACTORY] Échec backup de {path} : {e}")
+
+    def _restore_from_bak(self, path):
+        """Restaure un fichier depuis sa sauvegarde .bak."""
+        import shutil
+        bak = path + ".bak"
+        if os.path.exists(bak):
+            try:
+                shutil.copy2(bak, path)
+                logger.info(f"[FACTORY] Restauré depuis .bak : {path}")
+            except Exception as e:
+                logger.warning(f"[FACTORY] Échec restauration .bak de {path} : {e}")
 
     def _extract_code_force(self, text: str) -> str:
         """
@@ -186,11 +205,19 @@ class DivineFactory(BaseAgent):
             if len(code_content) < 5:
                 return {"status": "error", "result": "Code détecté trop court (Faux positif probable)."}
 
-            # Sandboxing : fichiers protégés (seul un ordre direct Niveau 0 peut les modifier)
+            # Sandboxing : fichiers critiques (rejet absolu)
             normalized = target_path.replace("\\", "/")
-            if normalized in _PROTECTED_FILES:
-                logger.warning(f"[FACTORY] 🛡️ PROTÉGÉ : {target_path} — écriture refusée (fichier système critique)")
-                return {"status": "error", "result": f"Fichier protégé : {target_path}. Écriture refusée."}
+            if normalized in _CRITICAL_FILES:
+                logger.warning(f"[FACTORY] 🛡️ CRITIQUE : {target_path} — écriture refusée")
+                return {"status": "error", "result": f"Fichier critique : {target_path}. Écriture refusée."}
+
+            # Sandboxing : fichiers supervisés (autorisés uniquement via pipeline Evolution)
+            if normalized in _SUPERVISED_FILES:
+                evo_spec_id = task_payload.get("evolution_spec_id")
+                if not evo_spec_id:
+                    logger.warning(f"[FACTORY] 🛡️ SUPERVISÉ : {target_path} — pas de spec_id Evolution")
+                    return {"status": "error", "result": f"Fichier supervisé : {target_path}. Seul le pipeline Evolution peut le modifier."}
+                logger.info(f"[FACTORY] 🔓 SUPERVISÉ : {target_path} autorisé via spec [{evo_spec_id}]")
 
             # Sandboxing : vérification extension
             ext = os.path.splitext(target_path)[1].lower()
@@ -243,7 +270,20 @@ class DivineFactory(BaseAgent):
                 
                 with open(full_path, "w", encoding="utf-8") as f:
                     f.write(code_content)
-                
+
+                # Gate de tests pour fichiers supervisés
+                if normalized in _SUPERVISED_FILES:
+                    from core.ci_pipeline import run_existing_tests_for_file
+                    tests_ok, test_output = await run_existing_tests_for_file(full_path)
+                    if not tests_ok:
+                        self._restore_from_bak(full_path)
+                        logger.warning(f"[FACTORY] 🔴 ROLLBACK supervisé : {target_path} — tests échoués")
+                        return {
+                            "status": "error",
+                            "result": f"Fichier supervisé rollback : tests existants échoués après écriture.\n{test_output[-500:]}"
+                        }
+                    logger.info(f"[FACTORY] ✅ Tests existants passés pour {target_path}")
+
                 self._log_to_manifest("WRITE", target_path)
                 msg = f"✅ Fichier écrit (Smart Path + Backup) : {target_path}"
                 self.remember(f"FILE_CREATED: {target_path}", metadata={"type": "code_creation"})
