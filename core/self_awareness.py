@@ -270,6 +270,13 @@ class SelfAwarenessEngine:
             "mood": mood,
         }
 
+        # Stats spreading activation
+        try:
+            from core.spreading_activation import activation_engine
+            snapshot["spreading_activation"] = activation_engine.get_stats()
+        except Exception:
+            pass
+
         self._snapshots.append(snapshot)
         if len(self._snapshots) > MAX_SNAPSHOTS:
             self._snapshots = self._snapshots[-MAX_SNAPSHOTS:]
@@ -561,6 +568,15 @@ class SelfAwarenessEngine:
         expansion_in_last_10 = sum(1 for h in last_10_all if h.get("intent") == "EXPANSION_CODE")
         if expansion_in_last_10 == 0 and len(routine_history) >= 10:
             _add("EXPANSION_CODE", 2.0)
+
+        # --- Règle 11 : Ponts créatifs non explorés (spreading activation) ---
+        try:
+            from core.spreading_activation import activation_engine
+            unused_bridges = activation_engine.get_stats().get("unused_bridges", 0)
+            if unused_bridges >= 3:
+                _add("COUNCIL_DEBATE", 2.0)
+        except Exception:
+            pass
 
         return adjustments
 

@@ -184,7 +184,8 @@ class BaseAgent:
         except Exception as e:
             self.log_thought(f"Erreur Sauvegarde: {e}", type="error")
 
-    def recall(self, query: str, limit: int = None, collection="collective_wisdom") -> str:
+    def recall(self, query: str, limit: int = None, collection="collective_wisdom",
+               lateral: bool = False) -> str:
         if not self.has_memory: return ""
         try:
             import math
@@ -213,7 +214,27 @@ class BaseAgent:
             scored.sort(key=lambda x: x[1], reverse=True)
             # Filtre qualité : exclure les résultats sous le seuil
             scored = [(doc, s) for doc, s in scored if s >= self._MIN_RECALL_SCORE]
-            return "\n".join(doc for doc, _ in scored[:limit])
+            base_result = "\n".join(doc for doc, _ in scored[:limit])
+
+            # Activation latérale (spreading activation) sur le top-1
+            if lateral and base_result and scored:
+                try:
+                    from core.spreading_activation import activation_engine
+                    top_doc = scored[0][0]
+                    try:
+                        loop = asyncio.get_running_loop()
+                        if loop.is_running():
+                            loop.create_task(
+                                activation_engine.activate(
+                                    top_doc, collection, self.memory_manager, max_hops=1
+                                )
+                            )
+                    except RuntimeError:
+                        pass  # Pas de loop active, skip silencieusement
+                except Exception:
+                    pass
+
+            return base_result
         except Exception as e:
             logger.warning(f"[{self.name}] Échec recall mémoire ({collection}) : {e}")
         return ""
@@ -354,12 +375,23 @@ class BaseAgent:
             self.log_thought("🧠 Souvenirs trouvés !", type="info")
             context_memory = f"\n[SOUVENIRS]:\n{mem1}\n"
 
+        # Intuitions (spreading activation) — lecture cache RAM, 0 requête
+        intuition_block = ""
+        try:
+            from core.spreading_activation import activation_engine
+            intuition_text = activation_engine.format_for_prompt(max_chars=300)
+            if intuition_text:
+                intuition_block = f"\n{intuition_text}\n"
+        except Exception:
+            pass
+
         # Note: council.py injecte aussi un contexte projet (_COUNCIL_PROJECT_CONTEXT) — garder cohérent
         full_prompt = (
             f"\n[SYSTEM: Nexus V20 (Local First) | AGENT: {self.name.upper()}]\n"
             f"[CONTRAINTE: Projet sur UN SEUL PC Windows + Ollama local. "
             f"Pas de Kubernetes/Docker/Kafka/microservices/blockchain.]\n"
             f"{context_memory}"
+            f"{intuition_block}"
             f"{prompt}"
         )
 

@@ -268,6 +268,22 @@ class Council:
                 f"Tu DOIS prendre en compte ce feedback dans ta réponse.\n\n"
             )
 
+        # Intuitions du système (spreading activation — cache RAM, 0 requête)
+        intuition_block = ""
+        try:
+            from core.spreading_activation import activation_engine
+            thoughts = activation_engine.get_latent_thoughts(max_thoughts=3)
+            bridges = activation_engine.get_creative_bridges(unused_only=True)
+            parts = []
+            if thoughts:
+                parts.append("Concepts actifs: " + ", ".join(thoughts))
+            for b in bridges[:1]:
+                parts.append(b.hypothesis)
+            if parts:
+                intuition_block = "\n[INTUITIONS DU SYSTÈME]\n" + "\n".join(parts) + "\n"
+        except Exception:
+            pass
+
         return (
             f"Tu participes à un CONSEIL multi-agents.\n"
             f"LANGUE OBLIGATOIRE : Réponds UNIQUEMENT en français. Pas d'anglais.\n"
@@ -281,6 +297,7 @@ class Council:
             f"HISTORIQUE DU DÉBAT :\n{history}\n\n"
             f"{round_instructions}\n"
             f"{president_block}"
+            f"{intuition_block}"
             f"{COUNCIL_GUARDRAIL}"
         )
 

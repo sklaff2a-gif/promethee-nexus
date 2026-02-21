@@ -407,6 +407,29 @@ class PsycheEngine:
                 "subject_key": "budget",
             }
 
+        # Priorité 2.5 : eureka — pont créatif non exploré (spreading activation)
+        if "eureka" not in recent:
+            try:
+                from core.spreading_activation import activation_engine
+                bridges = activation_engine.get_creative_bridges(unused_only=True)
+                strong_bridges = [b for b in bridges if b.bridge_strength >= 0.5]
+                if strong_bridges:
+                    bridge = strong_bridges[0]
+                    return {
+                        "participants": ["strategist", "coder", "evolution"],
+                        "mission": (
+                            f"EUREKA: Le système a détecté une connexion créative entre "
+                            f"'{bridge.node_a}' ({bridge.collection_a}) et "
+                            f"'{bridge.node_b}' ({bridge.collection_b}). "
+                            f"{bridge.hypothesis} "
+                            f"Comment exploiter cette connexion pour améliorer Prométhée ?"
+                        ),
+                        "needs_research": False, "research_query": None,
+                        "subject_key": "eureka",
+                    }
+            except Exception:
+                pass
+
         # Priorité 2 (par défaut) : débat alimenté par la recherche web (rotation)
         # Avancer l'index si le thème a déjà été débattu récemment
         n_themes = len(RESEARCH_THEMES)

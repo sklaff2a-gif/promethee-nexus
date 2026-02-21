@@ -664,6 +664,17 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Bonus spreading activation (affinité sémantique) ---
+        try:
+            from core.spreading_activation import activation_engine as sa_engine
+            for i, (routine, s) in enumerate(scored):
+                sa_bonus = sa_engine.compute_routine_affinity(routine["intent"])
+                if sa_bonus != 0.0:
+                    scored[i] = (routine, s + sa_bonus)
+            scored.sort(key=lambda x: x[1], reverse=True)
+        except Exception:
+            pass
+
         selected, score = scored[0]
         agent = selected["agent"]
         intent = selected["intent"]
@@ -819,6 +830,18 @@ class AutonomyEngine:
                     pass
                 await self._trigger_targeted_learning(selected["mission"], agent, intent)
 
+        # Alimentation spreading activation (non bloquant)
+        if result_preview and len(result_preview) > 50:
+            try:
+                from core.spreading_activation import activation_engine
+                asyncio.create_task(
+                    activation_engine.activate(
+                        result_preview, "collective_wisdom", max_hops=0
+                    )
+                )
+            except Exception:
+                pass
+
         # Publier AUTONOMY_ROUTINE_COMPLETE pour les handlers PSYCHE
         participants = []
         if intent == "COUNCIL_DEBATE" and response:
@@ -843,6 +866,13 @@ class AutonomyEngine:
             try:
                 from core.self_awareness import awareness
                 awareness.generate_snapshot()
+            except Exception:
+                pass
+            # Decay + cleanup spreading activation
+            try:
+                from core.spreading_activation import activation_engine
+                activation_engine.decay_all()
+                activation_engine.cleanup()
             except Exception:
                 pass
 
