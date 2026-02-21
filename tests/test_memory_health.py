@@ -32,6 +32,7 @@ def _make_manager(tmp_path, use_persistent=True):
     mgr = ChromaMemoryManager.__new__(ChromaMemoryManager)
     mgr.project_id = "test"
     mgr.db_path = db_path
+    mgr._lock = asyncio.Lock()
     if use_persistent:
         mgr.client = chromadb.PersistentClient(path=db_path)
     else:
@@ -239,3 +240,113 @@ class TestMemoryAlert:
         assert "MÉMOIRE" in written_lines[0]
         assert "DOWN" in written_lines[0]
         assert "critical" in written_lines[0]
+
+
+# ============================================================
+# TestAsyncLock — Méthodes async protégées par asyncio.Lock
+# ============================================================
+
+class TestAsyncLock:
+    """Tests pour les méthodes async lockées de ChromaMemoryManager."""
+
+    def test_lock_exists_on_instance(self, isolate_chroma):
+        mgr = _make_manager(isolate_chroma, use_persistent=True)
+        assert hasattr(mgr, "_lock")
+        assert isinstance(mgr._lock, asyncio.Lock)
+
+    @pytest.mark.asyncio
+    async def test_async_purge_expired_returns_int(self, isolate_chroma):
+        mgr = _make_manager(isolate_chroma, use_persistent=True)
+        # Ajouter un document ancien pour vérifier la purge
+        old_ts = str(time.time() - 200 * 86400)  # 200 jours
+        mgr.add_documents(
+            documents=["vieux souvenir obsolète pour test de purge"],
+            metadatas=[{"timestamp": old_ts, "source": "test"}],
+            ids=["old-doc-1"],
+            collection_name="collective_wisdom",
+        )
+        result = await mgr.async_purge_expired(max_age_days=90)
+        assert isinstance(result, int)
+        assert result >= 1
+
+    @pytest.mark.asyncio
+    async def test_async_purge_expired_matches_sync(self, isolate_chroma):
+        """async_purge_expired retourne le même résultat que purge_expired."""
+        mgr = _make_manager(isolate_chroma, use_persistent=True)
+        # Pas de documents anciens → les deux retournent 0
+        sync_result = mgr.purge_expired(max_age_days=90)
+        async_result = await mgr.async_purge_expired(max_age_days=90)
+        assert sync_result == async_result == 0
+
+    @pytest.mark.asyncio
+    async def test_async_purge_low_quality_returns_int(self, isolate_chroma):
+        mgr = _make_manager(isolate_chroma, use_persistent=True)
+        # Ajouter un document trop court
+        mgr.add_documents(
+            documents=["court"],
+            metadatas=[{"timestamp": str(time.time()), "source": "test"}],
+            ids=["short-doc-1"],
+            collection_name="collective_wisdom",
+        )
+        result = await mgr.async_purge_low_quality(min_length=100)
+        assert isinstance(result, int)
+        assert result >= 1
+
+    @pytest.mark.asyncio
+    async def test_async_check_health_returns_dict(self, isolate_chroma):
+        mgr = _make_manager(isolate_chroma, use_persistent=True)
+        result = await mgr.async_check_health()
+        assert isinstance(result, dict)
+        assert "status" in result
+        assert "persistent" in result
+        assert "probe_ok" in result
+        assert "collections" in result
+        assert result["status"] == "healthy"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_async_purges_no_error(self, isolate_chroma):
+        """Deux purges concurrentes ne causent pas d'erreur grâce au lock."""
+        mgr = _make_manager(isolate_chroma, use_persistent=True)
+        # Lancer les deux en parallèle
+        results = await asyncio.gather(
+            mgr.async_purge_expired(max_age_days=90),
+            mgr.async_purge_low_quality(min_length=100),
+            mgr.async_check_health(),
+        )
+        assert isinstance(results[0], int)
+        assert isinstance(results[1], int)
+        assert isinstance(results[2], dict)
+
+    @pytest.mark.asyncio
+    async def test_system_health_check_uses_async(self, isolate_chroma):
+        """SystemHealthCheck.run() utilise async_check_health (vérifie l'intégration)."""
+        mgr = _make_manager(isolate_chroma, use_persistent=True)
+
+        import psutil as _psutil
+        import httpx as _httpx
+
+        with patch.object(_psutil, "cpu_percent", return_value=30.0), \
+             patch.object(_psutil, "virtual_memory") as mock_vm, \
+             patch.object(_httpx, "AsyncClient") as mock_httpx_client, \
+             patch.object(mgr, "async_check_health", wraps=mgr.async_check_health) as spy:
+            mem = MagicMock()
+            mem.percent = 50.0
+            mem.used = 8 * 1024**3
+            mem.total = 16 * 1024**3
+            mock_vm.return_value = mem
+
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"models": []}
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_resp
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_httpx_client.return_value = mock_client
+
+            from core.autonomy_engine import SystemHealthCheck
+            result = await SystemHealthCheck.run()
+
+            # Vérifier que async_check_health a bien été appelé
+            spy.assert_awaited_once()
+            assert result["memory"]["status"] == "healthy"

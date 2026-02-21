@@ -1,3 +1,4 @@
+import asyncio
 import chromadb
 import logging
 import os
@@ -51,6 +52,9 @@ class ChromaMemoryManager:
         except Exception as e:
             logger.warning(f"PersistentClient échoué ({e}), fallback EphemeralClient (mémoire non persistante)")
             self.client = chromadb.EphemeralClient()
+
+        # Lock asyncio pour les opérations d'écriture composées (purge, health check)
+        self._lock = asyncio.Lock()
 
         # Collections de base (casiers de mémoire)
         self.collections = {
@@ -257,3 +261,19 @@ class ChromaMemoryManager:
             except Exception as e:
                 print(f"Erreur Memoire (Purge qualite {name}): {e}")
         return total
+
+    async def async_purge_expired(self, max_age_days: int = 90, collection_name: str = None) -> int:
+        """Version async de purge_expired(), protégée par le lock."""
+        async with self._lock:
+            return self.purge_expired(max_age_days, collection_name)
+
+    async def async_purge_low_quality(self, min_length: int = 100, max_non_latin_ratio: float = 0.10,
+                                       collection_name: str = None) -> int:
+        """Version async de purge_low_quality(), protégée par le lock."""
+        async with self._lock:
+            return self.purge_low_quality(min_length, max_non_latin_ratio, collection_name)
+
+    async def async_check_health(self) -> dict:
+        """Version async de check_health(), protégée par le lock."""
+        async with self._lock:
+            return self.check_health()

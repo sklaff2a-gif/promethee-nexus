@@ -120,14 +120,14 @@ class SystemHealthCheck:
         except Exception as e:
             warnings.append(f"Ollama error: {e}")
 
-        # Ping ChromaDB
+        # Ping ChromaDB (via lock async pour protéger la probe write/delete)
         memory_status = {"status": "unknown"}
         try:
             from core.vector_store import ChromaMemoryManager
             instances = ChromaMemoryManager._instances
             if instances:
                 mgr = next(iter(instances.values()))
-                memory_status = mgr.check_health()
+                memory_status = await mgr.async_check_health()
             else:
                 memory_status = {"status": "down", "warnings": ["Aucune instance ChromaDB"]}
         except Exception as e:
@@ -1074,52 +1074,25 @@ class AutonomyEngine:
         logger.info(f"[COUNCIL] Journal council_journal.md mis à jour : {mission[:50]}")
 
     async def _execute_memory_cleanup(self) -> dict:
-        """Nettoie la mémoire RAG : purge les anciennes ET les mauvaise qualité."""
+        """Nettoie la mémoire RAG : purge les anciennes ET les mauvaise qualité.
+
+        Utilise les méthodes async lockées de ChromaMemoryManager pour éviter
+        les race conditions sur les opérations composées (get→filter→delete).
+        """
         try:
             from core.vector_store import ChromaMemoryManager
             mgr = ChromaMemoryManager.get_instance()
             if not mgr:
                 return {"status": "error", "result": "ChromaDB indisponible."}
 
-            removed_old = 0
-            removed_quality = 0
+            # Phase 1 : Purge des entrées anciennes (>60 jours) — protégé par lock
+            removed_old = await mgr.async_purge_expired(max_age_days=60)
 
-            # Phase 1 : Purge des entrées anciennes (>60 jours)
-            for coll_name in ["collective_wisdom", "code_snippets"]:
-                try:
-                    coll = getattr(mgr, coll_name, None) or mgr.client.get_collection(coll_name)
-                    count = coll.count()
-                    if count < 10:
-                        continue
-                    results = coll.get(limit=min(count, 100), include=["metadatas", "documents"])
-                    if not results or not results.get("ids"):
-                        continue
-                    now = time.time()
-                    ids_to_delete = []
-                    for i, meta in enumerate(results.get("metadatas", [])):
-                        try:
-                            ts = float(meta.get("timestamp", 0))
-                            age_days = (now - ts) / 86400
-                            if age_days > 60:
-                                ids_to_delete.append(results["ids"][i])
-                        except (ValueError, TypeError):
-                            pass
-                    if ids_to_delete:
-                        coll.delete(ids=ids_to_delete[:20])
-                        removed_old += len(ids_to_delete[:20])
-                except Exception as e:
-                    logger.warning(f"[MEMORY_CLEANUP] Erreur collection {coll_name}: {e}")
-
-            # Phase 2 : Purge qualitative (textes courts, hallucinations non-latin)
-            for coll_name in ["collective_wisdom", "code_snippets"]:
-                try:
-                    removed_quality += mgr.purge_low_quality(
-                        min_length=100,
-                        max_non_latin_ratio=0.10,
-                        collection_name=coll_name
-                    )
-                except Exception as e:
-                    logger.warning(f"[MEMORY_CLEANUP] Erreur purge qualitative {coll_name}: {e}")
+            # Phase 2 : Purge qualitative (textes courts, hallucinations non-latin) — protégé par lock
+            removed_quality = await mgr.async_purge_low_quality(
+                min_length=100,
+                max_non_latin_ratio=0.10,
+            )
 
             total = removed_old + removed_quality
             msg = f"Nettoyage mémoire : {removed_old} anciennes + {removed_quality} basse qualité = {total} supprimées."
