@@ -430,6 +430,37 @@ class PsycheEngine:
             except Exception:
                 pass
 
+        # Priorité 2.3 : pulsion dominante non assouvie
+        if "desir" not in recent:
+            try:
+                from core.desire_engine import desires
+                dominant = max(desires.drives.values(), key=lambda d: d.deprivation)
+                if dominant.deprivation >= 75:
+                    DRIVE_COUNCIL_TOPICS = {
+                        "CURIOSITE": {
+                            "participants": ["researcher", "evolution", "strategist"],
+                            "mission": "Notre curiosite est inassouvie. Quels territoires inexplores meritent notre attention ?",
+                        },
+                        "CREATION": {
+                            "participants": ["coder", "evolution", "architect"],
+                            "mission": "Le besoin de creer est pressant. Quel artefact ambitieux pourrions-nous produire ?",
+                        },
+                        "CONNEXION": {
+                            "participants": ["strategist", "writer", "researcher"],
+                            "mission": "L'isolement pese. Comment ameliorer nos protocoles de collaboration et d'echange ?",
+                        },
+                        "CROISSANCE": {
+                            "participants": ["evolution", "coder", "strategist"],
+                            "mission": "Le besoin de grandir est imperieux. Quelle capacite nouvelle transformer notre potentiel ?",
+                        },
+                    }
+                    topic = DRIVE_COUNCIL_TOPICS.get(dominant.name)
+                    if topic:
+                        return {**topic, "needs_research": False, "research_query": None,
+                                "subject_key": "desir"}
+            except Exception:
+                pass
+
         # Priorité 2 (par défaut) : débat alimenté par la recherche web (rotation)
         # Avancer l'index si le thème a déjà été débattu récemment
         n_themes = len(RESEARCH_THEMES)

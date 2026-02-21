@@ -26,11 +26,21 @@ MOOD_MAP = [
     ("fatigue",    lambda sr, traits: sr < 0.5),
     ("instable",   lambda sr, traits: sr < 0.6 and traits.get("survie", 50) > 65),
     ("curieux",    lambda sr, traits: traits.get("curiosite", 50) > 65 and sr > 0.7),
+    ("anime",      lambda sr, traits: sr > 0.6 and _has_urgent_desires()),
     ("créatif",    lambda sr, traits: traits.get("creativite", 50) > 65 and sr > 0.7),
     ("prudent",    lambda sr, traits: traits.get("survie", 50) > 70),
     ("audacieux",  lambda sr, traits: traits.get("audace", 50) > 65 and sr > 0.6),
     ("équilibré",  lambda sr, traits: True),
 ]
+
+
+def _has_urgent_desires() -> bool:
+    """Retourne True si au moins une pulsion a une deprivation >= 75."""
+    try:
+        from core.desire_engine import desires
+        return any(d.deprivation >= 75 for d in desires.drives.values())
+    except Exception:
+        return False
 
 
 def _compute_mood(success_rate: float, traits_avg: Dict[str, float]) -> str:
@@ -274,6 +284,13 @@ class SelfAwarenessEngine:
         try:
             from core.spreading_activation import activation_engine
             snapshot["spreading_activation"] = activation_engine.get_stats()
+        except Exception:
+            pass
+
+        # Pulsions (desirs)
+        try:
+            from core.desire_engine import desires
+            snapshot["desires"] = desires.get_drive_summary()
         except Exception:
             pass
 
@@ -625,19 +642,31 @@ class SelfAwarenessEngine:
 
     def get_purpose_context(self) -> str:
         """Texte court injectable dans les décisions autonomes, adapté à l'état."""
+        parts = []
         gaps = self.get_open_gaps()
         mood = "équilibré"
         if self._snapshots:
             mood = self._snapshots[-1].get("mood", "équilibré")
 
         if gaps:
-            return f"[MISSION] J'ai {len(gaps)} lacune(s) à combler. Chaque échec est une opportunité d'apprendre."
+            parts.append(f"[MISSION] J'ai {len(gaps)} lacune(s) à combler. Chaque échec est une opportunité d'apprendre.")
         elif mood == "productif":
-            return "[MISSION] Je suis en forme. C'est le moment d'explorer et de créer."
+            parts.append("[MISSION] Je suis en forme. C'est le moment d'explorer et de créer.")
         elif mood in ("fatigue", "instable"):
-            return "[MISSION] Je dois consolider mes acquis et me reposer sur ce que je sais."
+            parts.append("[MISSION] Je dois consolider mes acquis et me reposer sur ce que je sais.")
         else:
-            return "[MISSION] J'existe pour aider mon utilisateur. Chaque connaissance me rend plus utile."
+            parts.append("[MISSION] J'existe pour aider mon utilisateur. Chaque connaissance me rend plus utile.")
+
+        # Pulsions dominantes
+        try:
+            from core.desire_engine import desires
+            narrative = desires.get_dominant_narrative(top_n=1)
+            if narrative:
+                parts.append(f"[DESIR] {narrative}")
+        except Exception:
+            pass
+
+        return " ".join(parts)
 
     # --- Accesseurs ---
 

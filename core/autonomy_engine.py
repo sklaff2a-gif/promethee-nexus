@@ -701,6 +701,21 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Bonus pulsions (desirs) ---
+        try:
+            from core.desire_engine import desires
+            desires.tick()
+            for i, (routine, s) in enumerate(scored):
+                desire_bonus = desires.compute_desire_bonus(routine["intent"])
+                if desire_bonus > 0:
+                    scored[i] = (routine, s + desire_bonus)
+            scored.sort(key=lambda x: x[1], reverse=True)
+            urgent = [d.name for d in desires.drives.values() if d.deprivation >= 75]
+            if urgent:
+                print(f"   \U0001FA90 DESIRS: Pulsions urgentes: {', '.join(urgent)}")
+        except Exception:
+            pass
+
         selected, score = scored[0]
         agent = selected["agent"]
         intent = selected["intent"]
@@ -769,6 +784,14 @@ class AutonomyEngine:
                 purpose_ctx = awareness.get_purpose_context()
             except Exception:
                 pass
+            # Enrichir avec le narratif interieur (pulsions)
+            try:
+                from core.desire_engine import desires
+                narrative = desires.get_dominant_narrative()
+                if narrative:
+                    purpose_ctx += f"\n[DESIRS] {narrative}"
+            except Exception:
+                pass
             # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)
             raw_mission = selected["mission"]
             # Retirer le préfixe [MODE VEILLE] déjà présent dans certaines missions
@@ -802,6 +825,17 @@ class AutonomyEngine:
 
         # Score qualité post-routine
         quality_score = self._score_result_quality(response, intent)
+
+        # Feedback pulsions
+        try:
+            from core.desire_engine import desires
+            if quality_score >= 0.6:
+                desires.on_event("ROUTINE_SUCCESS", {"intent": intent, "quality": quality_score})
+            else:
+                desires.on_event("ROUTINE_FAILURE", {"intent": intent, "quality": quality_score})
+            desires.save()
+        except Exception:
+            pass
 
         # Aperçu du résultat pour comparaison future
         result_preview = ""
