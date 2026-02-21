@@ -54,5 +54,12 @@
     "description": "Analyse de logs : patterns d'erreur, diagnostic d'incidents, règles d'alerte",
     "keywords": ["log", "logs", "erreur récurrente", "incident", "monitoring", "alerte", "pattern erreur"],
     "file": "log_analyst.py"
+  },
+  {
+    "slug": "code_reviewer",
+    "name": "CodeReviewer",
+    "description": "Revue de code specialisee pour le pipeline Evolution et les diffs CodeSmith",
+    "keywords": ["code review", "revue code", "diff codesmith", "evolution review", "review spec"],
+    "file": "code_reviewer.py"
   }
 ]

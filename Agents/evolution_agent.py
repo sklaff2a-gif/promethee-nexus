@@ -685,6 +685,58 @@ class DivineEvolution(BaseAgent):
         if deploy_status == "success" and not orchestrator._contains_python_code(generated_code):
             deploy_status = "rejected_no_code"
             self.log_thought(f"⚠️ [{spec.id}] Architect a validé mais le code n'est pas structurel Python — rejeté.", type="warning")
+
+        # --- PHASE 5b : SECOND AVIS si Architect refuse du code CodeSmith ---
+        if deploy_status != "success" and code_source == "codesmith":
+            self.log_thought(
+                f"🔍 Phase 5b : Architect a refusé [{spec.id}] — consultation code_reviewer...",
+                type="info"
+            )
+            try:
+                reviewer_response = await orchestrator.dispatch_task("code_reviewer", {
+                    "mission": (
+                        f"REVUE EVOLUTION SPEC [{spec.id}] {spec.name}\n"
+                        f"Fichier cible: {spec.target_file}\n"
+                        f"Source: CodeSmith (transformation déterministe AST)\n"
+                        f"L'Architect a refusé ce code. Analyse-le et donne ton verdict."
+                    ),
+                    "context": generated_code
+                })
+
+                reviewer_verdict = reviewer_response.get("verdict", "UNSAFE")
+
+                if reviewer_verdict == "SAFE":
+                    # Re-soumettre à l'Architect avec le rapport du spécialiste
+                    reviewer_report = reviewer_response.get("result", "")[:500]
+                    self.log_thought(
+                        f"🔍 Phase 5b : code_reviewer dit SAFE — re-soumission à l'Architect...",
+                        type="info"
+                    )
+                    architect_response2 = await orchestrator.dispatch_task("architect", {
+                        "mission": (
+                            f"[SECOND EXAMEN] Amélioration [{spec.id}] {spec.name}.\n"
+                            f"Fichier cible: {spec.target_file}\n"
+                            f"EVOLUTION_SPEC_ID: {spec.id}\n"
+                            f"Un spécialiste code_reviewer a analysé ce code et l'a jugé SÛR.\n"
+                            f"Rapport: {reviewer_report}\n"
+                            f"Merci de ré-examiner et valider pour déploiement."
+                        ),
+                        "context": generated_code
+                    })
+                    deploy_status = architect_response2.get("status", "unknown")
+                    if deploy_status == "success":
+                        self.log_thought(
+                            f"✅ Phase 5b : Architect convaincu après avis spécialiste [{spec.id}].",
+                            type="success"
+                        )
+                else:
+                    self.log_thought(
+                        f"⚠️ Phase 5b : code_reviewer confirme UNSAFE [{spec.id}] — abandon.",
+                        type="warning"
+                    )
+            except Exception as e:
+                self.log_thought(f"⚠️ Phase 5b : erreur code_reviewer: {e}", type="warning")
+
         if deploy_status == "success":
             catalog.mark_pending_deploy(spec.id)
             self.log_thought(f"✅ [{spec.id}] {spec.name} soumis au pipeline Formatter→Factory (pending_deploy).", type="info")
