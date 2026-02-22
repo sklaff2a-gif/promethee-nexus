@@ -750,7 +750,11 @@ class DivineEvolution(BaseAgent):
             self.log_thought(f"⚠️ [{spec.id}] Architect a validé mais le code n'est pas structurel Python — rejeté.", type="warning")
 
         # --- PHASE 5b : SECOND AVIS si Architect refuse du code CodeSmith ---
+<<<<<<< Updated upstream
         if deploy_status != "success" and code_source == "codesmith":
+=======
+        if deploy_status != "success" and code_source == "deterministic":
+>>>>>>> Stashed changes
             self.log_thought(
                 f"🔍 Phase 5b : Architect a refusé [{spec.id}] — consultation code_reviewer...",
                 type="info"

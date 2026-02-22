@@ -54,3 +54,1400 @@ Ce fichier est maintenu automatiquement par le moteur d'autonomie et curé manue
 - *[17:43] Budget priorisation — trop vague, aucune action concrète*
 - *[19:11] Scalabilité métriques — vague, pas d'implémentation extractible*
 - *[20:52] asyncio.Queue event_bus — redondant avec PERF-006 (Batch bus publish)*
+<<<<<<< Updated upstream
+=======
+
+---
+
+## [2026-02-22 07:15] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 07:15] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 07:15] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 07:15] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 07:15] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] doublon: meme cible que MEM-006 (core/psyche.py:save)
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-70001`: [CURATION] doublon: meme cible que MEM-006 (core/psyche.py:save)
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**3 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80003`: [CURATION] doublon: meme cible que MEM-006 (core/psyche.py:save)
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 07:16] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 07:17] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 07:17] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 07:17] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 07:17] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 07:17] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 07:17] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 07:17] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 07:17] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 07:17] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 07:17] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 07:17] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 07:17] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 07:17] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 07:17] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 07:56] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 07:56] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 07:56] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 07:56] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 07:56] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 07:56] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 07:56] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 08:05] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 08:05] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 08:05] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 08:05] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 08:05] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 08:05] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 08:05] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 08:05] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 08:05] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 08:05] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 08:05] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 08:05] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 08:05] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 08:05] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 08:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 08:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 08:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 08:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 08:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 08:06] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 08:06] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 08:07] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 08:07] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 08:07] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 08:07] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 08:07] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 08:07] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 08:07] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 08:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 08:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 08:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 08:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 08:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 08:12] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 08:12] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 08:39] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 08:39] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 08:39] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 08:39] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 08:39] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 08:39] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 08:39] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 13:58] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 13:58] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 13:58] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 13:58] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 13:58] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 13:58] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 13:58] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 13:58] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 13:58] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 13:58] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 13:58] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 13:58] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 13:58] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 13:58] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 15:09] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 15:09] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 15:09] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 15:09] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 15:09] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 15:09] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 15:09] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 15:36] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 15:36] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 15:36] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 15:36] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 15:36] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 15:36] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 15:36] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 15:36] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 15:36] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 15:36] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 15:36] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 15:36] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 15:36] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 15:36] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 15:39] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 15:39] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 15:39] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 15:39] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 15:39] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 15:39] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 15:39] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 16:02] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 16:02] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 16:02] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 16:02] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 16:02] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 16:02] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 16:02] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 16:03] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 16:03] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 16:03] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 16:03] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 16:03] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 16:03] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 16:03] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 17:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 17:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 17:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 17:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 17:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 17:12] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 17:12] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 17:21] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 17:21] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 17:21] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 17:21] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 17:21] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 17:21] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 17:21] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 17:21] Test curation
+
+**Participants** : strategist, coder | **Tours** : 1 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-02-22 17:25] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 17:25] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 17:25] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 17:25] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 17:25] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 17:25] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 17:25] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 17:25] Test curation
+
+**Participants** : strategist, coder | **Tours** : 1 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-02-22 17:25] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 17:25] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 17:25] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 17:25] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 17:25] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 17:25] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 17:25] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 17:25] Test curation
+
+**Participants** : strategist, coder | **Tours** : 1 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-02-22 17:27] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>48h)
+
+---
+
+## [2026-02-22 17:27] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-02-22 17:27] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-02-22 17:27] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-02-22 17:27] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-02-22 17:27] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 17:27] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>48h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>48h)
+
+---
+
+## [2026-02-22 17:27] Test curation
+
+**Participants** : strategist, coder | **Tours** : 1 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+>>>>>>> Stashed changes
+
+---
+
+## [2026-02-22 19:14] Le Researcher a trouvé des méthodes pour améliorer les débats entre agents IA. C
+
+**Participants** : strategist, coder, writer | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  *   **Directly addresses the core issue:** The risk of `router.py` becoming overloaded, initially identified in Tour 1, 
+  *   **Avoids the pitfalls of complexity:** The rejection of direct modifications to `router.py` (Tour 2) has been upheld
+  *   **Provides a proactive solution:** The need for a proactive approach, as highlighted by the Writer in Tour 3, is met
+  *   **Maintains technical feasibility:** The Coder's validation in Tour 3 confirmed the solutio
+  - **Tour 1** : Le risque de surcharge de `router.py` a été identifié comme critique.
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)

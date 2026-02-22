@@ -59,7 +59,7 @@ class Config:
         "infra": "qwen3:8b",
         "security": "deepseek-r1:8b",
         "writer": "gemma3:12b",
-        "strategist": "gpt-oss:20b",
+        "strategist": "gemma3:12b",
         "architect": "gemma3:12b",
         "researcher": "qwen3-vl:8b"
     }

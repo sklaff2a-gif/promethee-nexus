@@ -7,7 +7,7 @@ Tu es invoqué automatiquement toutes les 4 heures pour surveiller et maintenir 
 ### Phase 1 : Analyse des logs en cours
 ```bash
 cd "C:\MesProjets\PROMETHEE_V11_restructuration2026"
-PYTHONIOENCODING=utf-8 python analyze_run.py "logs/"
+PYTHONIOENCODING=utf-8 python analyze_run.py "logs/" --date today
 ```
 Si le dossier `logs/` est vide ou n'existe pas, cherche dans `log run copie/`.
 Lis le rapport produit par le script.
