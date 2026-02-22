@@ -55,6 +55,7 @@ TRAIT_RESONANCE: Dict[str, Dict[str, float]] = {
 # Valeurs negatives = satisfaction, positives = frustration
 EVENT_IMPACT: Dict[str, Any] = {
     "ROUTINE_SUCCESS": {
+        "_default":           {"MAITRISE": -5, "CROISSANCE": -3},
         "EXPANSION_CODE":     {"CREATION": -12, "CROISSANCE": -8, "MAITRISE": -10},
         "VEILLE_SILENCIEUSE": {"CURIOSITE": -15, "COMPREHENSION": -8},
         "COUNCIL_DEBATE":     {"CONNEXION": -12, "COMPREHENSION": -5},
@@ -64,6 +65,7 @@ EVENT_IMPACT: Dict[str, Any] = {
         "MEMORY_CLEANUP":     {"STABILITE": -8, "COMPREHENSION": -3},
         "DROPZONE_SCAN":      {"CURIOSITE": -10, "CONNEXION": -5},
         "REFACTOR_RANDOM":    {"MAITRISE": -10, "CREATION": -5},
+        "MEMORY_CONSOLIDATION": {"COMPREHENSION": -8, "STABILITE": -5},
     },
     "ROUTINE_FAILURE": {
         "_default":           {"MAITRISE": +8, "STABILITE": +5},
@@ -76,7 +78,7 @@ EVENT_IMPACT: Dict[str, Any] = {
     "CI_FAILURE":             {"MAITRISE": +10, "STABILITE": +8},
     "HEALTH_NO_GO":           {"STABILITE": +15},
     "HEALTH_DEGRADED":        {"STABILITE": +8},
-    "KNOWLEDGE_GAP_FOUND":    {"CURIOSITE": +5, "COMPREHENSION": +8},
+    "KNOWLEDGE_GAP_DETECTED":  {"CURIOSITE": +5, "COMPREHENSION": +8},
     "EUREKA_BRIDGE":          {"CURIOSITE": -10, "CREATION": -5, "COMPREHENSION": -10},
 }
 
@@ -224,7 +226,7 @@ class DesireEngine:
             self.on_event("HEALTH_DEGRADED")
 
     async def _on_knowledge_gap(self, event: dict):
-        self.on_event("KNOWLEDGE_GAP_FOUND")
+        self.on_event("KNOWLEDGE_GAP_DETECTED")
 
     async def _on_eureka_bridge(self, event: dict):
         self.on_event("EUREKA_BRIDGE")

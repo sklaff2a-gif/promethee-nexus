@@ -344,6 +344,7 @@ class AutonomyEngine:
             self.daily_count = 0
             self.daily_budget_used = 0
             self.last_reset_day = today
+            self._persist_state()
 
             # Bilan et seed objectifs quotidiens
             try:
@@ -604,6 +605,8 @@ class AutonomyEngine:
                 print(f"   🔀 LOOP_BREAKER: Intent force -> [{forced}]")
                 # Deleguer l'execution directe (sauter tout le scoring)
                 return await self._execute_forced_routine(forced_routine, health)
+            else:
+                logger.warning(f"[AUTONOMY] Intent forcé '{forced}' introuvable dans les routines, fallback au scoring normal.")
 
         routines = self._get_routines()
 
@@ -1759,12 +1762,18 @@ class AutonomyEngine:
                     })
                     logger.warning(f"[AUTONOMY] MÉMOIRE {memory['status'].upper()}: {memory.get('warnings', [])}")
 
-                # Retry dead letters (1 par cycle, silencieux)
+                # Retry dead letters (1 par cycle, supprime si échec pour éviter boucle infinie)
                 if bus.dead_letter_count > 0:
                     try:
                         retried = await bus.retry_dead_letter(0)
                         if retried:
-                            logger.info(f"[AUTONOMY] Dead letter re-publiée avec succès.")
+                            logger.info("[AUTONOMY] Dead letter re-publiée avec succès.")
+                        else:
+                            # Échec du retry → supprimer pour ne pas boucler indéfiniment
+                            dl_list = bus.get_dead_letters()
+                            if dl_list:
+                                bus._dead_letters.pop(0)
+                                logger.info("[AUTONOMY] Dead letter irrécupérable supprimée.")
                     except Exception:
                         pass
 
