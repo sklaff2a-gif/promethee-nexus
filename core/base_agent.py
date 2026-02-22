@@ -11,6 +11,7 @@ import pkgutil
 import inspect
 import warnings
 import time
+from collections import deque
 from typing import Dict, Any, List
 
 # Setup des chemins
@@ -44,22 +45,27 @@ class BaseAgent:
     - Interface : Publication temps réel sur le Bus
     - Budget : Compteur d'appels Cloud partagé + cooldown 429 + quotas journaliers
     """
-    # Compteur Cloud partagé entre toutes les instances
-    _cloud_call_count = 0
-    _cloud_call_reset_time = time.time()
-    MAX_CLOUD_CALLS_PER_HOUR = 100
+    # RPM tracking : fenêtre glissante de 60s par modèle
+    _rpm_windows: dict = {}  # model_name -> deque of timestamps
+
+    # Budget journalier par modèle (reset à minuit)
+    _daily_model_calls: dict = {}  # model_name -> int
+    _daily_model_reset_day = None
+
+    # Compteur spécifique Evolution (budget réservé R&D)
+    _daily_cloud_calls_evolution = 0
+    MAX_DAILY_EVOLUTION_CLOUD = 40  # Evolution peut utiliser max 40 appels Pro/jour
+
+    # Sémaphore global : limite les appels Ollama concurrents (évite saturation RAM/CPU)
+    _ollama_semaphore = None  # Initialisé lazily (nécessite une event loop)
+    _ollama_loop_id = None    # Détecte si l'event loop a changé (Smart Restart)
+    MAX_CONCURRENT_OLLAMA = 2
 
     # Cooldown après erreur 429 (quota exceeded)
     _cloud_cooldown_until = 0.0  # timestamp jusqu'auquel le Cloud est désactivé
-    CLOUD_COOLDOWN_SECONDS = 3600  # 1 heure de cooldown après un 429
-
-    # Quotas journaliers Gemini Free Tier (RPD = requests per day)
-    _daily_cloud_calls = 0
-    _daily_cloud_calls_evolution = 0  # Compteur séparé pour Evolution
-    _daily_cloud_reset_day = None
-    MAX_DAILY_CLOUD_CALLS = 50        # Budget total conservateur
-    MAX_DAILY_EVOLUTION_CALLS = 15    # Réservé pour Evolution (R&D)
-    # Les autres agents partagent MAX_DAILY_CLOUD_CALLS - MAX_DAILY_EVOLUTION_CALLS = 35
+    CLOUD_COOLDOWN_SECONDS = 900  # 15 min de cooldown après un 429 (Tier 1)
+    _cloud_429_count_today = 0    # Nombre de 429 reçus aujourd'hui
+    _cloud_429_reset_day = None   # Jour du dernier reset du compteur 429
 
     # Demi-vie mémoire en jours (surchargeable par agent)
     MEMORY_HALF_LIFE_DAYS = 30
@@ -168,6 +174,24 @@ class BaseAgent:
                     )
                     return
 
+            # Gatekeeper : filtre qualite avance (reutilise existing_text/distance deja calcules)
+            try:
+                from core.memory_gatekeeper import evaluate as gatekeeper_evaluate
+                _ext_text = None
+                _ext_dist = 1.0
+                if existing and existing.get('documents') and existing['documents'][0]:
+                    _ext_text = existing['documents'][0][0]
+                    if existing.get('distances') and existing['distances'][0]:
+                        _ext_dist = existing['distances'][0][0]
+                gk = gatekeeper_evaluate(text, metadata, _ext_text, _ext_dist)
+                if not gk["accept"]:
+                    self.log_thought(f"Memoire filtree (gatekeeper): {gk['reason']}", type="info")
+                    return
+            except ImportError:
+                pass
+            except Exception:
+                pass
+
             doc_id = str(uuid.uuid4())
             meta = metadata or {}
             meta["agent"] = self.name
@@ -178,10 +202,13 @@ class BaseAgent:
         except Exception as e:
             self.log_thought(f"Erreur Sauvegarde: {e}", type="error")
 
-    def recall(self, query: str, limit: int = 2, collection="collective_wisdom") -> str:
+    def recall(self, query: str, limit: int = None, collection="collective_wisdom",
+               lateral: bool = False) -> str:
         if not self.has_memory: return ""
         try:
             import math
+            if limit is None:
+                limit = getattr(Config, "RAG_RECALL_LIMIT", 2)
             fetch_count = limit * 3
             res = self.memory_manager.query_with_metadata(
                 [query], n_results=fetch_count, collection_name=collection
@@ -191,24 +218,119 @@ class BaseAgent:
 
             now = time.time()
             scored = []
-            for doc, meta, dist in zip(
+            doc_ids = res.get('ids', [[]])[0] if res.get('ids') else []
+            for idx, (doc, meta, dist) in enumerate(zip(
                 res['documents'][0], res['metadatas'][0], res['distances'][0]
-            ):
+            )):
                 similarity = max(0.0, 1.0 - dist)
                 try:
                     age_days = (now - float(meta.get("timestamp", 0))) / 86400
                 except (ValueError, TypeError):
                     age_days = self.MEMORY_HALF_LIFE_DAYS
                 decay = math.exp(-age_days * 0.693 / self.MEMORY_HALF_LIFE_DAYS)
-                scored.append((doc, similarity * decay))
+                doc_id = doc_ids[idx] if idx < len(doc_ids) else None
+                scored.append((doc, similarity * decay, doc_id))
 
             scored.sort(key=lambda x: x[1], reverse=True)
             # Filtre qualité : exclure les résultats sous le seuil
-            scored = [(doc, s) for doc, s in scored if s >= self._MIN_RECALL_SCORE]
-            return "\n".join(doc for doc, _ in scored[:limit])
+            scored = [(doc, s, did) for doc, s, did in scored if s >= self._MIN_RECALL_SCORE]
+            base_result = "\n".join(doc for doc, _, _ in scored[:limit])
+
+            # Tracker les rappels pour la mémoire utilitaire
+            for _, _, doc_id in scored[:limit]:
+                if doc_id:
+                    try:
+                        self.memory_manager.record_recall(doc_id, collection)
+                    except Exception:
+                        pass
+
+            # Activation latérale (spreading activation) sur le top-1
+            if lateral and base_result and scored:
+                try:
+                    from core.spreading_activation import activation_engine
+                    top_doc = scored[0][0]
+                    try:
+                        loop = asyncio.get_running_loop()
+                        if loop.is_running():
+                            loop.create_task(
+                                activation_engine.activate(
+                                    top_doc, collection, self.memory_manager, max_hops=1
+                                )
+                            )
+                    except RuntimeError:
+                        pass  # Pas de loop active, skip silencieusement
+                except Exception:
+                    pass
+
+            # --- Boost synaptique (associations persistantes) ---
+            try:
+                from core.synaptic_network import cortex
+                from core.spreading_activation import extract_concepts
+                query_concepts = [c for c, _ in extract_concepts(query, max_concepts=5)]
+                syn_text = cortex.format_for_prompt(query_concepts, max_chars=150)
+                if syn_text:
+                    base_result = f"{base_result}\n{syn_text}"
+            except Exception:
+                pass
+
+            return base_result
         except Exception as e:
             logger.warning(f"[{self.name}] Échec recall mémoire ({collection}) : {e}")
         return ""
+
+    # --- PROTOCOLE D'ESCALADE UNIFIE ---
+    _ESCALATION_MAP = {
+        "hallucination": "hallucination_doctor",
+        "rejection": "code_reviewer",
+        "loop": "loop_breaker",
+    }
+
+    async def _request_help(self, failure_type: str, context: dict) -> dict:
+        """Demande l'aide d'un specialiste Grimoire via le protocole d'escalade unifie."""
+        specialist = self._ESCALATION_MAP.get(failure_type)
+        if not specialist:
+            return {"action": "skip", "reason": f"no specialist for {failure_type}"}
+        try:
+            from core.orchestrator import orchestrator
+            response = await orchestrator.dispatch_task(specialist, {
+                "mission": f"AIDE: {failure_type}",
+                "context": json.dumps(context, default=str)
+            })
+            if not response or not isinstance(response, dict):
+                return {"action": "skip", "reason": "reponse invalide"}
+            action = response.get("action") or response.get("verdict", "skip")
+            response["action"] = action
+            return response
+        except Exception as e:
+            self.log_thought(f"Escalade {failure_type} echouee: {e}", type="warning")
+            return {"action": "skip", "reason": str(e)}
+
+    @classmethod
+    def _check_rpm(cls, model_name: str) -> bool:
+        """Vérifie si on est sous la limite RPM pour ce modèle."""
+        rpm_limits = getattr(Config, 'CLOUD_RPM_LIMITS', {})
+        rpm_default = getattr(Config, 'CLOUD_RPM_DEFAULT', 30)
+        limit = rpm_limits.get(model_name, rpm_default)
+
+        now = time.time()
+        window = cls._rpm_windows.setdefault(model_name, deque())
+        while window and window[0] < now - 60:
+            window.popleft()
+        return len(window) < limit
+
+    @classmethod
+    def _record_cloud_call(cls, model_name: str):
+        """Enregistre un appel pour RPM + budget journalier."""
+        cls._rpm_windows.setdefault(model_name, deque()).append(time.time())
+        cls._daily_model_calls[model_name] = cls._daily_model_calls.get(model_name, 0) + 1
+
+    @classmethod
+    def _check_daily_budget(cls, model_name: str) -> bool:
+        """Vérifie le budget journalier pour ce modèle."""
+        daily_limits = getattr(Config, 'CLOUD_DAILY_LIMITS', {})
+        limit = daily_limits.get(model_name, 500)  # défaut généreux
+        used = cls._daily_model_calls.get(model_name, 0)
+        return used < limit
 
     def _get_gemini_client(self, model_name):
         try:
@@ -232,20 +354,8 @@ class BaseAgent:
         # 1. Génération de la réponse (via Cloud ou Local selon la complexité)
         response_text = await self.generate_content(f"Tu es {self.role}. Mission: {mission}")
         
-        # 2. 🚨 CORRECTIF UI : On publie la réponse sur le Bus pour l'interface Web 🚨
-        try:
-            # On formate le message pour que le frontend le comprenne
-            ui_payload = {
-                "type": "AGENT_RESPONSE",  # Le mot-clé que le JS écoute
-                "agent": self.name,
-                "content": response_text,
-                "timestamp": str(time.time())
-            }
-            # On l'envoie dans le tuyau
-            await bus.publish("AGENT_RESPONSE", ui_payload)
-            self.log_thought("✅ Réponse envoyée à l'interface.", type="success")
-        except Exception as e:
-            self.log_thought(f"❌ Erreur d'affichage UI : {e}", type="error")
+        # 2. Sanitisation anti-patterns dangereux
+        response_text = self._sanitize_response(response_text, self.name)
 
         return {"status": "success", "result": response_text}
 
@@ -262,6 +372,15 @@ class BaseAgent:
         "COUNCIL_RESEARCH",
     )
 
+    @staticmethod
+    def _extract_model_size(model_name: str) -> int:
+        """Extrait la taille en milliards depuis le nom du modèle (ex: 'qwen3-coder:30b' → 30).
+        Retourne 0 si la taille n'est pas détectable."""
+        match = re.search(r':(\d+)b', model_name, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+        return 0
+
     async def _evaluate_complexity(self, prompt: str) -> bool:
         """
         Calibrage V2: "La Pince". On force le local pour tout ce qui est culture G.
@@ -274,7 +393,7 @@ class BaseAgent:
 
         try:
             # On utilise le modèle local pour juger
-            eval_model = "gemma3:12b"
+            eval_model = getattr(Config, "DEFAULT_LOCAL_MODEL", "gemma3:12b")
             
             # PROMPT RENDU BEAUCOUP PLUS STRICT
             eval_prompt = (
@@ -307,18 +426,41 @@ class BaseAgent:
             self.log_thought("🧠 Souvenirs trouvés !", type="info")
             context_memory = f"\n[SOUVENIRS]:\n{mem1}\n"
 
+        # Intuitions (spreading activation) — lecture cache RAM, 0 requête
+        intuition_block = ""
+        try:
+            from core.spreading_activation import activation_engine
+            intuition_text = activation_engine.format_for_prompt(max_chars=300)
+            if intuition_text:
+                intuition_block = f"\n{intuition_text}\n"
+        except Exception:
+            pass
+
+        # Note: council.py injecte aussi un contexte projet (_COUNCIL_PROJECT_CONTEXT) — garder cohérent
         full_prompt = (
             f"\n[SYSTEM: Nexus V20 (Local First) | AGENT: {self.name.upper()}]\n"
             f"[CONTRAINTE: Projet sur UN SEUL PC Windows + Ollama local. "
             f"Pas de Kubernetes/Docker/Kafka/microservices/blockchain.]\n"
             f"{context_memory}"
+            f"{intuition_block}"
             f"{prompt}"
         )
 
         # Modèles Locaux
         specific_locals = getattr(Config, "AGENT_SPECIFIC_LOCAL_MODELS", {})
-        default_local = "gemma3:12b"
+        default_local = getattr(Config, "DEFAULT_LOCAL_MODEL", "gemma3:12b")
         local_model = specific_locals.get(self.name, default_local)
+
+        # Enforcement MAX_LOCAL_MODEL_SIZE : fallback si le modèle est trop gros pour la VRAM
+        max_size = getattr(Config, "MAX_LOCAL_MODEL_SIZE", 0)
+        if max_size > 0:
+            model_size = self._extract_model_size(local_model)
+            if model_size > max_size:
+                self.log_thought(
+                    f"📏 Modèle {local_model} ({model_size}B) dépasse la limite ({max_size}B) → fallback {default_local}",
+                    type="warning",
+                )
+                local_model = default_local
 
         # Etape 2 : Évaluation de la nécessité du Cloud
         if self._force_local_next:
@@ -334,51 +476,58 @@ class BaseAgent:
         if needs_cloud:
             now = time.time()
 
-            # Reset compteur horaire
-            if now - BaseAgent._cloud_call_reset_time > 3600:
-                BaseAgent._cloud_call_count = 0
-                BaseAgent._cloud_call_reset_time = now
-
-            # Reset compteur journalier
+            # Reset compteurs journaliers
             from datetime import date
             today = date.today()
-            if BaseAgent._daily_cloud_reset_day != today:
-                BaseAgent._daily_cloud_calls = 0
+            if BaseAgent._daily_model_reset_day != today:
+                BaseAgent._daily_model_calls = {}
                 BaseAgent._daily_cloud_calls_evolution = 0
-                BaseAgent._daily_cloud_reset_day = today
+                BaseAgent._cloud_429_count_today = 0
+                BaseAgent._cloud_cooldown_until = 0.0  # Reset cooldown au nouveau jour
+                BaseAgent._daily_model_reset_day = today
 
-            # Budget Cloud séparé : Evolution a son propre quota réservé
             is_evolution = self.name == "evolution"
-            if is_evolution:
-                daily_limit = BaseAgent.MAX_DAILY_EVOLUTION_CALLS
-                daily_used = BaseAgent._daily_cloud_calls_evolution
-            else:
-                daily_limit = BaseAgent.MAX_DAILY_CLOUD_CALLS - BaseAgent.MAX_DAILY_EVOLUTION_CALLS
-                daily_used = BaseAgent._daily_cloud_calls - BaseAgent._daily_cloud_calls_evolution
 
             # Vérification cooldown 429
             if now < BaseAgent._cloud_cooldown_until:
                 remaining = int(BaseAgent._cloud_cooldown_until - now)
                 self.log_thought(f"⏸️ Cloud en cooldown 429 ({remaining}s restantes) -> Fallback Local", type="warning")
                 needs_cloud = False
-            elif BaseAgent._cloud_call_count >= BaseAgent.MAX_CLOUD_CALLS_PER_HOUR:
-                self.log_thought(f"💰 Budget Cloud horaire atteint ({BaseAgent.MAX_CLOUD_CALLS_PER_HOUR}/h) -> Fallback Local", type="warning")
-                needs_cloud = False
-            elif daily_used >= daily_limit:
-                self.log_thought(f"💰 Budget Cloud {'Evolution' if is_evolution else 'général'} atteint ({daily_used}/{daily_limit}) -> Fallback Local", type="warning")
-                needs_cloud = False
             else:
                 cloud_response = None
                 used_model = "Aucun"
                 for model_name in self.cloud_models:
+                    # Vérifier RPM pour ce modèle
+                    if not BaseAgent._check_rpm(model_name):
+                        rpm_limits = getattr(Config, 'CLOUD_RPM_LIMITS', {})
+                        rpm_default = getattr(Config, 'CLOUD_RPM_DEFAULT', 30)
+                        limit = rpm_limits.get(model_name, rpm_default)
+                        self.log_thought(f"⏱️ RPM atteint pour {model_name.split('/')[-1]} ({limit}/min) -> modèle suivant", type="warning")
+                        continue
+
+                    # Vérifier budget journalier pour ce modèle
+                    if not BaseAgent._check_daily_budget(model_name):
+                        daily_limits = getattr(Config, 'CLOUD_DAILY_LIMITS', {})
+                        limit = daily_limits.get(model_name, 500)
+                        self.log_thought(f"💰 Budget journalier atteint pour {model_name.split('/')[-1]} ({limit}/jour) -> modèle suivant", type="warning")
+                        continue
+
+                    # Vérifier budget Evolution séparé (si applicable)
+                    if is_evolution and BaseAgent._daily_cloud_calls_evolution >= BaseAgent.MAX_DAILY_EVOLUTION_CLOUD:
+                        self.log_thought(f"💰 Budget Evolution épuisé ({BaseAgent._daily_cloud_calls_evolution}/{BaseAgent.MAX_DAILY_EVOLUTION_CLOUD})", type="warning")
+                        break
+
                     try:
                         client = self._get_gemini_client(model_name)
                         if not client: continue
-                        self.log_thought(f"🚀 Escalade Cloud (Tâche Complexe) : {model_name.split('/')[-1]}...", type="thought")
+                        rpm_w = BaseAgent._rpm_windows.get(model_name, deque())
+                        rpm_count = sum(1 for t in rpm_w if t > time.time() - 60)
+                        rpm_limits = getattr(Config, 'CLOUD_RPM_LIMITS', {})
+                        rpm_limit = rpm_limits.get(model_name, getattr(Config, 'CLOUD_RPM_DEFAULT', 30))
+                        self.log_thought(f"🚀 Escalade Cloud : {model_name.split('/')[-1]} ({rpm_count}/{rpm_limit} RPM)...", type="thought")
                         loop = asyncio.get_running_loop()
                         response = await loop.run_in_executor(None, client.generate_content, full_prompt)
-                        BaseAgent._cloud_call_count += 1
-                        BaseAgent._daily_cloud_calls += 1
+                        BaseAgent._record_cloud_call(model_name)
                         if is_evolution:
                             BaseAgent._daily_cloud_calls_evolution += 1
                         if response.text:
@@ -388,17 +537,19 @@ class BaseAgent:
                             # Si succès Cloud sur tâche complexe, on apprend
                             if len(cloud_response) > 50:
                                 self.remember(f"Q: {prompt}\nA: {cloud_response}", metadata={"source": used_model, "trigger": "cloud_escalation"})
-                            return self._strip_cot(cloud_response)
+                            return self._sanitize_response(self._strip_cot(cloud_response), self.name)
                     except Exception as e:
                         # Détecter les erreurs 429 (quota exceeded)
                         err_str = str(e)
                         if "429" in err_str or "quota" in err_str.lower() or "exceeded" in err_str.lower():
-                            BaseAgent._cloud_cooldown_until = now + BaseAgent.CLOUD_COOLDOWN_SECONDS
+                            BaseAgent._activate_cloud_cooldown()
+                            remaining = int(BaseAgent._cloud_cooldown_until - time.time())
                             self.log_thought(
-                                f"🚫 Quota Gemini épuisé (429) — cooldown {BaseAgent.CLOUD_COOLDOWN_SECONDS}s activé",
+                                f"🚫 Quota Gemini épuisé (429 x{BaseAgent._cloud_429_count_today}) "
+                                f"— cooldown {remaining}s activé",
                                 type="warning"
                             )
-                            break  # Stop la cascade, pas la peine d'essayer les autres modèles
+                            break  # Stop la cascade
                         continue
 
                 # Si le Cloud échoue, fallback sur le Local
@@ -410,59 +561,106 @@ class BaseAgent:
 
         # Exécution Locale (avec streaming temps réel)
         result = await self._call_ollama_stream(full_prompt, local_model)
-        return self._strip_cot(result)
+        return self._sanitize_response(self._strip_cot(result), self.name)
+
+    @classmethod
+    def _activate_cloud_cooldown(cls):
+        """Active le cooldown Cloud avec escalade (Tier 1 plus tolérant).
+        - 1er 429 du jour : cooldown 15 min
+        - 2e 429 : cooldown 1h
+        - 3e+ 429 : cooldown 4h
+        """
+        from datetime import date
+        today = date.today()
+
+        # Reset compteur si nouveau jour
+        if cls._cloud_429_reset_day != today:
+            cls._cloud_429_count_today = 0
+            cls._cloud_429_reset_day = today
+
+        cls._cloud_429_count_today += 1
+        now = time.time()
+
+        if cls._cloud_429_count_today >= 3:
+            # 3e+ 429 : cooldown 4h
+            cls._cloud_cooldown_until = now + 4 * 3600
+            logger.warning(f"[CLOUD] 429 x{cls._cloud_429_count_today} — cooldown 4h")
+        elif cls._cloud_429_count_today == 2:
+            # 2e 429 : cooldown 1h
+            cls._cloud_cooldown_until = now + 3600
+            logger.warning(f"[CLOUD] 429 x2 — cooldown 1h")
+        else:
+            # 1er 429 : cooldown 15 min (Tier 1)
+            cls._cloud_cooldown_until = now + cls.CLOUD_COOLDOWN_SECONDS
+            logger.warning(f"[CLOUD] 429 x1 — cooldown {cls.CLOUD_COOLDOWN_SECONDS}s")
+
+    @classmethod
+    def _get_ollama_semaphore(cls):
+        """Initialisation lazy du sémaphore. Recréé si l'event loop a changé."""
+        try:
+            loop_id = id(asyncio.get_running_loop())
+        except RuntimeError:
+            return asyncio.Semaphore(cls.MAX_CONCURRENT_OLLAMA)
+        if cls._ollama_semaphore is None or cls._ollama_loop_id != loop_id:
+            cls._ollama_semaphore = asyncio.Semaphore(cls.MAX_CONCURRENT_OLLAMA)
+            cls._ollama_loop_id = loop_id
+        return cls._ollama_semaphore
 
     async def _call_ollama(self, prompt: str, model: str) -> str:
         try:
-            url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
-            payload = { "model": model, "prompt": prompt, "stream": False, "options": { "temperature": 0.7, "num_ctx": 4096 } }
-            async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=payload, timeout=300)
-            if response.status_code == 200: return response.json().get("response", "Ollama vide.")
-            else: return f"Erreur OLLAMA: {response.status_code}"
-        except Exception as e: return "ÉCHEC TOTAL SYSTÈME."
+            async with self._get_ollama_semaphore():
+                url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
+                payload = { "model": model, "prompt": prompt, "stream": False, "options": { "temperature": 0.7, "num_ctx": 4096 } }
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(url, json=payload, timeout=300)
+                if response.status_code == 200: return response.json().get("response", "Ollama vide.")
+                else: return f"Erreur OLLAMA: {response.status_code}"
+        except Exception as e:
+            logger.error(f"[{self.name}] _call_ollama({model}) échoué: {e}")
+            return "ÉCHEC TOTAL SYSTÈME."
 
     async def _call_ollama_stream(self, prompt: str, model: str) -> str:
         """Appel Ollama en streaming avec publication temps réel sur le bus."""
         stream_id = str(uuid.uuid4())[:8]
         full_text = ""
         try:
-            url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
-            payload = { "model": model, "prompt": prompt, "stream": True, "options": { "temperature": 0.7, "num_ctx": 4096 } }
+            async with self._get_ollama_semaphore():
+                url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
+                payload = { "model": model, "prompt": prompt, "stream": True, "options": { "temperature": 0.7, "num_ctx": 4096 } }
 
-            # Signal de début
-            await bus.publish("AGENT_STREAM", {
-                "agent": self.name, "stream_id": stream_id,
-                "chunk": "", "done": False, "status": "start"
-            })
+                # Signal de début
+                await bus.publish("AGENT_STREAM", {
+                    "agent": self.name, "stream_id": stream_id,
+                    "chunk": "", "done": False, "status": "start"
+                })
 
-            async with httpx.AsyncClient() as client:
-                async with client.stream("POST", url, json=payload, timeout=300) as response:
-                    if response.status_code != 200:
-                        await bus.publish("AGENT_STREAM", {
-                            "agent": self.name, "stream_id": stream_id,
-                            "chunk": "", "done": True, "status": "end"
-                        })
-                        return f"Erreur OLLAMA: {response.status_code}"
-
-                    async for line in response.aiter_lines():
-                        if not line.strip():
-                            continue
-                        try:
-                            data = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        token = data.get("response", "")
-                        if token:
-                            full_text += token
+                async with httpx.AsyncClient() as client:
+                    async with client.stream("POST", url, json=payload, timeout=300) as response:
+                        if response.status_code != 200:
                             await bus.publish("AGENT_STREAM", {
                                 "agent": self.name, "stream_id": stream_id,
-                                "chunk": token, "done": False
+                                "chunk": "", "done": True, "status": "end"
                             })
-                        if data.get("done", False):
-                            break
+                            return f"Erreur OLLAMA: {response.status_code}"
 
-            # Signal de fin
+                        async for line in response.aiter_lines():
+                            if not line.strip():
+                                continue
+                            try:
+                                data = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            token = data.get("response", "")
+                            if token:
+                                full_text += token
+                                await bus.publish("AGENT_STREAM", {
+                                    "agent": self.name, "stream_id": stream_id,
+                                    "chunk": token, "done": False
+                                })
+                            if data.get("done", False):
+                                break
+
+            # Signal de fin (hors sémaphore — libère le slot dès la fin du streaming)
             await bus.publish("AGENT_STREAM", {
                 "agent": self.name, "stream_id": stream_id,
                 "chunk": "", "done": True, "status": "end"
@@ -494,6 +692,50 @@ class BaseAgent:
         r')',
         re.IGNORECASE,
     )
+
+    # --- Regex anti-patterns dangereux dans les réponses agents ---
+    _DANGEROUS_PATTERNS = re.compile(
+        r'(?:'
+        r'(?:^|\s)eval\s*\('                          # eval(...)
+        r'|(?:^|\s)exec\s*\('                          # exec(...)
+        r'|(?:^|\s)compile\s*\('                        # compile(...)
+        r'|subprocess\.(?:call|run|Popen|check_output)' # subprocess.*
+        r'|os\.(?:system|popen|exec[lv]?[pe]?)\s*\('   # os.system/popen/exec*
+        r'|__import__\s*\('                             # __import__(...)
+        r'|cmd\s*/c\s'                                  # cmd /c ...
+        r'|powershell\s+-[eE](?:nc)?\s'                 # powershell -enc/-e (encoded)
+        r'|base64\.(?:b64decode|decodebytes)\s*\('      # base64 decode
+        r'|rm\s+-rf\s+/'                                # rm -rf /
+        r'|shutil\.rmtree\s*\(\s*["\'/]'               # shutil.rmtree("/...")
+        r'|setuid\s*\(0\)'                              # setuid(0)
+        r'|chmod\s+[0-7]*777'                           # chmod 777
+        r')',
+        re.MULTILINE
+    )
+
+    @classmethod
+    def _sanitize_response(cls, text: str, agent_name: str = "") -> str:
+        """Détecte et neutralise les patterns dangereux dans les réponses agents.
+        Retourne le texte nettoyé + log un warning si des patterns sont trouvés."""
+        if not text:
+            return text
+        matches = cls._DANGEROUS_PATTERNS.findall(text)
+        if matches:
+            unique = list(set(m.strip() for m in matches))
+            logger.warning(
+                f"[{agent_name}] ANTI-PATTERN: {len(unique)} pattern(s) dangereux détecté(s): "
+                f"{', '.join(unique[:5])}"
+            )
+            # Neutraliser : commenter les lignes contenant les patterns
+            lines = text.split('\n')
+            sanitized = []
+            for line in lines:
+                if cls._DANGEROUS_PATTERNS.search(line):
+                    sanitized.append(f"# [NEUTRALISÉ] {line}")
+                else:
+                    sanitized.append(line)
+            return '\n'.join(sanitized)
+        return text
 
     @classmethod
     def _strip_cot(cls, text: str) -> str:

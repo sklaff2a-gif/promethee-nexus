@@ -222,13 +222,20 @@ class TestAntiSterileLoop:
         """VALIDÉ + code Python → ROUTAGE_FORMATTER_OK."""
         architect = DivineArchitect()
         code_context = "import os\nfrom typing import Dict\ndef process():\n    return True"
-        with patch.object(architect, "generate_content", new_callable=AsyncMock,
-                          return_value="VALIDÉ — Code propre"), \
+
+        async def _gen_valide(_prompt):
+            return "VALIDÉ — Code propre"
+
+        def _close_coro(coro):
+            coro.close()
+            return MagicMock()
+
+        with patch.object(architect, "generate_content", _gen_valide), \
              patch.object(architect, "recall", return_value=""), \
              patch.object(architect, "log_thought"), \
              patch("core.orchestrator.orchestrator") as mock_orch, \
              patch("asyncio.get_running_loop") as mock_loop:
-            mock_loop.return_value.create_task = MagicMock()
+            mock_loop.return_value.create_task = _close_coro
             mock_orch.dispatch_task = AsyncMock()
             result = await architect.process_task({
                 "mission": "Valide ce code.",
@@ -244,12 +251,23 @@ class TestAntiSterileLoop:
 class TestAutonomousOverrideGuard:
     """ADMIN_OVERRIDE doit être ignoré en mode autonome."""
 
+    @staticmethod
+    async def _gen_refused_medium(_prompt):
+        return "REFUSÉ — Risque moyen"
+
+    @staticmethod
+    async def _gen_refused_suspect(_prompt):
+        return "REFUSÉ — Code suspect"
+
+    @staticmethod
+    async def _gen_refused_inconnu(_prompt):
+        return "REFUSÉ — Risque inconnu"
+
     @pytest.mark.asyncio
     async def test_override_ignored_with_protocole_autonomie(self):
         """ADMIN_OVERRIDE + PROTOCOLE_AUTONOMIE → override ignoré."""
         architect = DivineArchitect()
-        with patch.object(architect, "generate_content", new_callable=AsyncMock,
-                          return_value="REFUSÉ — Risque moyen"), \
+        with patch.object(architect, "generate_content", self._gen_refused_medium), \
              patch.object(architect, "recall", return_value=""), \
              patch.object(architect, "log_thought"):
             result = await architect.process_task({
@@ -260,12 +278,10 @@ class TestAutonomousOverrideGuard:
         assert result["status"] == "error"
 
     @pytest.mark.asyncio
-    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
     async def test_override_ignored_with_evolution_pipeline(self):
         """ADMIN_OVERRIDE + EVOLUTION_PIPELINE → override ignoré."""
         architect = DivineArchitect()
-        with patch.object(architect, "generate_content", new_callable=AsyncMock,
-                          return_value="REFUSÉ — Code suspect"), \
+        with patch.object(architect, "generate_content", self._gen_refused_suspect), \
              patch.object(architect, "recall", return_value=""), \
              patch.object(architect, "log_thought"):
             result = await architect.process_task({
@@ -275,17 +291,21 @@ class TestAutonomousOverrideGuard:
         assert result["status"] == "error"
 
     @pytest.mark.asyncio
-    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
     async def test_override_works_from_user_command(self):
         """ADMIN_OVERRIDE sans marqueur autonome → override fonctionne."""
         architect = DivineArchitect()
-        with patch.object(architect, "generate_content", new_callable=AsyncMock,
-                          return_value="REFUSÉ — Risque inconnu"), \
+
+        def _close_coro(coro):
+            """Ferme proprement la coroutine pour eviter le warning 'never awaited'."""
+            coro.close()
+            return MagicMock()
+
+        with patch.object(architect, "generate_content", self._gen_refused_inconnu), \
              patch.object(architect, "recall", return_value=""), \
              patch.object(architect, "log_thought"), \
              patch("core.orchestrator.orchestrator") as mock_orch, \
              patch("asyncio.get_running_loop") as mock_loop:
-            mock_loop.return_value.create_task = MagicMock()
+            mock_loop.return_value.create_task = _close_coro
             mock_orch.dispatch_task = AsyncMock()
             result = await architect.process_task({
                 "mission": "ADMIN_OVERRIDE: Deploy ce code maintenant.",

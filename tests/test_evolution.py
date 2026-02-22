@@ -1,27 +1,37 @@
 import os
 import tempfile
 import pytest
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch, MagicMock
 from Agents.evolution_agent import (
     DivineEvolution, _is_spec_offtopic, _spec_targets_existing_file,
     _detect_alien_imports, _SEARCH_QUERIES, _SPEC_OFFTOPIC_THRESHOLD
 )
 from core.evolution_catalog import EvolutionCatalog, ImprovementSpec
+from core.experience_registry import ExperienceRegistry
 
 _FAKE_STATE_FILE = os.path.join(tempfile.gettempdir(), "test_evolution_state.json")
+_FAKE_REGISTRY_FILE = os.path.join(tempfile.gettempdir(), "test_evo_registry.json")
 
 
 @pytest.fixture(autouse=True)
 def isolate_catalog():
-    """Isole le catalogue entre chaque test."""
+    """Isole le catalogue et le registre d'expériences entre chaque test."""
     if os.path.exists(_FAKE_STATE_FILE):
         os.remove(_FAKE_STATE_FILE)
-    with patch("core.evolution_catalog.CATALOG_STATE_FILE", _FAKE_STATE_FILE):
+    if os.path.exists(_FAKE_REGISTRY_FILE):
+        os.remove(_FAKE_REGISTRY_FILE)
+    with patch("core.evolution_catalog.CATALOG_STATE_FILE", _FAKE_STATE_FILE), \
+         patch("core.experience_registry.REGISTRY_FILE", _FAKE_REGISTRY_FILE):
         EvolutionCatalog.reset_singleton()
+        ExperienceRegistry.reset_singleton()
         yield
         EvolutionCatalog.reset_singleton()
+        ExperienceRegistry.reset_singleton()
     if os.path.exists(_FAKE_STATE_FILE):
         os.remove(_FAKE_STATE_FILE)
+    if os.path.exists(_FAKE_REGISTRY_FILE):
+        os.remove(_FAKE_REGISTRY_FILE)
 
 
 class TestSpecOfftopic:
@@ -207,7 +217,7 @@ class TestCatalogPipelineV6:
     @pytest.fixture(autouse=True)
     def disable_protected_files_guard(self):
         """Désactive le guard fichiers protégés (testé dans TestProtectedFilesGuard)."""
-        with patch("Agents.factory_agent._PROTECTED_FILES", set()):
+        with patch("Agents.factory_agent._CRITICAL_FILES", set()):
             yield
 
     @pytest.mark.asyncio
@@ -314,7 +324,8 @@ class TestCatalogPipelineV6:
 
     @pytest.mark.asyncio
     async def test_catalog_pipeline_deployed_marks_catalog(self):
-        """Si l'Architecte valide, la spec est marquée deployed dans le catalogue."""
+        """Si l'Architecte valide, la spec est marquée pending_deploy (pas deployed)
+        car le déploiement réel est confirmé par ARTIFACT_CREATED de la Factory."""
         evo = DivineEvolution()
         cat = EvolutionCatalog()
 
@@ -334,8 +345,8 @@ class TestCatalogPipelineV6:
             result = await evo.process_task({"mission": "[MODE VEILLE]"})
 
         assert "CYCLE CATALOG V6" in result["result"]
-        deployed = cat.get_specs_by_status("deployed")
-        assert len(deployed) >= 1
+        pending = cat.get_specs_by_status("pending_deploy")
+        assert len(pending) >= 1
 
     @pytest.mark.asyncio
     async def test_catalog_pipeline_architect_rejects(self):
@@ -526,7 +537,7 @@ class TestGeminiCodeGeneration:
     @pytest.fixture(autouse=True)
     def disable_protected_files_guard(self):
         """Désactive le guard fichiers protégés (testé dans TestProtectedFilesGuard)."""
-        with patch("Agents.factory_agent._PROTECTED_FILES", set()):
+        with patch("Agents.factory_agent._CRITICAL_FILES", set()):
             yield
 
     @pytest.mark.asyncio
@@ -583,20 +594,20 @@ class TestGeminiCodeGeneration:
 # --- Tests fichiers protégés (Fix Evolution→Factory) ---
 
 class TestProtectedFilesGuard:
-    """Vérifie que l'Evolution refuse les specs ciblant des fichiers protégés."""
+    """Vérifie que l'Evolution refuse les specs ciblant des fichiers critiques
+    mais autorise celles ciblant des fichiers supervisés."""
 
     @pytest.mark.asyncio
-    async def test_protected_file_skipped(self):
-        """Une spec ciblant core/router.py (protégé) est rejetée avant Phase 3."""
+    async def test_critical_file_skipped(self):
+        """Une spec ciblant core/orchestrator.py (critique) est rejetée avant Phase 3."""
         evo = DivineEvolution()
 
-        # Créer une spec ciblant un fichier protégé
         catalog = EvolutionCatalog()
         spec = ImprovementSpec(
-            id="TEST-PROT", name="Cache Router", description="test",
-            category="performance", target_file="core/router.py",
-            target_method="classify_intent", difficulty=3,
-            code_template="# cache", validation="test", status="available",
+            id="TEST-CRIT", name="Refactor Orch", description="test",
+            category="performance", target_file="core/orchestrator.py",
+            target_method="dispatch_task", difficulty=3,
+            code_template="# code", validation="test", status="available",
         )
         catalog.specs[spec.id] = spec
 
@@ -604,7 +615,37 @@ class TestProtectedFilesGuard:
              patch.object(evo, "_read_target_file", return_value="# code existant\npass"):
             result = await evo.process_task({"mission": "[MODE VEILLE]"})
 
-        assert "protégé" in result.get("result", "").lower() or "warning" in result.get("status", "")
+        assert "critique" in result.get("result", "").lower() or "warning" in result.get("status", "")
+
+    @pytest.mark.asyncio
+    async def test_supervised_file_proceeds(self):
+        """Une spec ciblant core/router.py (supervisé, plus critique) passe normalement."""
+        evo = DivineEvolution()
+
+        catalog = EvolutionCatalog()
+        catalog.specs.clear()
+        spec = ImprovementSpec(
+            id="TEST-SUP", name="Cache Router", description="test",
+            category="performance", target_file="core/router.py",
+            target_method="classify_intent", difficulty=3,
+            code_template="# cache", validation="test", status="available",
+        )
+        catalog.specs[spec.id] = spec
+
+        valid_code = "import os\nimport sys\nprint('hello world minimum chars padded')"
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={
+            "result": "VALIDÉ", "status": "success"
+        })
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value="# existing code\npass"), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=valid_code), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # La spec a été traitée (pas de rejet fichier critique)
+        assert "critique" not in result.get("result", "").lower()
 
     @pytest.mark.asyncio
     async def test_non_protected_file_proceeds(self):
@@ -612,7 +653,6 @@ class TestProtectedFilesGuard:
         evo = DivineEvolution()
 
         catalog = EvolutionCatalog()
-        # Nettoyer toutes les specs par défaut et n'en garder qu'une non-protégée
         catalog.specs.clear()
         spec = ImprovementSpec(
             id="TEST-OK", name="Amélioration custom", description="test",
@@ -634,8 +674,7 @@ class TestProtectedFilesGuard:
              patch("core.orchestrator.orchestrator", mock_orch):
             result = await evo.process_task({"mission": "[MODE VEILLE]"})
 
-        # La spec a été traitée (pas de rejet fichier protégé)
-        assert "protégé" not in result.get("result", "").lower()
+        assert "critique" not in result.get("result", "").lower()
 
 
 class TestDetectAlienImports:
@@ -695,7 +734,7 @@ class TestAntiHallucinationCatalogPipeline:
 
     @pytest.fixture(autouse=True)
     def disable_protected_files_guard(self):
-        with patch("Agents.factory_agent._PROTECTED_FILES", set()):
+        with patch("Agents.factory_agent._CRITICAL_FILES", set()):
             yield
 
     @pytest.mark.asyncio
@@ -795,3 +834,304 @@ class TestAntiHallucinationCatalogPipeline:
         cat = EvolutionCatalog()
         deployed = cat.get_specs_by_status("deployed")
         assert len(deployed) == 0
+
+
+class TestAntiTruncation:
+    """Vérifie que l'Evolution détecte le code tronqué avant soumission à l'Architecte."""
+
+    @pytest.fixture(autouse=True)
+    def disable_protected_files_guard(self):
+        with patch("Agents.factory_agent._CRITICAL_FILES", set()):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_truncated_code_rejected(self):
+        """Un code généré < 60% du source original est rejeté (Phase 4d)."""
+        evo = DivineEvolution()
+
+        # Source original : ~1200 chars
+        original_source = "import os\nimport sys\nimport logging\n" + "def func_x():\n    pass\n" * 50
+
+        # Code généré : ~200 chars (~17% du source → bien < 60%)
+        truncated_code = (
+            "import os\nimport sys\nimport logging\n\n"
+            "def hello():\n    return 42\n\n"
+            "def world():\n    return 'hello world from truncated code'\n\n"
+            "# fin du fichier tronqué\n"
+        )
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=original_source), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=truncated_code), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # L'Architecte ne doit PAS avoir été appelé
+        architect_calls = [c for c in mock_orch.dispatch_task.call_args_list if c[0][0] == "architect"]
+        assert len(architect_calls) == 0
+        assert "troncature" in result["result"].lower()
+
+    @pytest.mark.asyncio
+    async def test_full_code_passes_truncation_check(self):
+        """Un code généré >= 60% du source passe le check anti-troncature."""
+        evo = DivineEvolution()
+
+        original_source = "import os\ndef old_func():\n    return 1\n" * 3  # ~120 chars
+
+        # Code généré : même taille avec les améliorations
+        new_code = "import os\nimport asyncio\ndef new_func():\n    return 42\n" * 3
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
+        mock_orch._contains_python_code = MagicMock(return_value=True)
+
+        mock_bus = MagicMock()
+        mock_bus.publish = AsyncMock()
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=original_source), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=new_code), \
+             patch("core.orchestrator.orchestrator", mock_orch), \
+             patch("core.event_bus.bus.bus", mock_bus):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # L'Architecte DOIT avoir été appelé
+        architect_calls = [c for c in mock_orch.dispatch_task.call_args_list if c[0][0] == "architect"]
+        assert len(architect_calls) == 1
+
+
+class TestPendingDeployPipeline:
+    """Le pipeline V6 doit marquer pending_deploy (pas deployed) — Fix run 2026-02-18."""
+
+    @pytest.fixture(autouse=True)
+    def isolate_catalog(self, tmp_path):
+        _state_file = str(tmp_path / "test_catalog.json")
+        _reg_file = str(tmp_path / "test_registry.json")
+        with patch("core.evolution_catalog.CATALOG_STATE_FILE", _state_file), \
+             patch("core.experience_registry.REGISTRY_FILE", _reg_file):
+            EvolutionCatalog.reset_singleton()
+            ExperienceRegistry.reset_singleton()
+            yield
+            EvolutionCatalog.reset_singleton()
+            ExperienceRegistry.reset_singleton()
+
+    @pytest.mark.asyncio
+    async def test_pipeline_marks_pending_deploy_not_deployed(self):
+        """Après validation Architect, la spec est pending_deploy (pas deployed)."""
+        from core.evolution_catalog import EvolutionCatalog
+        cat = EvolutionCatalog()
+
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            from Agents.evolution_agent import DivineEvolution
+            evo = DivineEvolution()
+
+        # Le code généré doit être assez long pour passer l'anti-troncature (>60% du source)
+        original_source = "import os\ndef hello():\n    return 42\n"
+        valid_code = (
+            "import os\nimport logging\n\nlogger = logging.getLogger('test')\n\n"
+            "def hello():\n    return 42\n\nclass Helper:\n    pass\n"
+        )
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
+        mock_orch._contains_python_code = MagicMock(return_value=True)
+
+        mock_bus = MagicMock()
+        mock_bus.publish = AsyncMock()
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=original_source), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=valid_code), \
+             patch("core.orchestrator.orchestrator", mock_orch), \
+             patch("core.event_bus.bus.bus", mock_bus):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        assert "CYCLE CATALOG V6" in result["result"]
+        # Au moins une spec doit être en pending_deploy (pas deployed)
+        pending = cat.get_specs_by_status("pending_deploy")
+        deployed = cat.get_specs_by_status("deployed")
+        assert len(pending) >= 1, f"Aucune spec en pending_deploy. Deployed: {len(deployed)}"
+        assert len(deployed) == 0, "Aucune spec ne devrait être deployed directement"
+
+
+class TestCouncilSpecCuration:
+    """Tests de la curation automatique des specs COUNCIL."""
+
+    def _make_council_spec(self, catalog, spec_id="COUNCIL-99999", **kwargs):
+        """Helper pour créer une spec COUNCIL de test."""
+        defaults = dict(
+            name="Council: Test",
+            description="Issu d'un consensus Council. Amélioration significative du système pour optimiser les performances globales.",
+            category="intelligence",
+            target_file="core/router.py",
+            target_method="classify_intent",
+            difficulty=2,
+            code_template="import logging\n\ndef council_improvement():\n    logger = logging.getLogger('test')\n    logger.info('improvement')\n    return True\n",
+            validation="Vérifier que l'amélioration fonctionne.",
+            tags=["council", "consensus"],
+            status="available",
+            last_attempt=datetime.now().isoformat(),
+        )
+        defaults.update(kwargs)
+        spec = ImprovementSpec(id=spec_id, **defaults)
+        catalog.specs[spec_id] = spec
+        return spec
+
+    def test_mark_rejected_sets_status(self):
+        """mark_rejected met le statut à 'rejected' et ajoute la raison."""
+        cat = EvolutionCatalog()
+        self._make_council_spec(cat, "COUNCIL-10001")
+
+        cat.mark_rejected("COUNCIL-10001", "test_raison")
+
+        spec = cat.get_spec("COUNCIL-10001")
+        assert spec.status == "rejected"
+        assert any("[CURATION] test_raison" in r for r in spec.failure_reasons)
+
+    def test_curate_removes_old_specs(self):
+        """Une spec > 48h est rejetée."""
+        cat = EvolutionCatalog()
+        old_time = (datetime.now() - timedelta(hours=50)).isoformat()
+        self._make_council_spec(cat, "COUNCIL-20001", last_attempt=old_time)
+
+        purged = cat.curate_council_specs()
+        assert purged == 1
+        assert cat.get_spec("COUNCIL-20001").status == "rejected"
+
+    def test_curate_removes_missing_file(self):
+        """Une spec ciblant un fichier inexistant est rejetée."""
+        cat = EvolutionCatalog()
+        self._make_council_spec(
+            cat, "COUNCIL-30001",
+            target_file="core/fichier_qui_nexiste_pas.py",
+        )
+
+        purged = cat.curate_council_specs()
+        assert purged == 1
+        assert cat.get_spec("COUNCIL-30001").status == "rejected"
+        assert "fichier_inexistant" in cat.get_spec("COUNCIL-30001").failure_reasons[-1]
+
+    def test_curate_removes_short_description(self):
+        """Une spec avec description < 50 chars est rejetée."""
+        cat = EvolutionCatalog()
+        self._make_council_spec(
+            cat, "COUNCIL-40001",
+            description="Trop court",
+        )
+
+        purged = cat.curate_council_specs()
+        assert purged == 1
+        assert "description_trop_courte" in cat.get_spec("COUNCIL-40001").failure_reasons[-1]
+
+    def test_curate_removes_duplicate(self):
+        """Une spec avec même target_file+method qu'une built-in est rejetée."""
+        cat = EvolutionCatalog()
+        # PERF-001 cible core/router.py:classify_intent — créer un doublon
+        self._make_council_spec(
+            cat, "COUNCIL-50001",
+            target_file="core/router.py",
+            target_method="classify_intent",
+        )
+
+        purged = cat.curate_council_specs()
+        assert purged == 1
+        assert "doublon" in cat.get_spec("COUNCIL-50001").failure_reasons[-1]
+
+    def test_curate_removes_boilerplate(self):
+        """Une spec avec code_template boilerplate (que comments+pass) est rejetée."""
+        cat = EvolutionCatalog()
+        self._make_council_spec(
+            cat, "COUNCIL-60001",
+            code_template="# Amélioration issue du consensus\n# Actions:\npass\n",
+            target_file="core/psyche.py",
+            target_method="unique_method_boilerplate_test",
+        )
+
+        purged = cat.curate_council_specs()
+        assert purged == 1
+        assert "boilerplate" in cat.get_spec("COUNCIL-60001").failure_reasons[-1]
+
+    def test_curate_keeps_valid_spec(self):
+        """Une spec valide (fichier existant, desc longue, récente, pas doublon, code réel) est conservée."""
+        cat = EvolutionCatalog()
+        self._make_council_spec(
+            cat, "COUNCIL-70001",
+            target_file="core/psyche.py",
+            target_method="unique_valid_method_test",
+        )
+
+        purged = cat.curate_council_specs()
+        assert purged == 0
+        assert cat.get_spec("COUNCIL-70001").status == "available"
+
+    def test_curate_returns_purged_count(self):
+        """curate_council_specs retourne le bon nombre de specs purgées."""
+        cat = EvolutionCatalog()
+        old_time = (datetime.now() - timedelta(hours=72)).isoformat()
+        self._make_council_spec(cat, "COUNCIL-80001", last_attempt=old_time,
+                                target_file="core/psyche.py", target_method="unique_count_m1")
+        self._make_council_spec(cat, "COUNCIL-80002", last_attempt=old_time,
+                                target_file="core/psyche.py", target_method="unique_count_m2")
+        self._make_council_spec(
+            cat, "COUNCIL-80003",
+            target_file="core/psyche.py",
+            target_method="unique_count_m3",
+        )
+
+        purged = cat.curate_council_specs()
+        assert purged == 2  # 2 périmées, 1 valide
+        assert cat.get_spec("COUNCIL-80003").status == "available"
+
+    @pytest.mark.asyncio
+    async def test_guard_calls_curation_before_skip(self):
+        """Le guard dans _execute_council_debate purge les vieilles specs et débloque le débat."""
+        from core.autonomy_engine import AutonomyEngine
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine.error_streak = 0
+        engine.daily_count = 0
+        engine.routine_history = []
+        engine._current_council_subject = ""
+
+        cat = EvolutionCatalog()
+        old_time = (datetime.now() - timedelta(hours=72)).isoformat()
+        # Créer 4 specs COUNCIL périmées (>48h)
+        for i in range(4):
+            self._make_council_spec(
+                cat, f"COUNCIL-9000{i}", last_attempt=old_time,
+                target_file="core/psyche.py", target_method=f"guard_test_m{i}",
+            )
+
+        # Vérifier qu'il y a bien 4 specs available avant
+        pending_before = [s for s in cat.specs.values()
+                          if s.id.startswith("COUNCIL-") and s.status == "available"]
+        assert len(pending_before) == 4
+
+        # Appeler _execute_council_debate — le guard devrait curéer et débloquer
+        # (on mocke psyche et council pour ne pas exécuter le débat complet)
+        with patch("core.psyche.psyche") as mock_psyche:
+            mock_psyche.get_debate_index.return_value = 0
+            mock_psyche.select_council_topic.return_value = {
+                "participants": ["strategist", "coder"],
+                "mission": "Test curation",
+                "needs_research": False, "research_query": None,
+                "subject_key": "test_curation",
+            }
+            with patch("core.council.Council") as mock_council_cls:
+                mock_council = MagicMock()
+                mock_council.run = AsyncMock(return_value={
+                    "status": "no_consensus", "rounds_used": 1,
+                    "transcript": [], "final_summary": "",
+                    "result": "",
+                })
+                mock_council_cls.return_value = mock_council
+                result = await engine._execute_council_debate()
+
+        # Vérifier que les 4 specs ont été purgées
+        pending_after = [s for s in cat.specs.values()
+                         if s.id.startswith("COUNCIL-") and s.status == "available"]
+        assert len(pending_after) == 0
+        # Le résultat ne devrait PAS être "skipped" car la curation a débloqué
+        assert result.get("reason") != "council_specs_saturated"

@@ -27,8 +27,22 @@ _log_formatter = logging.Formatter(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 
+
+class _SafeTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
+    """Sous-classe qui catch PermissionError dans doRollover().
+    Sur Windows, _TeeStream tient un handle sur le fichier log,
+    ce qui empêche la rotation. On skip et on retente au prochain emit."""
+
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except PermissionError:
+            # Le fichier est verrouillé (probablement par _TeeStream) — on skip la rotation
+            pass
+
+
 # FileHandler rotatif : 1 fichier par jour, garde 14 jours
-_file_handler = logging.handlers.TimedRotatingFileHandler(
+_file_handler = _SafeTimedRotatingFileHandler(
     os.path.join(_LOGS_DIR, "promethee.log"),
     when="midnight", backupCount=14, encoding="utf-8"
 )
@@ -50,7 +64,11 @@ class _TeeStream:
         self.log_handler = log_handler
 
     def write(self, text):
-        self.original.write(text)
+        try:
+            self.original.write(text)
+        except UnicodeEncodeError:
+            # Fallback: encode with errors='replace' for problematic characters
+            self.original.write(text.encode('utf-8', errors='replace').decode('utf-8', errors='replace'))
         if text.strip():
             record = logging.LogRecord(
                 name="stdout", level=logging.INFO, pathname="", lineno=0,
@@ -77,6 +95,7 @@ from core.psyche import psyche
 from core.strategic_journal import journal as strat_journal
 from core.self_awareness import awareness
 from core.objectives_engine import objectives as objectives_engine, MAX_ACTIVE_OBJECTIVES
+from core.desire_engine import desires
 from core import talk_logger
 from core import interface_logger
 from core import ci_pipeline
@@ -162,6 +181,14 @@ AGENTS_CONFIG = [
     ("formatter", "DivineFormatter", "formatter_agent"), # <--- AJOUT VITAL : L'Agent Formatter
 ]
 
+async def _on_smart_restart(data: dict):
+    """Smart Restart propre : laisse les opérations en cours finir, puis exit(65)."""
+    filename = data.get("filename", "?")
+    logger.info(f"[SMART RESTART] Programmé suite à modification: {filename}")
+    await asyncio.sleep(3)
+    os._exit(65)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tracemalloc.start()
@@ -198,11 +225,23 @@ async def lifespan(app: FastAPI):
     feedback_loop.init()
     print("   🔄 FEEDBACK: Boucle de feedback Evolution active.")
 
+    # --- PULSIONS PRIMORDIALES ---
+    desires.init()
+    print("   💓 DESIRS: Moteur de pulsions primordiales actif.")
+
+    # --- CORTEX ASSOCIATIF ---
+    from core.synaptic_network import cortex
+    cortex.init()
+    print(f"   🧬 SYNAPSE: Cortex associatif actif "
+          f"({len(cortex.nodes)} noeuds, {len(cortex.synapses)} synapses).")
+
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
-    bus.subscribe("AGENT_TASK_DISPATCH", nervous_system_listener)
 
     # --- CI/CD Pipeline (remplace quality_control_listener) ---
     ci_pipeline.start()
+
+    # --- Smart Restart via bus (propre, pas de sys.exit dans une Task) ---
+    bus.subscribe("SMART_RESTART_REQUESTED", _on_smart_restart)
 
     talk_logger.start()
     interface_logger.start()
@@ -213,14 +252,6 @@ async def lifespan(app: FastAPI):
     interface_logger.stop()
     print("🔌 Arrêt.")
     tracemalloc.stop()
-
-async def nervous_system_listener(event: dict):
-    data = event.get("data", {})
-    target = data.get("target")
-    payload = data.get("payload")
-    if target and payload:
-        print(f"⚡ [NERVOUS SYSTEM] Réflexe déclenché vers -> {target.upper()}")
-        asyncio.create_task(orchestrator.dispatch_task(target, payload))
 
 app = FastAPI(lifespan=lifespan)
 _start_time = time.time()
@@ -257,6 +288,14 @@ async def ready():
     from config import Config
     from core.vector_store import ChromaMemoryManager
 
+    # Kill switch actif → système bloqué, pas prêt
+    if orchestrator.kill_switch_active:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={"ready": False, "reason": "kill_switch_active"},
+        )
+
     checks = {}
 
     # --- Ollama ---
@@ -281,9 +320,15 @@ async def ready():
             checks["chromadb"] = {"status": "error", "detail": "no_instance"}
         else:
             mgr = next(iter(instances.values()))
-            col = mgr._get_collection("collective_wisdom")
-            doc_count = col.count()
-            checks["chromadb"] = {"status": "ok", "project": mgr.project_id, "documents": doc_count}
+            mem_health = mgr.check_health()
+            checks["chromadb"] = {
+                "status": "ok" if mem_health["status"] == "healthy" else "error",
+                "detail": mem_health["status"],
+                "persistent": mem_health.get("persistent", False),
+                "collections": mem_health.get("collections", {}),
+                "probe_ok": mem_health.get("probe_ok", False),
+                "warnings": mem_health.get("warnings", []),
+            }
     except Exception as e:
         checks["chromadb"] = {"status": "error", "detail": str(e)}
 
