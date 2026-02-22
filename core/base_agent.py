@@ -336,21 +336,6 @@ class BaseAgent:
         # 2. Sanitisation anti-patterns dangereux
         response_text = self._sanitize_response(response_text, self.name)
 
-        # 3. 🚨 CORRECTIF UI : On publie la réponse sur le Bus pour l'interface Web 🚨
-        try:
-            # On formate le message pour que le frontend le comprenne
-            ui_payload = {
-                "type": "AGENT_RESPONSE",  # Le mot-clé que le JS écoute
-                "agent": self.name,
-                "content": response_text,
-                "timestamp": str(time.time())
-            }
-            # On l'envoie dans le tuyau
-            await bus.publish("AGENT_RESPONSE", ui_payload)
-            self.log_thought("✅ Réponse envoyée à l'interface.", type="success")
-        except Exception as e:
-            self.log_thought(f"❌ Erreur d'affichage UI : {e}", type="error")
-
         return {"status": "success", "result": response_text}
 
     # Marqueurs de missions internes → toujours local (économie Cloud)
@@ -609,7 +594,9 @@ class BaseAgent:
                     response = await client.post(url, json=payload, timeout=300)
                 if response.status_code == 200: return response.json().get("response", "Ollama vide.")
                 else: return f"Erreur OLLAMA: {response.status_code}"
-        except Exception as e: return "ÉCHEC TOTAL SYSTÈME."
+        except Exception as e:
+            logger.error(f"[{self.name}] _call_ollama({model}) échoué: {e}")
+            return "ÉCHEC TOTAL SYSTÈME."
 
     async def _call_ollama_stream(self, prompt: str, model: str) -> str:
         """Appel Ollama en streaming avec publication temps réel sur le bus."""

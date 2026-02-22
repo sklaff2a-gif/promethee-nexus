@@ -18,7 +18,7 @@ STATE_FILE = os.path.join(
 )
 
 MAX_SNAPSHOTS = 50
-MAX_DAILY_ROUTINES_REF = 80  # Doit correspondre à autonomy_engine.MAX_DAILY_ROUTINES
+from core.autonomy_engine import MAX_DAILY_ROUTINES as MAX_DAILY_ROUTINES_REF
 
 # --- Humeur synthétique (déterministe, premier match gagne) ---
 MOOD_MAP = [

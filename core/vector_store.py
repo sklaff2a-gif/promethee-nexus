@@ -54,7 +54,9 @@ class ChromaMemoryManager:
             self.client = chromadb.EphemeralClient()
 
         # Lock asyncio pour les opérations d'écriture composées (purge, health check)
-        self._lock = asyncio.Lock()
+        # Lazy-init : recréé si l'event loop change (Smart Restart exit 65)
+        self._lock = None
+        self._lock_loop_id = None
 
         # Collections de base (casiers de mémoire)
         self.collections = {
@@ -62,6 +64,17 @@ class ChromaMemoryManager:
             "code_snippets": self.client.get_or_create_collection(name="code_snippets")
         }
         print(f"🧠 [MÉMOIRE] ChromaDB chargé (projet={project_id}) : {list(self.collections.keys())}")
+
+    def _get_lock(self) -> asyncio.Lock:
+        """Lazy-init du lock asyncio. Recréé si l'event loop change (Smart Restart)."""
+        try:
+            loop_id = id(asyncio.get_running_loop())
+        except RuntimeError:
+            return asyncio.Lock()
+        if self._lock is None or self._lock_loop_id != loop_id:
+            self._lock = asyncio.Lock()
+            self._lock_loop_id = loop_id
+        return self._lock
 
     def _get_collection(self, collection_name: str):
         """Retourne la collection, en la créant à la demande si inconnue."""
@@ -264,16 +277,16 @@ class ChromaMemoryManager:
 
     async def async_purge_expired(self, max_age_days: int = 90, collection_name: str = None) -> int:
         """Version async de purge_expired(), protégée par le lock."""
-        async with self._lock:
+        async with self._get_lock():
             return self.purge_expired(max_age_days, collection_name)
 
     async def async_purge_low_quality(self, min_length: int = 100, max_non_latin_ratio: float = 0.10,
                                        collection_name: str = None) -> int:
         """Version async de purge_low_quality(), protégée par le lock."""
-        async with self._lock:
+        async with self._get_lock():
             return self.purge_low_quality(min_length, max_non_latin_ratio, collection_name)
 
     async def async_check_health(self) -> dict:
         """Version async de check_health(), protégée par le lock."""
-        async with self._lock:
+        async with self._get_lock():
             return self.check_health()

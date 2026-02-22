@@ -4,6 +4,7 @@ import os
 import sys
 import json
 import pytest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -36,31 +37,32 @@ class TestSelfAwarenessInit:
         assert engine._subscribed is True
 
 
+@patch("core.self_awareness._has_urgent_desires", return_value=False)
 class TestMoodComputation:
-    """Tests de l'humeur synthétique."""
+    """Tests de l'humeur synthétique (isolé du DesireEngine)."""
 
-    def test_mood_productif(self):
+    def test_mood_productif(self, _mock):
         assert _compute_mood(0.9, {"curiosite": 50}) == "productif"
 
-    def test_mood_fatigue(self):
+    def test_mood_fatigue(self, _mock):
         assert _compute_mood(0.3, {"curiosite": 50}) == "fatigue"
 
-    def test_mood_instable(self):
+    def test_mood_instable(self, _mock):
         assert _compute_mood(0.55, {"survie": 70}) == "instable"
 
-    def test_mood_curieux(self):
+    def test_mood_curieux(self, _mock):
         assert _compute_mood(0.75, {"curiosite": 70, "survie": 50}) == "curieux"
 
-    def test_mood_creatif(self):
+    def test_mood_creatif(self, _mock):
         assert _compute_mood(0.75, {"creativite": 70, "curiosite": 50}) == "créatif"
 
-    def test_mood_prudent(self):
+    def test_mood_prudent(self, _mock):
         assert _compute_mood(0.7, {"survie": 75, "curiosite": 50, "creativite": 50}) == "prudent"
 
-    def test_mood_audacieux(self):
+    def test_mood_audacieux(self, _mock):
         assert _compute_mood(0.65, {"audace": 70, "survie": 50, "curiosite": 50, "creativite": 50}) == "audacieux"
 
-    def test_mood_equilibre_fallback(self):
+    def test_mood_equilibre_fallback(self, _mock):
         assert _compute_mood(0.7, {"curiosite": 50, "creativite": 50, "survie": 50, "audace": 50}) == "équilibré"
 
 

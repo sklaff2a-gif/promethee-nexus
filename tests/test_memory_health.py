@@ -32,7 +32,8 @@ def _make_manager(tmp_path, use_persistent=True):
     mgr = ChromaMemoryManager.__new__(ChromaMemoryManager)
     mgr.project_id = "test"
     mgr.db_path = db_path
-    mgr._lock = asyncio.Lock()
+    mgr._lock = None
+    mgr._lock_loop_id = None
     if use_persistent:
         mgr.client = chromadb.PersistentClient(path=db_path)
     else:
@@ -249,10 +250,14 @@ class TestMemoryAlert:
 class TestAsyncLock:
     """Tests pour les méthodes async lockées de ChromaMemoryManager."""
 
-    def test_lock_exists_on_instance(self, isolate_chroma):
+    def test_lock_lazy_init(self, isolate_chroma):
         mgr = _make_manager(isolate_chroma, use_persistent=True)
-        assert hasattr(mgr, "_lock")
-        assert isinstance(mgr._lock, asyncio.Lock)
+        assert hasattr(mgr, "_get_lock")
+        # Lazy-init : _lock est None avant le premier appel
+        assert mgr._lock is None
+        # Après appel, le lock est créé
+        lock = mgr._get_lock()
+        assert isinstance(lock, asyncio.Lock)
 
     @pytest.mark.asyncio
     async def test_async_purge_expired_returns_int(self, isolate_chroma):

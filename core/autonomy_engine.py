@@ -4,6 +4,7 @@ import random
 import logging
 import json
 import os
+import uuid
 from datetime import date, datetime
 from core.orchestrator import orchestrator
 from core.event_bus.bus import bus
@@ -844,6 +845,7 @@ class AutonomyEngine:
 
         # Reset du flag d'apprentissage pour ce cycle
         self._learning_done_this_cycle = False
+        failure_type = ""
 
         if response and response.get("status") in ("success", "consensus", "max_rounds"):
             # Distinguer consensus réel vs max_rounds (timeout sans accord)
@@ -891,8 +893,7 @@ class AutonomyEngine:
                 await self._trigger_targeted_learning(selected["mission"], agent, intent)
 
         # Loop breaker : si repetition ou error_streak eleve -> consulter le specialiste
-        _lb_failure = locals().get("failure_type", "")
-        if _lb_failure == "repetition" or self.error_streak >= 5:
+        if failure_type == "repetition" or self.error_streak >= 5:
             try:
                 loop_response = await orchestrator.dispatch_task("loop_breaker", {
                     "mission": "AIDE: loop",
@@ -1064,8 +1065,19 @@ class AutonomyEngine:
                 if s.id.startswith("COUNCIL-") and s.status == "available"
             ]
             if len(pending_council) >= 3:
-                logger.info(f"[COUNCIL] {len(pending_council)} specs en attente — débat reporté.")
-                return {"status": "skipped", "reason": "council_specs_saturated"}
+                # Tenter une curation avant de skipper
+                purged = catalog.curate_council_specs()
+                if purged > 0:
+                    # Recompter après curation
+                    pending_council = [
+                        s for s in catalog.specs.values()
+                        if s.id.startswith("COUNCIL-") and s.status == "available"
+                    ]
+                if len(pending_council) >= 3:
+                    logger.info(f"[COUNCIL] {len(pending_council)} specs en attente — débat reporté.")
+                    return {"status": "skipped", "reason": "council_specs_saturated"}
+                else:
+                    logger.info(f"[COUNCIL] Curation: {purged} specs purgées, débat débloqué !")
         except Exception:
             pass  # Catalogue inaccessible — laisser tourner
 
@@ -1547,7 +1559,7 @@ class AutonomyEngine:
 
         # Construire la spec
         mission_short = topic.get("mission", "amélioration")[:80]
-        spec_id = f"COUNCIL-{int(time.time()) % 100000}"
+        spec_id = f"COUNCIL-{int(time.time())}-{uuid.uuid4().hex[:4]}"
 
         # Prendre le premier fichier cible vérifié (pas de fallback générique)
         if not file_mentions:

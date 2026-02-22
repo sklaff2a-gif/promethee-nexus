@@ -33,14 +33,11 @@ class Orchestrator:
         code_patterns = re.findall(r'^(import |from \w+ import|class \w+|def \w+\(|@\w+)', text, re.MULTILINE)
         return len(code_patterns) >= 2
 
-    # Marqueurs de contextes internes → forcer le mode local sur l'agent
-    # DOIT rester synchronisé avec BaseAgent._LOCAL_FORCE_MARKERS
-    _INTERNAL_CONTEXT_MARKERS = (
-        "PROTOCOLE_AUTONOMIE", "[MODE VEILLE]", "YOUTUBE_VEILLE",
-        "DROPZONE_ANALYSIS", "PROTOCOLE_AUTONOMIE_GRIMOIRE",
-        "CONSEIL multi-agents", "EVOLUTION_PIPELINE",
-        "MEMORY_CLEANUP", "COUNCIL_RESEARCH",
-    )
+    # Marqueurs de contextes internes — importé depuis BaseAgent (source unique)
+    @staticmethod
+    def _get_internal_markers():
+        from core.base_agent import BaseAgent
+        return BaseAgent._LOCAL_FORCE_MARKERS
 
     async def dispatch_task(self, target_slug: str, task_payload: Dict[str, Any]):
         if self.kill_switch_active:
@@ -88,7 +85,7 @@ class Orchestrator:
             context = str(task_payload.get("context", ""))
             mission = str(task_payload.get("mission", ""))
             if task_payload.get("force_local", False) or any(
-                m in context or m in mission for m in self._INTERNAL_CONTEXT_MARKERS
+                m in context or m in mission for m in self._get_internal_markers()
             ):
                 if hasattr(agent, "_force_local_next"):
                     agent._force_local_next = True
@@ -147,7 +144,8 @@ class Orchestrator:
                     if self._contains_python_code(code_to_apply):
                         asyncio.create_task(self.dispatch_task("factory", {
                             "mission": "Applique ce code validé par l'Architecte.",
-                            "context": code_to_apply
+                            "context": code_to_apply,
+                            "evolution_spec_id": "BRIDGE_VALIDATED",
                         }))
                     else:
                         logger.warning("⚠️ [BRIDGE] Validation reçue mais aucun code Python structurel trouvé dans le contexte.")

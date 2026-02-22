@@ -1,6 +1,7 @@
 import os
 import tempfile
 import pytest
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch, MagicMock
 from Agents.evolution_agent import (
     DivineEvolution, _is_spec_offtopic, _spec_targets_existing_file,
@@ -954,3 +955,182 @@ class TestPendingDeployPipeline:
         deployed = cat.get_specs_by_status("deployed")
         assert len(pending) >= 1, f"Aucune spec en pending_deploy. Deployed: {len(deployed)}"
         assert len(deployed) == 0, "Aucune spec ne devrait être deployed directement"
+
+
+class TestCouncilSpecCuration:
+    """Tests de la curation automatique des specs COUNCIL."""
+
+    def _make_council_spec(self, catalog, spec_id="COUNCIL-99999", **kwargs):
+        """Helper pour créer une spec COUNCIL de test."""
+        defaults = dict(
+            name="Council: Test",
+            description="Issu d'un consensus Council. Amélioration significative du système pour optimiser les performances globales.",
+            category="intelligence",
+            target_file="core/router.py",
+            target_method="classify_intent",
+            difficulty=2,
+            code_template="import logging\n\ndef council_improvement():\n    logger = logging.getLogger('test')\n    logger.info('improvement')\n    return True\n",
+            validation="Vérifier que l'amélioration fonctionne.",
+            tags=["council", "consensus"],
+            status="available",
+            last_attempt=datetime.now().isoformat(),
+        )
+        defaults.update(kwargs)
+        spec = ImprovementSpec(id=spec_id, **defaults)
+        catalog.specs[spec_id] = spec
+        return spec
+
+    def test_mark_rejected_sets_status(self):
+        """mark_rejected met le statut à 'rejected' et ajoute la raison."""
+        cat = EvolutionCatalog()
+        self._make_council_spec(cat, "COUNCIL-10001")
+
+        cat.mark_rejected("COUNCIL-10001", "test_raison")
+
+        spec = cat.get_spec("COUNCIL-10001")
+        assert spec.status == "rejected"
+        assert any("[CURATION] test_raison" in r for r in spec.failure_reasons)
+
+    def test_curate_removes_old_specs(self):
+        """Une spec > 48h est rejetée."""
+        cat = EvolutionCatalog()
+        old_time = (datetime.now() - timedelta(hours=50)).isoformat()
+        self._make_council_spec(cat, "COUNCIL-20001", last_attempt=old_time)
+
+        purged = cat.curate_council_specs()
+        assert purged == 1
+        assert cat.get_spec("COUNCIL-20001").status == "rejected"
+
+    def test_curate_removes_missing_file(self):
+        """Une spec ciblant un fichier inexistant est rejetée."""
+        cat = EvolutionCatalog()
+        self._make_council_spec(
+            cat, "COUNCIL-30001",
+            target_file="core/fichier_qui_nexiste_pas.py",
+        )
+
+        purged = cat.curate_council_specs()
+        assert purged == 1
+        assert cat.get_spec("COUNCIL-30001").status == "rejected"
+        assert "fichier_inexistant" in cat.get_spec("COUNCIL-30001").failure_reasons[-1]
+
+    def test_curate_removes_short_description(self):
+        """Une spec avec description < 50 chars est rejetée."""
+        cat = EvolutionCatalog()
+        self._make_council_spec(
+            cat, "COUNCIL-40001",
+            description="Trop court",
+        )
+
+        purged = cat.curate_council_specs()
+        assert purged == 1
+        assert "description_trop_courte" in cat.get_spec("COUNCIL-40001").failure_reasons[-1]
+
+    def test_curate_removes_duplicate(self):
+        """Une spec avec même target_file+method qu'une built-in est rejetée."""
+        cat = EvolutionCatalog()
+        # PERF-001 cible core/router.py:classify_intent — créer un doublon
+        self._make_council_spec(
+            cat, "COUNCIL-50001",
+            target_file="core/router.py",
+            target_method="classify_intent",
+        )
+
+        purged = cat.curate_council_specs()
+        assert purged == 1
+        assert "doublon" in cat.get_spec("COUNCIL-50001").failure_reasons[-1]
+
+    def test_curate_removes_boilerplate(self):
+        """Une spec avec code_template boilerplate (que comments+pass) est rejetée."""
+        cat = EvolutionCatalog()
+        self._make_council_spec(
+            cat, "COUNCIL-60001",
+            code_template="# Amélioration issue du consensus\n# Actions:\npass\n",
+            target_file="core/psyche.py",
+            target_method="unique_method_boilerplate_test",
+        )
+
+        purged = cat.curate_council_specs()
+        assert purged == 1
+        assert "boilerplate" in cat.get_spec("COUNCIL-60001").failure_reasons[-1]
+
+    def test_curate_keeps_valid_spec(self):
+        """Une spec valide (fichier existant, desc longue, récente, pas doublon, code réel) est conservée."""
+        cat = EvolutionCatalog()
+        self._make_council_spec(
+            cat, "COUNCIL-70001",
+            target_file="core/psyche.py",
+            target_method="unique_valid_method_test",
+        )
+
+        purged = cat.curate_council_specs()
+        assert purged == 0
+        assert cat.get_spec("COUNCIL-70001").status == "available"
+
+    def test_curate_returns_purged_count(self):
+        """curate_council_specs retourne le bon nombre de specs purgées."""
+        cat = EvolutionCatalog()
+        old_time = (datetime.now() - timedelta(hours=72)).isoformat()
+        self._make_council_spec(cat, "COUNCIL-80001", last_attempt=old_time,
+                                target_file="core/psyche.py", target_method="unique_count_m1")
+        self._make_council_spec(cat, "COUNCIL-80002", last_attempt=old_time,
+                                target_file="core/psyche.py", target_method="unique_count_m2")
+        self._make_council_spec(
+            cat, "COUNCIL-80003",
+            target_file="core/psyche.py",
+            target_method="unique_count_m3",
+        )
+
+        purged = cat.curate_council_specs()
+        assert purged == 2  # 2 périmées, 1 valide
+        assert cat.get_spec("COUNCIL-80003").status == "available"
+
+    @pytest.mark.asyncio
+    async def test_guard_calls_curation_before_skip(self):
+        """Le guard dans _execute_council_debate purge les vieilles specs et débloque le débat."""
+        from core.autonomy_engine import AutonomyEngine
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine.error_streak = 0
+        engine.daily_count = 0
+        engine.routine_history = []
+        engine._current_council_subject = ""
+
+        cat = EvolutionCatalog()
+        old_time = (datetime.now() - timedelta(hours=72)).isoformat()
+        # Créer 4 specs COUNCIL périmées (>48h)
+        for i in range(4):
+            self._make_council_spec(
+                cat, f"COUNCIL-9000{i}", last_attempt=old_time,
+                target_file="core/psyche.py", target_method=f"guard_test_m{i}",
+            )
+
+        # Vérifier qu'il y a bien 4 specs available avant
+        pending_before = [s for s in cat.specs.values()
+                          if s.id.startswith("COUNCIL-") and s.status == "available"]
+        assert len(pending_before) == 4
+
+        # Appeler _execute_council_debate — le guard devrait curéer et débloquer
+        # (on mocke psyche et council pour ne pas exécuter le débat complet)
+        with patch("core.psyche.psyche") as mock_psyche:
+            mock_psyche.get_debate_index.return_value = 0
+            mock_psyche.select_council_topic.return_value = {
+                "participants": ["strategist", "coder"],
+                "mission": "Test curation",
+                "needs_research": False, "research_query": None,
+                "subject_key": "test_curation",
+            }
+            with patch("core.council.Council") as mock_council_cls:
+                mock_council = AsyncMock()
+                mock_council.run_debate.return_value = {
+                    "status": "no_consensus", "rounds_used": 1,
+                    "transcript": [], "final_summary": "",
+                }
+                mock_council_cls.return_value = mock_council
+                result = await engine._execute_council_debate()
+
+        # Vérifier que les 4 specs ont été purgées
+        pending_after = [s for s in cat.specs.values()
+                         if s.id.startswith("COUNCIL-") and s.status == "available"]
+        assert len(pending_after) == 0
+        # Le résultat ne devrait PAS être "skipped" car la curation a débloqué
+        assert result.get("reason") != "council_specs_saturated"

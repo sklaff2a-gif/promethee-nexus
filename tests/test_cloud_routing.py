@@ -324,17 +324,11 @@ class TestLocalForceMarkers:
         assert hasattr(BaseAgent, "_LOCAL_FORCE_MARKERS")
         assert len(BaseAgent._LOCAL_FORCE_MARKERS) >= 8
 
-    def test_markers_exist_on_orchestrator(self):
-        """_INTERNAL_CONTEXT_MARKERS est défini sur Orchestrator."""
-        assert hasattr(Orchestrator, "_INTERNAL_CONTEXT_MARKERS")
-        assert len(Orchestrator._INTERNAL_CONTEXT_MARKERS) >= 5
-
-    def test_orchestrator_markers_subset_of_agent(self):
-        """Les marqueurs orchestrateur sont un sous-ensemble des marqueurs agent."""
-        for marker in Orchestrator._INTERNAL_CONTEXT_MARKERS:
-            assert marker in BaseAgent._LOCAL_FORCE_MARKERS, (
-                f"Marqueur '{marker}' dans Orchestrator mais absent de BaseAgent._LOCAL_FORCE_MARKERS"
-            )
+    def test_orchestrator_markers_from_base_agent(self):
+        """L'orchestrateur utilise les mêmes marqueurs que BaseAgent (source unique)."""
+        markers = Orchestrator._get_internal_markers()
+        assert markers is BaseAgent._LOCAL_FORCE_MARKERS
+        assert len(markers) >= 8
 
 
 # ─── Tests RPM Enforcement ───

@@ -1745,6 +1745,121 @@ class EvolutionCatalog:
             spec.status = "available"  # Re-disponible pour un prochain cycle
         self._save()
 
+    def mark_rejected(self, spec_id: str, reason: str = ""):
+        """Marque une spec comme rejetée par curation automatique."""
+        spec = self.specs.get(spec_id)
+        if not spec:
+            return
+        spec.status = "rejected"
+        if reason:
+            spec.failure_reasons.append(f"[CURATION] {reason}")
+        self._save()
+        logger.info(f"Catalogue: {spec_id} rejeté par curation — {reason}")
+
+    def curate_council_specs(self) -> int:
+        """Purge déterministe des specs COUNCIL inutiles. Zéro LLM."""
+        purged = 0
+        council_specs = [
+            s for s in self.specs.values()
+            if s.id.startswith("COUNCIL-") and s.status == "available"
+        ]
+
+        for spec in council_specs:
+            reason = self._evaluate_council_spec(spec)
+            if reason:
+                self.mark_rejected(spec.id, reason)
+                purged += 1
+
+        if purged:
+            logger.info(f"[CURATION] {purged} spec(s) COUNCIL purgée(s).")
+            self._append_curation_journal(purged, council_specs)
+        return purged
+
+    def _evaluate_council_spec(self, spec: ImprovementSpec) -> Optional[str]:
+        """Évalue une spec COUNCIL. Retourne None si valide, sinon la raison de rejet."""
+        # 1. Fichier cible inexistant
+        if spec.target_file:
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            full_path = os.path.join(project_root, spec.target_file.replace("/", os.sep))
+            if not os.path.exists(full_path):
+                return f"fichier_inexistant: {spec.target_file}"
+
+        # 2. Description trop courte
+        if len(spec.description) < 50:
+            return f"description_trop_courte: {len(spec.description)} chars"
+
+        # 3. Âge > 48h
+        created_at = self._extract_council_timestamp(spec)
+        if created_at:
+            age = datetime.now() - created_at
+            if age > timedelta(hours=48):
+                hours = age.total_seconds() / 3600
+                return f"perimee: {hours:.0f}h (>48h)"
+
+        # 4. Doublon sémantique (même target_file + même target_method qu'une autre spec)
+        if spec.target_file and spec.target_method:
+            for other in self.specs.values():
+                if other.id == spec.id:
+                    continue
+                if other.status in ("available", "attempted", "pending_deploy", "deployed", "confirmed"):
+                    if other.target_file == spec.target_file and other.target_method == spec.target_method:
+                        return f"doublon: meme cible que {other.id} ({spec.target_file}:{spec.target_method})"
+
+        # 5. Code template boilerplate
+        template = spec.code_template.strip()
+        if template.startswith("# Amelioration") or template.startswith("# Amélioration"):
+            return "boilerplate: template par defaut"
+        # Vérifier si le template ne contient que des commentaires et pass
+        lines = [l.strip() for l in template.split("\n") if l.strip()]
+        non_trivial = [l for l in lines if not l.startswith("#") and l != "pass"
+                       and not l.startswith('"""') and not l.startswith("'''")
+                       and l != "def council_improvement():"]
+        if not non_trivial:
+            return "boilerplate: aucune implementation reelle"
+
+        return None
+
+    def _extract_council_timestamp(self, spec: ImprovementSpec) -> Optional[datetime]:
+        """Extrait le timestamp de création d'une spec COUNCIL."""
+        # Priorité : last_attempt (toujours renseigné à la création)
+        if spec.last_attempt:
+            try:
+                return datetime.fromisoformat(spec.last_attempt)
+            except (ValueError, TypeError):
+                pass
+        # Fallback : extraire depuis l'ID COUNCIL-{timestamp}-{hex4}
+        try:
+            parts = spec.id.split("-")
+            if len(parts) >= 2:
+                ts = int(parts[1])
+                if ts > 1_000_000_000:  # timestamp Unix valide (post-2001)
+                    return datetime.fromtimestamp(ts)
+        except (ValueError, IndexError):
+            pass
+        return None
+
+    def _append_curation_journal(self, purged: int, specs: list):
+        """Écrit un résumé de la curation dans config/council_journal.md."""
+        try:
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            journal_path = os.path.join(project_root, "config", "council_journal.md")
+            now = datetime.now().strftime("%Y-%m-%d %H:%M")
+            rejected = [s for s in specs if s.status == "rejected"]
+            details = "\n".join(
+                f"  - `{s.id}`: {s.failure_reasons[-1] if s.failure_reasons else '?'}"
+                for s in rejected
+            )
+            entry = (
+                f"\n---\n\n"
+                f"## [{now}] CURATION AUTOMATIQUE\n\n"
+                f"**{purged} spec(s) COUNCIL purgée(s)** :\n{details}\n"
+            )
+            os.makedirs(os.path.dirname(journal_path), exist_ok=True)
+            with open(journal_path, "a", encoding="utf-8") as f:
+                f.write(entry)
+        except Exception as e:
+            logger.warning(f"[CURATION] Écriture journal échouée: {e}")
+
     def mark_available(self, spec_id: str):
         """Remet une spec en disponible (utile après correction)."""
         spec = self.specs.get(spec_id)
