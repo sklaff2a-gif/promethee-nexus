@@ -235,6 +235,12 @@ async def lifespan(app: FastAPI):
     print(f"   🧬 SYNAPSE: Cortex associatif actif "
           f"({len(cortex.nodes)} noeuds, {len(cortex.synapses)} synapses).")
 
+    # --- COEUR (Moteur Cardiaque) ---
+    from core.cardiac_engine import heart
+    heart.init()
+    heart_task = asyncio.create_task(heart.start_beating())
+    print(f"   💓 COEUR: Moteur cardiaque actif (BPM={heart.bpm:.0f}).")
+
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
 
     # --- CI/CD Pipeline (remplace quality_control_listener) ---

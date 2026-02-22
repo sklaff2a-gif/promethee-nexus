@@ -610,7 +610,12 @@ class BaseAgent:
         try:
             async with self._get_ollama_semaphore():
                 url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
-                payload = { "model": model, "prompt": prompt, "stream": False, "options": { "temperature": 0.7, "num_ctx": 4096 } }
+                try:
+                    from core.cardiac_engine import heart
+                    _temperature = heart.get_temperature()
+                except Exception:
+                    _temperature = 0.7
+                payload = { "model": model, "prompt": prompt, "stream": False, "options": { "temperature": _temperature, "num_ctx": 4096 } }
                 async with httpx.AsyncClient() as client:
                     response = await client.post(url, json=payload, timeout=300)
                 if response.status_code == 200: return response.json().get("response", "Ollama vide.")
@@ -626,7 +631,12 @@ class BaseAgent:
         try:
             async with self._get_ollama_semaphore():
                 url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
-                payload = { "model": model, "prompt": prompt, "stream": True, "options": { "temperature": 0.7, "num_ctx": 4096 } }
+                try:
+                    from core.cardiac_engine import heart
+                    _temperature = heart.get_temperature()
+                except Exception:
+                    _temperature = 0.7
+                payload = { "model": model, "prompt": prompt, "stream": True, "options": { "temperature": _temperature, "num_ctx": 4096 } }
 
                 # Signal de début
                 await bus.publish("AGENT_STREAM", {

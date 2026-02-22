@@ -733,6 +733,17 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Bonus somatique (intuitions viscérales du coeur) ---
+        try:
+            from core.cardiac_engine import heart
+            for i, (routine, s) in enumerate(scored):
+                somatic = heart.get_somatic_signal(routine["intent"])
+                if somatic != 0.0:
+                    scored[i] = (routine, s + somatic)
+            scored.sort(key=lambda x: x[1], reverse=True)
+        except Exception:
+            pass
+
         selected, score = scored[0]
         agent = selected["agent"]
         intent = selected["intent"]
@@ -741,6 +752,11 @@ class AutonomyEngine:
         veto_reason = self._should_veto(intent, agent)
         if veto_reason:
             print(f"   🚫 VETO: {veto_reason}")
+            try:
+                from core.cardiac_engine import heart
+                heart.react("veto")
+            except Exception:
+                pass
             # Fallback : prendre la 2ème meilleure routine
             if len(scored) > 1:
                 selected, score = scored[1]
@@ -865,6 +881,14 @@ class AutonomyEngine:
             else:
                 desires.on_event("ROUTINE_FAILURE", {"intent": intent, "quality": quality_score})
             desires.save()
+        except Exception:
+            pass
+
+        # Feedback cardiaque (marqueurs somatiques)
+        try:
+            from core.cardiac_engine import heart
+            outcome = "success" if quality_score >= 0.6 else "failure"
+            heart.form_somatic_marker(intent, outcome, quality_score, response.get("result", "")[:80] if isinstance(response, dict) else "")
         except Exception:
             pass
 
@@ -1121,6 +1145,11 @@ class AutonomyEngine:
                     consolidated += 1
 
             # --- Dream Mode (consolidation synaptique) ---
+            try:
+                from core.cardiac_engine import heart
+                heart.react("dream")
+            except Exception:
+                pass
             try:
                 from core.synaptic_network import cortex
                 dream_report = cortex.dream_consolidation()
@@ -1746,11 +1775,20 @@ class AutonomyEngine:
         print(f"   🧠 AUTONOMY: Moteur V24 (Health-Aware Sentinel) activé. Limite: {MAX_DAILY_ROUTINES} routines/jour.")
 
         while self.is_running:
-            # Sleep adaptatif : modéré si error_streak >= 3 (max 1.5× pour éviter spirale)
-            sleep_time = random.randint(600, 1200)
+            # Sleep adaptatif : piloté par le coeur (cohérence cardiaque)
+            try:
+                from core.cardiac_engine import heart
+                sleep_time = heart.compute_sleep_duration()
+            except Exception:
+                sleep_time = random.randint(600, 1200)
             if self.error_streak >= 3:
                 sleep_time = int(sleep_time * 1.5)
                 logger.warning(f"[AUTONOMY] Mode prudent (error_streak={self.error_streak}), sleep: {sleep_time}s")
+                try:
+                    from core.cardiac_engine import heart as _h
+                    _h.react("error_streak")
+                except Exception:
+                    pass
                 # Décroissance progressive : réduire l'error_streak de 1 à chaque cycle pour sortir de la spirale
                 if self.error_streak > 5:
                     self.error_streak -= 1

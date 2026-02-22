@@ -341,6 +341,13 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Stats cardiaques (coeur)
+        try:
+            from core.cardiac_engine import heart
+            snapshot["cardiac"] = heart.get_stats()
+        except Exception:
+            pass
+
         self._snapshots.append(snapshot)
         if len(self._snapshots) > MAX_SNAPSHOTS:
             self._snapshots = self._snapshots[-MAX_SNAPSHOTS:]
