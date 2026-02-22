@@ -1120,11 +1120,12 @@ class TestCouncilSpecCuration:
                 "subject_key": "test_curation",
             }
             with patch("core.council.Council") as mock_council_cls:
-                mock_council = AsyncMock()
-                mock_council.run_debate.return_value = {
+                mock_council = MagicMock()
+                mock_council.run = AsyncMock(return_value={
                     "status": "no_consensus", "rounds_used": 1,
                     "transcript": [], "final_summary": "",
-                }
+                    "result": "",
+                })
                 mock_council_cls.return_value = mock_council
                 result = await engine._execute_council_debate()
 
