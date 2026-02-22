@@ -4,8 +4,11 @@ import asyncio
 import os
 import re
 import time
+from datetime import datetime
 from typing import Dict, Any
 from core.base_agent import BaseAgent
+from core.prompt_templates import CODE_GENERATION_GUARDRAIL
+from core.experience_registry import ExperienceRegistry, Experience
 
 logger = logging.getLogger("evolution")
 
@@ -50,10 +53,12 @@ _SPEC_OFFTOPIC_KEYWORDS = {
 _SPEC_OFFTOPIC_THRESHOLD = 2
 
 # Imports étrangers au projet — si le code généré en contient, c'est une hallucination
+# (set élargi : couvre les frameworks ML, web, BDD, vector DBs, cloud providers)
 _ALIEN_IMPORTS = {
-    "django", "flask", "streamlit", "pygame", "tkinter",
+    "django", "flask", "streamlit", "gradio", "pygame", "tkinter",
     "langchain", "langgraph", "crewai", "autogen",
     "tensorflow", "torch", "keras", "sklearn",
+    "pandas", "numpy", "scipy",
     "kubernetes", "docker", "terraform", "kafka",
     "web3", "solidity", "brownie",
     "sqlalchemy", "peewee", "mongoengine",
@@ -70,37 +75,35 @@ _VALID_TARGET_PREFIXES = ("core/", "Agents/", "config.py", "main.py")
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _detect_alien_imports(source_code: str) -> list:
+    """Détecte les imports de frameworks hors-périmètre dans du code source via AST.
+    Plus robuste que le parsing ligne par ligne (gère multi-import, aliases, etc.).
+    Retourne la liste des modules aliens détectés."""
+    import ast as _ast
+    aliens = []
+    try:
+        tree = _ast.parse(source_code)
+    except SyntaxError:
+        return aliens
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            for alias in node.names:
+                top = alias.name.split(".")[0]
+                if top in _ALIEN_IMPORTS:
+                    aliens.append(top)
+        elif isinstance(node, _ast.ImportFrom):
+            if node.module:
+                top = node.module.split(".")[0]
+                if top in _ALIEN_IMPORTS:
+                    aliens.append(top)
+    return sorted(set(aliens))
+
+
 def _is_spec_offtopic(spec: str) -> bool:
     """Vérifie si la spec contient trop de mots-clés hors-sujet."""
     spec_lower = spec.lower()
     count = sum(1 for kw in _SPEC_OFFTOPIC_KEYWORDS if kw in spec_lower)
     return count >= _SPEC_OFFTOPIC_THRESHOLD
-
-
-def _detect_alien_imports(code: str) -> list:
-    """Détecte les imports de frameworks étrangers au projet dans le code généré.
-    Retourne la liste des imports aliens trouvés."""
-    aliens_found = []
-    for line in code.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith(("import ", "from ")):
-            continue
-        # Extraire le module racine
-        if stripped.startswith("from "):
-            parts = stripped.split()
-            if len(parts) >= 2:
-                module_root = parts[1].split(".")[0]
-            else:
-                continue
-        else:
-            parts = stripped.split()
-            if len(parts) >= 2:
-                module_root = parts[1].split(".")[0].split(",")[0]
-            else:
-                continue
-        if module_root in _ALIEN_IMPORTS:
-            aliens_found.append(module_root)
-    return list(set(aliens_found))
 
 
 def _spec_targets_existing_file(spec: str) -> bool:
@@ -159,7 +162,7 @@ class DivineEvolution(BaseAgent):
     async def _generate_code_cloud(self, prompt: str) -> str:
         """Génère du code via Gemini Cloud (bypass évaluateur de complexité).
         Cascade : essaie tous les modèles Cloud configurés.
-        Respecte le cooldown 429 et le budget quotidien Evolution.
+        Respecte le cooldown 429, les limites RPM et le budget quotidien Evolution.
         """
         now = time.time()
 
@@ -169,23 +172,33 @@ class DivineEvolution(BaseAgent):
             self.log_thought(f"⏸️ Cloud en cooldown 429 ({remaining}s restantes) → pas de génération Cloud", type="warning")
             return ""
 
-        # Vérifier et reset compteur journalier
+        # Reset compteurs journaliers si nouveau jour
         from datetime import date
         today = date.today()
-        if BaseAgent._daily_cloud_reset_day != today:
-            BaseAgent._daily_cloud_calls = 0
+        if BaseAgent._daily_model_reset_day != today:
+            BaseAgent._daily_model_calls = {}
             BaseAgent._daily_cloud_calls_evolution = 0
-            BaseAgent._daily_cloud_reset_day = today
+            BaseAgent._daily_model_reset_day = today
 
         # Vérifier budget quotidien Evolution
-        if BaseAgent._daily_cloud_calls_evolution >= BaseAgent.MAX_DAILY_EVOLUTION_CALLS:
+        if BaseAgent._daily_cloud_calls_evolution >= BaseAgent.MAX_DAILY_EVOLUTION_CLOUD:
             self.log_thought(
-                f"💰 Budget Cloud Evolution épuisé ({BaseAgent._daily_cloud_calls_evolution}/{BaseAgent.MAX_DAILY_EVOLUTION_CALLS})",
+                f"💰 Budget Cloud Evolution épuisé ({BaseAgent._daily_cloud_calls_evolution}/{BaseAgent.MAX_DAILY_EVOLUTION_CLOUD})",
                 type="warning"
             )
             return ""
 
         for model_name in self.cloud_models:
+            # Vérifier RPM pour ce modèle
+            if not BaseAgent._check_rpm(model_name):
+                self.log_thought(f"⏱️ RPM atteint pour {model_name.split('/')[-1]} -> modèle suivant", type="warning")
+                continue
+
+            # Vérifier budget journalier pour ce modèle
+            if not BaseAgent._check_daily_budget(model_name):
+                self.log_thought(f"💰 Budget journalier atteint pour {model_name.split('/')[-1]} -> modèle suivant", type="warning")
+                continue
+
             try:
                 client = self._get_gemini_client(model_name)
                 if not client:
@@ -193,23 +206,40 @@ class DivineEvolution(BaseAgent):
                 self.log_thought(f"☁️ Gemini ({model_name.split('/')[-1]}) — génération de code...", type="thought")
                 loop = asyncio.get_running_loop()
                 response = await loop.run_in_executor(None, client.generate_content, prompt)
-                BaseAgent._cloud_call_count += 1
-                BaseAgent._daily_cloud_calls += 1
+                BaseAgent._record_cloud_call(model_name)
                 BaseAgent._daily_cloud_calls_evolution += 1
                 if response.text and len(response.text) > 50:
                     return response.text
             except Exception as e:
                 err_str = str(e)
                 if "429" in err_str or "quota" in err_str.lower() or "exceeded" in err_str.lower():
-                    BaseAgent._cloud_cooldown_until = now + BaseAgent.CLOUD_COOLDOWN_SECONDS
+                    BaseAgent._activate_cloud_cooldown()
+                    remaining = int(BaseAgent._cloud_cooldown_until - time.time())
                     self.log_thought(
-                        f"🚫 Quota Gemini épuisé (429) — cooldown {BaseAgent.CLOUD_COOLDOWN_SECONDS}s activé",
+                        f"🚫 Quota Gemini épuisé (429 x{BaseAgent._cloud_429_count_today}) "
+                        f"— cooldown {remaining}s activé",
                         type="warning"
                     )
                     break
                 self.log_thought(f"⚠️ Gemini {model_name.split('/')[-1]} échoué: {e}", type="warning")
                 continue
         return ""
+
+    @staticmethod
+    def _capture_system_context() -> dict:
+        """Capture le contexte système pour enrichir les Experience."""
+        ctx = {"mood": "", "success_rate": 1.0, "error_streak": 0}
+        try:
+            from core.self_awareness import awareness
+            snap = awareness.get_latest_snapshot()
+            if snap:
+                ctx["mood"] = snap.get("mood", "")
+                perf = snap.get("performance", {})
+                ctx["success_rate"] = perf.get("success_rate", 1.0)
+                ctx["error_streak"] = perf.get("error_streak", 0)
+        except Exception:
+            pass
+        return ctx
 
     def _read_target_file(self, target_file: str) -> str:
         """Lit le fichier cible depuis le projet."""
@@ -253,8 +283,7 @@ class DivineEvolution(BaseAgent):
         try:
             spec_response = await self.generate_content(spec_prompt)
 
-            # Extraire le JSON de la réponse
-            import re
+            # Extraire le JSON de la réponse (re importé en top-level)
             json_match = re.search(r'\{[^}]+\}', spec_response)
             if not json_match:
                 return {"status": "warning", "result": "R.A.S — format spec invalide."}
@@ -279,6 +308,7 @@ class DivineEvolution(BaseAgent):
                 f"- Ajoute un pré-traitement déterministe AVANT l'appel au LLM\n"
                 f"- PAS de os.system, subprocess, eval, exec, __import__\n"
                 f"- Retourne UNIQUEMENT le code Python, rien d'autre."
+                f"{CODE_GENERATION_GUARDRAIL}"
             )
 
             # Génération via Gemini Cloud (fallback Coder local)
@@ -301,7 +331,6 @@ class DivineEvolution(BaseAgent):
             aliens = _detect_alien_imports(generated_code)
             if aliens:
                 return {"status": "warning", "result": f"R.A.S — hallucination Grimoire ({', '.join(aliens)})"}
-
             # Écrire via GrimoireWriter (les 7 validations sont intégrées)
             result = GrimoireWriter.write_recipe(
                 slug=slug,
@@ -336,14 +365,31 @@ class DivineEvolution(BaseAgent):
         # --- PHASE 1 : SÉLECTION ---
         self.log_thought("📋 Phase 1 : Sélection depuis le catalogue...", type="thought")
 
-        candidates = catalog.get_top_candidates(5)
+        # Filtrer les specs ciblant des fichiers critiques (les supervisés sont autorisés)
+        try:
+            from Agents.factory_agent import _CRITICAL_FILES
+        except ImportError:
+            _CRITICAL_FILES = set()
+
+        def _is_eligible(spec_tuple):
+            spec = spec_tuple[0]
+            target = spec.target_file.replace("\\", "/")
+            return target not in _CRITICAL_FILES
+
+        # Filtrer aussi via les insights d'apprentissage (specs qui échouent systématiquement)
+        registry = ExperienceRegistry()
+        insights = registry.get_learning_insights()
+        stuck_specs = {i["spec_id"] for i in insights if i["type"] == "repeated_phase_failure" and i["count"] >= 3}
+
+        candidates = [c for c in catalog.get_top_candidates(8)
+                      if _is_eligible(c) and c[0].id not in stuck_specs][:5]
         if not candidates:
-            self.log_thought("📭 Catalogue épuisé : aucune spec éligible.", type="info")
+            self.log_thought("📭 Catalogue épuisé : aucune spec éligible (critiques exclus).", type="info")
             # Tenter la méta-évolution
             new_specs = catalog.generate_combinations()
             if new_specs:
                 self.log_thought(f"🧬 Méta-évolution : {len(new_specs)} nouvelles specs générées.", type="info")
-                candidates = catalog.get_top_candidates(5)
+                candidates = [c for c in catalog.get_top_candidates(8) if _is_eligible(c)][:5]
             if not candidates:
                 # Fallback : tenter la création d'une recette Grimoire
                 return await self._run_grimoire_creation()
@@ -359,6 +405,12 @@ class DivineEvolution(BaseAgent):
 
         self.log_thought(f"🎯 Spec sélectionnée : [{spec.id}] {spec.name}", type="info")
 
+        # Variables de tracking pour le registre d'expériences
+        registry = ExperienceRegistry()
+        ctx = self._capture_system_context()
+        code_source = ""
+        generated_code = ""
+
         # --- PHASE 2 : PRÉPARATION ---
         self.log_thought(f"📖 Phase 2 : Lecture de {spec.target_file}...", type="thought")
         catalog.mark_attempted(spec.id)
@@ -367,52 +419,116 @@ class DivineEvolution(BaseAgent):
         if not source_code:
             reason = f"Fichier cible introuvable: {spec.target_file}"
             catalog.mark_failed(spec.id, reason)
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase2", outcome="failed", failure_reason=reason,
+                    code_source="", code_length=0,
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
-        # Vérifier que le fichier n'est pas protégé par la Factory
+        # Vérifier que le fichier n'est pas critique (_CRITICAL_FILES importé en Phase 1)
+        normalized_target = spec.target_file.replace("\\", "/")
+        if normalized_target in _CRITICAL_FILES:
+            reason = f"Fichier critique : {spec.target_file}"
+            self.log_thought(f"🛡️ {reason} — skip spec [{spec.id}]", type="warning")
+            catalog.mark_failed(spec.id, reason)
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase2", outcome="failed", failure_reason=reason,
+                    code_source="", code_length=0,
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
+            return {"status": "warning", "result": f"R.A.S — {reason}"}
+
+        # --- PHASE 3 : MATÉRIALISATION ---
+        # Tentative 1 : CodeSmith (déterministe, pas de LLM)
         try:
-            from Agents.factory_agent import _PROTECTED_FILES
-            normalized_target = spec.target_file.replace("\\", "/")
-            if normalized_target in _PROTECTED_FILES:
-                reason = f"Fichier protégé par Factory: {spec.target_file}"
-                self.log_thought(f"🛡️ {reason} — skip spec [{spec.id}]", type="warning")
-                catalog.mark_failed(spec.id, reason)
-                return {"status": "warning", "result": f"R.A.S — {reason}"}
-        except ImportError:
-            pass
+            from core.code_smith import CodeSmith, spec_to_actions
+            cs_actions = spec_to_actions(spec, source_code)
+        except Exception as _cs_err:
+            logger.warning(f"CodeSmith import/init error: {_cs_err}")
+            cs_actions = None
 
-        # --- PHASE 3 : MATÉRIALISATION (Gemini Cloud) ---
-        self.log_thought(f"🛠️ Phase 3 : Génération du code via Gemini Cloud [{spec.id}]...", type="info")
+        if cs_actions is not None:
+            self.log_thought(f"[CodeSmith] Transformation déterministe [{spec.id}]...", type="info")
+            cs_result = CodeSmith.apply(source_code, cs_actions)
+            if cs_result.success:
+                generated_code = cs_result.modified_source
+                code_source = "deterministic"
+                self.log_thought(f"[CodeSmith] {cs_result.actions_applied} actions appliquées.", type="info")
+            else:
+                self.log_thought(f"[CodeSmith] Échec: {cs_result.error}. Fallback LLM...", type="warning")
+                generated_code = ""
 
-        code_prompt = (
-            f"Applique cette amélioration au fichier {spec.target_file} (méthode: {spec.target_method}).\n"
-            f"AMÉLIORATION [{spec.id}] : {spec.name}\n"
-            f"DESCRIPTION : {spec.description}\n"
-            f"TEMPLATE DE CODE À INTÉGRER :\n{spec.code_template}\n\n"
-            f"CODE SOURCE ACTUEL DU FICHIER :\n{source_code[:3000]}\n\n"
-            f"INSTRUCTIONS :\n"
-            f"- Intègre le template dans le code existant\n"
-            f"- Conserve TOUT le code existant fonctionnel\n"
-            f"- Adapte les noms de variables si nécessaire\n"
-            f"- Retourne LE FICHIER COMPLET modifié (pas juste le diff)\n"
-            f"- Donne UNIQUEMENT le code Python, sans explication ni commentaire hors-code."
-        )
+        # Tentative 2 : LLM Cloud/Local (si CodeSmith n'a pas produit de résultat)
+        if not generated_code or len(generated_code) < 50:
+            self.log_thought(f"🛠️ Phase 3 : Génération du code via Gemini Cloud [{spec.id}]...", type="info")
 
-        generated_code = await self._generate_code_cloud(code_prompt)
+            # Consulter le registre d'expériences
+            past_failures = registry.get_failure_summary(spec.id)
+
+            code_prompt = (
+                f"Applique cette amélioration au fichier {spec.target_file} (méthode: {spec.target_method}).\n"
+                f"AMÉLIORATION [{spec.id}] : {spec.name}\n"
+                f"DESCRIPTION : {spec.description}\n"
+                f"TEMPLATE DE CODE À INTÉGRER :\n{spec.code_template}\n\n"
+                f"CODE SOURCE ACTUEL DU FICHIER :\n{source_code[:3000]}\n\n"
+                f"INSTRUCTIONS :\n"
+                f"- Intègre le template dans le code existant\n"
+                f"- Conserve TOUT le code existant fonctionnel\n"
+                f"- Adapte les noms de variables si nécessaire\n"
+                f"- Retourne LE FICHIER COMPLET modifié (pas juste le diff)\n"
+                f"- Donne UNIQUEMENT le code Python, sans explication ni commentaire hors-code."
+                f"{CODE_GENERATION_GUARDRAIL}"
+            )
+
+            if past_failures:
+                code_prompt += f"\n\nATTENTION — {past_failures}\nÉVITE de reproduire ces erreurs.\n"
+
+            generated_code = await self._generate_code_cloud(code_prompt)
+            if generated_code and len(generated_code) >= 50:
+                code_source = "cloud"
+
+            if not generated_code or len(generated_code) < 50:
+                # Fallback : dispatch au Coder local
+                self.log_thought("⚠️ Cloud indisponible, tentative via Coder local...", type="warning")
+                coder_response = await orchestrator.dispatch_task("coder", {
+                    "mission": code_prompt,
+                    "context": f"EVOLUTION_PIPELINE\nSPEC_ID: {spec.id}"
+                })
+                generated_code = coder_response.get("result", "")
+                if generated_code and len(generated_code) >= 50:
+                    code_source = "local"
 
         if not generated_code or len(generated_code) < 50:
-            # Fallback : dispatch au Coder local
-            self.log_thought("⚠️ Cloud indisponible, tentative via Coder local...", type="warning")
-            coder_response = await orchestrator.dispatch_task("coder", {
-                "mission": code_prompt,
-                "context": f"EVOLUTION_PIPELINE\nSPEC_ID: {spec.id}"
-            })
-            generated_code = coder_response.get("result", "")
-
-        if not generated_code or len(generated_code) < 50:
-            reason = "Aucun code produit (Cloud + Local)"
+            reason = "Aucun code produit (CodeSmith + Cloud + Local)"
             catalog.mark_failed(spec.id, reason)
             self.log_thought(f"💤 {reason}.", type="info")
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase3", outcome="failed", failure_reason=reason,
+                    code_source=code_source, code_length=len(generated_code) if generated_code else 0,
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
             return {"status": "warning", "result": f"R.A.S — {reason}."}
 
         # --- PHASE 4 : VALIDATION SYNTAXE ---
@@ -437,25 +553,182 @@ class DivineEvolution(BaseAgent):
                 try:
                     ast.parse(retry_code)
                     generated_code = retry_code
+                    code_source = "cloud+retry"
                     self.log_thought("✅ Code corrigé avec succès après retry !", type="info")
                 except SyntaxError as e2:
                     reason = f"ast.parse error (après retry): {e2}"
                     catalog.mark_failed(spec.id, reason)
                     self.log_thought(f"❌ Syntaxe toujours invalide après retry : {e2}", type="error")
+                    try:
+                        registry.record(Experience(
+                            id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                            spec_id=spec.id, spec_name=spec.name,
+                            attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                            phase_reached="phase4", outcome="failed", failure_reason=reason,
+                            code_source=code_source, code_length=len(generated_code),
+                            syntax_error=str(e2),
+                            system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                            error_streak_at_attempt=ctx["error_streak"],
+                        ))
+                    except Exception:
+                        pass
                     return {"status": "error", "result": f"Spec [{spec.id}] rejetée : {reason}"}
             else:
                 reason = f"ast.parse error: {e}"
                 catalog.mark_failed(spec.id, reason)
                 self.log_thought(f"❌ Syntaxe invalide (retry Cloud indisponible) : {e}", type="error")
+                try:
+                    registry.record(Experience(
+                        id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                        spec_id=spec.id, spec_name=spec.name,
+                        attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                        phase_reached="phase4", outcome="failed", failure_reason=reason,
+                        code_source=code_source, code_length=len(generated_code),
+                        syntax_error=str(e),
+                        system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                        error_streak_at_attempt=ctx["error_streak"],
+                    ))
+                except Exception:
+                    pass
                 return {"status": "error", "result": f"Spec [{spec.id}] rejetée : {reason}"}
 
-        # --- PHASE 4.5 : FILTRE ANTI-HALLUCINATION ---
+        # --- PHASE 4b : FILTRE ANTI-HALLUCINATION (imports aliens) ---
         aliens = _detect_alien_imports(generated_code)
         if aliens:
-            reason = f"Hallucination LLM : imports étrangers détectés ({', '.join(aliens)})"
+            # Tentative de correction via hallucination_doctor
+            try:
+                help_response = await self._request_help("hallucination", {
+                    "type": "alien_imports", "aliens": aliens,
+                    "spec_name": spec.name, "spec_description": spec.description,
+                    "target_file": spec.target_file, "source_code": source_code[:3000],
+                })
+                if help_response.get("action") == "retry" and help_response.get("corrected_prompt"):
+                    self.log_thought(f"🔄 [{spec.id}] Retry doctor (alien_imports)...", type="info")
+                    retry_code = await self._generate_code_cloud(help_response["corrected_prompt"])
+                    if retry_code:
+                        retry_code = self._extract_python_code(retry_code)
+                        retry_aliens = _detect_alien_imports(retry_code)
+                        if not retry_aliens:
+                            generated_code = retry_code
+                            code_source = f"{code_source}+doctor_retry"
+                            self.log_thought(f"✅ [{spec.id}] Doctor retry reussi (aliens corriges)", type="info")
+                            aliens = []  # Reset pour ne pas tomber dans le rejet ci-dessous
+            except Exception as e:
+                logger.warning(f"[{spec.id}] Doctor retry echoue: {e}")
+
+        if aliens:
+            reason = f"Imports aliens détectés ({', '.join(aliens)}) — hallucination LLM"
             catalog.mark_failed(spec.id, reason)
             self.log_thought(f"🚫 [{spec.id}] {reason}", type="warning")
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase4b", outcome="failed", failure_reason=reason,
+                    code_source=code_source, code_length=len(generated_code),
+                    alien_imports=aliens,
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
             return {"status": "warning", "result": f"R.A.S — {reason}"}
+
+        # --- PHASE 4c : VALIDATION STRUCTURELLE ---
+        # Le code doit contenir au moins un def/class/import pour être une vraie amélioration
+        try:
+            _tree = ast.parse(generated_code)
+            _has_structure = any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom))
+                for node in ast.walk(_tree)
+            )
+        except SyntaxError:
+            _has_structure = False
+        if not _has_structure:
+            # Tentative de correction via hallucination_doctor
+            try:
+                help_response = await self._request_help("hallucination", {
+                    "type": "non_structural",
+                    "spec_name": spec.name, "spec_description": spec.description,
+                    "target_file": spec.target_file, "source_code": source_code[:3000],
+                })
+                if help_response.get("action") == "retry" and help_response.get("corrected_prompt"):
+                    self.log_thought(f"🔄 [{spec.id}] Retry doctor (non_structural)...", type="info")
+                    retry_code = await self._generate_code_cloud(help_response["corrected_prompt"])
+                    if retry_code:
+                        retry_code = self._extract_python_code(retry_code)
+                        try:
+                            _retry_tree = ast.parse(retry_code)
+                            _retry_ok = any(
+                                isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom))
+                                for n in ast.walk(_retry_tree)
+                            )
+                        except SyntaxError:
+                            _retry_ok = False
+                        if _retry_ok:
+                            generated_code = retry_code
+                            code_source = f"{code_source}+doctor_retry"
+                            _has_structure = True
+                            self.log_thought(f"✅ [{spec.id}] Doctor retry reussi (structure corrigee)", type="info")
+            except Exception as e:
+                logger.warning(f"[{spec.id}] Doctor retry echoue: {e}")
+
+        if not _has_structure:
+            reason = "Code non-structurel (pas de def/class/import) — hallucination probable"
+            catalog.mark_failed(spec.id, reason)
+            self.log_thought(f"🚫 [{spec.id}] {reason}", type="warning")
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase4c", outcome="failed", failure_reason=reason,
+                    code_source=code_source, code_length=len(generated_code),
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
+            return {"status": "warning", "result": f"R.A.S — {reason}"}
+
+        # --- PHASE 4d : ANTI-TRONCATURE ---
+        # Le code généré doit faire au moins 60% du code source original
+        if source_code and len(source_code) > 500:
+            ratio = len(generated_code) / len(source_code)
+            if ratio < 0.60:
+                reason = (
+                    f"Anti-troncature: code généré ({len(generated_code)} chars) = "
+                    f"{ratio:.0%} du source ({len(source_code)} chars) — fichier incomplet"
+                )
+                # Enrichir le diagnostic via le doctor (verdict toujours "abandon" pour truncation)
+                try:
+                    help_response = await self._request_help("hallucination", {
+                        "type": "truncation", "ratio": ratio,
+                        "source_length": len(source_code),
+                        "generated_length": len(generated_code),
+                    })
+                    diag = help_response.get("diagnosis", {})
+                    if diag:
+                        reason = f"{reason} [doctor: {diag.get('details', '')}]"
+                except Exception:
+                    pass
+                catalog.mark_failed(spec.id, reason)
+                self.log_thought(f"🛡️ [{spec.id}] {reason}", type="warning")
+                try:
+                    registry.record(Experience(
+                        id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                        spec_id=spec.id, spec_name=spec.name,
+                        attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                        phase_reached="phase4d", outcome="failed", failure_reason=reason,
+                        code_source=code_source, code_length=len(generated_code),
+                        truncation_ratio=round(ratio, 3),
+                        system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                        error_streak_at_attempt=ctx["error_streak"],
+                    ))
+                except Exception:
+                    pass
+                return {"status": "warning", "result": f"R.A.S — {reason}"}
 
         # --- PHASE 5 : DÉPLOIEMENT SÉCURISÉ (Architecte) ---
         self.log_thought(f"🛡️ Phase 5 : Soumission [{spec.id}] à l'Architecte...", type="info")
@@ -464,6 +737,7 @@ class DivineEvolution(BaseAgent):
             "mission": (
                 f"Analyse cette amélioration R&D [{spec.id}] {spec.name}.\n"
                 f"Fichier cible: {spec.target_file}\n"
+                f"EVOLUTION_SPEC_ID: {spec.id}\n"
                 f"S'il est sûr, valide-le pour déploiement (Envoi Formatter)."
             ),
             "context": generated_code
@@ -474,9 +748,76 @@ class DivineEvolution(BaseAgent):
         if deploy_status == "success" and not orchestrator._contains_python_code(generated_code):
             deploy_status = "rejected_no_code"
             self.log_thought(f"⚠️ [{spec.id}] Architect a validé mais le code n'est pas structurel Python — rejeté.", type="warning")
+
+        # --- PHASE 5b : SECOND AVIS si Architect refuse du code CodeSmith ---
+        if deploy_status != "success" and code_source == "codesmith":
+            self.log_thought(
+                f"🔍 Phase 5b : Architect a refusé [{spec.id}] — consultation code_reviewer...",
+                type="info"
+            )
+            try:
+                reviewer_response = await orchestrator.dispatch_task("code_reviewer", {
+                    "mission": (
+                        f"REVUE EVOLUTION SPEC [{spec.id}] {spec.name}\n"
+                        f"Fichier cible: {spec.target_file}\n"
+                        f"Source: CodeSmith (transformation déterministe AST)\n"
+                        f"L'Architect a refusé ce code. Analyse-le et donne ton verdict."
+                    ),
+                    "context": generated_code
+                })
+
+                reviewer_verdict = reviewer_response.get("verdict", "UNSAFE")
+
+                if reviewer_verdict == "SAFE":
+                    # Re-soumettre à l'Architect avec le rapport du spécialiste
+                    reviewer_report = reviewer_response.get("result", "")[:500]
+                    self.log_thought(
+                        f"🔍 Phase 5b : code_reviewer dit SAFE — re-soumission à l'Architect...",
+                        type="info"
+                    )
+                    architect_response2 = await orchestrator.dispatch_task("architect", {
+                        "mission": (
+                            f"[SECOND EXAMEN] Amélioration [{spec.id}] {spec.name}.\n"
+                            f"Fichier cible: {spec.target_file}\n"
+                            f"EVOLUTION_SPEC_ID: {spec.id}\n"
+                            f"Un spécialiste code_reviewer a analysé ce code et l'a jugé SÛR.\n"
+                            f"Rapport: {reviewer_report}\n"
+                            f"Merci de ré-examiner et valider pour déploiement."
+                        ),
+                        "context": generated_code
+                    })
+                    deploy_status = architect_response2.get("status", "unknown")
+                    if deploy_status == "success":
+                        self.log_thought(
+                            f"✅ Phase 5b : Architect convaincu après avis spécialiste [{spec.id}].",
+                            type="success"
+                        )
+                else:
+                    self.log_thought(
+                        f"⚠️ Phase 5b : code_reviewer confirme UNSAFE [{spec.id}] — abandon.",
+                        type="warning"
+                    )
+            except Exception as e:
+                self.log_thought(f"⚠️ Phase 5b : erreur code_reviewer: {e}", type="warning")
+
         if deploy_status == "success":
-            catalog.mark_deployed(spec.id)
-            self.log_thought(f"✅ [{spec.id}] {spec.name} déployé avec succès !", type="info")
+            catalog.mark_pending_deploy(spec.id)
+            self.log_thought(f"✅ [{spec.id}] {spec.name} soumis au pipeline Formatter→Factory (pending_deploy).", type="info")
+
+            # Enregistrer le succès dans le registre
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase5", outcome="deployed", failure_reason="",
+                    code_source=code_source, code_length=len(generated_code),
+                    architect_verdict="success",
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
 
             # Publier l'événement
             try:
@@ -501,6 +842,19 @@ class DivineEvolution(BaseAgent):
             reason = f"Architect: {deploy_status}"
             catalog.mark_failed(spec.id, reason)
             self.log_thought(f"⚠️ [{spec.id}] non validé par l'Architecte ({deploy_status}).", type="warning")
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase5", outcome="failed", failure_reason=reason,
+                    code_source=code_source, code_length=len(generated_code),
+                    architect_verdict=deploy_status,
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
 
         return {
             "status": "success",

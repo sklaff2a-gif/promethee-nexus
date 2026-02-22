@@ -13,12 +13,21 @@ import sys
 
 from core.event_bus.bus import bus
 from core.orchestrator import orchestrator
+from core.prompt_templates import TEST_GENERATION_GUARDRAIL
 
 logger = logging.getLogger("CIPipeline")
 
-AUTO_TESTS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tests", "auto"
-)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+AUTO_TESTS_DIR = os.path.join(PROJECT_ROOT, "tests", "auto")
+
+# Mapping fichiers supervisés → fichiers de tests spécifiques
+# (pour les fichiers dont le nom de test ne suit pas la convention core/foo.py → tests/test_foo.py)
+_SUPERVISED_TEST_MAP = {
+    "core/vector_store.py": ["tests/test_memory_health.py", "tests/test_multiproject_memory.py"],
+    "core/grimoire_writer.py": ["tests/test_grimoire.py"],
+    "core/event_bus/bus.py": ["tests/test_event_bus.py"],
+}
 
 
 # --- Fonctions utilitaires ---
@@ -55,6 +64,8 @@ def _extract_api_signatures(source_code: str) -> str:
                 if name and name.isupper():
                     lines.append(f"  {name} = ...")
 
+    _func_types = (ast.FunctionDef, ast.AsyncFunctionDef)
+
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.ClassDef):
             bases = ", ".join(
@@ -62,16 +73,18 @@ def _extract_api_signatures(source_code: str) -> str:
             )
             lines.append(f"  class {node.name}({bases}):")
             for item in node.body:
-                if isinstance(item, ast.FunctionDef) and item.name == "__init__":
+                if isinstance(item, _func_types) and item.name == "__init__":
                     args = ", ".join(a.arg for a in item.args.args if a.arg != "self")
                     lines.append(f"    def __init__({args})")
-                elif isinstance(item, ast.FunctionDef) and not item.name.startswith("_"):
+                elif isinstance(item, _func_types) and not item.name.startswith("_"):
                     args = ", ".join(a.arg for a in item.args.args if a.arg != "self")
-                    lines.append(f"    def {item.name}({args})")
-        elif isinstance(node, ast.FunctionDef):
+                    prefix = "async def" if isinstance(item, ast.AsyncFunctionDef) else "def"
+                    lines.append(f"    {prefix} {item.name}({args})")
+        elif isinstance(node, _func_types):
             if not node.name.startswith("_"):
                 args = ", ".join(a.arg for a in node.args.args)
-                lines.append(f"  def {node.name}({args})")
+                prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+                lines.append(f"  {prefix} {node.name}({args})")
 
     return "\n".join(lines) if lines else ""
 
@@ -255,6 +268,40 @@ async def _run_pytest(test_file: str) -> tuple[bool, str]:
         return False, f"Erreur exécution pytest: {e}"
 
 
+async def run_existing_tests_for_file(filepath: str) -> tuple[bool, str]:
+    """Lance les tests existants liés à un fichier source.
+    Retourne (success, output). Si aucun test trouvé → (True, "no tests")."""
+    normalized = filepath.replace("\\", "/")
+    # Extraire le chemin relatif au projet
+    proj_norm = PROJECT_ROOT.replace("\\", "/")
+    if normalized.startswith(proj_norm):
+        normalized = normalized[len(proj_norm):].lstrip("/")
+
+    # Chercher dans le mapping spécial
+    test_files = _SUPERVISED_TEST_MAP.get(normalized)
+    if test_files:
+        test_files = [os.path.join(PROJECT_ROOT, tf) for tf in test_files]
+    else:
+        # Mapping par défaut : core/foo.py → tests/test_foo.py
+        basename = os.path.basename(normalized.replace("/", os.sep))
+        name_no_ext = basename.replace(".py", "")
+        default_test = os.path.join(PROJECT_ROOT, "tests", f"test_{name_no_ext}.py")
+        test_files = [default_test] if os.path.exists(default_test) else []
+
+    if not test_files:
+        return True, "Aucun test existant trouvé"
+
+    # Lancer chaque fichier de test
+    all_output = []
+    for tf in test_files:
+        if os.path.exists(tf):
+            ok, out = await _run_pytest(tf)
+            all_output.append(out)
+            if not ok:
+                return False, "\n".join(all_output)
+    return True, "\n".join(all_output)
+
+
 async def run_pipeline(filename: str, filepath: str):
     """Pipeline CI/CD complet pour un fichier créé par Factory."""
 
@@ -311,6 +358,22 @@ async def run_pipeline(filename: str, filepath: str):
         _rollback(filepath)
         return
 
+    # Validation imports aliens (Django, Flask, etc.) — anti-hallucination
+    try:
+        from Agents.evolution_agent import _detect_alien_imports
+        aliens = _detect_alien_imports(source_code)
+        if aliens:
+            detail = f"Imports aliens détectés ({', '.join(aliens)}) — hallucination LLM probable"
+            logger.warning(f"[CI/CD] {detail} — rollback pour {filename}")
+            await bus.publish("CI_PIPELINE_RESULT", {
+                "filename": filename, "success": False,
+                "detail": detail
+            })
+            _rollback(filepath)
+            return
+    except ImportError:
+        pass  # Si evolution_agent n'est pas dispo, skip ce check
+
     # Contexte d'imports DYNAMIQUE basé sur le fichier réel
     import_hint = _build_import_hint(filename, filepath, source_code)
 
@@ -337,6 +400,7 @@ async def run_pipeline(filename: str, filepath: str):
         f"{memory_context}\n"
         f"CODE SOURCE COMPLET À TESTER :\n"
         f"```python\n{source_code}\n```"
+        f"{TEST_GENERATION_GUARDRAIL}"
     )
 
     # Calcul du module path (réutilisé pour validation)
@@ -543,12 +607,11 @@ async def run_pipeline(filename: str, filepath: str):
         "detail": f"Pipeline complet — {filename} déployé avec succès"
     })
 
-    # Smart Restart si fichier système
+    # Smart Restart si fichier système — via bus pour un arrêt propre
     is_system_file = any(k in filepath for k in ["Agents", "core", "main.py", "config.py"])
     if is_system_file:
         logger.info(f"[SMART RESTART] Modification système détectée ({filename})")
-        await asyncio.sleep(3)
-        sys.exit(65)
+        await bus.publish("SMART_RESTART_REQUESTED", {"filename": filename})
 
 
 # --- Listener bus ---

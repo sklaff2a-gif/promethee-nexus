@@ -2,7 +2,7 @@ import pytest
 import os
 import tempfile
 from unittest.mock import patch, AsyncMock, MagicMock
-from Agents.factory_agent import _FILENAME_STOPLIST, _PROTECTED_FILES
+from Agents.factory_agent import _FILENAME_STOPLIST, _PROTECTED_FILES, _CRITICAL_FILES, _SUPERVISED_FILES
 
 
 class TestFactorySandboxing:
@@ -258,22 +258,232 @@ class TestFactoryProtectedFiles:
             return DivineFactory()
 
     @pytest.mark.parametrize("protected", [
-        "core/base_agent.py",
         "core/orchestrator.py",
         "main.py",
         "config.py",
     ])
     @pytest.mark.asyncio
-    async def test_reject_protected_file(self, factory, protected):
-        """L'écriture dans un fichier protégé doit être refusée."""
+    async def test_reject_critical_file(self, factory, protected):
+        """L'écriture dans un fichier critique doit être refusée."""
         payload = {
             "mission": f"écris {protected}",
             "context": "```python\nimport os\nprint('pwned')\n```"
         }
         result = await factory.process_task(payload)
         assert result["status"] == "error"
-        assert "protégé" in result["result"].lower() or "Protégé" in result["result"]
+        assert "critique" in result["result"].lower()
 
     @pytest.mark.asyncio
     async def test_protected_list_not_empty(self):
         assert len(_PROTECTED_FILES) >= 10
+
+    @pytest.mark.asyncio
+    async def test_protected_files_is_union(self):
+        """_PROTECTED_FILES doit être l'union de _CRITICAL_FILES et _SUPERVISED_FILES."""
+        assert _PROTECTED_FILES == _CRITICAL_FILES | _SUPERVISED_FILES
+
+    @pytest.mark.asyncio
+    async def test_critical_file_always_rejected(self, factory):
+        """Un fichier critique est toujours rejeté, même avec evolution_spec_id."""
+        payload = {
+            "mission": "écris main.py",
+            "context": "```python\nimport os\nprint('pwned')\n```",
+            "evolution_spec_id": "SPEC-TEST-001",
+        }
+        result = await factory.process_task(payload)
+        assert result["status"] == "error"
+        assert "critique" in result["result"].lower()
+
+    @pytest.mark.asyncio
+    async def test_supervised_file_rejected_without_spec_id(self, factory):
+        """Un fichier supervisé sans evolution_spec_id est rejeté."""
+        payload = {
+            "mission": "écris core/base_agent.py",
+            "context": "```python\nimport os\nprint('pwned')\n```"
+        }
+        result = await factory.process_task(payload)
+        assert result["status"] == "error"
+        assert "supervisé" in result["result"].lower()
+
+    @pytest.mark.asyncio
+    async def test_supervised_file_allowed_with_spec_id(self, factory, tmp_path):
+        """Un fichier supervisé avec spec_id + tests qui passent → succès."""
+        factory.project_root = str(tmp_path)
+        core_dir = tmp_path / "core"
+        core_dir.mkdir(parents=True, exist_ok=True)
+        target = core_dir / "base_agent.py"
+        target.write_text("# original", encoding="utf-8")
+
+        code = "import os\nimport logging\nclass BaseAgent:\n    pass\n"
+        payload = {
+            "mission": "écris core/base_agent.py",
+            "context": f"```python\n{code}\n```",
+            "evolution_spec_id": "SPEC-TEST-002",
+        }
+        with patch.object(factory, 'remember'), \
+             patch("core.event_bus.bus.bus") as mock_bus, \
+             patch("core.ci_pipeline.run_existing_tests_for_file", new_callable=AsyncMock, return_value=(True, "46 passed")):
+            mock_bus.publish = AsyncMock()
+            result = await factory.process_task(payload)
+        assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_supervised_file_rollback_on_test_failure(self, factory, tmp_path):
+        """Un fichier supervisé qui casse les tests → rollback automatique."""
+        factory.project_root = str(tmp_path)
+        core_dir = tmp_path / "core"
+        core_dir.mkdir(parents=True, exist_ok=True)
+        target = core_dir / "base_agent.py"
+        target.write_text("# original content", encoding="utf-8")
+
+        code = "import os\nimport logging\nclass BrokenAgent:\n    pass\n"
+        payload = {
+            "mission": "écris core/base_agent.py",
+            "context": f"```python\n{code}\n```",
+            "evolution_spec_id": "SPEC-TEST-003",
+        }
+        with patch("core.ci_pipeline.run_existing_tests_for_file", new_callable=AsyncMock,
+                    return_value=(False, "FAILED: test_base_agent.py::test_init")):
+            result = await factory.process_task(payload)
+        assert result["status"] == "error"
+        assert "rollback" in result["result"].lower()
+        # Le fichier original doit être restauré via .bak
+        assert target.read_text(encoding="utf-8") == "# original content"
+
+
+class TestFactoryAntiTruncation:
+    """Vérifie que la Factory rejette les écritures qui tronquent un fichier existant."""
+
+    @pytest.fixture
+    def factory(self, tmp_path):
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            from Agents.factory_agent import DivineFactory
+            f = DivineFactory()
+            f.project_root = str(tmp_path)
+            return f
+
+    @pytest.mark.asyncio
+    async def test_truncation_rejected(self, factory, tmp_path):
+        """Un fichier réduit à < 60% de l'original est rejeté."""
+        target = tmp_path / "Agents" / "test_agent.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Écrire un fichier existant de 1000 bytes
+        target.write_text("x" * 1000, encoding="utf-8")
+
+        # Tenter d'écrire un fichier de 400 bytes (40% de l'original)
+        small_code = "import os\n" + "a = 1\n" * 50  # ~350 chars
+        payload = {
+            "mission": f"écris Agents/test_agent.py",
+            "context": f"```python\n{small_code}\n```"
+        }
+        result = await factory.process_task(payload)
+        assert result["status"] == "error"
+        assert "troncature" in result["result"].lower()
+
+    @pytest.mark.asyncio
+    async def test_larger_file_accepted(self, factory, tmp_path):
+        """Un fichier plus grand ou de taille similaire est accepté."""
+        target = tmp_path / "Agents" / "test_agent.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x" * 500, encoding="utf-8")
+
+        # Nouveau code de 600 bytes (120% — plus grand)
+        big_code = "import os\nimport sys\n" + "def func():\n    pass\n" * 30
+        payload = {
+            "mission": f"écris Agents/test_agent.py",
+            "context": f"```python\n{big_code}\n```"
+        }
+        with patch("core.event_bus.bus.bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+            result = await factory.process_task(payload)
+        assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_new_file_no_truncation_check(self, factory, tmp_path):
+        """Un nouveau fichier (qui n'existe pas) n'est pas soumis au check."""
+        code = "import os\ndef hello():\n    return 42\n"
+        payload = {
+            "mission": "écris Agents/new_agent.py",
+            "context": f"```python\n{code}\n```"
+        }
+        with patch("core.event_bus.bus.bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+            result = await factory.process_task(payload)
+        assert result["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_small_file_no_truncation_check(self, factory, tmp_path):
+        """Les petits fichiers (< 500B) ne sont pas soumis au check."""
+        target = tmp_path / "Agents" / "tiny.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x = 1\n", encoding="utf-8")  # 6 bytes
+
+        code = "y = 2\n"  # Encore plus petit, mais fichier original trop petit pour le check
+        payload = {
+            "mission": "écris Agents/tiny.py",
+            "context": f"```python\n{code}\n```"
+        }
+        with patch("core.event_bus.bus.bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+            result = await factory.process_task(payload)
+        assert result["status"] == "success"
+
+    def test_truncation_constants(self):
+        """Les constantes anti-troncature sont définies."""
+        from Agents.factory_agent import TRUNCATION_MIN_RATIO, TRUNCATION_MIN_FILE_SIZE
+        assert TRUNCATION_MIN_RATIO == 0.60
+        assert TRUNCATION_MIN_FILE_SIZE == 500
+
+
+class TestFactoryRegexFallback:
+    """Tests de la regex durcie et du fallback finditer (Fix run 2026-02-18)."""
+
+    @pytest.fixture
+    def factory(self):
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            from Agents.factory_agent import DivineFactory
+            return DivineFactory()
+
+    def test_dans_les_fichiers_not_captured(self, factory):
+        """'dans les fichiers' ne doit PAS capturer 'les' comme path."""
+        import re
+        _PATH_REGEX = re.compile(
+            r'(?:crée|écris|fichier|path|write|update|dans|cible)\s+[:\s]*'
+            r'([a-zA-Z0-9_/\\-]*[./\\][a-zA-Z0-9_/\\.\\-]+)',
+            re.IGNORECASE,
+        )
+        text = "dans les fichiers de configuration"
+        match = _PATH_REGEX.search(text)
+        # "les" ne contient ni . ni / ni \ → la regex ne le capture pas
+        assert match is None
+
+    def test_regex_captures_real_path(self, factory):
+        """La regex capture un vrai chemin avec extension."""
+        import re
+        _PATH_REGEX = re.compile(
+            r'(?:crée|écris|fichier|path|write|update|dans|cible)\s+[:\s]*'
+            r'([a-zA-Z0-9_/\\-]*[./\\][a-zA-Z0-9_/\\.\\-]+)',
+            re.IGNORECASE,
+        )
+        text = "écris dans core/test_module.py le code suivant"
+        match = _PATH_REGEX.search(text)
+        assert match is not None
+        assert match.group(1) == "core/test_module.py"
+
+    @pytest.mark.asyncio
+    async def test_finditer_fallback_skips_false_positive(self, factory, tmp_path):
+        """Si le 1er match est dans la stoplist, finditer cherche le suivant."""
+        # On construit un texte avec "dans les" (faux positif) suivi d'un vrai path
+        payload = {
+            "mission": "écris dans Agents/new_tool.py",
+            "context": "```python\nimport os\ndef hello():\n    return 42\n```"
+        }
+        factory.project_root = str(tmp_path)
+        agents_dir = tmp_path / "Agents"
+        agents_dir.mkdir(parents=True, exist_ok=True)
+
+        with patch("core.event_bus.bus.bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+            result = await factory.process_task(payload)
+        assert result["status"] == "success"
+        assert "Agents/new_tool.py" in result["result"]

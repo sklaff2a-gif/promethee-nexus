@@ -1,6 +1,8 @@
+import re
 import logging
 from typing import Dict, Any
 from core.base_agent import BaseAgent
+from core.prompt_templates import analysis_guardrail, get_project_structure
 
 logger = logging.getLogger("security")
 
@@ -61,6 +63,13 @@ CONCLUSION : [synthèse en 1-2 phrases]
         # Enrichir avec la mémoire RAG
         rag_context = self.recall(mission)
 
+        # Injection dynamique de la structure projet (anti-hallucination de fichiers)
+        try:
+            project_files = get_project_structure()
+            guardrail_suffix = analysis_guardrail(project_files)
+        except Exception:
+            guardrail_suffix = ""
+
         prompt = f"""{self.system_instructions}
 
 MISSION : {mission}
@@ -71,13 +80,23 @@ CONTEXTE :
 MÉMOIRE PERTINENTE :
 {rag_context[:1000] if rag_context else "(aucune)"}
 
-Analyse et réponds selon le format structuré ci-dessus."""
+Analyse et réponds selon le format structuré ci-dessus.{guardrail_suffix}"""
 
         response = await self.generate_content(prompt)
 
-        # Mémoriser les findings significatifs
+        # Mémoriser uniquement les findings significatifs (anti-doublon)
         if response and len(response) > 100:
-            self.remember(f"AUDIT: {mission[:100]} — {response[:300]}")
+            # Skip les audits sans vulnérabilité (bruit RAG)
+            lower_resp = response.lower()
+            if "aucune vulnérabilité" in lower_resp or "rien à signaler" in lower_resp:
+                self.log_thought("🔒 Audit clean — pas de stockage RAG (aucune vulnérabilité).", type="info")
+            else:
+                # Extraire le nom du fichier audité pour un format distinctif
+                filename = "inconnu"
+                fn_match = re.search(r'fichier\s+(\S+)', mission)
+                if fn_match:
+                    filename = fn_match.group(1)
+                self.remember(f"SECURITY_FINDING [{filename}]: {response[:400]}")
 
         return {
             "status": "success",

@@ -1,9 +1,9 @@
+import asyncio
 import json
 import logging
 from typing import Dict, Any, List
 from core.base_agent import BaseAgent
 from core.capabilities.web_surfer import WebSurfer
-from core.capabilities.knowledge_ingestor import KnowledgeIngestor
 
 logger = logging.getLogger("researcher")
 
@@ -19,9 +19,7 @@ class DivineResearcher(BaseAgent):
             role="Analyste de Données & Veilleur Stratégique",
             description="Scanne le web via Google/DDG et les documents locaux pour extraire du savoir."
         )
-        # On charge les outils externes
         self.surfer = WebSurfer()
-        self.ingestor = KnowledgeIngestor()
 
     async def process_task(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
         mission = task_payload.get("mission", "")
@@ -45,8 +43,9 @@ class DivineResearcher(BaseAgent):
         
         self.log_thought(f"🌍 Lancement WebSurfer Hybride : {query[:30]}...", "info")
         
-        # Appel à l'outil (C'est ici que la magie opère : Google ou DDG ?)
-        web_results = self.surfer.search(query, max_results=5)
+        # Appel à l'outil dans un executor (search() est synchrone/bloquant)
+        loop = asyncio.get_running_loop()
+        web_results = await loop.run_in_executor(None, lambda: self.surfer.search(query, max_results=5))
         
         self.log_thought("✅ Résultats récupérés. Analyse et Synthèse...", "info")
         

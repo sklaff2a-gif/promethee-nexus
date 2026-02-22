@@ -19,6 +19,7 @@ def reset_event_bus(monkeypatch, tmp_path):
     from core.strategic_journal import StrategicJournal, JOURNAL_FILE
     from core.self_awareness import SelfAwarenessEngine, STATE_FILE as AWARENESS_STATE_FILE
     from core.objectives_engine import ObjectivesEngine, STATE_FILE as OBJECTIVES_STATE_FILE
+    from core.spreading_activation import SpreadingActivationEngine
 
     # Isolation disque : tous les chemins relatifs pointent vers tmp_path
     monkeypatch.chdir(tmp_path)
@@ -29,6 +30,7 @@ def reset_event_bus(monkeypatch, tmp_path):
     StrategicJournal.reset_singleton()
     SelfAwarenessEngine.reset_singleton()
     ObjectivesEngine.reset_singleton()
+    SpreadingActivationEngine.reset_singleton()
     # Nettoyer les fichiers d'état pour éviter la pollution entre tests
     for f in [STATE_FILE, JOURNAL_FILE, AWARENESS_STATE_FILE, OBJECTIVES_STATE_FILE]:
         if os.path.exists(f):
@@ -40,6 +42,7 @@ def reset_event_bus(monkeypatch, tmp_path):
     StrategicJournal.reset_singleton()
     SelfAwarenessEngine.reset_singleton()
     ObjectivesEngine.reset_singleton()
+    SpreadingActivationEngine.reset_singleton()
     for f in [STATE_FILE, JOURNAL_FILE, AWARENESS_STATE_FILE, OBJECTIVES_STATE_FILE]:
         if os.path.exists(f):
             os.remove(f)

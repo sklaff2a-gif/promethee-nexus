@@ -238,12 +238,14 @@ class TestEvolutionBudget:
     """Vérifie que _generate_code_cloud() respecte le budget et le cooldown."""
 
     def setup_method(self):
-        # Reset les compteurs de classe
-        BaseAgent._cloud_call_count = 0
+        # Reset les compteurs de classe (nouveau système RPM)
+        BaseAgent._rpm_windows = {}
+        BaseAgent._daily_model_calls = {}
         BaseAgent._cloud_cooldown_until = 0.0
-        BaseAgent._daily_cloud_calls = 0
         BaseAgent._daily_cloud_calls_evolution = 0
-        BaseAgent._daily_cloud_reset_day = date.today()
+        BaseAgent._daily_model_reset_day = date.today()
+        BaseAgent._cloud_429_count_today = 0
+        BaseAgent._cloud_429_reset_day = None
 
     @pytest.mark.asyncio
     async def test_cooldown_429_blocks_cloud(self):
@@ -265,7 +267,7 @@ class TestEvolutionBudget:
         from Agents.evolution_agent import DivineEvolution
         evo = DivineEvolution()
 
-        BaseAgent._daily_cloud_calls_evolution = BaseAgent.MAX_DAILY_EVOLUTION_CALLS
+        BaseAgent._daily_cloud_calls_evolution = BaseAgent.MAX_DAILY_EVOLUTION_CLOUD
 
         with patch.object(evo, "_get_gemini_client") as mock_client:
             result = await evo._generate_code_cloud("Génère du code Python")
@@ -274,7 +276,7 @@ class TestEvolutionBudget:
 
     @pytest.mark.asyncio
     async def test_successful_call_increments_counters(self):
-        """Un appel Cloud réussi incrémente les 3 compteurs."""
+        """Un appel Cloud réussi incrémente les compteurs RPM + daily + evolution."""
         from Agents.evolution_agent import DivineEvolution
         evo = DivineEvolution()
 
@@ -288,8 +290,10 @@ class TestEvolutionBudget:
             result = await evo._generate_code_cloud("Génère du code Python")
 
         assert result == mock_response.text
-        assert BaseAgent._cloud_call_count == 1
-        assert BaseAgent._daily_cloud_calls == 1
+        # Le modèle utilisé est le premier dans cloud_models
+        model = evo.cloud_models[0]
+        assert BaseAgent._daily_model_calls.get(model, 0) == 1
+        assert len(BaseAgent._rpm_windows.get(model, [])) == 1
         assert BaseAgent._daily_cloud_calls_evolution == 1
 
     @pytest.mark.asyncio
@@ -320,14 +324,87 @@ class TestLocalForceMarkers:
         assert hasattr(BaseAgent, "_LOCAL_FORCE_MARKERS")
         assert len(BaseAgent._LOCAL_FORCE_MARKERS) >= 8
 
-    def test_markers_exist_on_orchestrator(self):
-        """_INTERNAL_CONTEXT_MARKERS est défini sur Orchestrator."""
-        assert hasattr(Orchestrator, "_INTERNAL_CONTEXT_MARKERS")
-        assert len(Orchestrator._INTERNAL_CONTEXT_MARKERS) >= 5
+    def test_orchestrator_markers_from_base_agent(self):
+        """L'orchestrateur utilise les mêmes marqueurs que BaseAgent (source unique)."""
+        markers = Orchestrator._get_internal_markers()
+        assert markers is BaseAgent._LOCAL_FORCE_MARKERS
+        assert len(markers) >= 8
 
-    def test_orchestrator_markers_subset_of_agent(self):
-        """Les marqueurs orchestrateur sont un sous-ensemble des marqueurs agent."""
-        for marker in Orchestrator._INTERNAL_CONTEXT_MARKERS:
-            assert marker in BaseAgent._LOCAL_FORCE_MARKERS, (
-                f"Marqueur '{marker}' dans Orchestrator mais absent de BaseAgent._LOCAL_FORCE_MARKERS"
-            )
+
+# ─── Tests RPM Enforcement ───
+
+class TestRpmEnforcement:
+    """Vérifie que _check_rpm bloque correctement après N appels dans la minute."""
+
+    def setup_method(self):
+        BaseAgent._rpm_windows = {}
+
+    def test_check_rpm_allows_under_limit(self):
+        """RPM sous la limite → autorisé."""
+        assert BaseAgent._check_rpm("models/gemini-2.5-pro") is True
+
+    def test_check_rpm_blocks_at_limit(self):
+        """RPM à la limite → bloqué."""
+        from collections import deque
+        now = time.time()
+        # Remplir la fenêtre à la limite (50 pour Pro)
+        BaseAgent._rpm_windows["models/gemini-2.5-pro"] = deque(
+            [now - i * 0.5 for i in range(50)]
+        )
+        assert BaseAgent._check_rpm("models/gemini-2.5-pro") is False
+
+    def test_check_rpm_unblocks_after_expiry(self):
+        """Après 60s, les timestamps expirent et le RPM se libère."""
+        from collections import deque
+        old = time.time() - 61  # Plus de 60s
+        BaseAgent._rpm_windows["models/gemini-2.5-pro"] = deque(
+            [old - i for i in range(50)]
+        )
+        assert BaseAgent._check_rpm("models/gemini-2.5-pro") is True
+
+    def test_record_cloud_call_increments_rpm_and_daily(self):
+        """_record_cloud_call incrémente RPM et daily."""
+        BaseAgent._daily_model_calls = {}
+        BaseAgent._record_cloud_call("models/gemini-2.5-flash")
+        assert len(BaseAgent._rpm_windows["models/gemini-2.5-flash"]) == 1
+        assert BaseAgent._daily_model_calls["models/gemini-2.5-flash"] == 1
+
+    def test_unknown_model_uses_default_rpm(self):
+        """Un modèle inconnu utilise CLOUD_RPM_DEFAULT (30)."""
+        assert BaseAgent._check_rpm("models/unknown-model") is True
+        from collections import deque
+        now = time.time()
+        BaseAgent._rpm_windows["models/unknown-model"] = deque(
+            [now - i * 0.5 for i in range(30)]
+        )
+        assert BaseAgent._check_rpm("models/unknown-model") is False
+
+
+# ─── Tests Daily Budget Per Model ───
+
+class TestDailyBudgetPerModel:
+    """Vérifie que _check_daily_budget bloque après le quota par modèle."""
+
+    def setup_method(self):
+        BaseAgent._daily_model_calls = {}
+
+    def test_budget_allows_under_limit(self):
+        """Budget sous la limite → autorisé."""
+        assert BaseAgent._check_daily_budget("models/gemini-2.5-pro") is True
+
+    def test_budget_blocks_at_limit(self):
+        """Budget Pro à 100 → bloqué."""
+        BaseAgent._daily_model_calls["models/gemini-2.5-pro"] = 100
+        assert BaseAgent._check_daily_budget("models/gemini-2.5-pro") is False
+
+    def test_budget_flash_higher_limit(self):
+        """Flash a une limite de 2000, bien plus haute que Pro."""
+        BaseAgent._daily_model_calls["models/gemini-2.5-flash"] = 100
+        assert BaseAgent._check_daily_budget("models/gemini-2.5-flash") is True
+
+    def test_budget_unknown_model_default(self):
+        """Un modèle inconnu a un budget par défaut de 500."""
+        BaseAgent._daily_model_calls["models/unknown"] = 499
+        assert BaseAgent._check_daily_budget("models/unknown") is True
+        BaseAgent._daily_model_calls["models/unknown"] = 500
+        assert BaseAgent._check_daily_budget("models/unknown") is False

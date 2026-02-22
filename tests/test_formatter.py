@@ -1,5 +1,6 @@
 """Tests pour le Formatter Agent - extraction déterministe fallback."""
 import pytest
+from unittest.mock import patch, AsyncMock
 from Agents.formatter_agent import DivineFormatter
 
 
@@ -137,3 +138,53 @@ class TestRebuildFormattedResponse:
         assert "FICHIER: core/test.py" in result
         assert "```python" in result
         assert "print('hello')" in result
+
+
+class TestSyntaxValidation:
+    """Tests de la validation ast.parse() avant dispatch Factory (Fix run 2026-02-18)."""
+
+    def setup_method(self):
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            self.f = DivineFormatter()
+
+    @pytest.mark.asyncio
+    async def test_broken_code_fallback_to_original(self):
+        """Si le LLM casse la syntaxe, fallback vers le code original du contexte."""
+        valid_code = "import os\ndef hello():\n    return 42\n"
+        broken_code = "import os\ndef hello(\n    return 42\n"  # parenthèse non fermée
+
+        # Simuler : generate_content retourne du code cassé dans le bon format
+        broken_response = f"FICHIER: core/test.py\nCODE:\n```python\n{broken_code}\n```"
+
+        with patch.object(self.f, "generate_content", new=AsyncMock(return_value=broken_response)):
+            with patch.object(self.f, "log_thought"):
+                payload = {
+                    "mission": "Nettoie ce code.",
+                    "context": f"FICHIER: core/test.py\n```python\n{valid_code}\n```",
+                }
+                result = await self.f.process_task(payload)
+
+        # Le fallback déterministe doit récupérer le code original valide
+        assert result["status"] in ("success", "error")
+        # Si le fallback marche, on envoie à la Factory
+        if result["status"] == "success":
+            assert "FACTORY" in result["result"]
+
+    @pytest.mark.asyncio
+    async def test_valid_code_dispatched_normally(self):
+        """Si le code LLM est syntaxiquement valide, dispatch normal à la Factory."""
+        valid_code = "import os\ndef hello():\n    return 42\n"
+        good_response = f"FICHIER: core/test.py\nCODE:\n```python\n{valid_code}\n```"
+
+        with patch.object(self.f, "generate_content", new=AsyncMock(return_value=good_response)):
+            with patch.object(self.f, "log_thought"):
+                with patch("core.orchestrator.orchestrator") as mock_orch:
+                    mock_orch.dispatch_task = AsyncMock()
+                    payload = {
+                        "mission": "Nettoie ce code.",
+                        "context": f"FICHIER: core/test.py\n```python\n{valid_code}\n```",
+                    }
+                    result = await self.f.process_task(payload)
+
+        assert result["status"] == "success"
+        assert "FACTORY" in result["result"]

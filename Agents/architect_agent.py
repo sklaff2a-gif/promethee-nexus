@@ -50,7 +50,8 @@ FORMAT DE RÉPONSE :
 
     @staticmethod
     def _contains_python_code(text: str) -> bool:
-        """Détecte du vrai code Python structurel (pas une simple mention)."""
+        """Détecte du vrai code Python structurel (pas une simple mention).
+        NB: même logique que Orchestrator._contains_python_code — synchroniser si modifié."""
         code_patterns = re.findall(r'^(import |from \w+ import|class \w+|def \w+\(|@\w+)', text, re.MULTILINE)
         return len(code_patterns) >= 2
 
@@ -169,6 +170,11 @@ FORMAT DE RÉPONSE :
                     "mission": "Nettoie ce code validé pour la Factory.",
                     "context": full_content
                 }
+
+                # Propager EVOLUTION_SPEC_ID si présent (pipeline Evolution → Factory)
+                spec_id_match = re.search(r'EVOLUTION_SPEC_ID:\s*(\S+)', mission)
+                if spec_id_match:
+                    formatter_payload["evolution_spec_id"] = spec_id_match.group(1)
 
                 loop = asyncio.get_running_loop()
                 loop.create_task(orchestrator.dispatch_task("formatter", formatter_payload))

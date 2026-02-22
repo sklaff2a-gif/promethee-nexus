@@ -1,0 +1,46 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'FILE=$(jq -r \".tool_input.file_path // empty\"); if [[ \"$FILE\" == *.py ]]; then echo \"[HOOK] Fichier Python modifié: $FILE\"; fi'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'echo \"[HOOK] Session terminée à $(date +%Y-%m-%d_%H:%M:%S)\" >> \"C:/MesProjets/PROMETHEE_V11_restructuration2026/logs/claude_sessions.log\"'"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(PYTHONIOENCODING=utf-8 python -m pytest:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(PYTHONIOENCODING=utf-8 python analyze_run.py:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(cp:*)",
+      "Bash(mkdir:*)",
+      "Bash(ls:*)",
+      "Read",
+      "Edit",
+      "Glob",
+      "Grep",
+      "WebSearch"
+    ]
+  }
+}

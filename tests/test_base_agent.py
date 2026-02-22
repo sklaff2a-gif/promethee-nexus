@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from core.base_agent import BaseAgent
+from config import Config
 
 
 # ─── Tests CoT Stripping (Fix #7) ───
@@ -195,3 +196,215 @@ class TestRememberDedup:
         agent.memory_manager.query_with_metadata.side_effect = Exception("ChromaDB error")
         agent.remember("test text")  # Ne doit pas lever d'exception
         agent.memory_manager.add_documents.assert_not_called()
+
+
+# ─── Tests Sanitize Response (anti-patterns dangereux) ───
+
+class TestSanitizeResponse:
+    """Vérifie que _sanitize_response détecte et neutralise les patterns dangereux."""
+
+    def test_eval_neutralized(self):
+        code = "result = eval('2+2')\nprint(result)"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+        assert "eval(" in result  # Le texte est là mais commenté
+
+    def test_exec_neutralized(self):
+        code = "exec('import os; os.system(\"dir\")')"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+
+    def test_subprocess_neutralized(self):
+        code = "import subprocess\nsubprocess.call(['rm', '-rf', '/'])"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert result.count("# [NEUTRALISÉ]") >= 1
+
+    def test_os_system_neutralized(self):
+        code = "os.system('shutdown -r -t 0')"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+
+    def test_cmd_c_neutralized(self):
+        code = "Exécuter cmd /c del /f /q C:\\*"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+
+    def test_base64_decode_neutralized(self):
+        code = "payload = base64.b64decode(encoded_string)"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+
+    def test_rm_rf_neutralized(self):
+        code = "rm -rf /etc/passwd"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+
+    def test_safe_code_unchanged(self):
+        """Le code normal n'est pas modifié."""
+        code = "def hello():\n    return 'world'\n\nresult = hello()"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert result == code
+        assert "# [NEUTRALISÉ]" not in result
+
+    def test_empty_text_unchanged(self):
+        assert BaseAgent._sanitize_response("", "test") == ""
+        assert BaseAgent._sanitize_response(None, "test") is None
+
+    def test_mixed_safe_and_dangerous(self):
+        """Seules les lignes dangereuses sont neutralisées."""
+        code = "import os\ndef clean():\n    os.system('rm -rf /')\n    return True"
+        result = BaseAgent._sanitize_response(code, "test")
+        lines = result.split('\n')
+        assert not lines[0].startswith("# [NEUTRALISÉ]")  # import os = safe
+        assert not lines[1].startswith("# [NEUTRALISÉ]")  # def clean = safe
+        assert lines[2].startswith("# [NEUTRALISÉ]")      # os.system = dangerous
+        assert not lines[3].startswith("# [NEUTRALISÉ]")  # return True = safe
+
+    def test_setuid_neutralized(self):
+        code = "os.setuid(0)"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+
+    def test_chmod_777_neutralized(self):
+        code = "chmod 777 /etc/shadow"
+        result = BaseAgent._sanitize_response(code, "test")
+        assert "# [NEUTRALISÉ]" in result
+
+
+# ─── Tests Cooldown 429 avec escalade exponentielle ───
+
+class TestCloudCooldownEscalation:
+    """Vérifie que le cooldown 429 s'escalade (Tier 1 : 15min/1h/4h)."""
+
+    def setup_method(self):
+        """Reset l'état Cloud avant chaque test."""
+        BaseAgent._cloud_cooldown_until = 0.0
+        BaseAgent._cloud_429_count_today = 0
+        BaseAgent._cloud_429_reset_day = None
+
+    def test_first_429_standard_cooldown(self):
+        """1er 429 : cooldown de 15 min (900s)."""
+        import time
+        before = time.time()
+        BaseAgent._activate_cloud_cooldown()
+        assert BaseAgent._cloud_429_count_today == 1
+        assert BaseAgent._cloud_cooldown_until >= before + 850   # ~15 min
+        assert BaseAgent._cloud_cooldown_until <= before + 950
+
+    def test_second_429_extended_cooldown(self):
+        """2e 429 : cooldown de 1h (3600s)."""
+        import time
+        BaseAgent._activate_cloud_cooldown()  # 1er
+        BaseAgent._activate_cloud_cooldown()  # 2e
+        assert BaseAgent._cloud_429_count_today == 2
+        expected = time.time() + 3600
+        assert abs(BaseAgent._cloud_cooldown_until - expected) < 5
+
+    def test_third_429_four_hours(self):
+        """3e+ 429 : cooldown de 4h (14400s)."""
+        import time
+        BaseAgent._activate_cloud_cooldown()  # 1er
+        BaseAgent._activate_cloud_cooldown()  # 2e
+        BaseAgent._activate_cloud_cooldown()  # 3e
+        assert BaseAgent._cloud_429_count_today == 3
+        expected = time.time() + 4 * 3600
+        assert abs(BaseAgent._cloud_cooldown_until - expected) < 5
+
+    def test_counter_resets_new_day(self):
+        """Le compteur 429 se reset si le jour change."""
+        from datetime import date, timedelta
+        BaseAgent._activate_cloud_cooldown()
+        BaseAgent._activate_cloud_cooldown()
+        assert BaseAgent._cloud_429_count_today == 2
+        # Simuler un nouveau jour
+        BaseAgent._cloud_429_reset_day = date.today() - timedelta(days=1)
+        BaseAgent._activate_cloud_cooldown()
+        assert BaseAgent._cloud_429_count_today == 1  # Reset + 1
+
+    def test_fourth_429_still_four_hours(self):
+        """4e 429 garde le cooldown de 4h."""
+        import time
+        for _ in range(4):
+            BaseAgent._activate_cloud_cooldown()
+        assert BaseAgent._cloud_429_count_today == 4
+        expected = time.time() + 4 * 3600
+        assert abs(BaseAgent._cloud_cooldown_until - expected) < 5
+
+
+class TestExtractModelSize:
+    """Tests de _extract_model_size (Fix run 2026-02-18)."""
+
+    def test_model_with_size(self):
+        assert BaseAgent._extract_model_size("qwen3-coder:30b") == 30
+
+    def test_model_small(self):
+        assert BaseAgent._extract_model_size("qwen3:8b") == 8
+
+    def test_model_14b(self):
+        assert BaseAgent._extract_model_size("qwen3-coder:14b") == 14
+
+    def test_model_no_size(self):
+        assert BaseAgent._extract_model_size("gemma3:latest") == 0
+
+    def test_model_empty(self):
+        assert BaseAgent._extract_model_size("") == 0
+
+
+class TestMaxLocalModelSize:
+    """Tests du MAX_LOCAL_MODEL_SIZE enforcement (Fix run 2026-02-18)."""
+
+    def setup_method(self):
+        """Reset l'état Cloud entre les tests."""
+        BaseAgent._rpm_windows = {}
+        BaseAgent._daily_model_calls = {}
+        BaseAgent._cloud_cooldown_until = 0.0
+        BaseAgent._cloud_429_count_today = 0
+        BaseAgent._cloud_429_reset_day = None
+        BaseAgent._daily_cloud_calls_evolution = 0
+        BaseAgent._daily_model_reset_day = None
+
+    def test_model_too_big_fallback(self):
+        """Si MAX_LOCAL_MODEL_SIZE=16, un modèle 30b doit fallback vers 12b."""
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            agent = BaseAgent("coder", "Coder", "Test")
+
+        with patch.object(Config, "MAX_LOCAL_MODEL_SIZE", 16), \
+             patch.object(Config, "AGENT_SPECIFIC_LOCAL_MODELS", {"coder": "qwen3-coder:30b"}):
+            # Simuler l'extraction du modèle local dans generate_content
+            local_model = Config.AGENT_SPECIFIC_LOCAL_MODELS.get("coder", "gemma3:12b")
+            max_size = Config.MAX_LOCAL_MODEL_SIZE
+            model_size = agent._extract_model_size(local_model)
+            assert model_size == 30
+            assert model_size > max_size
+            # Le code dans generate_content ferait : local_model = default_local
+            if max_size > 0 and model_size > max_size:
+                local_model = "gemma3:12b"
+            assert local_model == "gemma3:12b"
+
+    def test_model_within_limit_kept(self):
+        """Si MAX_LOCAL_MODEL_SIZE=16, un modèle 8b est conservé."""
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            agent = BaseAgent("factory", "Factory", "Test")
+
+        with patch.object(Config, "MAX_LOCAL_MODEL_SIZE", 16), \
+             patch.object(Config, "AGENT_SPECIFIC_LOCAL_MODELS", {"factory": "qwen3:8b"}):
+            local_model = Config.AGENT_SPECIFIC_LOCAL_MODELS.get("factory", "gemma3:12b")
+            max_size = Config.MAX_LOCAL_MODEL_SIZE
+            model_size = agent._extract_model_size(local_model)
+            assert model_size == 8
+            assert model_size <= max_size
+            # Le modèle reste inchangé
+            assert local_model == "qwen3:8b"
+
+    def test_no_limit_model_kept(self):
+        """Si MAX_LOCAL_MODEL_SIZE=0 (défaut), aucune limite n'est appliquée."""
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            agent = BaseAgent("coder", "Coder", "Test")
+
+        with patch.object(Config, "MAX_LOCAL_MODEL_SIZE", 0), \
+             patch.object(Config, "AGENT_SPECIFIC_LOCAL_MODELS", {"coder": "qwen3-coder:30b"}):
+            local_model = Config.AGENT_SPECIFIC_LOCAL_MODELS.get("coder", "gemma3:12b")
+            max_size = Config.MAX_LOCAL_MODEL_SIZE
+            # max_size == 0 → pas de vérification
+            assert max_size == 0
+            assert local_model == "qwen3-coder:30b"

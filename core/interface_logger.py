@@ -38,9 +38,12 @@ TRACKED_EVENTS = {
     "COUNCIL_START",
     "COUNCIL_TURN",
     "COUNCIL_END",
+    "COUNCIL_PRESIDENT_VERDICT",
     "CI_PIPELINE_START",
     "CI_PIPELINE_STEP",
     "CI_PIPELINE_RESULT",
+    "EXPERIENCE_RECORDED",
+    "MEMORY_HEALTH_ALERT",
 }
 
 
@@ -147,9 +150,26 @@ def _format_event(event_type: str, data: dict):
             _write(f"[{ts}] [DIALOGUE] [{agent}] [CONSEIL Tour {round_n}/{max_r}] {content}")
         _write(f"[{ts}] [LOG:info] [{agent}] Conseil T{round_n}: contribution envoyée")
 
+    # --- COUNCIL_PRESIDENT_VERDICT ---
+    elif event_type == "COUNCIL_PRESIDENT_VERDICT":
+        round_n = data.get("round", "?")
+        pres_verdict = data.get("verdict", "?")
+        feedback = data.get("feedback", "")
+        icon = {"PERTINENT": "\u2705", "REDIRECT": "\u21a9\ufe0f", "ABORT": "\U0001f6d1"}.get(pres_verdict, "?")
+        line = f"[{ts}] [LOG:info] [PRESIDENT] Tour {round_n}: {icon} {pres_verdict}"
+        if pres_verdict in ("REDIRECT", "ABORT") and feedback:
+            line += f" — {feedback[:150]}"
+        _write(line)
+
     # --- COUNCIL_END ---
     elif event_type == "COUNCIL_END":
-        verdict = "CONSENSUS ATTEINT" if data.get("status") == "consensus" else "LIMITE DE TOURS"
+        status = data.get("status", "")
+        if status == "consensus":
+            verdict = "CONSENSUS ATTEINT"
+        elif status == "aborted":
+            verdict = "ABORT PAR LE PRÉSIDENT"
+        else:
+            verdict = "LIMITE DE TOURS"
         rounds = data.get("rounds_used", "?")
         _write(f"[{ts}] [DIALOGUE] [SYSTEM] CONSEIL FERME [{verdict}] après {rounds} tour(s).")
 
@@ -177,6 +197,28 @@ def _format_event(event_type: str, data: dict):
         level = "success" if success else "err"
         _write(f"[{ts}] [DIALOGUE] [SYSTEM] CI/CD [{verdict}] {filename} : {detail}")
         _write(f"[{ts}] [LOG:{level}] [CI/CD] RESULTAT [{verdict}] {filename}")
+
+    # --- MEMORY_HEALTH_ALERT ---
+    elif event_type == "MEMORY_HEALTH_ALERT":
+        status = data.get("status", "unknown")
+        warnings = data.get("warnings", [])
+        level = "critical" if status == "down" else "warning"
+        line = f"[{ts}] [LOG:{level}] [MÉMOIRE] Status: {status.upper()}"
+        if warnings:
+            line += f" — {'; '.join(str(w)[:60] for w in warnings[:3])}"
+        _write(line)
+
+    # --- EXPERIENCE_RECORDED ---
+    elif event_type == "EXPERIENCE_RECORDED":
+        spec_id = data.get("spec_id", "?")
+        phase = data.get("phase_reached", "?")
+        outcome = data.get("outcome", "?")
+        fail_reason = data.get("failure_reason", "")[:80]
+        level = "success" if outcome == "deployed" else "info"
+        line = f"[{ts}] [LOG:{level}] [REGISTRY] {spec_id} Phase {phase}: {outcome}"
+        if fail_reason:
+            line += f" — {fail_reason}"
+        _write(line)
 
 
 def _on_bus_event(event: dict):

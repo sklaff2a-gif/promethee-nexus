@@ -16,7 +16,10 @@ from core.ci_pipeline import (
     _recall_failures,
     _recall_successes,
     run_pipeline,
+    run_existing_tests_for_file,
     _on_artifact_created,
+    _SUPERVISED_TEST_MAP,
+    PROJECT_ROOT,
 )
 from core.event_bus.bus import bus
 
@@ -709,3 +712,60 @@ class TestPromptStructure:
         assert "RÈGLES STRICTES" in prompt
         assert "MISSION" in prompt
         assert "N'invente AUCUNE" in prompt
+
+
+# --- Tests run_existing_tests_for_file ---
+
+class TestRunExistingTestsForFile:
+
+    def test_supervised_test_map_has_entries(self):
+        """Le mapping spécial contient au moins les fichiers documentés."""
+        assert "core/vector_store.py" in _SUPERVISED_TEST_MAP
+        assert "core/grimoire_writer.py" in _SUPERVISED_TEST_MAP
+        assert "core/event_bus/bus.py" in _SUPERVISED_TEST_MAP
+
+    @pytest.mark.asyncio
+    async def test_run_existing_tests_for_base_agent(self):
+        """Le mapping par défaut trouve test_base_agent.py pour core/base_agent.py."""
+        test_file = os.path.join(PROJECT_ROOT, "tests", "test_base_agent.py")
+        if not os.path.exists(test_file):
+            pytest.skip("test_base_agent.py non trouvé")
+
+        # Mock _run_pytest pour ne pas exécuter les vrais tests
+        with patch("core.ci_pipeline._run_pytest", new_callable=AsyncMock,
+                    return_value=(True, "46 passed")) as mock_pytest:
+            ok, output = await run_existing_tests_for_file(
+                os.path.join(PROJECT_ROOT, "core", "base_agent.py")
+            )
+
+        assert ok is True
+        assert "46 passed" in output
+        # Vérifie que le bon fichier de test a été appelé
+        called_path = mock_pytest.call_args[0][0]
+        assert "test_base_agent.py" in called_path
+
+    @pytest.mark.asyncio
+    async def test_run_existing_tests_no_tests_found(self, tmp_path):
+        """Un fichier sans tests retourne (True, 'Aucun test...')."""
+        fake_file = str(tmp_path / "core" / "totally_unknown_module.py")
+        ok, output = await run_existing_tests_for_file(fake_file)
+        assert ok is True
+        assert "Aucun test" in output
+
+    @pytest.mark.asyncio
+    async def test_run_existing_tests_special_mapping(self):
+        """Le mapping spécial pour vector_store.py trouve les bons fichiers."""
+        test_file_1 = os.path.join(PROJECT_ROOT, "tests", "test_memory_health.py")
+        if not os.path.exists(test_file_1):
+            pytest.skip("test_memory_health.py non trouvé")
+
+        with patch("core.ci_pipeline._run_pytest", new_callable=AsyncMock,
+                    return_value=(True, "19 passed")) as mock_pytest:
+            ok, output = await run_existing_tests_for_file(
+                os.path.join(PROJECT_ROOT, "core", "vector_store.py")
+            )
+
+        assert ok is True
+        # Vérifie que le fichier du mapping spécial a été appelé
+        called_path = mock_pytest.call_args[0][0]
+        assert "test_memory_health.py" in called_path or "test_multiproject_memory.py" in called_path

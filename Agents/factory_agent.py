@@ -10,16 +10,27 @@ logger = logging.getLogger("factory_agent")
 
 ALLOWED_EXTENSIONS = {".py", ".txt", ".md", ".json", ".js", ".html", ".css", ".yaml", ".yml", ".toml", ".cfg"}
 MAX_FILE_SIZE = 100 * 1024  # 100 KB
+# Seuil anti-troncature : rejeter si nouveau < X% de l'existant (pour fichiers > 500B)
+TRUNCATION_MIN_RATIO = 0.60
+TRUNCATION_MIN_FILE_SIZE = 500  # Ne pas vérifier pour les petits fichiers
 
-# Fichiers système critiques : le Factory ne doit JAMAIS les écraser via une chaîne automatique.
+# Fichiers système CRITIQUES : JAMAIS modifiables automatiquement.
 # Seul un ordre utilisateur direct (Niveau 0 : "factory: écris ...") peut contourner cette protection.
-_PROTECTED_FILES = {
+_CRITICAL_FILES = {
     "main.py", "config.py", "guardian.py", "start_nexus.py", "emergency_restore.py",
-    "core/orchestrator.py", "core/base_agent.py", "core/router.py",
-    "core/summoner.py", "core/event_bus/bus.py", "core/autonomy_engine.py",
-    "core/council.py", "core/vector_store.py", "core/grimoire_writer.py",
-    "core/ci_pipeline.py",
+    "core/orchestrator.py", "core/summoner.py",
 }
+
+# Fichiers SUPERVISÉS : modifiables par le pipeline Evolution uniquement,
+# avec gate de tests existants obligatoire.
+_SUPERVISED_FILES = {
+    "core/base_agent.py", "core/router.py", "core/council.py",
+    "core/event_bus/bus.py", "core/autonomy_engine.py",
+    "core/vector_store.py", "core/grimoire_writer.py", "core/ci_pipeline.py",
+}
+
+# Rétro-compatibilité : union pour les imports externes
+_PROTECTED_FILES = _CRITICAL_FILES | _SUPERVISED_FILES
 
 # Mots français/anglais courants que la regex de détection capture par erreur
 # quand elle parse du texte LLM libre (ex: "fichier de données" → capture "de")
@@ -56,7 +67,7 @@ class DivineFactory(BaseAgent):
     def __init__(self):
         super().__init__(name="factory", role="System Executor", description="La Main de Prométhée.")
         self.manifest_path = "_FACTORY_HISTORY.txt"
-        self.project_root = os.path.abspath(".")
+        self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     def _log_to_manifest(self, action, path):
         try:
@@ -74,6 +85,17 @@ class DivineFactory(BaseAgent):
                 shutil.copy2(path, path + ".bak")
             except Exception as e:
                 logger.warning(f"[FACTORY] Échec backup de {path} : {e}")
+
+    def _restore_from_bak(self, path):
+        """Restaure un fichier depuis sa sauvegarde .bak."""
+        import shutil
+        bak = path + ".bak"
+        if os.path.exists(bak):
+            try:
+                shutil.copy2(bak, path)
+                logger.info(f"[FACTORY] Restauré depuis .bak : {path}")
+            except Exception as e:
+                logger.warning(f"[FACTORY] Échec restauration .bak de {path} : {e}")
 
     def _extract_code_force(self, text: str) -> str:
         """
@@ -143,16 +165,24 @@ class DivineFactory(BaseAgent):
         self.log_thought(f"Analyse Factory V25.0 : {mission[:50]}...", type="thought")
 
         # 1. DÉTECTION DU CHEMIN
-        path_match = re.search(r'(?:crée|écris|fichier|path|write|update|dans|cible)\s+[:\s]*([a-zA-Z0-9_/\.\\-]+)', mission + "\n" + context, re.IGNORECASE)
+        # Regex durcie : exige au moins un . / ou \ dans le groupe capturé (évite "les", "des", etc.)
+        _PATH_REGEX = re.compile(
+            r'(?:crée|écris|fichier|path|write|update|dans|cible)\s+[:\s]*'
+            r'([a-zA-Z0-9_/\\-]*[./\\][a-zA-Z0-9_/\\.\\-]+)',
+            re.IGNORECASE,
+        )
+        full_search_text = mission + "\n" + context
         target_path = None
-        
-        if path_match:
+
+        for path_match in _PATH_REGEX.finditer(full_search_text):
             candidate = path_match.group(1).strip().strip("'").strip('"')
             if self._is_valid_target_path(candidate):
                 target_path = candidate
+                break
             else:
                 logger.info(f"[FACTORY] Path rejeté (faux positif regex) : '{candidate}'")
-        elif "FICHIER:" in context:
+
+        if not target_path and "FICHIER:" in context:
             try:
                 candidate = context.split("FICHIER:")[1].split()[0].strip()
                 if self._is_valid_target_path(candidate):
@@ -175,11 +205,19 @@ class DivineFactory(BaseAgent):
             if len(code_content) < 5:
                 return {"status": "error", "result": "Code détecté trop court (Faux positif probable)."}
 
-            # Sandboxing : fichiers protégés (seul un ordre direct Niveau 0 peut les modifier)
+            # Sandboxing : fichiers critiques (rejet absolu)
             normalized = target_path.replace("\\", "/")
-            if normalized in _PROTECTED_FILES:
-                logger.warning(f"[FACTORY] 🛡️ PROTÉGÉ : {target_path} — écriture refusée (fichier système critique)")
-                return {"status": "error", "result": f"Fichier protégé : {target_path}. Écriture refusée."}
+            if normalized in _CRITICAL_FILES:
+                logger.warning(f"[FACTORY] 🛡️ CRITIQUE : {target_path} — écriture refusée")
+                return {"status": "error", "result": f"Fichier critique : {target_path}. Écriture refusée."}
+
+            # Sandboxing : fichiers supervisés (autorisés uniquement via pipeline Evolution)
+            if normalized in _SUPERVISED_FILES:
+                evo_spec_id = task_payload.get("evolution_spec_id")
+                if not evo_spec_id:
+                    logger.warning(f"[FACTORY] 🛡️ SUPERVISÉ : {target_path} — pas de spec_id Evolution")
+                    return {"status": "error", "result": f"Fichier supervisé : {target_path}. Seul le pipeline Evolution peut le modifier."}
+                logger.info(f"[FACTORY] 🔓 SUPERVISÉ : {target_path} autorisé via spec [{evo_spec_id}]")
 
             # Sandboxing : vérification extension
             ext = os.path.splitext(target_path)[1].lower()
@@ -207,23 +245,61 @@ class DivineFactory(BaseAgent):
                     return {"status": "error", "result": "Écriture hors-projet interdite."}
 
                 os.makedirs(os.path.dirname(full_path), exist_ok=True)
-                
+
+                # Anti-troncature : rejeter si le nouveau fichier est trop court par rapport à l'existant
+                if os.path.exists(full_path):
+                    existing_size = os.path.getsize(full_path)
+                    new_size = len(code_content.encode("utf-8"))
+                    if existing_size > TRUNCATION_MIN_FILE_SIZE and new_size < existing_size * TRUNCATION_MIN_RATIO:
+                        ratio_pct = int(new_size / existing_size * 100)
+                        logger.warning(
+                            f"[FACTORY] 🛡️ ANTI-TRONCATURE: {target_path} rejeté "
+                            f"({new_size}B vs {existing_size}B existant = {ratio_pct}% < {int(TRUNCATION_MIN_RATIO*100)}%)"
+                        )
+                        return {
+                            "status": "error",
+                            "result": (
+                                f"Anti-troncature : le nouveau code ({new_size}B) fait {ratio_pct}% "
+                                f"de l'existant ({existing_size}B). Écriture refusée. "
+                                f"Le code généré est probablement incomplet."
+                            )
+                        }
+
                 # Backup automatique avant écriture
                 self._backup(full_path)
                 
                 with open(full_path, "w", encoding="utf-8") as f:
                     f.write(code_content)
-                
+
+                # Gate de tests pour fichiers supervisés
+                if normalized in _SUPERVISED_FILES:
+                    from core.ci_pipeline import run_existing_tests_for_file
+                    tests_ok, test_output = await run_existing_tests_for_file(full_path)
+                    if not tests_ok:
+                        self._restore_from_bak(full_path)
+                        logger.warning(f"[FACTORY] 🔴 ROLLBACK supervisé : {target_path} — tests échoués")
+                        return {
+                            "status": "error",
+                            "result": f"Fichier supervisé rollback : tests existants échoués après écriture.\n{test_output[-500:]}"
+                        }
+                    logger.info(f"[FACTORY] ✅ Tests existants passés pour {target_path}")
+
                 self._log_to_manifest("WRITE", target_path)
                 msg = f"✅ Fichier écrit (Smart Path + Backup) : {target_path}"
                 self.remember(f"FILE_CREATED: {target_path}", metadata={"type": "code_creation"})
                 
                 # Feedback UI
                 from core.event_bus.bus import bus
-                await bus.publish("AGENT_RESPONSE", {"agent": "factory", "content": msg, "timestamp": str(datetime.now())})
+                import time as _time
+                await bus.publish("AGENT_RESPONSE", {"agent": "factory", "content": msg, "timestamp": str(_time.time())})
 
                 # --- AMÉLIORATION A : TRIGGER QUALITÉ ---
-                await bus.publish("ARTIFACT_CREATED", {"filepath": full_path, "filename": target_path})
+                artifact_event = {"filepath": full_path, "filename": target_path}
+                # Propager evolution_spec_id si présent (pipeline Evolution)
+                evo_spec_id = task_payload.get("evolution_spec_id")
+                if evo_spec_id:
+                    artifact_event["spec_id"] = evo_spec_id
+                await bus.publish("ARTIFACT_CREATED", artifact_event)
                 
                 return {"status": "success", "result": msg}
             

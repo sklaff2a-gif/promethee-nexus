@@ -44,6 +44,10 @@ ROUTINE_AFFINITY: Dict[str, Dict[str, float]] = {
     "VEILLE_SILENCIEUSE": {"curiosite": 0.5, "savoir": 0.4, "creativite": 0.1},
     "DROPZONE_SCAN":      {"savoir": 0.4, "curiosite": 0.3, "respect": 0.3},
     "COUNCIL_DEBATE":     {"respect": 0.3, "curiosite": 0.3, "creativite": 0.2, "audace": 0.2},
+    "GRIMOIRE_INVOKE":    {"savoir": 0.4, "curiosite": 0.3, "creativite": 0.3},
+    "SECURITY_AUDIT":     {"survie": 0.5, "respect": 0.3, "savoir": 0.2},
+    "MEMORY_CLEANUP":     {"survie": 0.4, "respect": 0.4, "savoir": 0.2},
+    "REFACTOR_RANDOM":    {"respect": 0.4, "creativite": 0.3, "savoir": 0.3},
 }
 
 # Decay quotidien : 2% de retour vers la baseline
@@ -403,6 +407,60 @@ class PsycheEngine:
                 "subject_key": "budget",
             }
 
+        # Priorité 2.5 : eureka — pont créatif non exploré (spreading activation)
+        if "eureka" not in recent:
+            try:
+                from core.spreading_activation import activation_engine
+                bridges = activation_engine.get_creative_bridges(unused_only=True)
+                strong_bridges = [b for b in bridges if b.bridge_strength >= 0.5]
+                if strong_bridges:
+                    bridge = strong_bridges[0]
+                    return {
+                        "participants": ["strategist", "coder", "evolution"],
+                        "mission": (
+                            f"EUREKA: Le système a détecté une connexion créative entre "
+                            f"'{bridge.node_a}' ({bridge.collection_a}) et "
+                            f"'{bridge.node_b}' ({bridge.collection_b}). "
+                            f"{bridge.hypothesis} "
+                            f"Comment exploiter cette connexion pour améliorer Prométhée ?"
+                        ),
+                        "needs_research": False, "research_query": None,
+                        "subject_key": "eureka",
+                    }
+            except Exception:
+                pass
+
+        # Priorité 2.3 : pulsion dominante non assouvie
+        if "desir" not in recent:
+            try:
+                from core.desire_engine import desires
+                dominant = max(desires.drives.values(), key=lambda d: d.deprivation)
+                if dominant.deprivation >= 75:
+                    DRIVE_COUNCIL_TOPICS = {
+                        "CURIOSITE": {
+                            "participants": ["researcher", "evolution", "strategist"],
+                            "mission": "Notre curiosite est inassouvie. Quels territoires inexplores meritent notre attention ?",
+                        },
+                        "CREATION": {
+                            "participants": ["coder", "evolution", "architect"],
+                            "mission": "Le besoin de creer est pressant. Quel artefact ambitieux pourrions-nous produire ?",
+                        },
+                        "CONNEXION": {
+                            "participants": ["strategist", "writer", "researcher"],
+                            "mission": "L'isolement pese. Comment ameliorer nos protocoles de collaboration et d'echange ?",
+                        },
+                        "CROISSANCE": {
+                            "participants": ["evolution", "coder", "strategist"],
+                            "mission": "Le besoin de grandir est imperieux. Quelle capacite nouvelle transformer notre potentiel ?",
+                        },
+                    }
+                    topic = DRIVE_COUNCIL_TOPICS.get(dominant.name)
+                    if topic:
+                        return {**topic, "needs_research": False, "research_query": None,
+                                "subject_key": "desir"}
+            except Exception:
+                pass
+
         # Priorité 2 (par défaut) : débat alimenté par la recherche web (rotation)
         # Avancer l'index si le thème a déjà été débattu récemment
         n_themes = len(RESEARCH_THEMES)
@@ -410,7 +468,7 @@ class PsycheEngine:
             idx = (debate_index + offset) % n_themes
             theme = RESEARCH_THEMES[idx]
             theme_key = theme["query"][:30].lower()
-            if theme_key not in recent[-3:]:
+            if theme_key not in recent[-5:]:
                 break
         else:
             # Tous les thèmes ont été débattus récemment — prendre le suivant en rotation

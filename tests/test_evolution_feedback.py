@@ -624,3 +624,64 @@ class TestIntegration:
         mock_rb.assert_called_once()
         mock_catalog.mark_rolled_back.assert_called_once()
         assert fb._completed_feedbacks[0]["verdict"] == "degraded"
+
+
+class TestOnArtifactCreated:
+    """Tests de _on_artifact_created (Fix run 2026-02-18)."""
+
+    @pytest.mark.asyncio
+    async def test_artifact_with_spec_id_confirms_deploy(self):
+        """ARTIFACT_CREATED avec spec_id en pending_deploy → mark_deployed."""
+        EvolutionFeedbackLoop.reset_singleton()
+        fb = EvolutionFeedbackLoop()
+
+        mock_catalog = MagicMock()
+        mock_spec = MagicMock()
+        mock_spec.status = "pending_deploy"
+        mock_catalog.get_spec.return_value = mock_spec
+
+        with patch.dict("sys.modules", {
+            "core.evolution_catalog": MagicMock(catalog=mock_catalog),
+        }):
+            await fb._on_artifact_created({
+                "data": {"spec_id": "PERF-001", "filepath": "/test/file.py"}
+            })
+
+        mock_catalog.mark_deployed.assert_called_once_with("PERF-001")
+
+    @pytest.mark.asyncio
+    async def test_artifact_without_spec_id_is_ignored(self):
+        """ARTIFACT_CREATED sans spec_id → rien ne se passe."""
+        EvolutionFeedbackLoop.reset_singleton()
+        fb = EvolutionFeedbackLoop()
+
+        mock_catalog = MagicMock()
+
+        with patch.dict("sys.modules", {
+            "core.evolution_catalog": MagicMock(catalog=mock_catalog),
+        }):
+            await fb._on_artifact_created({
+                "data": {"filepath": "/test/file.py"}
+            })
+
+        mock_catalog.mark_deployed.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_artifact_spec_not_pending_deploy_is_ignored(self):
+        """ARTIFACT_CREATED avec spec_id mais pas en pending_deploy → pas de mark_deployed."""
+        EvolutionFeedbackLoop.reset_singleton()
+        fb = EvolutionFeedbackLoop()
+
+        mock_catalog = MagicMock()
+        mock_spec = MagicMock()
+        mock_spec.status = "deployed"  # Déjà deployed
+        mock_catalog.get_spec.return_value = mock_spec
+
+        with patch.dict("sys.modules", {
+            "core.evolution_catalog": MagicMock(catalog=mock_catalog),
+        }):
+            await fb._on_artifact_created({
+                "data": {"spec_id": "PERF-001", "filepath": "/test/file.py"}
+            })
+
+        mock_catalog.mark_deployed.assert_not_called()

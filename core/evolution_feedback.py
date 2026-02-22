@@ -55,6 +55,7 @@ class EvolutionFeedbackLoop:
             from core.event_bus.bus import bus
             bus.subscribe("EVOLUTION_DEPLOYED", self._on_evolution_deployed)
             bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
+            bus.subscribe("ARTIFACT_CREATED", self._on_artifact_created)
             self._subscribed = True
             logger.info("FEEDBACK: Boucle de feedback Evolution active.")
         except Exception as e:
@@ -143,6 +144,21 @@ class EvolutionFeedbackLoop:
         if completed:
             self._save()
 
+    async def _on_artifact_created(self, event: dict):
+        """Quand la Factory écrit un fichier, confirme le déploiement si spec_id présent."""
+        data = event.get("data", event)
+        spec_id = data.get("spec_id")
+        if not spec_id:
+            return
+        try:
+            from core.evolution_catalog import catalog
+            spec = catalog.get_spec(spec_id)
+            if spec and spec.status == "pending_deploy":
+                catalog.mark_deployed(spec_id)
+                logger.info(f"FEEDBACK: [{spec_id}] confirmé deployed via ARTIFACT_CREATED.")
+        except Exception as e:
+            logger.warning(f"FEEDBACK: Erreur confirmation deploy {spec_id}: {e}")
+
     # --- Évaluation ---
 
     async def _evaluate_deployment(self, obs: Dict[str, Any]):
@@ -191,9 +207,21 @@ class EvolutionFeedbackLoop:
             "reasons": reasons,
         }
 
-        # Actions selon le verdict
+        # Mettre à jour l'expérience dans le registre
         spec_id = obs["spec_id"]
+        try:
+            from core.experience_registry import ExperienceRegistry
+            exp_registry = ExperienceRegistry()
+            exp_history = exp_registry.get_spec_history(spec_id)
+            if exp_history:
+                latest = exp_history[-1]
+                latest["post_deploy_verdict"] = verdict
+                latest["post_deploy_delta"] = round(delta_success, 4)
+                exp_registry._save()
+        except Exception as e:
+            logger.warning(f"FEEDBACK: Erreur mise à jour registre: {e}")
 
+        # Actions selon le verdict
         try:
             from core.evolution_catalog import catalog
             if verdict == "degraded":
@@ -266,13 +294,18 @@ class EvolutionFeedbackLoop:
                 f"FEEDBACK: Pas de .bak pour {target_file}, rollback impossible."
             )
 
-        # Publier l'événement rollback (pas de Smart Restart)
+        # Publier l'événement rollback + Smart Restart pour recharger le code restauré
         try:
             from core.event_bus.bus import bus
             await bus.publish("EVOLUTION_ROLLED_BACK", {
                 "spec_id": obs["spec_id"],
                 "spec_name": obs["spec_name"],
                 "target_file": target_file,
+            })
+            # Smart Restart : le fichier sur disque est l'ancien, mais le code en mémoire est le nouveau
+            await bus.publish("SMART_RESTART_REQUESTED", {
+                "filename": target_file,
+                "reason": f"rollback spec {obs.get('spec_name', '?')}",
             })
         except Exception:
             pass

@@ -40,8 +40,8 @@ class TestCountOfftopic:
         assert _count_offtopic(code) == 0
 
     def test_threshold_value(self):
-        """Le seuil doit être 3 (tolérance pour 1-2 mentions isolées)."""
-        assert _OFFTOPIC_THRESHOLD == 3
+        """Le seuil doit être 2 (tolérance réduite — anti-hallucination renforcée)."""
+        assert _OFFTOPIC_THRESHOLD == 2
 
 
 class TestCoderOfftopicFilter:

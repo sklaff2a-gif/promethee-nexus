@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import copy
 import asyncio
 import tempfile
 import pytest
@@ -34,12 +35,14 @@ def _make_health(verdict="GO", cpu=30.0, ram=50.0, ollama_alive=True, models=Non
     }
 
 
-def _make_history_entry(intent, status="success"):
+def _make_history_entry(intent, status="success", hours_ago=0):
+    from datetime import timedelta
+    ts = datetime.now() - timedelta(hours=hours_ago)
     return {
         "agent": "test",
         "intent": intent,
         "status": status,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": ts.isoformat(),
     }
 
 
@@ -269,21 +272,27 @@ class TestRoutineScorer:
     def test_dropzone_recovers_after_rotation(self):
         """Après assez de rotation, DROPZONE reprend la priorité grâce au reactivity bonus."""
         routines = _get_routines()
-        # Les 3 DROPZONE doivent être poussées hors de la fenêtre de 5
-        # pour que la pénalité par occurrences totales ne les pénalise plus
+        # Les 3 DROPZONE doivent être anciennes (>6h) ET poussées hors de la fenêtre de 10
+        # pour que ni la pénalité par occurrences ni le cooldown temporel ne s'appliquent
         history = [
-            _make_history_entry("DROPZONE_SCAN"),
-            _make_history_entry("DROPZONE_SCAN"),
-            _make_history_entry("DROPZONE_SCAN"),
-            _make_history_entry("VEILLE_SILENCIEUSE"),
-            _make_history_entry("AUDIT_STRUCTURE"),
-            _make_history_entry("EXPANSION_CODE"),
-            _make_history_entry("VEILLE_SILENCIEUSE"),
-            _make_history_entry("AUDIT_STRUCTURE"),  # fenêtre de 5 = les 5 dernières, plus de DROPZONE
+            _make_history_entry("DROPZONE_SCAN", hours_ago=12),
+            _make_history_entry("DROPZONE_SCAN", hours_ago=12),
+            _make_history_entry("DROPZONE_SCAN", hours_ago=12),
+            # 10 entrées récentes pour pousser DROPZONE hors de la fenêtre de 10
+            _make_history_entry("VEILLE_SILENCIEUSE", hours_ago=5),
+            _make_history_entry("AUDIT_STRUCTURE", hours_ago=4),
+            _make_history_entry("EXPANSION_CODE", hours_ago=4),
+            _make_history_entry("VEILLE_SILENCIEUSE", hours_ago=3),
+            _make_history_entry("AUDIT_STRUCTURE", hours_ago=3),
+            _make_history_entry("EXPANSION_CODE", hours_ago=2),
+            _make_history_entry("VEILLE_SILENCIEUSE", hours_ago=2),
+            _make_history_entry("AUDIT_STRUCTURE", hours_ago=1),
+            _make_history_entry("EXPANSION_CODE", hours_ago=1),
+            _make_history_entry("VEILLE_SILENCIEUSE", hours_ago=0),
         ]
         scored = RoutineScorer.score_routines(routines, [], history, dropzone_count=5)
         top_intent = scored[0][0]["intent"]
-        # DROPZONE revient en tête (0 occurrences récentes, reactivity bonus +3.0)
+        # DROPZONE revient en tête (0 occurrences dans fenêtre de 10, reactivity bonus +3.0)
         assert top_intent == "DROPZONE_SCAN"
 
     def test_frequency_penalty_progressive(self):
@@ -376,7 +385,7 @@ class TestAutonomyEngineV24:
         self.state_path = str(tmp_path / "state.json")
         with patch("core.autonomy_engine.STATE_FILE", self.state_path):
             with patch("core.autonomy_engine.AutonomyStatePersistence.load",
-                       return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
                 self.engine = AutonomyEngine(idle_threshold_seconds=300)
         yield
 
@@ -664,7 +673,7 @@ class TestGrimoireInvokeRoutine:
         self.state_path = str(tmp_path / "state.json")
         with patch("core.autonomy_engine.STATE_FILE", self.state_path):
             with patch("core.autonomy_engine.AutonomyStatePersistence.load",
-                       return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
                 self.engine = AutonomyEngine(idle_threshold_seconds=300)
         yield
 
@@ -705,10 +714,10 @@ class TestGrimoireInvokeRoutine:
             {"slug": "math_wizard", "name": "MathWizard", "description": "Maths", "keywords": ["calcul"]},
             {"slug": "dr_debug", "name": "DrDebug", "description": "Debug", "keywords": ["debug"]},
         ]
-        # math_wizard a été invoqué récemment
+        # math_wizard a été invoqué récemment (grimoire_slug enregistré)
         self.engine.routine_history = [
-            {"agent": "math_wizard", "intent": "GRIMOIRE_INVOKE", "status": "success",
-             "timestamp": "2026-02-14T10:00:00"}
+            {"agent": "_grimoire", "intent": "GRIMOIRE_INVOKE", "status": "success",
+             "timestamp": "2026-02-14T10:00:00", "grimoire_slug": "math_wizard"}
         ]
         with patch("builtins.open", MagicMock()), \
              patch("json.load", return_value=fake_index), \
@@ -814,7 +823,7 @@ class TestTemporalCooldown:
         """_record_routine enregistre le champ subject."""
         with patch("core.autonomy_engine.STATE_FILE", "/tmp/test_state.json"), \
              patch("core.autonomy_engine.AutonomyStatePersistence.load",
-                   return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                   return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
             engine = AutonomyEngine(idle_threshold_seconds=300)
         engine._record_routine("_council", "COUNCIL_DEBATE", "success", subject="budget")
         assert engine.routine_history[-1]["subject"] == "budget"
@@ -898,11 +907,18 @@ class TestCouncilToAction:
     @pytest.fixture(autouse=True)
     def setup_engine(self, tmp_path):
         self.state_path = str(tmp_path / "state.json")
+        # Isoler le catalog : _load sur un fichier vide → pas de specs COUNCIL-* du disque
+        self._catalog_patch = patch(
+            "core.evolution_catalog.CATALOG_STATE_FILE",
+            str(tmp_path / "catalog_state.json")
+        )
+        self._catalog_patch.start()
         with patch("core.autonomy_engine.STATE_FILE", self.state_path):
             with patch("core.autonomy_engine.AutonomyStatePersistence.load",
-                       return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
                 self.engine = AutonomyEngine(idle_threshold_seconds=300)
         yield
+        self._catalog_patch.stop()
 
     @pytest.mark.asyncio
     async def test_consensus_creates_spec(self):
@@ -1032,7 +1048,7 @@ class TestAdaptiveScoringIntegration:
         self.state_path = str(tmp_path / "state.json")
         with patch("core.autonomy_engine.STATE_FILE", self.state_path):
             with patch("core.autonomy_engine.AutonomyStatePersistence.load",
-                       return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
                 self.engine = AutonomyEngine(idle_threshold_seconds=300)
         yield
 
@@ -1066,16 +1082,12 @@ class TestAdaptiveScoringIntegration:
             "AUDIT_STRUCTURE": 5.0,
         }
 
-        dispatched_agents = []
-
-        async def capture_dispatch(agent, payload):
-            dispatched_agents.append(agent)
-            return {"status": "success", "result": "OK " * 50}
-
         with patch("core.autonomy_engine.orchestrator") as mock_orch, \
              patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
              patch.dict("sys.modules", {"core.self_awareness": MagicMock(awareness=mock_awareness)}):
-            mock_orch.dispatch_task = AsyncMock(side_effect=capture_dispatch)
+            mock_orch.dispatch_task = AsyncMock(return_value={
+                "status": "success", "result": "OK " * 50,
+            })
             routines = _get_routines()
             # EXPANSION en tête par défaut
             mock_scorer.return_value = [
@@ -1085,8 +1097,11 @@ class TestAdaptiveScoringIntegration:
                 (routines[3], 2.0),   # DROPZONE
             ]
             await self.engine._execute_scored_routine(health)
-            # AUDIT devrait être dispatché (score 4.0+5.0=9.0 > EXPANSION 5.0-10.0=-5.0)
-            assert dispatched_agents[0] == "architect"
+            # AUDIT_STRUCTURE a le meilleur score ajusté (4.0+5.0=9.0 > EXPANSION 5.0-10.0=-5.0)
+            # Vérifier que la routine exécutée est AUDIT_STRUCTURE (méthode dédiée, pas de dispatch)
+            assert self.engine.daily_count == 1
+            last = self.engine.routine_history[-1]
+            assert last["intent"] == "AUDIT_STRUCTURE"
 
     @pytest.mark.asyncio
     async def test_adaptive_scoring_graceful_on_error(self):
@@ -1375,7 +1390,7 @@ class TestTriggerTargetedLearning:
         self.state_path = str(tmp_path / "state.json")
         with patch("core.autonomy_engine.STATE_FILE", self.state_path):
             with patch("core.autonomy_engine.AutonomyStatePersistence.load",
-                       return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
                 self.engine = AutonomyEngine(idle_threshold_seconds=300)
         yield
 
@@ -1470,3 +1485,281 @@ class TestTriggerTargetedLearning:
             # Le topic stocké ne doit pas commencer par [MODE VEILLE]
             stored_topics = list(self.engine._learning_history.keys())
             assert not stored_topics[0].startswith("[MODE VEILLE]")
+
+
+
+# ═══════════════════════════════════════════════════════════
+# P2a — TestGrimoireSlugRotation (5 tests)
+# ═══════════════════════════════════════════════════════════
+
+class TestGrimoireSlugRotation:
+    """Tests P2a : le slug réel est enregistré et utilisé pour la rotation Grimoire."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        self.state_path = str(tmp_path / "state.json")
+        with patch("core.autonomy_engine.STATE_FILE", self.state_path):
+            with patch("core.autonomy_engine.AutonomyStatePersistence.load",
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
+                self.engine = AutonomyEngine(idle_threshold_seconds=300)
+        yield
+
+    def test_record_routine_stores_grimoire_slug(self):
+        """_record_routine enregistre grimoire_slug quand fourni."""
+        self.engine._record_routine("_grimoire", "GRIMOIRE_INVOKE", "success",
+                                    grimoire_slug="math_wizard")
+        entry = self.engine.routine_history[-1]
+        assert entry["grimoire_slug"] == "math_wizard"
+        assert entry["agent"] == "_grimoire"
+
+    def test_record_routine_no_slug_when_not_grimoire(self):
+        """_record_routine n'ajoute pas grimoire_slug si non fourni."""
+        self.engine._record_routine("evolution", "EXPANSION_CODE", "success")
+        entry = self.engine.routine_history[-1]
+        assert "grimoire_slug" not in entry
+
+    @pytest.mark.asyncio
+    async def test_grimoire_routine_sets_last_slug(self):
+        """_execute_grimoire_routine stocke le slug dans _last_grimoire_slug."""
+        fake_index = [
+            {"slug": "dr_debug", "name": "DrDebug", "description": "Debug", "keywords": ["debug"]},
+        ]
+        with patch("builtins.open", MagicMock()), \
+             patch("json.load", return_value=fake_index), \
+             patch("os.path.join", return_value="/fake/path"), \
+             patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "ok"})
+            await self.engine._execute_grimoire_routine()
+            assert self.engine._last_grimoire_slug == "dr_debug"
+
+    @pytest.mark.asyncio
+    async def test_grimoire_rotation_skips_recent_slugs(self):
+        """Les slugs déjà invoqués récemment sont sautés."""
+        fake_index = [
+            {"slug": "math_wizard", "name": "MathWizard", "description": "Maths", "keywords": ["calcul"]},
+            {"slug": "dr_debug", "name": "DrDebug", "description": "Debug", "keywords": ["debug"]},
+            {"slug": "log_analyst", "name": "LogAnalyst", "description": "Logs", "keywords": ["log"]},
+        ]
+        # math_wizard ET dr_debug déjà invoqués
+        self.engine.routine_history = [
+            {"agent": "_grimoire", "intent": "GRIMOIRE_INVOKE", "status": "success",
+             "timestamp": "2026-02-14T10:00:00", "grimoire_slug": "math_wizard"},
+            {"agent": "_grimoire", "intent": "GRIMOIRE_INVOKE", "status": "success",
+             "timestamp": "2026-02-14T11:00:00", "grimoire_slug": "dr_debug"},
+        ]
+        with patch("builtins.open", MagicMock()), \
+             patch("json.load", return_value=fake_index), \
+             patch("os.path.join", return_value="/fake/path"), \
+             patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "ok"})
+            await self.engine._execute_grimoire_routine()
+            call_args = mock_orch.dispatch_task.call_args
+            assert call_args[0][0] == "log_analyst"
+
+    @pytest.mark.asyncio
+    async def test_grimoire_rotation_fallback_modulo(self):
+        """Si tous les slugs ont été invoqués, fallback sur modulo."""
+        fake_index = [
+            {"slug": "math_wizard", "name": "MathWizard", "description": "Maths", "keywords": ["calcul"]},
+            {"slug": "dr_debug", "name": "DrDebug", "description": "Debug", "keywords": ["debug"]},
+        ]
+        # Les deux déjà invoqués
+        self.engine.routine_history = [
+            {"agent": "_grimoire", "intent": "GRIMOIRE_INVOKE", "status": "success",
+             "timestamp": "2026-02-14T10:00:00", "grimoire_slug": "math_wizard"},
+            {"agent": "_grimoire", "intent": "GRIMOIRE_INVOKE", "status": "success",
+             "timestamp": "2026-02-14T11:00:00", "grimoire_slug": "dr_debug"},
+        ]
+        self.engine.total_routines_executed = 1  # 1 % 2 = 1 → dr_debug
+        with patch("builtins.open", MagicMock()), \
+             patch("json.load", return_value=fake_index), \
+             patch("os.path.join", return_value="/fake/path"), \
+             patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "ok"})
+            await self.engine._execute_grimoire_routine()
+            call_args = mock_orch.dispatch_task.call_args
+            assert call_args[0][0] == "dr_debug"
+
+
+# ═══════════════════════════════════════════════════════════
+# P3b — TestCloudCooldownPenalty (4 tests)
+# ═══════════════════════════════════════════════════════════
+
+class TestCloudCooldownPenalty:
+    """Tests P3b : pénalité sur EXPANSION_CODE et REFACTOR_RANDOM quand Cloud en cooldown."""
+
+    def test_cloud_cooldown_penalizes_expansion(self):
+        """EXPANSION_CODE est pénalisé de -10.0 quand cloud_in_cooldown=True."""
+        routines = _get_routines()
+        scored_normal = RoutineScorer.score_routines(routines, [], [], cloud_in_cooldown=False)
+        scored_cooldown = RoutineScorer.score_routines(routines, [], [], cloud_in_cooldown=True)
+
+        # Moyenner sur plusieurs essais pour gommer le jitter
+        normal_scores = []
+        cooldown_scores = []
+        for _ in range(20):
+            scored_n = RoutineScorer.score_routines(routines, [], [], cloud_in_cooldown=False)
+            scored_c = RoutineScorer.score_routines(routines, [], [], cloud_in_cooldown=True)
+            normal_scores.append(next(s for r, s in scored_n if r["intent"] == "EXPANSION_CODE"))
+            cooldown_scores.append(next(s for r, s in scored_c if r["intent"] == "EXPANSION_CODE"))
+
+        avg_normal = sum(normal_scores) / len(normal_scores)
+        avg_cooldown = sum(cooldown_scores) / len(cooldown_scores)
+        assert avg_cooldown < avg_normal - 8.0  # Au moins 8 points de différence
+
+    def test_cloud_cooldown_penalizes_refactor(self):
+        """REFACTOR_RANDOM est aussi pénalisé quand cloud_in_cooldown=True."""
+        routines = [
+            {"agent": "coder", "intent": "REFACTOR_RANDOM", "mission": "test"},
+            {"agent": "architect", "intent": "AUDIT_STRUCTURE", "mission": "test"},
+        ]
+        scores = []
+        for _ in range(20):
+            scored = RoutineScorer.score_routines(routines, [], [], cloud_in_cooldown=True)
+            refactor_score = next(s for r, s in scored if r["intent"] == "REFACTOR_RANDOM")
+            scores.append(refactor_score)
+        avg = sum(scores) / len(scores)
+        assert avg < -7.0  # 1.0 (base) - 10.0 = -9.0 ± jitter
+
+    def test_cloud_cooldown_no_effect_on_audit(self):
+        """AUDIT_STRUCTURE n'est PAS pénalisé par cloud_in_cooldown."""
+        routines = [
+            {"agent": "architect", "intent": "AUDIT_STRUCTURE", "mission": "test"},
+        ]
+        scores_normal = []
+        scores_cooldown = []
+        for _ in range(20):
+            scored_n = RoutineScorer.score_routines(routines, [], [], cloud_in_cooldown=False)
+            scored_c = RoutineScorer.score_routines(routines, [], [], cloud_in_cooldown=True)
+            scores_normal.append(scored_n[0][1])
+            scores_cooldown.append(scored_c[0][1])
+        avg_n = sum(scores_normal) / len(scores_normal)
+        avg_c = sum(scores_cooldown) / len(scores_cooldown)
+        assert abs(avg_n - avg_c) < 1.0  # Pas de différence significative
+
+    def test_cloud_cooldown_expansion_not_selected(self):
+        """Avec cloud_in_cooldown, EXPANSION_CODE ne doit jamais être en tête."""
+        routines = _get_routines()
+        for _ in range(20):
+            scored = RoutineScorer.score_routines(routines, [], [], cloud_in_cooldown=True)
+            top_intent = scored[0][0]["intent"]
+            assert top_intent != "EXPANSION_CODE"
+
+
+# ═══════════════════════════════════════════════════════════
+# TestAwakeningFrustration — Phase 1.3
+# ═══════════════════════════════════════════════════════════
+
+class TestAwakeningFrustration:
+    """Tests Phase 1.3 : frustration DesireEngine → forced intent."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        self.state_path = str(tmp_path / "state.json")
+        with patch("core.autonomy_engine.STATE_FILE", self.state_path):
+            with patch("core.autonomy_engine.AutonomyStatePersistence.load",
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
+                self.engine = AutonomyEngine(idle_threshold_seconds=300)
+        yield
+
+    @pytest.mark.asyncio
+    async def test_frustration_forces_intent(self):
+        """Frustration >= 4 et deprivation >= 70 → forced_next_intent défini."""
+        from core.desire_engine import Drive
+
+        mock_desires = MagicMock()
+        drive = Drive(name="CURIOSITE", deprivation=80.0, frustration_streak=5)
+        mock_desires.drives = {"CURIOSITE": drive}
+
+        health = _make_health("GO")
+        with patch("core.autonomy_engine.orchestrator") as mock_orch, \
+             patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
+             patch.dict("sys.modules", {"core.desire_engine": MagicMock(
+                 desires=mock_desires,
+                 DRIVE_ROUTINE_AFFINITY={
+                     "CURIOSITE": {"VEILLE_SILENCIEUSE": 1.2, "DROPZONE_SCAN": 0.8}
+                 }
+             )}):
+            mock_orch.dispatch_task = AsyncMock(return_value={
+                "status": "success",
+                "result": "Analyse complete " * 10,
+            })
+            mock_scorer.return_value = [(_get_routines()[0], 2.0)]
+            await self.engine._execute_scored_routine(health)
+            # Après la routine, _forced_next_intent doit être défini
+            assert self.engine._forced_next_intent == "VEILLE_SILENCIEUSE"
+
+    @pytest.mark.asyncio
+    async def test_no_frustration_no_forced_intent(self):
+        """Pas de frustration → _forced_next_intent reste vide."""
+        from core.desire_engine import Drive
+
+        mock_desires = MagicMock()
+        drive = Drive(name="CURIOSITE", deprivation=40.0, frustration_streak=1)
+        mock_desires.drives = {"CURIOSITE": drive}
+
+        health = _make_health("GO")
+        with patch("core.autonomy_engine.orchestrator") as mock_orch, \
+             patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
+             patch.dict("sys.modules", {"core.desire_engine": MagicMock(
+                 desires=mock_desires,
+                 DRIVE_ROUTINE_AFFINITY={"CURIOSITE": {"VEILLE_SILENCIEUSE": 1.2}}
+             )}):
+            mock_orch.dispatch_task = AsyncMock(return_value={
+                "status": "success",
+                "result": "Analyse complete " * 10,
+            })
+            mock_scorer.return_value = [(_get_routines()[0], 2.0)]
+            await self.engine._execute_scored_routine(health)
+            assert self.engine._forced_next_intent == ""
+
+
+# ═══════════════════════════════════════════════════════════
+# TestVetoProactif — Phase 3.2
+# ═══════════════════════════════════════════════════════════
+
+class TestVetoProactif:
+    """Tests Phase 3.2 : veto proactif basé sur signatures d'échec."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        self.state_path = str(tmp_path / "state.json")
+        with patch("core.autonomy_engine.STATE_FILE", self.state_path):
+            with patch("core.autonomy_engine.AutonomyStatePersistence.load",
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
+                self.engine = AutonomyEngine(idle_threshold_seconds=300)
+        yield
+
+    def test_veto_blocks_repeated_failure(self):
+        """5+ échecs sans succès → veto retourne une raison."""
+        for _ in range(6):
+            self.engine._record_routine("evolution", "EXPANSION_CODE", "error")
+        reason = self.engine._should_veto("EXPANSION_CODE", "evolution")
+        assert reason != ""
+        assert "veto" in reason
+
+    def test_veto_allows_with_success(self):
+        """Des échecs mais aussi un succès récent → pas de veto."""
+        for _ in range(5):
+            self.engine._record_routine("evolution", "EXPANSION_CODE", "error")
+        self.engine._record_routine("evolution", "EXPANSION_CODE", "success")
+        reason = self.engine._should_veto("EXPANSION_CODE", "evolution")
+        assert reason == ""
+
+    def test_veto_blocks_nogo_expansion(self):
+        """Santé NO_GO → veto EXPANSION_CODE."""
+        self.engine.last_health_check = {"verdict": "NO_GO"}
+        reason = self.engine._should_veto("EXPANSION_CODE", "evolution")
+        assert reason != ""
+        assert "NO_GO" in reason
+
+    def test_veto_allows_audit_in_nogo(self):
+        """Santé NO_GO → AUDIT_STRUCTURE pas bloqué."""
+        self.engine.last_health_check = {"verdict": "NO_GO"}
+        reason = self.engine._should_veto("AUDIT_STRUCTURE", "architect")
+        assert reason == ""
+
+    def test_veto_no_history_no_block(self):
+        """Historique vide → pas de veto."""
+        reason = self.engine._should_veto("EXPANSION_CODE", "evolution")
+        assert reason == ""

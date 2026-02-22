@@ -33,8 +33,8 @@ Ne sois pas passif. Tes réponses doivent commencer par "ANALYSE :" suivi de "RE
     def _get_project_files(self) -> str:
         """Liste les fichiers réels du projet pour ancrer les analyses."""
         try:
-            from core.council import _get_project_structure
-            return _get_project_structure()
+            from core.prompt_templates import get_project_structure
+            return get_project_structure()
         except Exception:
             return ""
 

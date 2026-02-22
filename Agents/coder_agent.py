@@ -2,6 +2,7 @@ import logging
 import re
 from typing import Dict, Any
 from core.base_agent import BaseAgent
+from core.prompt_templates import CODE_GENERATION_GUARDRAIL
 
 logger = logging.getLogger("coder")
 
@@ -16,10 +17,12 @@ _OFFTOPIC_KEYWORDS = {
     "flask", "django", "streamlit", "gradio",
     "langchain", "langgraph", "crewai", "autogen",
     "kubernetes", "docker", "terraform", "kafka",
+    "openai", "faiss", "torch", "tensorflow",
+    "huggingface", "transformers", "pdfplumber", "pypdf",
 }
 
 # Seuil : si plus de N mots-clés hors-sujet distincts, on rejette
-_OFFTOPIC_THRESHOLD = 3
+_OFFTOPIC_THRESHOLD = 2
 
 # Modules existants du projet (injecté dans le prompt pour ancrage)
 _PROJECT_CONTEXT = """
@@ -85,6 +88,7 @@ RÈGLES ABSOLUES :
         ----------------------------------------------------
         {context_section}
         MISSION ACTUELLE : {mission}
+        {CODE_GENERATION_GUARDRAIL}
         """
 
         response = await self.generate_content(full_prompt)
@@ -92,6 +96,22 @@ RÈGLES ABSOLUES :
         # 3. FILTRE DE PERTINENCE POST-GÉNÉRATION
         offtopic_count = _count_offtopic(response)
         if offtopic_count >= _OFFTOPIC_THRESHOLD:
+            # Tentative de correction via hallucination_doctor
+            try:
+                help_response = await self._request_help("hallucination", {
+                    "type": "offtopic", "mission": mission,
+                    "keywords_found": [kw for kw in _OFFTOPIC_KEYWORDS if kw in response.lower()],
+                })
+                if help_response.get("action") == "retry" and help_response.get("corrected_prompt"):
+                    self.log_thought("🔄 Retry doctor (offtopic)...", type="info")
+                    retry_response = await self.generate_content(help_response["corrected_prompt"])
+                    retry_count = _count_offtopic(retry_response)
+                    if retry_count < _OFFTOPIC_THRESHOLD:
+                        self.log_thought("✅ Doctor retry reussi (offtopic corrige)", type="info")
+                        return {"status": "success", "result": retry_response, "agent": self.name}
+            except Exception as e:
+                logger.warning(f"Doctor retry echoue: {e}")
+
             self.log_thought(
                 f"⚠️ Code rejeté : {offtopic_count} mots-clés hors-sujet détectés (trading/blockchain/RSS/etc.)",
                 type="warning"

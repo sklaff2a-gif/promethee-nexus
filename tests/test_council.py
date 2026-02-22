@@ -2,7 +2,9 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from core.council import (
     Council, parse_council_mission, _is_consensus, _strip_markdown_prefix,
-    MIN_ROUNDS_BEFORE_CONSENSUS, _COUNCIL_PROJECT_CONTEXT,
+    _score_argument, _parse_president_verdict,
+    MIN_ROUNDS_BEFORE_CONSENSUS, MIN_ROUNDS_BEFORE_PRESIDENT,
+    PRESIDENT_AGENT_NAME, _COUNCIL_PROJECT_CONTEXT,
     _get_project_structure,
 )
 from core.orchestrator import Orchestrator
@@ -53,17 +55,23 @@ class TestParseCouncilMission:
 
 class TestConsensus:
 
+    # Contenu suffisant pour dépasser MIN_CONSENSUS_CONTENT_LENGTH (100 chars)
+    _SUBSTANCE = (
+        "L'implémentation proposée améliore significativement les performances du routeur "
+        "en ajoutant un cache LRU avec TTL de 5 minutes sur les classifications de niveau 1."
+    )
+
     def test_consensus_marqueur(self):
-        assert _is_consensus("CONSENSUS : le code est bon.") is True
+        assert _is_consensus(f"CONSENSUS : {self._SUBSTANCE}") is True
 
     def test_approuve_marqueur(self):
-        assert _is_consensus("APPROUVE. Tout est correct.") is True
+        assert _is_consensus(f"APPROUVE. {self._SUBSTANCE}") is True
 
     def test_approuve_accent_marqueur(self):
-        assert _is_consensus("APPROUVÉ. Rien à redire.") is True
+        assert _is_consensus(f"APPROUVÉ. {self._SUBSTANCE}") is True
 
     def test_accord_final_marqueur(self):
-        assert _is_consensus("ACCORD FINAL. Nous convergeons.") is True
+        assert _is_consensus(f"ACCORD FINAL. {self._SUBSTANCE}") is True
 
     def test_pas_de_marqueur(self):
         assert _is_consensus("Je pense qu'il y a des problèmes.") is False
@@ -73,44 +81,48 @@ class TestConsensus:
 
     def test_marqueur_en_minuscule_debut(self):
         # Le nettoyage passe en upper, donc "consensus" doit matcher
-        assert _is_consensus("consensus trouvé") is True
+        assert _is_consensus(f"consensus {self._SUBSTANCE}") is True
 
     def test_chaine_vide(self):
         assert _is_consensus("") is False
+
+    def test_shallow_consensus_rejected(self):
+        """Un consensus sans contenu substantiel est rejeté."""
+        assert _is_consensus("CONSENSUS : oui.") is False
 
     # --- Variantes markdown (bug fix V24) ---
 
     def test_consensus_markdown_bold(self):
         """**CONSENSUS** en gras markdown."""
-        assert _is_consensus("**CONSENSUS** La solution est robuste.") is True
+        assert _is_consensus(f"**CONSENSUS** {self._SUBSTANCE}") is True
 
     def test_consensus_markdown_bold_with_colon(self):
         """**CONSENSUS :** gras + deux-points."""
-        assert _is_consensus("**CONSENSUS :** Approuvé.") is True
+        assert _is_consensus(f"**CONSENSUS :** {self._SUBSTANCE}") is True
 
     def test_consensus_markdown_h2(self):
         """## CONSENSUS en header markdown."""
-        assert _is_consensus("## CONSENSUS") is True
+        assert _is_consensus(f"## CONSENSUS {self._SUBSTANCE}") is True
 
     def test_consensus_markdown_h3(self):
         """### CONSENSUS en header markdown."""
-        assert _is_consensus("### CONSENSUS\nTout est validé.") is True
+        assert _is_consensus(f"### CONSENSUS\n{self._SUBSTANCE}") is True
 
     def test_consensus_markdown_h1(self):
         """# CONSENSUS en header markdown."""
-        assert _is_consensus("# CONSENSUS") is True
+        assert _is_consensus(f"# CONSENSUS {self._SUBSTANCE}") is True
 
     def test_approuve_markdown_bold(self):
         """**APPROUVÉ** en gras."""
-        assert _is_consensus("**APPROUVÉ**") is True
+        assert _is_consensus(f"**APPROUVÉ** {self._SUBSTANCE}") is True
 
     def test_consensus_markdown_italic(self):
         """*CONSENSUS* en italique."""
-        assert _is_consensus("*CONSENSUS* je valide.") is True
+        assert _is_consensus(f"*CONSENSUS* {self._SUBSTANCE}") is True
 
     def test_consensus_markdown_blockquote(self):
         """> CONSENSUS en blockquote."""
-        assert _is_consensus("> CONSENSUS trouvé.") is True
+        assert _is_consensus(f"> CONSENSUS {self._SUBSTANCE}") is True
 
     def test_non_consensus_markdown_bold(self):
         """**Analyse** ne doit pas matcher."""
@@ -155,67 +167,66 @@ class TestCouncilRun:
         assert len(result["transcript"]) == 6
 
     @pytest.mark.asyncio
-    async def test_consensus_au_tour_2(self):
-        # Tour 1 : pas de consensus. Tour 2 : consensus des deux.
-        coder_responses = ["Voici ma proposition.", "CONSENSUS : c'est bon."]
-        security_responses = ["Il y a un problème.", "CONSENSUS : corrigé, j'approuve."]
+    async def test_consensus_at_min_round(self):
+        # Consensus au premier tour autorisé (MIN_ROUNDS_BEFORE_CONSENSUS).
+        _S = TestConsensus._SUBSTANCE
+        non_consensus = "Voici mon analyse."
+        consensus_resp = f"CONSENSUS : {_S}"
+        # Réponses : non-consensus pour les tours < MIN, consensus au tour MIN
+        coder_responses = [non_consensus] * (MIN_ROUNDS_BEFORE_CONSENSUS - 1) + [consensus_resp]
+        security_responses = [non_consensus] * (MIN_ROUNDS_BEFORE_CONSENSUS - 1) + [consensus_resp]
 
         agents = {
             "coder": self._make_mock_agent(coder_responses),
             "security": self._make_mock_agent(security_responses),
         }
-        council = Council(agents, ["coder", "security"], "revois ce code", max_rounds=5)
+        council = Council(agents, ["coder", "security"], "revois ce code", max_rounds=10)
         result = await council.run()
 
         assert result["status"] == "consensus"
-        assert result["rounds_used"] == 2
+        assert result["rounds_used"] == MIN_ROUNDS_BEFORE_CONSENSUS
 
     @pytest.mark.asyncio
-    async def test_consensus_markdown_stops_at_round_2(self):
+    async def test_consensus_markdown_stops_at_min_round(self):
         """Bug fix V24: les agents envoient CONSENSUS en markdown, le débat doit s'arrêter."""
-        # Tour 1 : contributions normales. Tour 2 : consensus en markdown.
-        researcher_responses = [
-            "Voici mes trouvailles sur les agents IA.",
-            "## CONSENSUS\nLes 3 candidats sont validés.",
-        ]
-        strategist_responses = [
-            "L'analyse est pertinente mais incomplète.",
-            "**CONSENSUS** La feuille de route est approuvée.",
-        ]
-        evolution_responses = [
-            "### CRITIQUE\nIl manque l'aspect adaptatif.",
-            "**CONSENSUS :** J'approuve avec les amendements.",
-        ]
+        _S = TestConsensus._SUBSTANCE
+        non_consensus = "Voici mon analyse détaillée."
+        # Réponses non-consensus pour les tours < MIN, consensus markdown au tour MIN
+        researcher_responses = [non_consensus] * (MIN_ROUNDS_BEFORE_CONSENSUS - 1) + [f"## CONSENSUS\n{_S}"]
+        strategist_responses = [non_consensus] * (MIN_ROUNDS_BEFORE_CONSENSUS - 1) + [f"**CONSENSUS** {_S}"]
+        evolution_responses = [non_consensus] * (MIN_ROUNDS_BEFORE_CONSENSUS - 1) + [f"**CONSENSUS :** {_S}"]
 
         agents = {
             "researcher": self._make_mock_agent(researcher_responses),
             "strategist": self._make_mock_agent(strategist_responses),
             "evolution": self._make_mock_agent(evolution_responses),
         }
-        council = Council(agents, ["researcher", "strategist", "evolution"], "test", max_rounds=5)
+        council = Council(agents, ["researcher", "strategist", "evolution"], "test", max_rounds=10)
         result = await council.run()
 
         assert result["status"] == "consensus"
-        assert result["rounds_used"] == 2  # Arrêt au tour 2, pas 5
+        assert result["rounds_used"] == MIN_ROUNDS_BEFORE_CONSENSUS
 
     @pytest.mark.asyncio
-    async def test_consensus_tour_1_ignore(self):
-        """Anti-écho V2 : CONSENSUS au tour 1 est ignoré (MIN_ROUNDS_BEFORE_CONSENSUS)."""
+    async def test_consensus_early_rounds_ignored(self):
+        """Anti-écho : CONSENSUS avant MIN_ROUNDS est ignoré."""
         # Les deux agents disent CONSENSUS à chaque tour
-        coder_responses = ["CONSENSUS : ok"] * 3
-        security_responses = ["CONSENSUS : ok"] * 3
+        _S = TestConsensus._SUBSTANCE
+        n = MIN_ROUNDS_BEFORE_CONSENSUS + 1  # assez de réponses
+        coder_responses = [f"CONSENSUS : {_S}"] * n
+        security_responses = [f"CONSENSUS : {_S}"] * n
 
         agents = {
             "coder": self._make_mock_agent(coder_responses),
             "security": self._make_mock_agent(security_responses),
         }
-        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+        council = Council(agents, ["coder", "security"], "test", max_rounds=n)
         result = await council.run()
 
         assert result["status"] == "consensus"
-        # Le consensus ne peut PAS arriver au tour 1
+        # Le consensus ne peut PAS arriver avant MIN_ROUNDS_BEFORE_CONSENSUS
         assert result["rounds_used"] >= MIN_ROUNDS_BEFORE_CONSENSUS
-        assert result["rounds_used"] == MIN_ROUNDS_BEFORE_CONSENSUS  # Accepté au tour 2
+        assert result["rounds_used"] == MIN_ROUNDS_BEFORE_CONSENSUS
 
     @pytest.mark.asyncio
     async def test_prompt_tour_1_contient_critique_obligatoire(self):
@@ -258,13 +269,14 @@ class TestCouncilRun:
 
     @pytest.mark.asyncio
     async def test_min_rounds_before_consensus_value(self):
-        """La constante MIN_ROUNDS_BEFORE_CONSENSUS vaut 2."""
-        assert MIN_ROUNDS_BEFORE_CONSENSUS == 2
+        """La constante MIN_ROUNDS_BEFORE_CONSENSUS vaut 3."""
+        assert MIN_ROUNDS_BEFORE_CONSENSUS == 3
 
     @pytest.mark.asyncio
     async def test_consensus_partiel_ne_suffit_pas(self):
         """Un seul agent en consensus ne suffit pas, il faut tous."""
-        coder_responses = ["CONSENSUS : ok"] * 3
+        _S = TestConsensus._SUBSTANCE
+        coder_responses = [f"CONSENSUS : {_S}"] * 3
         security_responses = ["Non, je refuse."] * 3
 
         agents = {
@@ -356,16 +368,17 @@ class TestOrchestratorCouncil:
     @pytest.mark.asyncio
     async def test_dispatch_council_lance_debat(self, orch):
         mock_agent_1 = MagicMock()
-        mock_agent_1.generate_content = AsyncMock(return_value="CONSENSUS : ok")
+        _S = TestConsensus._SUBSTANCE
+        mock_agent_1.generate_content = AsyncMock(return_value=f"CONSENSUS : {_S}")
         mock_agent_2 = MagicMock()
-        mock_agent_2.generate_content = AsyncMock(return_value="CONSENSUS : ok")
+        mock_agent_2.generate_content = AsyncMock(return_value=f"CONSENSUS : {_S}")
 
         await orch.register_agent("coder", mock_agent_1)
         await orch.register_agent("security", mock_agent_2)
 
         result = await orch.dispatch_council(["coder", "security"], "test mission")
         assert result["status"] == "consensus"
-        # MIN_ROUNDS_BEFORE_CONSENSUS = 2 : consensus ignoré au tour 1, accepté au tour 2
+        # Consensus ignoré avant MIN_ROUNDS_BEFORE_CONSENSUS, accepté au tour MIN
         assert result["rounds_used"] == MIN_ROUNDS_BEFORE_CONSENSUS
 
 
@@ -413,3 +426,271 @@ class TestProjectStructure:
         council = Council(agents, ["coder", "security"], "test", max_rounds=3)
         prompt = council._build_prompt("coder", 1)
         assert "FICHIERS RÉELS" in prompt
+
+
+# ============================================================
+# TESTS SCORING ARGUMENTS
+# ============================================================
+
+class TestScoreArgument:
+    """Vérifie que _score_argument évalue correctement les arguments du Council."""
+
+    def test_empty_content_scores_zero(self):
+        result = _score_argument("")
+        assert result["score"] == 0.0
+        assert result["confidence"] == 0.0
+
+    def test_short_content_scores_zero(self):
+        result = _score_argument("ok")
+        assert result["score"] == 0.0
+
+    def test_high_score_with_files_and_actions(self):
+        """Un argument riche (fichiers, actions, code) obtient un score élevé."""
+        content = (
+            "Je propose de modifier `core/autonomy_engine.py` pour ajouter un garde-fou.\n"
+            "Il faut aussi corriger `Agents/coder_agent.py` et vérifier `core/council.py`.\n"
+            "L'action consiste à implémenter une validation dans la méthode dispatch.\n"
+            "```python\ndef validate_budget(cost):\n    return cost <= DAILY_MAX\n```\n"
+            "Cela permettrait de refactorer le pipeline sans risque."
+        )
+        result = _score_argument(content)
+        assert result["score"] >= 0.5
+        assert result["confidence"] >= 0.4
+        assert result["breakdown"]["fichiers_cités"] >= 3
+        assert result["breakdown"]["actions_proposées"] >= 2
+
+    def test_vague_content_low_score(self):
+        """Un argument vague sans fichiers ni actions obtient un score bas."""
+        content = (
+            "Je pense que nous devrions peut-être envisager de revoir "
+            "notre approche générale pour mieux optimiser les performances "
+            "du système dans son ensemble."
+        )
+        result = _score_argument(content)
+        assert result["score"] < 0.3
+        assert result["breakdown"]["fichiers_cités"] == 0
+        assert result["breakdown"]["actions_proposées"] == 0
+
+    def test_code_block_increases_score(self):
+        """Un bloc de code augmente le score."""
+        without_code = "Il faut modifier core/router.py pour ajouter un filtre."
+        with_code = (
+            "Il faut modifier core/router.py pour ajouter un filtre.\n"
+            "```python\ndef filter_intent(intent):\n    return intent in ALLOWED\n```"
+        )
+        score_without = _score_argument(without_code)["score"]
+        score_with = _score_argument(with_code)["score"]
+        assert score_with > score_without
+
+    def test_english_penalty(self):
+        """Le contenu en anglais est pénalisé."""
+        english = (
+            "We should implement a new function. However, this would require "
+            "moreover some changes. The function should be implemented carefully "
+            "and could therefore improve performance significantly."
+        )
+        result = _score_argument(english)
+        assert result["breakdown"].get("pénalité_anglais", 0) >= 3
+
+    def test_file_pattern_detection(self):
+        """Les différents formats de chemins projet sont détectés."""
+        content = (
+            "Fichiers : core/base_agent.py, Agents/security_agent.py, "
+            "config.py et tests/test_council.py doivent être modifiés."
+        )
+        result = _score_argument(content)
+        assert result["breakdown"]["fichiers_cités"] >= 3
+
+    def test_action_verbs_detected(self):
+        """Les verbes d'action français sont détectés."""
+        content = (
+            "Il faut ajouter un garde-fou, modifier le scoring, "
+            "supprimer les doublons et valider le résultat."
+        )
+        result = _score_argument(content)
+        assert result["breakdown"]["actions_proposées"] >= 4
+
+    def test_score_range_0_to_1(self):
+        """Le score est toujours dans [0, 1]."""
+        # Score maximal théorique
+        content = (
+            "Modifier core/a.py, core/b.py, Agents/c.py pour implémenter, "
+            "ajouter, corriger, supprimer un système. "
+            "```python\ndef a():\n    pass\n```\n"
+            "```python\ndef b():\n    pass\n```\n" * 3 +
+            "x" * 500
+        )
+        result = _score_argument(content)
+        assert 0.0 <= result["score"] <= 1.0
+        assert 0.0 <= result["confidence"] <= 1.0
+
+    def test_transcript_includes_scores(self):
+        """Le transcript formaté inclut les scores de pertinence."""
+        agents = {"a": MagicMock(), "b": MagicMock()}
+        council = Council(agents, ["a", "b"], "test", max_rounds=3)
+        council.transcript = [
+            {"agent": "a", "round": 1, "content": "Je propose de modifier core/router.py", "score": 0.45, "confidence": 0.3},
+            {"agent": "b", "round": 1, "content": "Bonne idée", "score": 0.1, "confidence": 0.0},
+        ]
+        formatted = council._format_transcript()
+        assert "pertinence:" in formatted
+        assert "★★" in formatted  # 0.45 >= 0.3 → ★★
+
+
+# ============================================================
+# TESTS PRÉSIDENT — PARSING
+# ============================================================
+
+class TestPresidentParsing:
+    """Tests de _parse_president_verdict."""
+
+    def test_parse_verdict_pertinent(self):
+        result = _parse_president_verdict("PERTINENT")
+        assert result["verdict"] == "PERTINENT"
+
+    def test_parse_verdict_redirect_with_feedback(self):
+        result = _parse_president_verdict("REDIRECT : Le débat dérive vers Kubernetes, recentrez sur Ollama local.")
+        assert result["verdict"] == "REDIRECT"
+        assert "Kubernetes" in result["feedback"]
+
+    def test_parse_verdict_abort(self):
+        result = _parse_president_verdict("ABORT : Hors-sujet total, aucune proposition viable.")
+        assert result["verdict"] == "ABORT"
+        assert "Hors-sujet" in result["feedback"]
+
+    def test_parse_verdict_markdown_wrapped(self):
+        result = _parse_president_verdict("**REDIRECT** : Recentrez le débat.")
+        assert result["verdict"] == "REDIRECT"
+        assert "Recentrez" in result["feedback"]
+
+    def test_parse_verdict_fallback_on_garbage(self):
+        result = _parse_president_verdict("Bla bla bla sans rapport avec un verdict.")
+        assert result["verdict"] == "PERTINENT"
+
+    def test_parse_verdict_empty(self):
+        result = _parse_president_verdict("")
+        assert result["verdict"] == "PERTINENT"
+
+
+# ============================================================
+# TESTS PRÉSIDENT — ÉVALUATION
+# ============================================================
+
+class TestPresidentEvaluation:
+    """Tests de l'évaluation par le président (architect)."""
+
+    def _make_mock_agent(self, responses=None):
+        agent = MagicMock()
+        if responses:
+            agent.generate_content = AsyncMock(side_effect=responses)
+        else:
+            agent.generate_content = AsyncMock(return_value="Voici mon analyse.")
+        return agent
+
+    @pytest.mark.asyncio
+    async def test_president_not_called_round_1(self):
+        """Pas d'appel architect au tour 1 (< MIN_ROUNDS_BEFORE_PRESIDENT)."""
+        architect_mock = self._make_mock_agent()
+        agents = {
+            "coder": self._make_mock_agent(),
+            "security": self._make_mock_agent(),
+            "architect": architect_mock,
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=1)
+        await council.run()
+        # architect ne doit PAS avoir été appelé (tour 1 < MIN_ROUNDS_BEFORE_PRESIDENT)
+        architect_mock.generate_content.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_abort_stops_debate(self):
+        """ABORT → status='aborted', débat s'arrête."""
+        n = MIN_ROUNDS_BEFORE_PRESIDENT + 1
+        agents = {
+            "coder": self._make_mock_agent(["analyse"] * n),
+            "security": self._make_mock_agent(["critique"] * n),
+            "architect": self._make_mock_agent(
+                # Appelé à partir du tour MIN_ROUNDS_BEFORE_PRESIDENT
+                ["ABORT : Technologies hors-périmètre mentionnées."]
+            ),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=n)
+        result = await council.run()
+        assert result["status"] == "aborted"
+        assert result["rounds_used"] == MIN_ROUNDS_BEFORE_PRESIDENT
+        assert "PRÉSIDENT — ABORT" in result["final_summary"]
+        assert "abort_reason" in result
+
+    @pytest.mark.asyncio
+    async def test_redirect_injects_feedback(self):
+        """REDIRECT → feedback injecté dans le prompt du tour suivant."""
+        n = MIN_ROUNDS_BEFORE_PRESIDENT + 2
+        architect_responses = ["REDIRECT : Recentrez sur les fichiers core/"]
+        # Après REDIRECT, le tour suivant reçoit PERTINENT pour ne pas reboucler
+        architect_responses.append("PERTINENT")
+        agents = {
+            "coder": self._make_mock_agent(["analyse"] * n),
+            "security": self._make_mock_agent(["critique"] * n),
+            "architect": self._make_mock_agent(architect_responses),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=n)
+        await council.run()
+
+        # Vérifier que le prompt du tour après REDIRECT contient le feedback
+        # On capture les appels à generate_content du coder
+        coder_calls = agents["coder"].generate_content.call_args_list
+        # Le tour après REDIRECT (tour MIN_ROUNDS_BEFORE_PRESIDENT+1) doit contenir le feedback
+        prompt_after_redirect = coder_calls[MIN_ROUNDS_BEFORE_PRESIDENT].args[0]
+        assert "FEEDBACK DU PRÉSIDENT" in prompt_after_redirect
+        assert "Recentrez" in prompt_after_redirect
+
+    @pytest.mark.asyncio
+    async def test_pertinent_resets_feedback(self):
+        """PERTINENT après REDIRECT → feedback disparaît du prompt."""
+        n = MIN_ROUNDS_BEFORE_PRESIDENT + 3
+        architect_responses = [
+            "REDIRECT : Recentrez sur core/",
+            "PERTINENT",
+            "PERTINENT",
+        ]
+        agents = {
+            "coder": self._make_mock_agent(["analyse"] * n),
+            "security": self._make_mock_agent(["critique"] * n),
+            "architect": self._make_mock_agent(architect_responses),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=n)
+        await council.run()
+
+        coder_calls = agents["coder"].generate_content.call_args_list
+        # Tour après PERTINENT (2 tours après le REDIRECT) → pas de feedback
+        if len(coder_calls) > MIN_ROUNDS_BEFORE_PRESIDENT + 1:
+            prompt_after_pertinent = coder_calls[MIN_ROUNDS_BEFORE_PRESIDENT + 1].args[0]
+            assert "FEEDBACK DU PRÉSIDENT" not in prompt_after_pertinent
+
+    @pytest.mark.asyncio
+    async def test_president_fallback_on_error(self):
+        """Exception architect → débat continue (PERTINENT par défaut)."""
+        n = MIN_ROUNDS_BEFORE_PRESIDENT + 1
+        architect_mock = MagicMock()
+        architect_mock.generate_content = AsyncMock(side_effect=RuntimeError("Ollama down"))
+        agents = {
+            "coder": self._make_mock_agent(["analyse"] * n),
+            "security": self._make_mock_agent(["critique"] * n),
+            "architect": architect_mock,
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=n)
+        result = await council.run()
+        # Le débat continue malgré l'erreur
+        assert result["status"] == "max_rounds"
+        assert result["rounds_used"] == n
+
+    @pytest.mark.asyncio
+    async def test_president_absent_debate_continues(self):
+        """Pas d'architect dans agents → aucune évaluation, débat normal."""
+        agents = {
+            "coder": self._make_mock_agent(),
+            "security": self._make_mock_agent(),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+        result = await council.run()
+        assert result["status"] == "max_rounds"
+        assert result["rounds_used"] == 3

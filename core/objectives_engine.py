@@ -6,7 +6,7 @@ import json
 import os
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, List, Dict, Any
 
 from core.event_bus.bus import bus
@@ -171,6 +171,7 @@ class ObjectivesEngine:
         self._subscribed = False
         self._seed_index: int = 0
         self._session_counters: Dict[str, int] = {}
+        self._last_counter_reset_day: str = date.today().isoformat()
         self._last_report_day: Optional[str] = None
         self._load()
 
@@ -190,6 +191,7 @@ class ObjectivesEngine:
         self._initialized = False
         self._seed_index = 0
         self._session_counters = {}
+        self._last_counter_reset_day = date.today().isoformat()
         self._last_report_day = None
 
     @classmethod
@@ -202,6 +204,13 @@ class ObjectivesEngine:
 
     async def _on_routine_complete(self, event: dict):
         """Appelé après chaque routine autonome."""
+        # Reset quotidien des compteurs de session
+        today = date.today().isoformat()
+        if today != self._last_counter_reset_day:
+            self._session_counters = {}
+            self._last_counter_reset_day = today
+            logger.info("OBJECTIFS: Reset quotidien des compteurs de session.")
+
         # Incrémenter les compteurs de session
         intent = event.get("intent", "")
         status = event.get("status", "")
@@ -587,6 +596,9 @@ class ObjectivesEngine:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self._objectives = data.get("objectives", [])
+            self._session_counters = data.get("session_counters", {})
+            self._seed_index = data.get("seed_index", 0)
+            self._last_counter_reset_day = data.get("last_counter_reset_day", date.today().isoformat())
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
@@ -595,6 +607,9 @@ class ObjectivesEngine:
         data = {
             "version": "1.0",
             "objectives": self._objectives,
+            "session_counters": self._session_counters,
+            "seed_index": self._seed_index,
+            "last_counter_reset_day": self._last_counter_reset_day,
         }
         tmp_path = STATE_FILE + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:

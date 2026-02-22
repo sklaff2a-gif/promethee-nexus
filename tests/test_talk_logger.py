@@ -139,9 +139,11 @@ class TestTalkLoggerStream:
         content = _read_today_file(talks_tmpdir)
         assert "STREAM START" in content
         assert "STREAM END" in content
-        # Le chunk intermédiaire ne doit pas apparaître comme ligne séparée
+        # Le contenu accumulé doit apparaître avec le signal end
+        assert "STREAM CONTENT" in content
+        assert "Hello" in content
         lines = [l for l in content.strip().split("\n") if l.strip()]
-        assert len(lines) == 2  # start + end uniquement
+        assert len(lines) == 3  # start + content + end
 
 
 class TestTalkLoggerFiltrage:

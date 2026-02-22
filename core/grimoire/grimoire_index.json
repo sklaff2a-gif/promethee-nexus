@@ -54,5 +54,26 @@
     "description": "Analyse de logs : patterns d'erreur, diagnostic d'incidents, règles d'alerte",
     "keywords": ["log", "logs", "erreur récurrente", "incident", "monitoring", "alerte", "pattern erreur"],
     "file": "log_analyst.py"
+  },
+  {
+    "slug": "code_reviewer",
+    "name": "CodeReviewer",
+    "description": "Revue de code specialisee pour le pipeline Evolution et les diffs CodeSmith",
+    "keywords": ["code review", "revue code", "diff codesmith", "evolution review", "review spec"],
+    "file": "code_reviewer.py"
+  },
+  {
+    "slug": "hallucination_doctor",
+    "name": "HallucinationDoctor",
+    "description": "Diagnostic d'hallucinations LLM et correction de prompts pour retry",
+    "keywords": ["hallucination", "alien import", "offtopic", "non structurel", "correction prompt"],
+    "file": "hallucination_doctor.py"
+  },
+  {
+    "slug": "loop_breaker",
+    "name": "LoopBreaker",
+    "description": "Detection et resolution de boucles repetitives dans les routines autonomes",
+    "keywords": ["boucle", "loop", "repetition", "stuck", "bloque", "error streak"],
+    "file": "loop_breaker.py"
   }
 ]
