@@ -1759,6 +1759,15 @@ class AutonomyEngine:
                     })
                     logger.warning(f"[AUTONOMY] MÉMOIRE {memory['status'].upper()}: {memory.get('warnings', [])}")
 
+                # Retry dead letters (1 par cycle, silencieux)
+                if bus.dead_letter_count > 0:
+                    try:
+                        retried = await bus.retry_dead_letter(0)
+                        if retried:
+                            logger.info(f"[AUTONOMY] Dead letter re-publiée avec succès.")
+                    except Exception:
+                        pass
+
                 # Heartbeat publié à chaque cycle (même si NO_GO)
                 await bus.publish("AUTONOMY_HEARTBEAT", {
                     "health": health,

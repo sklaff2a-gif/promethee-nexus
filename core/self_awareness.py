@@ -83,6 +83,8 @@ class SelfAwarenessEngine:
         # Santé mémoire vectorielle (mise à jour via bus)
         self._memory_status = "unknown"
         self._memory_warnings: List[str] = []
+        # Événements de personnalité (traits extrêmes détectés)
+        self._personality_events: List[Dict[str, Any]] = []
         self._load()
 
     # --- Init & Reset ---
@@ -106,6 +108,7 @@ class SelfAwarenessEngine:
         self._knowledge_gaps = []
         self._memory_status = "unknown"
         self._memory_warnings = []
+        self._personality_events = []
 
     @classmethod
     def reset_singleton(cls):
@@ -124,6 +127,8 @@ class SelfAwarenessEngine:
         bus.subscribe("CI_PIPELINE_RESULT", self._on_ci_result)
         bus.subscribe("MEMORY_HEALTH_ALERT", self._on_memory_alert)
         bus.subscribe("PSYCHE_UPDATE", self._on_psyche_update)
+        bus.subscribe("OBJECTIVE_COMPLETED", self._on_objective_completed)
+        bus.subscribe("OBJECTIVE_FAILED", self._on_objective_failed)
 
     async def _on_agent_response(self, event: dict):
         self._mission_count += 1
@@ -159,9 +164,28 @@ class SelfAwarenessEngine:
                 elif value < 25:
                     self._record_personality_event(f"trait_extreme_low:{trait}={value:.0f}")
 
+    async def _on_objective_completed(self, event: dict):
+        """Un objectif atteint enrichit le snapshot."""
+        title = event.get("title", "?")
+        logger.info(f"CONSCIENCE: Objectif atteint — {title}")
+        self._mission_success += 1  # Compte comme un succès global
+
+    async def _on_objective_failed(self, event: dict):
+        """Un objectif expiré est noté."""
+        title = event.get("title", "?")
+        logger.info(f"CONSCIENCE: Objectif expiré — {title}")
+
     def _record_personality_event(self, event_str: str):
-        """Enregistre un événement de personnalité dans les logs."""
+        """Enregistre un événement de personnalité (trait extrême détecté)."""
         logger.info(f"CONSCIENCE: Événement personnalité — {event_str}")
+        self._personality_events.append({
+            "event": event_str,
+            "timestamp": datetime.now().isoformat(),
+        })
+        # Garder les 50 derniers événements
+        if len(self._personality_events) > 50:
+            self._personality_events = self._personality_events[-50:]
+        self._save()
 
     # --- Snapshot ---
 
@@ -692,6 +716,15 @@ class SelfAwarenessEngine:
         })
         self._save()
         logger.info(f"CONSCIENCE: Lacune enregistrée — {topic} (via {source_intent})")
+        # Publier pour que DesireEngine réagisse (pulsion CURIOSITE/COMPREHENSION)
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            loop.create_task(bus.publish("KNOWLEDGE_GAP_DETECTED", {
+                "topic": topic, "source_intent": source_intent,
+            }))
+        except RuntimeError:
+            pass  # Pas de boucle asyncio (tests sync)
 
     def mark_gap_learned(self, topic: str):
         """Marque une lacune comme comblée par un apprentissage ciblé."""
@@ -856,6 +889,7 @@ class SelfAwarenessEngine:
             self._ci_fail = data.get("ci_fail", 0)
             self._council_aborted = data.get("council_aborted", 0)
             self._knowledge_gaps = data.get("knowledge_gaps", [])
+            self._personality_events = data.get("personality_events", [])
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
@@ -872,6 +906,7 @@ class SelfAwarenessEngine:
             "ci_fail": self._ci_fail,
             "council_aborted": self._council_aborted,
             "knowledge_gaps": self._knowledge_gaps,
+            "personality_events": self._personality_events,
         }
         tmp_path = STATE_FILE + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:

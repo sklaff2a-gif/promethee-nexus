@@ -587,6 +587,8 @@ class ObjectivesEngine:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self._objectives = data.get("objectives", [])
+            self._session_counters = data.get("session_counters", {})
+            self._seed_index = data.get("seed_index", 0)
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
@@ -595,6 +597,8 @@ class ObjectivesEngine:
         data = {
             "version": "1.0",
             "objectives": self._objectives,
+            "session_counters": self._session_counters,
+            "seed_index": self._seed_index,
         }
         tmp_path = STATE_FILE + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:

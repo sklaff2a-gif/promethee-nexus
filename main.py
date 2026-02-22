@@ -95,6 +95,7 @@ from core.psyche import psyche
 from core.strategic_journal import journal as strat_journal
 from core.self_awareness import awareness
 from core.objectives_engine import objectives as objectives_engine, MAX_ACTIVE_OBJECTIVES
+from core.desire_engine import desires
 from core import talk_logger
 from core import interface_logger
 from core import ci_pipeline
@@ -224,8 +225,11 @@ async def lifespan(app: FastAPI):
     feedback_loop.init()
     print("   🔄 FEEDBACK: Boucle de feedback Evolution active.")
 
+    # --- PULSIONS PRIMORDIALES ---
+    desires.init()
+    print("   💓 DESIRS: Moteur de pulsions primordiales actif.")
+
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
-    bus.subscribe("AGENT_TASK_DISPATCH", nervous_system_listener)
 
     # --- CI/CD Pipeline (remplace quality_control_listener) ---
     ci_pipeline.start()
@@ -242,14 +246,6 @@ async def lifespan(app: FastAPI):
     interface_logger.stop()
     print("🔌 Arrêt.")
     tracemalloc.stop()
-
-async def nervous_system_listener(event: dict):
-    data = event.get("data", {})
-    target = data.get("target")
-    payload = data.get("payload")
-    if target and payload:
-        print(f"⚡ [NERVOUS SYSTEM] Réflexe déclenché vers -> {target.upper()}")
-        asyncio.create_task(orchestrator.dispatch_task(target, payload))
 
 app = FastAPI(lifespan=lifespan)
 _start_time = time.time()

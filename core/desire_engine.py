@@ -184,6 +184,11 @@ class DesireEngine:
         bus.subscribe("CI_PIPELINE_RESULT", self._on_ci_result)
         bus.subscribe("AUTONOMY_HEARTBEAT", self._on_heartbeat)
         bus.subscribe("KNOWLEDGE_GAP_DETECTED", self._on_knowledge_gap)
+        bus.subscribe("EUREKA_BRIDGE", self._on_eureka_bridge)
+        bus.subscribe("OBJECTIVE_COMPLETED", self._on_objective_completed)
+        bus.subscribe("OBJECTIVE_FAILED", self._on_objective_failed)
+        bus.subscribe("EVOLUTION_FEEDBACK", self._on_evolution_feedback)
+        bus.subscribe("EVOLUTION_ROLLED_BACK", self._on_evolution_rolled_back)
 
     async def _on_routine_complete(self, event: dict):
         intent = event.get("intent", "")
@@ -220,6 +225,29 @@ class DesireEngine:
 
     async def _on_knowledge_gap(self, event: dict):
         self.on_event("KNOWLEDGE_GAP_FOUND")
+
+    async def _on_eureka_bridge(self, event: dict):
+        self.on_event("EUREKA_BRIDGE")
+
+    async def _on_objective_completed(self, event: dict):
+        """Un objectif atteint satisfait MAITRISE et CROISSANCE."""
+        self.on_event("ROUTINE_SUCCESS", {"intent": "EXPANSION_CODE"})
+
+    async def _on_objective_failed(self, event: dict):
+        """Un objectif expiré frustre MAITRISE."""
+        self.on_event("ROUTINE_FAILURE", {"intent": "_default"})
+
+    async def _on_evolution_feedback(self, event: dict):
+        """Feedback post-deploy : improved = satisfaction, degraded = frustration."""
+        verdict = event.get("verdict", "")
+        if verdict == "improved":
+            self.on_event("EVOLUTION_DEPLOYED")
+        elif verdict == "degraded":
+            self.on_event("CI_FAILURE")
+
+    async def _on_evolution_rolled_back(self, event: dict):
+        """Un rollback frustre MAITRISE et STABILITE."""
+        self.on_event("CI_FAILURE")
 
     # --- Cycle homeostatique ---
 
