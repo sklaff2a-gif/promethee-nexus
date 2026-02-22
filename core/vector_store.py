@@ -141,6 +141,19 @@ class ChromaMemoryManager:
             print(f"❌ Erreur Mémoire (QueryMeta): {e}")
             return None
 
+    def record_recall(self, doc_id: str, collection_name: str = "collective_wisdom"):
+        """Incrémente le compteur de rappel d'un document."""
+        try:
+            col = self._get_collection(collection_name)
+            result = col.get(ids=[doc_id], include=["metadatas"])
+            if result and result["metadatas"] and result["metadatas"][0]:
+                meta = result["metadatas"][0]
+                meta["recall_count"] = int(meta.get("recall_count", 0)) + 1
+                meta["last_recalled_at"] = str(time.time())
+                col.update(ids=[doc_id], metadatas=[meta])
+        except Exception:
+            pass
+
     def purge_expired(self, max_age_days: int = 90, collection_name: str = None) -> int:
         """Supprime les souvenirs plus vieux que max_age_days.
 
@@ -161,6 +174,10 @@ class ChromaMemoryManager:
                     try:
                         ts = float(meta.get("timestamp", 0))
                         if ts < cutoff:
+                            # Protéger les mémoires fréquemment rappelées
+                            recall_count = int(meta.get("recall_count", 0))
+                            if recall_count >= 3:
+                                continue
                             expired_ids.append(doc_id)
                     except (ValueError, TypeError):
                         pass

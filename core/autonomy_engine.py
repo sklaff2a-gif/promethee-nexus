@@ -174,6 +174,7 @@ CONTEXT_KEYWORDS = {
     "SECURITY_AUDIT": ["sécurité", "vulnérabilité", "injection", "risque", "audit"],
     "MEMORY_CLEANUP": ["mémoire", "nettoyage", "ancien", "doublon", "rag"],
     "REFACTOR_RANDOM": ["refactoring", "simplifier", "lisibilité", "dette", "technique"],
+    "MEMORY_CONSOLIDATION": ["consolidation", "synthèse", "résumé", "regrouper", "mémoire"],
 }
 
 
@@ -381,6 +382,7 @@ class AutonomyEngine:
             {"agent": "security", "intent": "SECURITY_AUDIT", "mission": "Audite un module aléatoire du projet pour des vulnérabilités (injection, eval, subprocess, fichiers non sanitisés)."},
             {"agent": "_memory_cleanup", "intent": "MEMORY_CLEANUP", "mission": "Nettoie la mémoire RAG ancienne et les doublons."},
             {"agent": "coder", "intent": "REFACTOR_RANDOM", "mission": "Choisis un fichier Python aléatoire du projet et propose un refactoring pour améliorer la lisibilité (noms de variables, simplification de logique)."},
+            {"agent": "_memory_consolidation", "intent": "MEMORY_CONSOLIDATION", "mission": "Consolide les mémoires récentes en synthèses thématiques."},
         ]
 
     def _persist_state(self):
@@ -721,6 +723,18 @@ class AutonomyEngine:
         agent = selected["agent"]
         intent = selected["intent"]
 
+        # --- Veto proactif ---
+        veto_reason = self._should_veto(intent, agent)
+        if veto_reason:
+            print(f"   🚫 VETO: {veto_reason}")
+            # Fallback : prendre la 2ème meilleure routine
+            if len(scored) > 1:
+                selected, score = scored[1]
+                agent = selected["agent"]
+                intent = selected["intent"]
+            else:
+                return  # Aucune alternative
+
         routine_cost_preview = RESOURCE_COSTS.get(intent, 2)
         print(f"   ✨ AUTONOMY: Routine [{intent}] (score={score:.1f}, coût={routine_cost_preview}pt) -> [{agent.upper()}] ({self.daily_count + 1}/{MAX_DAILY_ROUTINES}, budget: {self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt)")
 
@@ -752,6 +766,8 @@ class AutonomyEngine:
             response = await self._execute_audit_structure()
         elif intent == "REFACTOR_RANDOM":
             response = await self._execute_refactor_random()
+        elif intent == "MEMORY_CONSOLIDATION":
+            response = await self._execute_memory_consolidation()
         elif intent == "DROPZONE_SCAN" and dropzone_count == 0:
             # Dropzone vide → veille YouTube IA (rotation des sujets)
             yt_index = self.total_routines_executed % len(YOUTUBE_AI_VEILLE)
@@ -892,6 +908,24 @@ class AutonomyEngine:
                     pass
                 await self._trigger_targeted_learning(selected["mission"], agent, intent)
 
+        # --- Frustration DesireEngine : forcer l'intent suivant si pulsion frustrée ---
+        if not self._forced_next_intent:
+            try:
+                from core.desire_engine import desires as _desires, DRIVE_ROUTINE_AFFINITY
+                frustrated = [
+                    (name, d) for name, d in _desires.drives.items()
+                    if d.frustration_streak >= 4 and d.deprivation >= 70
+                ]
+                if frustrated:
+                    drive_name, drive = frustrated[0]
+                    forced_intent_map = DRIVE_ROUTINE_AFFINITY.get(drive_name, {})
+                    if forced_intent_map:
+                        best_intent = max(forced_intent_map, key=forced_intent_map.get)
+                        self._forced_next_intent = best_intent
+                        logger.warning(f"[EVEIL] Pulsion {drive_name} frustrée x{drive.frustration_streak} (dep={drive.deprivation:.0f}) → force {best_intent}")
+            except Exception:
+                pass
+
         # Loop breaker : si repetition ou error_streak eleve -> consulter le specialiste
         if failure_type == "repetition" or self.error_streak >= 5:
             try:
@@ -986,6 +1020,8 @@ class AutonomyEngine:
             response = await self._execute_audit_structure()
         elif intent == "REFACTOR_RANDOM":
             response = await self._execute_refactor_random()
+        elif intent == "MEMORY_CONSOLIDATION":
+            response = await self._execute_memory_consolidation()
         else:
             response = await orchestrator.dispatch_task(agent, {
                 "mission": f"[MODE VEILLE] {routine['mission']}",
@@ -1003,6 +1039,75 @@ class AutonomyEngine:
         self.daily_count += 1
         self.total_routines_executed += 1
         self.daily_budget_used += routine_cost
+
+    def _should_veto(self, intent: str, agent: str) -> str:
+        """Veto proactif basé sur les signatures d'échec apprises. Retourne la raison ou ''."""
+        # 1. Vérifier les échecs répétés dans l'historique
+        recent_failures = [
+            r for r in self.routine_history[-20:]
+            if r.get("intent") == intent and r.get("agent") == agent
+            and r.get("status") in ("error", "low_quality")
+        ]
+        if len(recent_failures) >= 5:
+            successes = [
+                r for r in self.routine_history[-20:]
+                if r.get("intent") == intent and r.get("agent") == agent
+                and r.get("status") == "success"
+            ]
+            if not successes:
+                return f"veto: {intent}/{agent} a échoué {len(recent_failures)}x sans succès récent"
+
+        # 2. Vérifier santé système
+        if self.last_health_check and isinstance(self.last_health_check, dict):
+            if self.last_health_check.get("verdict") == "NO_GO" and intent in ("EXPANSION_CODE", "GRIMOIRE_INVOKE"):
+                return f"veto: santé NO_GO, routine risquée {intent} reportée"
+
+        return ""
+
+    async def _execute_memory_consolidation(self) -> dict:
+        """Consolide les mémoires récentes en synthèses thématiques. Zero LLM."""
+        try:
+            from core.vector_store import ChromaMemoryManager
+            mgr = ChromaMemoryManager.get_instance()
+            if not mgr:
+                return {"status": "error", "result": "ChromaDB indisponible."}
+
+            col = mgr._get_collection("collective_wisdom")
+            all_docs = col.get(include=["documents", "metadatas"])
+
+            if not all_docs["ids"]:
+                return {"status": "success", "result": "Consolidation: aucun document à consolider."}
+
+            now = time.time()
+            recent = []
+            for doc, meta, doc_id in zip(all_docs["documents"], all_docs["metadatas"], all_docs["ids"]):
+                ts = float(meta.get("timestamp", 0))
+                if now - ts < 30 * 86400:  # 30 jours
+                    recent.append((doc, meta, doc_id, int(meta.get("recall_count", 0))))
+
+            # Grouper par source
+            groups = {}
+            for doc, meta, doc_id, rc in recent:
+                source = meta.get("source", "unknown")
+                groups.setdefault(source, []).append(doc[:200])
+
+            # Pour chaque groupe avec 5+ entrées, créer un résumé déterministe
+            consolidated = 0
+            for source, docs in groups.items():
+                if len(docs) >= 5:
+                    summary = f"[CONSOLIDATION {source}] {len(docs)} observations récentes:\n"
+                    summary += "\n".join(f"- {d[:100]}" for d in docs[:10])
+                    mgr.add_documents(
+                        [summary],
+                        [{"source": "consolidation", "timestamp": str(now), "original_count": len(docs)}],
+                        [f"consol-{source}-{int(now)}"],
+                        "collective_wisdom"
+                    )
+                    consolidated += 1
+
+            return {"status": "success", "result": f"Consolidation: {consolidated} groupes synthétisés à partir de {len(recent)} documents récents."}
+        except Exception as e:
+            return {"status": "error", "result": f"Erreur consolidation: {e}"}
 
     async def _execute_grimoire_routine(self) -> dict:
         """Invoque un agent Grimoire en rotation (le moins récemment utilisé)."""

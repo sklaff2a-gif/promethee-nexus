@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import copy
 import asyncio
 import tempfile
 import pytest
@@ -384,7 +385,7 @@ class TestAutonomyEngineV24:
         self.state_path = str(tmp_path / "state.json")
         with patch("core.autonomy_engine.STATE_FILE", self.state_path):
             with patch("core.autonomy_engine.AutonomyStatePersistence.load",
-                       return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
                 self.engine = AutonomyEngine(idle_threshold_seconds=300)
         yield
 
@@ -672,7 +673,7 @@ class TestGrimoireInvokeRoutine:
         self.state_path = str(tmp_path / "state.json")
         with patch("core.autonomy_engine.STATE_FILE", self.state_path):
             with patch("core.autonomy_engine.AutonomyStatePersistence.load",
-                       return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
                 self.engine = AutonomyEngine(idle_threshold_seconds=300)
         yield
 
@@ -822,7 +823,7 @@ class TestTemporalCooldown:
         """_record_routine enregistre le champ subject."""
         with patch("core.autonomy_engine.STATE_FILE", "/tmp/test_state.json"), \
              patch("core.autonomy_engine.AutonomyStatePersistence.load",
-                   return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                   return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
             engine = AutonomyEngine(idle_threshold_seconds=300)
         engine._record_routine("_council", "COUNCIL_DEBATE", "success", subject="budget")
         assert engine.routine_history[-1]["subject"] == "budget"
@@ -914,7 +915,7 @@ class TestCouncilToAction:
         self._catalog_patch.start()
         with patch("core.autonomy_engine.STATE_FILE", self.state_path):
             with patch("core.autonomy_engine.AutonomyStatePersistence.load",
-                       return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
                 self.engine = AutonomyEngine(idle_threshold_seconds=300)
         yield
         self._catalog_patch.stop()
@@ -1047,7 +1048,7 @@ class TestAdaptiveScoringIntegration:
         self.state_path = str(tmp_path / "state.json")
         with patch("core.autonomy_engine.STATE_FILE", self.state_path):
             with patch("core.autonomy_engine.AutonomyStatePersistence.load",
-                       return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
                 self.engine = AutonomyEngine(idle_threshold_seconds=300)
         yield
 
@@ -1389,7 +1390,7 @@ class TestTriggerTargetedLearning:
         self.state_path = str(tmp_path / "state.json")
         with patch("core.autonomy_engine.STATE_FILE", self.state_path):
             with patch("core.autonomy_engine.AutonomyStatePersistence.load",
-                       return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
                 self.engine = AutonomyEngine(idle_threshold_seconds=300)
         yield
 
@@ -1499,7 +1500,7 @@ class TestGrimoireSlugRotation:
         self.state_path = str(tmp_path / "state.json")
         with patch("core.autonomy_engine.STATE_FILE", self.state_path):
             with patch("core.autonomy_engine.AutonomyStatePersistence.load",
-                       return_value=dict(AutonomyStatePersistence.DEFAULT_STATE)):
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
                 self.engine = AutonomyEngine(idle_threshold_seconds=300)
         yield
 
@@ -1643,3 +1644,122 @@ class TestCloudCooldownPenalty:
             scored = RoutineScorer.score_routines(routines, [], [], cloud_in_cooldown=True)
             top_intent = scored[0][0]["intent"]
             assert top_intent != "EXPANSION_CODE"
+
+
+# ═══════════════════════════════════════════════════════════
+# TestAwakeningFrustration — Phase 1.3
+# ═══════════════════════════════════════════════════════════
+
+class TestAwakeningFrustration:
+    """Tests Phase 1.3 : frustration DesireEngine → forced intent."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        self.state_path = str(tmp_path / "state.json")
+        with patch("core.autonomy_engine.STATE_FILE", self.state_path):
+            with patch("core.autonomy_engine.AutonomyStatePersistence.load",
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
+                self.engine = AutonomyEngine(idle_threshold_seconds=300)
+        yield
+
+    @pytest.mark.asyncio
+    async def test_frustration_forces_intent(self):
+        """Frustration >= 4 et deprivation >= 70 → forced_next_intent défini."""
+        from core.desire_engine import Drive
+
+        mock_desires = MagicMock()
+        drive = Drive(name="CURIOSITE", deprivation=80.0, frustration_streak=5)
+        mock_desires.drives = {"CURIOSITE": drive}
+
+        health = _make_health("GO")
+        with patch("core.autonomy_engine.orchestrator") as mock_orch, \
+             patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
+             patch.dict("sys.modules", {"core.desire_engine": MagicMock(
+                 desires=mock_desires,
+                 DRIVE_ROUTINE_AFFINITY={
+                     "CURIOSITE": {"VEILLE_SILENCIEUSE": 1.2, "DROPZONE_SCAN": 0.8}
+                 }
+             )}):
+            mock_orch.dispatch_task = AsyncMock(return_value={
+                "status": "success",
+                "result": "Analyse complete " * 10,
+            })
+            mock_scorer.return_value = [(_get_routines()[0], 2.0)]
+            await self.engine._execute_scored_routine(health)
+            # Après la routine, _forced_next_intent doit être défini
+            assert self.engine._forced_next_intent == "VEILLE_SILENCIEUSE"
+
+    @pytest.mark.asyncio
+    async def test_no_frustration_no_forced_intent(self):
+        """Pas de frustration → _forced_next_intent reste vide."""
+        from core.desire_engine import Drive
+
+        mock_desires = MagicMock()
+        drive = Drive(name="CURIOSITE", deprivation=40.0, frustration_streak=1)
+        mock_desires.drives = {"CURIOSITE": drive}
+
+        health = _make_health("GO")
+        with patch("core.autonomy_engine.orchestrator") as mock_orch, \
+             patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
+             patch.dict("sys.modules", {"core.desire_engine": MagicMock(
+                 desires=mock_desires,
+                 DRIVE_ROUTINE_AFFINITY={"CURIOSITE": {"VEILLE_SILENCIEUSE": 1.2}}
+             )}):
+            mock_orch.dispatch_task = AsyncMock(return_value={
+                "status": "success",
+                "result": "Analyse complete " * 10,
+            })
+            mock_scorer.return_value = [(_get_routines()[0], 2.0)]
+            await self.engine._execute_scored_routine(health)
+            assert self.engine._forced_next_intent == ""
+
+
+# ═══════════════════════════════════════════════════════════
+# TestVetoProactif — Phase 3.2
+# ═══════════════════════════════════════════════════════════
+
+class TestVetoProactif:
+    """Tests Phase 3.2 : veto proactif basé sur signatures d'échec."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        self.state_path = str(tmp_path / "state.json")
+        with patch("core.autonomy_engine.STATE_FILE", self.state_path):
+            with patch("core.autonomy_engine.AutonomyStatePersistence.load",
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
+                self.engine = AutonomyEngine(idle_threshold_seconds=300)
+        yield
+
+    def test_veto_blocks_repeated_failure(self):
+        """5+ échecs sans succès → veto retourne une raison."""
+        for _ in range(6):
+            self.engine._record_routine("evolution", "EXPANSION_CODE", "error")
+        reason = self.engine._should_veto("EXPANSION_CODE", "evolution")
+        assert reason != ""
+        assert "veto" in reason
+
+    def test_veto_allows_with_success(self):
+        """Des échecs mais aussi un succès récent → pas de veto."""
+        for _ in range(5):
+            self.engine._record_routine("evolution", "EXPANSION_CODE", "error")
+        self.engine._record_routine("evolution", "EXPANSION_CODE", "success")
+        reason = self.engine._should_veto("EXPANSION_CODE", "evolution")
+        assert reason == ""
+
+    def test_veto_blocks_nogo_expansion(self):
+        """Santé NO_GO → veto EXPANSION_CODE."""
+        self.engine.last_health_check = {"verdict": "NO_GO"}
+        reason = self.engine._should_veto("EXPANSION_CODE", "evolution")
+        assert reason != ""
+        assert "NO_GO" in reason
+
+    def test_veto_allows_audit_in_nogo(self):
+        """Santé NO_GO → AUDIT_STRUCTURE pas bloqué."""
+        self.engine.last_health_check = {"verdict": "NO_GO"}
+        reason = self.engine._should_veto("AUDIT_STRUCTURE", "architect")
+        assert reason == ""
+
+    def test_veto_no_history_no_block(self):
+        """Historique vide → pas de veto."""
+        reason = self.engine._should_veto("EXPANSION_CODE", "evolution")
+        assert reason == ""

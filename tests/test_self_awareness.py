@@ -746,3 +746,354 @@ class TestCouncilAborted:
         patterns = self.engine.detect_patterns()
         types = [p["type"] for p in patterns]
         assert "high_council_abort" not in types
+
+
+# ═══════════════════════════════════════════════════════════
+# TestAwakeningPhase1 — Connexion des capteurs
+# ═══════════════════════════════════════════════════════════
+
+class TestAwakeningPhase1:
+    """Tests Phase 1 : connecter les capteurs existants."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        SelfAwarenessEngine.reset_singleton()
+        with patch("core.self_awareness.STATE_FILE", str(tmp_path / "sa.json")):
+            self.engine = SelfAwarenessEngine()
+        yield
+        SelfAwarenessEngine.reset_singleton()
+
+    def test_detect_patterns_returns_list(self):
+        """detect_patterns() retourne toujours une liste."""
+        result = self.engine.detect_patterns()
+        assert isinstance(result, list)
+
+    def test_detect_patterns_error_streak(self):
+        """error_streak >= 3 produit un pattern."""
+        self.engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {"error_streak": 4, "mission_count": 10, "success_rate": 0.7,
+                            "cloud_budget_used": 0, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "GO"},
+        })
+        patterns = self.engine.detect_patterns()
+        types = [p["type"] for p in patterns]
+        assert "error_streak" in types
+
+    def test_mood_curieux_boosts_veille(self):
+        """Mood curieux → VEILLE_SILENCIEUSE +1.5."""
+        self.engine._snapshots.append({
+            "traits": {"average": {"curiosite": 70}},
+            "performance": {"error_streak": 0, "mission_count": 5, "success_rate": 0.8,
+                            "cloud_budget_used": 0, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "GO"},
+            "mood": "curieux",
+        })
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("VEILLE_SILENCIEUSE", 0) >= 1.5
+
+    def test_mood_creatif_boosts_expansion(self):
+        """Mood créatif → EXPANSION_CODE +1.0."""
+        self.engine._snapshots.append({
+            "traits": {"average": {"creativite": 70}},
+            "performance": {"error_streak": 0, "mission_count": 5, "success_rate": 0.8,
+                            "cloud_budget_used": 0, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "GO"},
+            "mood": "créatif",
+        })
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("EXPANSION_CODE", 0) >= 1.0
+
+    def test_mood_anime_boosts_expansion(self):
+        """Mood anime → EXPANSION_CODE +1.0 (même que créatif)."""
+        self.engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {"error_streak": 0, "mission_count": 5, "success_rate": 0.8,
+                            "cloud_budget_used": 0, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "GO"},
+            "mood": "anime",
+        })
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("EXPANSION_CODE", 0) >= 1.0
+
+    def test_mood_prudent_penalizes_expansion(self):
+        """Mood prudent → EXPANSION_CODE -1.0."""
+        self.engine._snapshots.append({
+            "traits": {"average": {"survie": 75}},
+            "performance": {"error_streak": 0, "mission_count": 5, "success_rate": 0.6,
+                            "cloud_budget_used": 0, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "GO"},
+            "mood": "prudent",
+        })
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("EXPANSION_CODE", 0) <= -1.0
+
+    def test_patterns_health_degraded_penalizes(self):
+        """Pattern health_degraded → EXPANSION_CODE pénalisé."""
+        self.engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {"error_streak": 0, "mission_count": 5, "success_rate": 0.7,
+                            "cloud_budget_used": 0, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "NO_GO"},
+            "mood": "équilibré",
+        })
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("EXPANSION_CODE", 0) < 0
+
+    def test_patterns_low_consensus_penalizes(self):
+        """Pattern low_consensus → COUNCIL_DEBATE pénalisé."""
+        self.engine._council_count = 5
+        self.engine._council_consensus = 1  # 20%
+        self.engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {"error_streak": 0, "mission_count": 5, "success_rate": 0.7,
+                            "cloud_budget_used": 0, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.2},
+            "health": {"verdict": "GO"},
+            "mood": "équilibré",
+        })
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("COUNCIL_DEBATE", 0) < 0
+
+    def test_knowledge_gaps_boost_veille(self):
+        """2+ lacunes ouvertes → VEILLE +1.5."""
+        self.engine._knowledge_gaps = [
+            {"topic": "A", "learned": False}, {"topic": "B", "learned": False}
+        ]
+        self.engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {"error_streak": 0, "mission_count": 5, "success_rate": 0.7,
+                            "cloud_budget_used": 0, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "GO"},
+            "mood": "équilibré",
+        })
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("VEILLE_SILENCIEUSE", 0) >= 1.5
+
+    def test_psyche_update_subscription(self):
+        """PSYCHE_UPDATE est souscrit dans init()."""
+        from core.event_bus.bus import bus
+        self.engine._subscribed = False
+        self.engine._subscribe_events()
+        subs = bus.subscribers.get("PSYCHE_UPDATE", [])
+        assert any(cb.__name__ == "_on_psyche_update" for cb in subs if hasattr(cb, "__name__"))
+
+    @pytest.mark.asyncio
+    async def test_psyche_update_handler_extreme_high(self):
+        """Trait > 80 → événement personnalité enregistré."""
+        event = {"system_average": {"curiosite": 85, "audace": 40}}
+        with patch.object(self.engine, "_record_personality_event") as mock:
+            await self.engine._on_psyche_update(event)
+            mock.assert_called_once()
+            call_arg = mock.call_args[0][0]
+            assert "trait_extreme_high" in call_arg
+            assert "curiosite" in call_arg
+
+    @pytest.mark.asyncio
+    async def test_psyche_update_handler_extreme_low(self):
+        """Trait < 25 → événement personnalité enregistré."""
+        event = {"system_average": {"curiosite": 20, "audace": 50}}
+        with patch.object(self.engine, "_record_personality_event") as mock:
+            await self.engine._on_psyche_update(event)
+            mock.assert_called_once()
+            call_arg = mock.call_args[0][0]
+            assert "trait_extreme_low" in call_arg
+
+    @pytest.mark.asyncio
+    async def test_psyche_update_handler_normal_no_event(self):
+        """Traits normaux → pas d'événement."""
+        event = {"system_average": {"curiosite": 50, "audace": 60}}
+        with patch.object(self.engine, "_record_personality_event") as mock:
+            await self.engine._on_psyche_update(event)
+            mock.assert_not_called()
+
+
+# ═══════════════════════════════════════════════════════════
+# TestAwakeningPhase2 — Amplification des signaux
+# ═══════════════════════════════════════════════════════════
+
+class TestAwakeningPhase2:
+    """Tests Phase 2 : purpose context enrichi."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        SelfAwarenessEngine.reset_singleton()
+        with patch("core.self_awareness.STATE_FILE", str(tmp_path / "sa.json")):
+            self.engine = SelfAwarenessEngine()
+        yield
+        SelfAwarenessEngine.reset_singleton()
+
+    def test_purpose_context_includes_patterns(self):
+        """Purpose context inclut [ALERTES] quand des patterns existent."""
+        self.engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {"error_streak": 5, "mission_count": 10, "success_rate": 0.4,
+                            "cloud_budget_used": 0, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "NO_GO"},
+            "mood": "fatigue",
+        })
+        ctx = self.engine.get_purpose_context()
+        assert "[ALERTES]" in ctx
+
+    def test_purpose_context_includes_gaps(self):
+        """Purpose context inclut [LACUNES] quand des gaps ouverts existent."""
+        self.engine._knowledge_gaps = [
+            {"topic": "Python async patterns", "learned": False},
+            {"topic": "ChromaDB optimization", "learned": False},
+        ]
+        self.engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {"error_streak": 0, "mission_count": 5, "success_rate": 0.7,
+                            "cloud_budget_used": 0, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "GO"},
+            "mood": "équilibré",
+        })
+        ctx = self.engine.get_purpose_context()
+        assert "[LACUNES]" in ctx
+
+    def test_purpose_context_no_alerts_when_clean(self):
+        """Purpose context n'inclut pas [ALERTES] quand tout va bien."""
+        self.engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {"error_streak": 0, "mission_count": 5, "success_rate": 0.8,
+                            "cloud_budget_used": 0, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "GO"},
+            "mood": "productif",
+        })
+        ctx = self.engine.get_purpose_context()
+        assert "[ALERTES]" not in ctx
+
+
+# ═══════════════════════════════════════════════════════════
+# TestAwakeningPhase3 — Comportements émergents
+# ═══════════════════════════════════════════════════════════
+
+class TestAwakeningPhase3:
+    """Tests Phase 3 : méta-réflexion, mode stratégique."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        SelfAwarenessEngine.reset_singleton()
+        with patch("core.self_awareness.STATE_FILE", str(tmp_path / "sa.json")):
+            self.engine = SelfAwarenessEngine()
+        yield
+        SelfAwarenessEngine.reset_singleton()
+
+    def _add_snapshots(self, count, success_rates=None, traits=None):
+        """Helper pour ajouter N snapshots."""
+        for i in range(count):
+            sr = success_rates[i] if success_rates and i < len(success_rates) else 0.7
+            t = traits[i] if traits and i < len(traits) else {"curiosite": 50}
+            self.engine._snapshots.append({
+                "traits": {"average": t},
+                "performance": {"error_streak": 0, "mission_count": 10, "success_rate": sr,
+                                "cloud_budget_used": 0, "cloud_budget_max": 100,
+                                "council_consensus_rate": 0.5},
+                "health": {"verdict": "GO"},
+                "mood": "équilibré",
+            })
+
+    # --- meta_reflect ---
+
+    def test_meta_reflect_not_enough_snapshots(self):
+        """< 5 snapshots → insight=None."""
+        self._add_snapshots(3)
+        result = self.engine.meta_reflect()
+        assert result["insight"] is None
+
+    def test_meta_reflect_detects_decline(self):
+        """Success rate en baisse → insight contient 'baisse'."""
+        self._add_snapshots(6, success_rates=[0.9, 0.85, 0.8, 0.7, 0.6, 0.5])
+        result = self.engine.meta_reflect()
+        assert result["success_trend"] < 0
+        assert result["insight"] is not None
+        assert "baisse" in result["insight"]
+
+    def test_meta_reflect_detects_improvement(self):
+        """Success rate en hausse → insight contient 'hausse'."""
+        self._add_snapshots(6, success_rates=[0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
+        result = self.engine.meta_reflect()
+        assert result["success_trend"] > 0
+        assert "hausse" in result["insight"]
+
+    def test_meta_reflect_detects_volatile_traits(self):
+        """Traits très variables → volatile_traits non vide."""
+        traits = [
+            {"curiosite": 30}, {"curiosite": 70}, {"curiosite": 35},
+            {"curiosite": 75}, {"curiosite": 40}, {"curiosite": 80},
+        ]
+        self._add_snapshots(6, traits=traits)
+        result = self.engine.meta_reflect()
+        assert len(result["volatile_traits"]) > 0
+
+    def test_meta_reflect_stable_traits(self):
+        """Traits stables → volatile_traits vide."""
+        traits = [{"curiosite": 50}, {"curiosite": 51}, {"curiosite": 50},
+                  {"curiosite": 52}, {"curiosite": 50}, {"curiosite": 51}]
+        self._add_snapshots(6, traits=traits)
+        result = self.engine.meta_reflect()
+        assert len(result["volatile_traits"]) == 0
+
+    # --- compute_strategic_mode ---
+
+    def test_strategic_mode_survie_error_streak(self):
+        """error_streak >= 7 → mode survie."""
+        self.engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {"error_streak": 8, "mission_count": 10, "success_rate": 0.3,
+                            "cloud_budget_used": 0, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "GO"},
+            "mood": "fatigue",
+        })
+        assert self.engine.compute_strategic_mode() == "survie"
+
+    def test_strategic_mode_survie_nogo(self):
+        """Santé NO_GO → mode survie."""
+        self.engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {"error_streak": 0, "mission_count": 10, "success_rate": 0.7,
+                            "cloud_budget_used": 0, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "NO_GO"},
+            "mood": "équilibré",
+        })
+        assert self.engine.compute_strategic_mode() == "survie"
+
+    def test_strategic_mode_consolidation(self):
+        """Trend négatif → consolidation."""
+        self._add_snapshots(6, success_rates=[0.8, 0.75, 0.7, 0.65, 0.55, 0.5])
+        assert self.engine.compute_strategic_mode() == "consolidation"
+
+    def test_strategic_mode_exploration(self):
+        """Success rate > 75% et trend >= 0 → exploration."""
+        self._add_snapshots(6, success_rates=[0.8, 0.82, 0.85, 0.83, 0.85, 0.87])
+        assert self.engine.compute_strategic_mode() == "exploration"
+
+    def test_strategic_mode_standard(self):
+        """Conditions normales → standard."""
+        self._add_snapshots(6, success_rates=[0.6, 0.65, 0.6, 0.65, 0.6, 0.65])
+        assert self.engine.compute_strategic_mode() == "standard"
+
+    def test_scoring_survie_penalizes_expansion(self):
+        """Mode survie dans scoring → EXPANSION_CODE fortement pénalisé."""
+        self.engine._snapshots.append({
+            "traits": {"average": {}},
+            "performance": {"error_streak": 8, "mission_count": 10, "success_rate": 0.3,
+                            "cloud_budget_used": 0, "cloud_budget_max": 100,
+                            "council_consensus_rate": 0.5},
+            "health": {"verdict": "GO"},
+            "mood": "fatigue",
+        })
+        adj = self.engine.compute_adaptive_scoring([])
+        assert adj.get("EXPANSION_CODE", 0) < -3

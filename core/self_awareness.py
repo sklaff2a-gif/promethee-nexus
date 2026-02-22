@@ -123,6 +123,7 @@ class SelfAwarenessEngine:
         bus.subscribe("COUNCIL_END", self._on_council_end)
         bus.subscribe("CI_PIPELINE_RESULT", self._on_ci_result)
         bus.subscribe("MEMORY_HEALTH_ALERT", self._on_memory_alert)
+        bus.subscribe("PSYCHE_UPDATE", self._on_psyche_update)
 
     async def _on_agent_response(self, event: dict):
         self._mission_count += 1
@@ -146,6 +147,21 @@ class SelfAwarenessEngine:
     async def _on_memory_alert(self, event: dict):
         self._memory_status = event.get("status", "unknown")
         self._memory_warnings = event.get("warnings", [])
+
+    async def _on_psyche_update(self, event):
+        """Réagit aux changements de personnalité significatifs."""
+        data = event if isinstance(event, dict) else {}
+        avg = data.get("system_average", {})
+        for trait, value in avg.items():
+            if isinstance(value, (int, float)):
+                if value > 80:
+                    self._record_personality_event(f"trait_extreme_high:{trait}={value:.0f}")
+                elif value < 25:
+                    self._record_personality_event(f"trait_extreme_low:{trait}={value:.0f}")
+
+    def _record_personality_event(self, event_str: str):
+        """Enregistre un événement de personnalité dans les logs."""
+        logger.info(f"CONSCIENCE: Événement personnalité — {event_str}")
 
     # --- Snapshot ---
 
@@ -555,6 +571,16 @@ class SelfAwarenessEngine:
         elif mood == "productif":
             _add("EXPANSION_CODE", 0.5)
             _add("GRIMOIRE_INVOKE", 0.5)
+        elif mood == "curieux":
+            _add("VEILLE_SILENCIEUSE", 1.5)
+            _add("COUNCIL_DEBATE", 0.5)
+        elif mood in ("créatif", "anime"):
+            _add("EXPANSION_CODE", 1.0)
+            _add("GRIMOIRE_INVOKE", 1.0)
+        elif mood == "prudent":
+            _add("SECURITY_AUDIT", 1.0)
+            _add("AUDIT_STRUCTURE", 0.5)
+            _add("EXPANSION_CODE", -1.0)
 
         # --- Règle 7 : Refactor stérile ---
         refactor_entries = [h for h in routine_history if h.get("intent") == "REFACTOR_RANDOM"]
@@ -594,6 +620,49 @@ class SelfAwarenessEngine:
                 _add("COUNCIL_DEBATE", 2.0)
         except Exception:
             pass
+
+        # --- Règle 12 : Mode stratégique global ---
+        strategic_mode = self.compute_strategic_mode()
+        if strategic_mode == "survie":
+            _add("AUDIT_STRUCTURE", 3.0)
+            _add("EXPANSION_CODE", -5.0)
+            _add("GRIMOIRE_INVOKE", -3.0)
+        elif strategic_mode == "consolidation":
+            _add("AUDIT_STRUCTURE", 1.0)
+            _add("EXPANSION_CODE", -2.0)
+            _add("COUNCIL_DEBATE", 1.0)
+        elif strategic_mode == "exploration":
+            _add("VEILLE_SILENCIEUSE", 1.0)
+            _add("EXPANSION_CODE", 1.0)
+            _add("COUNCIL_DEBATE", 1.0)
+            _add("GRIMOIRE_INVOKE", 1.0)
+
+        # --- Règle 13 : Méta-réflexion ---
+        reflection = self.meta_reflect()
+        if reflection.get("success_trend", 0) < -0.15:
+            _add("AUDIT_STRUCTURE", 2.0)
+            _add("EXPANSION_CODE", -2.0)
+        if reflection.get("volatile_traits"):
+            _add("COUNCIL_DEBATE", 1.0)
+
+        # --- Règle 14 : Lacunes ouvertes ---
+        open_gaps = self.get_open_gaps()
+        if open_gaps and len(open_gaps) >= 2:
+            _add("VEILLE_SILENCIEUSE", 1.5)
+            _add("EXPANSION_CODE", 0.5)
+
+        # --- Règle 15 : Patterns détectés ---
+        patterns = self.detect_patterns()
+        if patterns:
+            pattern_types = {p["type"] for p in patterns}
+            if "health_degraded" in pattern_types:
+                _add("EXPANSION_CODE", -2.0)
+                _add("AUDIT_STRUCTURE", 1.0)
+            if "error_streak" in pattern_types:
+                _add("EXPANSION_CODE", -1.0)
+                _add("MEMORY_CLEANUP", 1.0)
+            if "low_consensus" in pattern_types:
+                _add("COUNCIL_DEBATE", -2.0)
 
         return adjustments
 
@@ -638,6 +707,76 @@ class SelfAwarenessEngine:
         """Retourne les lacunes non comblées."""
         return [g for g in self._knowledge_gaps if not g["learned"]]
 
+    # --- Méta-réflexion ---
+
+    def meta_reflect(self) -> dict:
+        """Analyse les 10 derniers snapshots pour détecter des tendances. Zero LLM."""
+        if len(self._snapshots) < 5:
+            return {"insight": None, "success_trend": 0, "volatile_traits": [], "snapshot_count": len(self._snapshots)}
+
+        recent = self._snapshots[-10:]
+
+        # Tendance success_rate
+        rates = [s.get("performance", {}).get("success_rate", 0) for s in recent]
+        trend = rates[-1] - rates[0] if len(rates) >= 2 else 0
+
+        # Volatilité des traits (écart-type)
+        trait_values = {}
+        for s in recent:
+            for trait, val in s.get("traits", {}).get("average", {}).items():
+                trait_values.setdefault(trait, []).append(val)
+
+        volatile_traits = []
+        for trait, vals in trait_values.items():
+            if len(vals) >= 3:
+                mean = sum(vals) / len(vals)
+                std = (sum((v - mean) ** 2 for v in vals) / len(vals)) ** 0.5
+                if std > 5:
+                    volatile_traits.append((trait, std))
+
+        # Construire l'insight
+        insight_parts = []
+        if trend < -0.1:
+            insight_parts.append(f"performance en baisse ({trend:+.2f})")
+        elif trend > 0.1:
+            insight_parts.append(f"performance en hausse ({trend:+.2f})")
+        if volatile_traits:
+            vt = ", ".join(f"{t}(std={s:.1f})" for t, s in volatile_traits)
+            insight_parts.append(f"traits instables: {vt}")
+
+        return {
+            "insight": " | ".join(insight_parts) if insight_parts else None,
+            "success_trend": trend,
+            "volatile_traits": volatile_traits,
+            "snapshot_count": len(recent),
+        }
+
+    def compute_strategic_mode(self) -> str:
+        """Détermine le mode stratégique global. Zero LLM."""
+        reflection = self.meta_reflect()
+        latest = self._snapshots[-1] if self._snapshots else {}
+        perf = latest.get("performance", {})
+        health = latest.get("health", {})
+
+        error_streak = perf.get("error_streak", 0)
+        success_rate = perf.get("success_rate", 0.5)
+        trend = reflection.get("success_trend", 0)
+
+        # SURVIE : erreurs critiques, santé dégradée
+        if error_streak >= 7 or health.get("verdict") == "NO_GO":
+            return "survie"
+
+        # CONSOLIDATION : performance en baisse, traits instables
+        if trend < -0.15 or (error_streak >= 4 and success_rate < 0.5):
+            return "consolidation"
+
+        # EXPLORATION : performance stable/haute, curiosité dominante
+        if success_rate > 0.75 and trend >= 0:
+            return "exploration"
+
+        # STANDARD : par défaut
+        return "standard"
+
     # --- Mission existentielle ---
 
     def get_purpose_context(self) -> str:
@@ -663,6 +802,32 @@ class SelfAwarenessEngine:
             narrative = desires.get_dominant_narrative(top_n=1)
             if narrative:
                 parts.append(f"[DESIR] {narrative}")
+        except Exception:
+            pass
+
+        # Méta-réflexion
+        reflection = self.meta_reflect()
+        if reflection.get("insight"):
+            parts.append(f"[META] {reflection['insight']}")
+
+        # Patterns actifs
+        patterns = self.detect_patterns()
+        if patterns:
+            pattern_names = [p["type"] for p in patterns[:3]]
+            parts.append(f"[ALERTES] {', '.join(pattern_names)}")
+
+        # Lacunes ouvertes
+        open_gaps = self.get_open_gaps()
+        if open_gaps:
+            gap_topics = [g["topic"][:30] for g in open_gaps[:2]]
+            parts.append(f"[LACUNES] {', '.join(gap_topics)}")
+
+        # Pulsions frustrées
+        try:
+            from core.desire_engine import desires as _desires
+            frustrated = [(n, d.frustration_streak) for n, d in _desires.drives.items() if d.frustration_streak >= 3]
+            if frustrated:
+                parts.append(f"[FRUSTRATIONS] {', '.join(f'{n}(x{s})' for n, s in frustrated)}")
         except Exception:
             pass
 

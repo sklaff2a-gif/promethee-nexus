@@ -218,21 +218,31 @@ class BaseAgent:
 
             now = time.time()
             scored = []
-            for doc, meta, dist in zip(
+            doc_ids = res.get('ids', [[]])[0] if res.get('ids') else []
+            for idx, (doc, meta, dist) in enumerate(zip(
                 res['documents'][0], res['metadatas'][0], res['distances'][0]
-            ):
+            )):
                 similarity = max(0.0, 1.0 - dist)
                 try:
                     age_days = (now - float(meta.get("timestamp", 0))) / 86400
                 except (ValueError, TypeError):
                     age_days = self.MEMORY_HALF_LIFE_DAYS
                 decay = math.exp(-age_days * 0.693 / self.MEMORY_HALF_LIFE_DAYS)
-                scored.append((doc, similarity * decay))
+                doc_id = doc_ids[idx] if idx < len(doc_ids) else None
+                scored.append((doc, similarity * decay, doc_id))
 
             scored.sort(key=lambda x: x[1], reverse=True)
             # Filtre qualité : exclure les résultats sous le seuil
-            scored = [(doc, s) for doc, s in scored if s >= self._MIN_RECALL_SCORE]
-            base_result = "\n".join(doc for doc, _ in scored[:limit])
+            scored = [(doc, s, did) for doc, s, did in scored if s >= self._MIN_RECALL_SCORE]
+            base_result = "\n".join(doc for doc, _, _ in scored[:limit])
+
+            # Tracker les rappels pour la mémoire utilitaire
+            for _, _, doc_id in scored[:limit]:
+                if doc_id:
+                    try:
+                        self.memory_manager.record_recall(doc_id, collection)
+                    except Exception:
+                        pass
 
             # Activation latérale (spreading activation) sur le top-1
             if lateral and base_result and scored:

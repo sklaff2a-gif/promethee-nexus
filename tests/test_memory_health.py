@@ -355,3 +355,78 @@ class TestAsyncLock:
             # Vérifier que async_check_health a bien été appelé
             spy.assert_awaited_once()
             assert result["memory"]["status"] == "healthy"
+
+
+# ═══════════════════════════════════════════════════════════
+# TestRecordRecall — Phase 2.1 Mémoire utilitaire
+# ═══════════════════════════════════════════════════════════
+
+class TestRecordRecall:
+    """Tests record_recall() et protection purge."""
+
+    def test_record_recall_increments_count(self, isolate_chroma):
+        """record_recall incrémente recall_count de 0 à 1."""
+        mgr = _make_manager(isolate_chroma)
+        mgr.add_documents(
+            ["test doc"], [{"timestamp": str(time.time()), "source": "test"}],
+            ["recall-test-1"], "collective_wisdom"
+        )
+        mgr.record_recall("recall-test-1", "collective_wisdom")
+        col = mgr._get_collection("collective_wisdom")
+        result = col.get(ids=["recall-test-1"], include=["metadatas"])
+        assert int(result["metadatas"][0].get("recall_count", 0)) == 1
+
+    def test_record_recall_multiple_increments(self, isolate_chroma):
+        """3 rappels → recall_count = 3."""
+        mgr = _make_manager(isolate_chroma)
+        mgr.add_documents(
+            ["test doc"], [{"timestamp": str(time.time()), "source": "test"}],
+            ["recall-test-2"], "collective_wisdom"
+        )
+        for _ in range(3):
+            mgr.record_recall("recall-test-2", "collective_wisdom")
+        col = mgr._get_collection("collective_wisdom")
+        result = col.get(ids=["recall-test-2"], include=["metadatas"])
+        assert int(result["metadatas"][0].get("recall_count", 0)) == 3
+
+    def test_record_recall_sets_last_recalled_at(self, isolate_chroma):
+        """record_recall met à jour last_recalled_at."""
+        mgr = _make_manager(isolate_chroma)
+        mgr.add_documents(
+            ["test doc"], [{"timestamp": str(time.time()), "source": "test"}],
+            ["recall-test-3"], "collective_wisdom"
+        )
+        mgr.record_recall("recall-test-3", "collective_wisdom")
+        col = mgr._get_collection("collective_wisdom")
+        result = col.get(ids=["recall-test-3"], include=["metadatas"])
+        assert "last_recalled_at" in result["metadatas"][0]
+
+    def test_record_recall_nonexistent_id(self, isolate_chroma):
+        """record_recall sur un ID inexistant ne plante pas."""
+        mgr = _make_manager(isolate_chroma)
+        mgr.record_recall("nonexistent-id", "collective_wisdom")
+
+    def test_purge_preserves_high_recall(self, isolate_chroma):
+        """Purge ne supprime pas les docs avec recall_count >= 3."""
+        mgr = _make_manager(isolate_chroma)
+        old_ts = str(time.time() - 200 * 86400)  # 200 jours
+        mgr.add_documents(
+            ["precious memory"], [{"timestamp": old_ts, "source": "test", "recall_count": "5"}],
+            ["high-recall-1"], "collective_wisdom"
+        )
+        purged = mgr.purge_expired(max_age_days=90)
+        assert purged == 0
+        col = mgr._get_collection("collective_wisdom")
+        remaining = col.get(ids=["high-recall-1"])
+        assert len(remaining["ids"]) == 1
+
+    def test_purge_removes_low_recall(self, isolate_chroma):
+        """Purge supprime les docs anciens avec recall_count < 3."""
+        mgr = _make_manager(isolate_chroma)
+        old_ts = str(time.time() - 200 * 86400)  # 200 jours
+        mgr.add_documents(
+            ["forgettable memory"], [{"timestamp": old_ts, "source": "test", "recall_count": "1"}],
+            ["low-recall-1"], "collective_wisdom"
+        )
+        purged = mgr.purge_expired(max_age_days=90)
+        assert purged == 1
