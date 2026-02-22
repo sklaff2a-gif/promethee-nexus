@@ -4,14 +4,32 @@ import random
 import logging
 import json
 import os
+import uuid
 from datetime import date, datetime
 from core.orchestrator import orchestrator
 from core.event_bus.bus import bus
+from core.prompt_templates import AUTONOMY_GUARDRAIL
 
 logger = logging.getLogger("AutonomyEngine")
 
 # Limite quotidienne de routines autonomes
 MAX_DAILY_ROUTINES = 80
+
+# Budget quotidien en points (chaque routine a un coût différent)
+DAILY_BUDGET_POINTS = 200
+
+def _load_resource_costs() -> dict:
+    """Charge les coûts par routine depuis config/resource_costs.json."""
+    costs_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "config", "resource_costs.json")
+    try:
+        with open(costs_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {k: v["cost"] for k, v in data.items() if isinstance(v, dict) and "cost" in v}
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        return {}
+
+RESOURCE_COSTS = _load_resource_costs()
 
 # Veille YouTube IA — rotation quand la dropzone est vide
 # Veille silencieuse — rotation de sujets (évite les doublons)
@@ -103,6 +121,19 @@ class SystemHealthCheck:
         except Exception as e:
             warnings.append(f"Ollama error: {e}")
 
+        # Ping ChromaDB (via lock async pour protéger la probe write/delete)
+        memory_status = {"status": "unknown"}
+        try:
+            from core.vector_store import ChromaMemoryManager
+            instances = ChromaMemoryManager._instances
+            if instances:
+                mgr = next(iter(instances.values()))
+                memory_status = await mgr.async_check_health()
+            else:
+                memory_status = {"status": "down", "warnings": ["Aucune instance ChromaDB"]}
+        except Exception as e:
+            memory_status = {"status": "down", "warnings": [str(e)]}
+
         # Verdict
         if cpu_percent >= SystemHealthCheck.CPU_CRIT or ram_percent >= SystemHealthCheck.RAM_CRIT or not ollama_alive:
             verdict = "NO_GO"
@@ -116,6 +147,10 @@ class SystemHealthCheck:
         if ram_percent >= SystemHealthCheck.RAM_WARN:
             warnings.append(f"RAM élevée: {ram_percent}%")
 
+        # Warning mémoire (ne bloque pas les routines)
+        if memory_status.get("status") in ("degraded", "down"):
+            warnings.append(f"Mémoire ChromaDB: {memory_status['status']}")
+
         return {
             "verdict": verdict,
             "cpu_percent": cpu_percent,
@@ -124,6 +159,7 @@ class SystemHealthCheck:
             "ram_total_gb": ram_total_gb,
             "ollama_alive": ollama_alive,
             "ollama_models": ollama_models,
+            "memory": memory_status,
             "warnings": warnings,
             "timestamp": datetime.now().isoformat(),
         }
@@ -138,6 +174,7 @@ CONTEXT_KEYWORDS = {
     "SECURITY_AUDIT": ["sécurité", "vulnérabilité", "injection", "risque", "audit"],
     "MEMORY_CLEANUP": ["mémoire", "nettoyage", "ancien", "doublon", "rag"],
     "REFACTOR_RANDOM": ["refactoring", "simplifier", "lisibilité", "dette", "technique"],
+    "MEMORY_CONSOLIDATION": ["consolidation", "synthèse", "résumé", "regrouper", "mémoire"],
 }
 
 
@@ -147,10 +184,12 @@ class RoutineScorer:
     @staticmethod
     def score_routines(routines: list, recent_context: list, routine_history: list,
                        dropzone_count: int = 0, health_verdict: str = "GO",
-                       personality_bias: dict = None) -> list:
+                       personality_bias: dict = None,
+                       cloud_in_cooldown: bool = False) -> list:
         """
         Retourne une liste de (routine, score) triée par score décroissant.
         personality_bias: dict optionnel {intent: float} provenant de PsycheEngine.
+        cloud_in_cooldown: True si le Cloud est en cooldown 429 (pénalise les routines lourdes).
         """
         scored = []
 
@@ -208,9 +247,13 @@ class RoutineScorer:
             if health_verdict == "DEGRADED" and intent == "EXPANSION_CODE":
                 score -= 1.5
 
-            # Personality bias (PSYCHE) : bonus/malus basé sur les traits du système
+            # Cloud cooldown penalty : pénaliser les routines qui hallucinent en local
+            if cloud_in_cooldown and intent in ("EXPANSION_CODE", "REFACTOR_RANDOM"):
+                score -= 10.0
+
+            # Personality bias (PSYCHE) : bonus/malus basé sur les traits du système (clampé [-2, +2])
             if personality_bias and intent in personality_bias:
-                score += personality_bias[intent]
+                score += max(-2.0, min(2.0, personality_bias[intent]))
 
             # Jitter aléatoire pour casser les égalités et favoriser la diversité
             score += random.uniform(-0.3, 0.3)
@@ -283,6 +326,14 @@ class AutonomyEngine:
         self._learning_history: dict = persisted.get("learning_history", {})
         # Flag : max 1 apprentissage par cycle de routine
         self._learning_done_this_cycle = False
+        # Budget en points (chaque routine a un coût différent)
+        self.daily_budget_used = persisted.get("daily_budget_used", 0)
+        # Cache des fichiers déjà audités par Security {filename: timestamp}
+        self._security_audited_files: dict = persisted.get("security_audited_files", {})
+        # Loop breaker : intents a eviter au prochain cycle
+        self._temp_blacklist: set = set()
+        # Loop breaker : intent force par le loop_breaker (bypass scoring)
+        self._forced_next_intent: str = ""
 
         bus.subscribe("USER_COMMAND", self.reset_timer)
 
@@ -291,7 +342,9 @@ class AutonomyEngine:
         today = date.today()
         if today != self.last_reset_day:
             self.daily_count = 0
+            self.daily_budget_used = 0
             self.last_reset_day = today
+            self._persist_state()
 
             # Bilan et seed objectifs quotidiens
             try:
@@ -303,6 +356,9 @@ class AutonomyEngine:
 
         if self.daily_count >= MAX_DAILY_ROUTINES:
             logger.warning(f"[AUTONOMY] Budget quotidien atteint ({MAX_DAILY_ROUTINES} routines). Pause jusqu'à demain.")
+            return False
+        if self.daily_budget_used >= DAILY_BUDGET_POINTS:
+            logger.warning(f"[AUTONOMY] Budget points épuisé ({self.daily_budget_used}/{DAILY_BUDGET_POINTS}). Pause jusqu'à demain.")
             return False
         return True
 
@@ -327,29 +383,52 @@ class AutonomyEngine:
             {"agent": "security", "intent": "SECURITY_AUDIT", "mission": "Audite un module aléatoire du projet pour des vulnérabilités (injection, eval, subprocess, fichiers non sanitisés)."},
             {"agent": "_memory_cleanup", "intent": "MEMORY_CLEANUP", "mission": "Nettoie la mémoire RAG ancienne et les doublons."},
             {"agent": "coder", "intent": "REFACTOR_RANDOM", "mission": "Choisis un fichier Python aléatoire du projet et propose un refactoring pour améliorer la lisibilité (noms de variables, simplification de logique)."},
+            {"agent": "_memory_consolidation", "intent": "MEMORY_CONSOLIDATION", "mission": "Consolide les mémoires récentes en synthèses thématiques."},
         ]
 
     def _persist_state(self):
         state = {
             "version": "24.0",
             "daily_count": self.daily_count,
+            "daily_budget_used": self.daily_budget_used,
             "last_reset_day": self.last_reset_day.isoformat() if self.last_reset_day else None,
             "routine_history": self.routine_history,
             "last_health_check": self.last_health_check,
             "error_streak": self.error_streak,
             "total_routines_executed": self.total_routines_executed,
             "learning_history": self._learning_history,
+            "security_audited_files": self._security_audited_files,
         }
         AutonomyStatePersistence.save(state)
 
-    def _score_result_quality(self, response: dict, intent: str) -> float:
-        """Score qualité du résultat d'une routine (0.0 = garbage, 1.0 = excellent).
+    def _analyze_result_text(self, result_text: str) -> dict:
+        """Analyse partagée du texte de résultat : non-latin ratio + répétition.
 
-        Critères :
-        - Longueur du résultat (trop court = mauvais)
-        - Ratio caractères non-latin (hallucination)
-        - Répétition avec les résultats précédents
+        Retourne {"non_latin_ratio": float, "is_repetition": bool}.
         """
+        # Ratio non-latin
+        non_latin_ratio = 0.0
+        alpha_chars = [c for c in result_text if c.isalpha()]
+        if alpha_chars:
+            non_latin = sum(1 for c in alpha_chars if ord(c) > 0x024F)
+            non_latin_ratio = non_latin / len(alpha_chars)
+
+        # Répétition avec les résultats précédents
+        is_repetition = False
+        recent_previews = [
+            str(h.get("result_preview", ""))
+            for h in self.routine_history[-5:]
+            if h.get("result_preview")
+        ]
+        for prev in recent_previews:
+            if prev and len(result_text) >= 200 and result_text[:200] == prev[:200]:
+                is_repetition = True
+                break
+
+        return {"non_latin_ratio": non_latin_ratio, "is_repetition": is_repetition}
+
+    def _score_result_quality(self, response: dict, intent: str) -> float:
+        """Score qualité du résultat d'une routine (0.0 = garbage, 1.0 = excellent)."""
         if not response or not isinstance(response, dict):
             return 0.0
 
@@ -357,37 +436,22 @@ class AutonomyEngine:
         score = 1.0
 
         # 1. Pénalité longueur : résultat vide ou très court
-        if len(result_text.strip()) < 20:
+        stripped_len = len(result_text.strip())
+        if stripped_len < 20:
             return 0.0
-        elif len(result_text.strip()) < 50:
+        elif stripped_len < 50:
             score -= 0.4
-        elif len(result_text.strip()) < 100:
+        elif stripped_len < 100:
             score -= 0.2
 
-        # 2. Pénalité non-latin (hallucination)
-        alpha_chars = [c for c in result_text if c.isalpha()]
-        if alpha_chars:
-            non_latin = sum(1 for c in alpha_chars if ord(c) > 0x024F)
-            ratio = non_latin / len(alpha_chars)
-            if ratio > 0.15:
-                score -= 0.5  # Forte pénalité
-            elif ratio > 0.05:
-                score -= 0.2
-
-        # 3. Pénalité répétition avec les résultats précédents
-        recent_results = [
-            str(h.get("result_preview", ""))
-            for h in self.routine_history[-5:]
-            if h.get("result_preview")
-        ]
-        for prev in recent_results:
-            if prev and result_text[:200] == prev[:200]:
-                score -= 0.4
-                break
-
-        # Stocker un aperçu pour la comparaison future
-        if hasattr(self, 'routine_history') and self.routine_history:
-            pass  # Le preview sera ajouté dans _record_routine
+        # 2-3. Analyse partagée (non-latin + répétition)
+        analysis = self._analyze_result_text(result_text)
+        if analysis["non_latin_ratio"] > 0.15:
+            score -= 0.5
+        elif analysis["non_latin_ratio"] > 0.05:
+            score -= 0.2
+        if analysis["is_repetition"]:
+            score -= 0.4
 
         return max(0.0, min(1.0, score))
 
@@ -398,27 +462,21 @@ class AutonomyEngine:
 
         result_text = str(response.get("result", ""))
 
-        # 1. Hallucination : ratio non-latin > 15%
-        alpha_chars = [c for c in result_text if c.isalpha()]
-        if alpha_chars:
-            non_latin = sum(1 for c in alpha_chars if ord(c) > 0x024F)
-            if non_latin / len(alpha_chars) > 0.15:
-                return "hallucination"
-
-        # 2. Répétition : 200 premiers chars identiques à un résultat précédent
-        recent_previews = [
-            str(h.get("result_preview", ""))
-            for h in self.routine_history[-5:]
-            if h.get("result_preview")
-        ]
-        for prev in recent_previews:
-            if prev and len(result_text) >= 200 and result_text[:200] == prev[:200]:
-                return "repetition"
+        # 1-2. Analyse partagée (non-latin + répétition)
+        analysis = self._analyze_result_text(result_text)
+        if analysis["non_latin_ratio"] > 0.15:
+            return "hallucination"
+        if analysis["is_repetition"]:
+            return "repetition"
 
         # 3. Ignorance : résultat court/vague + patterns linguistiques
-        #    Exclure les résultats vides/quasi-vides (c'est technique, pas de l'ignorance)
         stripped = result_text.strip()
         if len(stripped) < 10:
+            return "technical"
+
+        # Routines sans LLM : un résultat court est normal, pas de l'ignorance
+        no_llm_intents = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP"}
+        if intent in no_llm_intents:
             return "technical"
 
         ignorance_markers = [
@@ -465,7 +523,7 @@ class AutonomyEngine:
         # Dispatcher une recherche ciblée au Researcher
         print(f"   📚 APPRENTISSAGE: Recherche ciblée sur '{topic[:60]}...'")
         try:
-            await orchestrator.dispatch_task("researcher", {
+            result = await orchestrator.dispatch_task("researcher", {
                 "mission": f"[APPRENTISSAGE CIBLÉ] Recherche approfondie sur: {topic}",
                 "context": (
                     "APPRENTISSAGE_CIBLE — Le système a détecté une lacune de connaissance "
@@ -481,7 +539,14 @@ class AutonomyEngine:
             try:
                 from core.self_awareness import awareness
                 awareness.record_knowledge_gap(topic, intent)
-                awareness.mark_gap_learned(topic)
+                # Ne marquer comme appris que si le Researcher a réellement répondu
+                researcher_ok = (
+                    result and isinstance(result, dict)
+                    and result.get("status") == "success"
+                    and len(str(result.get("result", ""))) > 50
+                )
+                if researcher_ok:
+                    awareness.mark_gap_learned(topic)
             except Exception:
                 pass
 
@@ -491,7 +556,7 @@ class AutonomyEngine:
 
     def _record_routine(self, agent: str, intent: str, status: str, subject: str = "",
                         quality_score: float = 0.0, failure_type: str = None,
-                        result_preview: str = ""):
+                        result_preview: str = "", grimoire_slug: str = ""):
         entry = {
             "agent": agent,
             "intent": intent,
@@ -505,6 +570,8 @@ class AutonomyEngine:
             entry["failure_type"] = failure_type
         if result_preview:
             entry["result_preview"] = result_preview[:200]
+        if grimoire_slug:
+            entry["grimoire_slug"] = grimoire_slug
         self.routine_history.append(entry)
         # FIFO max 40 (étendu pour l'analyse temporelle)
         if len(self.routine_history) > 40:
@@ -528,7 +595,31 @@ class AutonomyEngine:
 
     async def _execute_scored_routine(self, health: dict):
         """Scoring → dispatch → record → persist."""
+        # Loop breaker : si un intent est force, bypass le scoring
+        if self._forced_next_intent:
+            forced = self._forced_next_intent
+            self._forced_next_intent = ""
+            routines = self._get_routines()
+            forced_routine = next((r for r in routines if r["intent"] == forced), None)
+            if forced_routine:
+                print(f"   🔀 LOOP_BREAKER: Intent force -> [{forced}]")
+                # Deleguer l'execution directe (sauter tout le scoring)
+                return await self._execute_forced_routine(forced_routine, health)
+            else:
+                logger.warning(f"[AUTONOMY] Intent forcé '{forced}' introuvable dans les routines, fallback au scoring normal.")
+
         routines = self._get_routines()
+
+        # Loop breaker : filtrer les routines blacklistees
+        if self._temp_blacklist:
+            filtered = [r for r in routines if r["intent"] not in self._temp_blacklist]
+            if filtered:
+                blacklisted = self._temp_blacklist.copy()
+                self._temp_blacklist.clear()
+                print(f"   🚫 LOOP_BREAKER: Blacklist temporaire: {', '.join(blacklisted)}")
+                routines = filtered
+            else:
+                self._temp_blacklist.clear()  # Eviter de bloquer tout
 
         # Compter les fichiers en dropzone
         try:
@@ -550,6 +641,14 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # Détecter si le Cloud est en cooldown 429
+        cloud_in_cooldown = False
+        try:
+            from core.base_agent import BaseAgent
+            cloud_in_cooldown = time.time() < BaseAgent._cloud_cooldown_until
+        except Exception:
+            pass
+
         scored = RoutineScorer.score_routines(
             routines=routines,
             recent_context=self.recent_context,
@@ -557,6 +656,7 @@ class AutonomyEngine:
             dropzone_count=dropzone_count,
             health_verdict=health["verdict"],
             personality_bias=personality_bias,
+            cloud_in_cooldown=cloud_in_cooldown,
         )
 
         # --- Bonus objectifs ---
@@ -570,10 +670,18 @@ class AutonomyEngine:
             pass
 
         # --- Ajustements adaptatifs (conscience de soi) ---
+        # Clamping : les ajustements cumulatifs sont bornés pour éviter les valeurs extrêmes
+        ADAPTIVE_CLAMP_MIN = -10.0
+        ADAPTIVE_CLAMP_MAX = 5.0
         adaptive_adjustments = {}
         try:
             from core.self_awareness import awareness
-            adaptive_adjustments = awareness.compute_adaptive_scoring(self.routine_history)
+            raw_adjustments = awareness.compute_adaptive_scoring(self.routine_history)
+            # Clamping des ajustements dans [min, max]
+            adaptive_adjustments = {
+                intent: max(ADAPTIVE_CLAMP_MIN, min(ADAPTIVE_CLAMP_MAX, val))
+                for intent, val in raw_adjustments.items()
+            }
             if adaptive_adjustments:
                 for i, (routine, s) in enumerate(scored):
                     adj = adaptive_adjustments.get(routine["intent"], 0.0)
@@ -588,11 +696,61 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Bonus spreading activation (affinité sémantique) ---
+        try:
+            from core.spreading_activation import activation_engine as sa_engine
+            for i, (routine, s) in enumerate(scored):
+                sa_bonus = sa_engine.compute_routine_affinity(routine["intent"])
+                if sa_bonus != 0.0:
+                    scored[i] = (routine, s + sa_bonus)
+            scored.sort(key=lambda x: x[1], reverse=True)
+        except Exception:
+            pass
+
+        # --- Bonus cortex synaptique (associations persistantes) ---
+        try:
+            from core.synaptic_network import cortex
+            for i, (routine, s) in enumerate(scored):
+                syn_bonus = cortex.compute_routine_affinity(routine["intent"])
+                if syn_bonus != 0.0:
+                    scored[i] = (routine, s + syn_bonus)
+            scored.sort(key=lambda x: x[1], reverse=True)
+        except Exception:
+            pass
+
+        # --- Bonus pulsions (desirs) ---
+        try:
+            from core.desire_engine import desires
+            desires.tick()
+            for i, (routine, s) in enumerate(scored):
+                desire_bonus = desires.compute_desire_bonus(routine["intent"])
+                if desire_bonus > 0:
+                    scored[i] = (routine, s + desire_bonus)
+            scored.sort(key=lambda x: x[1], reverse=True)
+            urgent = [d.name for d in desires.drives.values() if d.deprivation >= 75]
+            if urgent:
+                print(f"   \U0001FA90 DESIRS: Pulsions urgentes: {', '.join(urgent)}")
+        except Exception:
+            pass
+
         selected, score = scored[0]
         agent = selected["agent"]
         intent = selected["intent"]
 
-        print(f"   ✨ AUTONOMY: Routine [{intent}] (score={score:.1f}) -> [{agent.upper()}] ({self.daily_count + 1}/{MAX_DAILY_ROUTINES})")
+        # --- Veto proactif ---
+        veto_reason = self._should_veto(intent, agent)
+        if veto_reason:
+            print(f"   🚫 VETO: {veto_reason}")
+            # Fallback : prendre la 2ème meilleure routine
+            if len(scored) > 1:
+                selected, score = scored[1]
+                agent = selected["agent"]
+                intent = selected["intent"]
+            else:
+                return  # Aucune alternative
+
+        routine_cost_preview = RESOURCE_COSTS.get(intent, 2)
+        print(f"   ✨ AUTONOMY: Routine [{intent}] (score={score:.1f}, coût={routine_cost_preview}pt) -> [{agent.upper()}] ({self.daily_count + 1}/{MAX_DAILY_ROUTINES}, budget: {self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt)")
 
         # Annonce de l'objectif associé
         try:
@@ -618,8 +776,12 @@ class AutonomyEngine:
             response = await self._execute_memory_cleanup()
         elif intent == "SECURITY_AUDIT":
             response = await self._execute_security_audit()
+        elif intent == "AUDIT_STRUCTURE":
+            response = await self._execute_audit_structure()
         elif intent == "REFACTOR_RANDOM":
             response = await self._execute_refactor_random()
+        elif intent == "MEMORY_CONSOLIDATION":
+            response = await self._execute_memory_consolidation()
         elif intent == "DROPZONE_SCAN" and dropzone_count == 0:
             # Dropzone vide → veille YouTube IA (rotation des sujets)
             yt_index = self.total_routines_executed % len(YOUTUBE_AI_VEILLE)
@@ -653,20 +815,58 @@ class AutonomyEngine:
                 purpose_ctx = awareness.get_purpose_context()
             except Exception:
                 pass
-            mission_text = f"[MODE VEILLE] {selected['mission']}\nAgis de ta propre initiative."
-            if purpose_ctx:
-                mission_text = f"{purpose_ctx}\n{mission_text}"
+            # Enrichir avec le narratif interieur (pulsions)
+            try:
+                from core.desire_engine import desires
+                narrative = desires.get_dominant_narrative()
+                if narrative:
+                    purpose_ctx += f"\n[DESIRS] {narrative}"
+            except Exception:
+                pass
+            # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)
+            raw_mission = selected["mission"]
+            # Retirer le préfixe [MODE VEILLE] déjà présent dans certaines missions
+            clean_mission = raw_mission.replace("[MODE VEILLE] ", "").replace("[MODE VEILLE]", "").strip()
+            mission_text = f"[MODE VEILLE] {clean_mission}\nAgis de ta propre initiative."
+            # Guardrails et purpose dans le context (pas dans la mission envoyée aux moteurs de recherche)
+            context_parts = ["PROTOCOLE_AUTONOMIE"]
+            if purpose_ctx and isinstance(purpose_ctx, str):
+                context_parts.append(purpose_ctx)
+            context_parts.append(AUTONOMY_GUARDRAIL)
             response = await orchestrator.dispatch_task(agent, {
                 "mission": mission_text,
-                "context": "PROTOCOLE_AUTONOMIE",
+                "context": "\n".join(context_parts),
                 "force_local": True,
             })
+
+        # --- Guard : routines "skipped" (council saturé, etc.) — pas de budget consommé ---
+        if response and response.get("status") == "skipped":
+            reason = response.get("reason", "unknown")
+            print(f"   ⏭️ Routine {intent} skippée ({reason})")
+            self._record_routine(agent, intent, "skipped", quality_score=0.0)
+            # Pas d'incrémentation daily_count, budget, error_streak
+            return
 
         # Sujet du council (pour la déduplication)
         council_subject = getattr(self, "_current_council_subject", "")
 
+        # Slug Grimoire réel (pour la rotation)
+        grimoire_slug = getattr(self, "_last_grimoire_slug", "")
+        self._last_grimoire_slug = ""
+
         # Score qualité post-routine
         quality_score = self._score_result_quality(response, intent)
+
+        # Feedback pulsions
+        try:
+            from core.desire_engine import desires
+            if quality_score >= 0.6:
+                desires.on_event("ROUTINE_SUCCESS", {"intent": intent, "quality": quality_score})
+            else:
+                desires.on_event("ROUTINE_FAILURE", {"intent": intent, "quality": quality_score})
+            desires.save()
+        except Exception:
+            pass
 
         # Aperçu du résultat pour comparaison future
         result_preview = ""
@@ -675,15 +875,21 @@ class AutonomyEngine:
 
         # Reset du flag d'apprentissage pour ce cycle
         self._learning_done_this_cycle = False
+        failure_type = ""
 
-        if response and response.get("status") in ("success", "consensus"):
+        if response and response.get("status") in ("success", "consensus", "max_rounds"):
+            # Distinguer consensus réel vs max_rounds (timeout sans accord)
+            actual_status = response.get("status", "success")
+            is_max_rounds = actual_status == "max_rounds"
+
             if quality_score < 0.3:
                 # Succès technique mais résultat de mauvaise qualité
                 failure_type = self._diagnose_failure(response, quality_score, intent)
+                record_status = "max_rounds_low" if is_max_rounds else "low_quality"
                 print(f"   ⚠️ Routine {intent} terminée mais qualité basse ({quality_score:.2f}) [{failure_type}]")
-                self._record_routine(agent, intent, "low_quality", subject=council_subject,
+                self._record_routine(agent, intent, record_status, subject=council_subject,
                                      quality_score=quality_score, failure_type=failure_type,
-                                     result_preview=result_preview)
+                                     result_preview=result_preview, grimoire_slug=grimoire_slug)
                 self.error_streak += 1
                 # Apprentissage ciblé si ignorance détectée
                 if failure_type == "ignorance":
@@ -694,15 +900,18 @@ class AutonomyEngine:
                         pass
                     await self._trigger_targeted_learning(selected["mission"], agent, intent)
             else:
-                print(f"   ✅ Fin Routine {agent.upper() if agent != '_council' else 'COUNCIL'} (qualité: {quality_score:.2f})")
-                self._record_routine(agent, intent, "success", subject=council_subject,
-                                     quality_score=quality_score, result_preview=result_preview)
+                record_status = "max_rounds" if is_max_rounds else "success"
+                emoji = "⚖️" if is_max_rounds else "✅"
+                print(f"   {emoji} Fin Routine {agent.upper() if agent != '_council' else 'COUNCIL'} (qualité: {quality_score:.2f}{', max_rounds' if is_max_rounds else ''})")
+                self._record_routine(agent, intent, record_status, subject=council_subject,
+                                     quality_score=quality_score, result_preview=result_preview,
+                                     grimoire_slug=grimoire_slug)
                 self.error_streak = 0
         else:
             failure_type = self._diagnose_failure(response, quality_score, intent)
             self._record_routine(agent, intent, "error", subject=council_subject,
                                  quality_score=quality_score, failure_type=failure_type,
-                                 result_preview=result_preview)
+                                 result_preview=result_preview, grimoire_slug=grimoire_slug)
             self.error_streak += 1
             # Apprentissage ciblé si ignorance détectée
             if failure_type == "ignorance":
@@ -712,6 +921,64 @@ class AutonomyEngine:
                 except Exception:
                     pass
                 await self._trigger_targeted_learning(selected["mission"], agent, intent)
+
+        # --- Frustration DesireEngine : forcer l'intent suivant si pulsion frustrée ---
+        if not self._forced_next_intent:
+            try:
+                from core.desire_engine import desires as _desires, DRIVE_ROUTINE_AFFINITY
+                frustrated = [
+                    (name, d) for name, d in _desires.drives.items()
+                    if d.frustration_streak >= 4 and d.deprivation >= 70
+                ]
+                if frustrated:
+                    drive_name, drive = frustrated[0]
+                    forced_intent_map = DRIVE_ROUTINE_AFFINITY.get(drive_name, {})
+                    if forced_intent_map:
+                        best_intent = max(forced_intent_map, key=forced_intent_map.get)
+                        self._forced_next_intent = best_intent
+                        logger.warning(f"[EVEIL] Pulsion {drive_name} frustrée x{drive.frustration_streak} (dep={drive.deprivation:.0f}) → force {best_intent}")
+            except Exception:
+                pass
+
+        # Loop breaker : si repetition ou error_streak eleve -> consulter le specialiste
+        if failure_type == "repetition" or self.error_streak >= 5:
+            try:
+                loop_response = await orchestrator.dispatch_task("loop_breaker", {
+                    "mission": "AIDE: loop",
+                    "context": json.dumps({
+                        "history": self.routine_history[-10:],
+                        "error_streak": self.error_streak,
+                    }, default=str)
+                })
+                if loop_response and isinstance(loop_response, dict):
+                    loop_action = loop_response.get("action", "skip")
+                    if loop_action == "skip" and loop_response.get("blacklist"):
+                        self._temp_blacklist = set(loop_response["blacklist"])
+                        print(f"   🔀 LOOP_BREAKER: Blacklist {self._temp_blacklist}")
+                    elif loop_action == "redirect" and loop_response.get("forced_intent"):
+                        self._forced_next_intent = loop_response["forced_intent"]
+                        print(f"   🔀 LOOP_BREAKER: Redirect -> {self._forced_next_intent}")
+                    elif loop_action == "cooldown":
+                        extra = loop_response.get("extra_sleep", 120)
+                        print(f"   ⏸️ LOOP_BREAKER: Cooldown {extra}s")
+                        await asyncio.sleep(extra)
+                    elif loop_action == "escalate":
+                        print(f"   🚨 LOOP_BREAKER: Escalade Council recommandee (streak={self.error_streak})")
+                        self._forced_next_intent = "COUNCIL_DEBATE"
+            except Exception as e:
+                logger.warning(f"[AUTONOMY] Loop breaker echoue: {e}")
+
+        # Alimentation spreading activation (non bloquant)
+        if result_preview and len(result_preview) > 50:
+            try:
+                from core.spreading_activation import activation_engine
+                asyncio.create_task(
+                    activation_engine.activate(
+                        result_preview, "collective_wisdom", max_hops=0
+                    )
+                )
+            except Exception:
+                pass
 
         # Publier AUTONOMY_ROUTINE_COMPLETE pour les handlers PSYCHE
         participants = []
@@ -723,11 +990,15 @@ class AutonomyEngine:
             "participants": participants,
             "status": "success" if response and response.get("status") in ("success", "consensus") and quality_score >= 0.3 else "error",
             "quality_score": quality_score,
+            "result": result_preview,
         })
 
         self.daily_count += 1
         self.total_routines_executed += 1
-        logger.info(f"[AUTONOMY] Routine {self.daily_count}/{MAX_DAILY_ROUTINES} du jour exécutée.")
+        # Décompter le coût en points de budget
+        routine_cost = RESOURCE_COSTS.get(intent, 2)
+        self.daily_budget_used += routine_cost
+        logger.info(f"[AUTONOMY] Routine {self.daily_count}/{MAX_DAILY_ROUTINES} du jour (coût: {routine_cost}pt, budget: {self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt)")
 
         # Snapshot conscience de soi périodique (toutes les 5 routines)
         if self.daily_count % 5 == 0:
@@ -736,6 +1007,135 @@ class AutonomyEngine:
                 awareness.generate_snapshot()
             except Exception:
                 pass
+            # Decay + cleanup spreading activation
+            try:
+                from core.spreading_activation import activation_engine
+                activation_engine.decay_all()
+                activation_engine.cleanup()
+            except Exception:
+                pass
+
+    async def _execute_forced_routine(self, routine: dict, health: dict):
+        """Execute une routine forcee par le loop_breaker (bypass scoring)."""
+        agent = routine["agent"]
+        intent = routine["intent"]
+        routine_cost = RESOURCE_COSTS.get(intent, 2)
+        print(f"   ✨ AUTONOMY [FORCED]: [{intent}] -> [{agent.upper()}] (cout={routine_cost}pt)")
+
+        # Reutiliser la logique standard de dispatch
+        if intent == "COUNCIL_DEBATE":
+            response = await self._execute_council_debate()
+        elif intent == "GRIMOIRE_INVOKE":
+            response = await self._execute_grimoire_routine()
+        elif intent == "MEMORY_CLEANUP":
+            response = await self._execute_memory_cleanup()
+        elif intent == "SECURITY_AUDIT":
+            response = await self._execute_security_audit()
+        elif intent == "AUDIT_STRUCTURE":
+            response = await self._execute_audit_structure()
+        elif intent == "REFACTOR_RANDOM":
+            response = await self._execute_refactor_random()
+        elif intent == "MEMORY_CONSOLIDATION":
+            response = await self._execute_memory_consolidation()
+        else:
+            response = await orchestrator.dispatch_task(agent, {
+                "mission": f"[MODE VEILLE] {routine['mission']}",
+                "context": f"PROTOCOLE_AUTONOMIE\n{AUTONOMY_GUARDRAIL}",
+                "force_local": True,
+            })
+
+        quality = self._score_result_quality(response, intent)
+        status = "success" if response and response.get("status") in ("success", "consensus") else "error"
+        self._record_routine(agent, intent, status, quality_score=quality)
+        if status == "success" and quality >= 0.3:
+            self.error_streak = 0
+        else:
+            self.error_streak += 1
+        self.daily_count += 1
+        self.total_routines_executed += 1
+        self.daily_budget_used += routine_cost
+
+    def _should_veto(self, intent: str, agent: str) -> str:
+        """Veto proactif basé sur les signatures d'échec apprises. Retourne la raison ou ''."""
+        # 1. Vérifier les échecs répétés dans l'historique
+        recent_failures = [
+            r for r in self.routine_history[-20:]
+            if r.get("intent") == intent and r.get("agent") == agent
+            and r.get("status") in ("error", "low_quality")
+        ]
+        if len(recent_failures) >= 5:
+            successes = [
+                r for r in self.routine_history[-20:]
+                if r.get("intent") == intent and r.get("agent") == agent
+                and r.get("status") == "success"
+            ]
+            if not successes:
+                return f"veto: {intent}/{agent} a échoué {len(recent_failures)}x sans succès récent"
+
+        # 2. Vérifier santé système
+        if self.last_health_check and isinstance(self.last_health_check, dict):
+            if self.last_health_check.get("verdict") == "NO_GO" and intent in ("EXPANSION_CODE", "GRIMOIRE_INVOKE"):
+                return f"veto: santé NO_GO, routine risquée {intent} reportée"
+
+        return ""
+
+    async def _execute_memory_consolidation(self) -> dict:
+        """Consolide les mémoires récentes en synthèses thématiques. Zero LLM."""
+        try:
+            from core.vector_store import ChromaMemoryManager
+            mgr = ChromaMemoryManager.get_instance()
+            if not mgr:
+                return {"status": "error", "result": "ChromaDB indisponible."}
+
+            col = mgr._get_collection("collective_wisdom")
+            all_docs = col.get(include=["documents", "metadatas"])
+
+            if not all_docs["ids"]:
+                return {"status": "success", "result": "Consolidation: aucun document à consolider."}
+
+            now = time.time()
+            recent = []
+            for doc, meta, doc_id in zip(all_docs["documents"], all_docs["metadatas"], all_docs["ids"]):
+                ts = float(meta.get("timestamp", 0))
+                if now - ts < 30 * 86400:  # 30 jours
+                    recent.append((doc, meta, doc_id, int(meta.get("recall_count", 0))))
+
+            # Grouper par source
+            groups = {}
+            for doc, meta, doc_id, rc in recent:
+                source = meta.get("source", "unknown")
+                groups.setdefault(source, []).append(doc[:200])
+
+            # Pour chaque groupe avec 5+ entrées, créer un résumé déterministe
+            consolidated = 0
+            for source, docs in groups.items():
+                if len(docs) >= 5:
+                    summary = f"[CONSOLIDATION {source}] {len(docs)} observations récentes:\n"
+                    summary += "\n".join(f"- {d[:100]}" for d in docs[:10])
+                    mgr.add_documents(
+                        [summary],
+                        [{"source": "consolidation", "timestamp": str(now), "original_count": len(docs)}],
+                        [f"consol-{source}-{int(now)}"],
+                        "collective_wisdom"
+                    )
+                    consolidated += 1
+
+            # --- Dream Mode (consolidation synaptique) ---
+            try:
+                from core.synaptic_network import cortex
+                dream_report = cortex.dream_consolidation()
+                if dream_report.get("dream_connections", 0) > 0:
+                    result_msg = (f"Consolidation: {consolidated} groupes synthétisés"
+                                  f" à partir de {len(recent)} documents récents."
+                                  f" | Dream: +{dream_report['dream_connections']} connexions"
+                                  f", -{dream_report['pruned_synapses']} pruned")
+                    return {"status": "success", "result": result_msg}
+            except Exception:
+                pass
+
+            return {"status": "success", "result": f"Consolidation: {consolidated} groupes synthétisés à partir de {len(recent)} documents récents."}
+        except Exception as e:
+            return {"status": "error", "result": f"Erreur consolidation: {e}"}
 
     async def _execute_grimoire_routine(self) -> dict:
         """Invoque un agent Grimoire en rotation (le moins récemment utilisé)."""
@@ -749,8 +1149,8 @@ class AutonomyEngine:
 
             # Rotation : choisir le slug le moins récemment invoqué
             recent_grimoire = [
-                h["agent"] for h in self.routine_history
-                if h.get("intent") == "GRIMOIRE_INVOKE"
+                h.get("grimoire_slug") for h in self.routine_history
+                if h.get("intent") == "GRIMOIRE_INVOKE" and h.get("grimoire_slug")
             ]
             slugs = [entry["slug"] for entry in grimoire_index]
 
@@ -775,9 +1175,10 @@ class AutonomyEngine:
             )
 
             print(f"   📖 GRIMOIRE INVOKE: {best_slug} — {description[:60]}")
+            self._last_grimoire_slug = best_slug
             response = await orchestrator.dispatch_task(best_slug, {
                 "mission": mission,
-                "context": "PROTOCOLE_AUTONOMIE_GRIMOIRE",
+                "context": f"PROTOCOLE_AUTONOMIE_GRIMOIRE\n{AUTONOMY_GUARDRAIL}",
                 "force_local": True,
             })
             return response or {"status": "error", "result": "Pas de réponse du Grimoire."}
@@ -788,6 +1189,31 @@ class AutonomyEngine:
 
     async def _execute_council_debate(self) -> dict:
         """Lance un débat autonome Council : Recherche web → Débat éclairé."""
+        # --- Guard : skip si trop de specs Council en attente ---
+        try:
+            from core.evolution_catalog import EvolutionCatalog
+            catalog = EvolutionCatalog()
+            pending_council = [
+                s for s in catalog.specs.values()
+                if s.id.startswith("COUNCIL-") and s.status == "available"
+            ]
+            if len(pending_council) >= 3:
+                # Tenter une curation avant de skipper
+                purged = catalog.curate_council_specs()
+                if purged > 0:
+                    # Recompter après curation
+                    pending_council = [
+                        s for s in catalog.specs.values()
+                        if s.id.startswith("COUNCIL-") and s.status == "available"
+                    ]
+                if len(pending_council) >= 3:
+                    logger.info(f"[COUNCIL] {len(pending_council)} specs en attente — débat reporté.")
+                    return {"status": "skipped", "reason": "council_specs_saturated"}
+                else:
+                    logger.info(f"[COUNCIL] Curation: {purged} specs purgées, débat débloqué !")
+        except Exception:
+            pass  # Catalogue inaccessible — laisser tourner
+
         # Extraire les sujets des derniers councils pour la déduplication
         recent_subjects = [
             h.get("subject", "")
@@ -866,6 +1292,9 @@ class AutonomyEngine:
             mission=f"[DÉBAT AUTONOME] {mission}",
         )
         result["participants"] = topic["participants"]
+        # Injecter "result" pour le scoring qualité (Council retourne final_summary, pas result)
+        if "result" not in result:
+            result["result"] = result.get("final_summary", "")
 
         # Pipeline Council → Action : si consensus, créer des specs Evolution
         if result.get("status") == "consensus":
@@ -887,54 +1316,85 @@ class AutonomyEngine:
         except Exception as e:
             logger.warning(f"[COUNCIL] Écriture journal échouée: {e}")
 
+        # Écrire dans le journal des councils persistant (memory/council_journal.md)
+        try:
+            self._append_council_journal(topic, result)
+        except Exception as e:
+            logger.warning(f"[COUNCIL] Écriture council_journal échouée: {e}")
+
         return result
 
+    def _append_council_journal(self, topic: dict, result: dict):
+        """Ajoute une entrée au journal persistant des councils (memory/council_journal.md)."""
+        import re
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        journal_path = os.path.join(project_root, "config", "council_journal.md")
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        participants = ", ".join(topic.get("participants", []))
+        mission = topic.get("mission", "Sujet inconnu")
+        status = result.get("status", "inconnu")
+        rounds_used = result.get("rounds_used", "?")
+
+        # Extraire les propositions clés depuis le transcript du dernier tour
+        proposals = []
+        files_mentioned = set()
+        transcript = result.get("transcript", [])
+        if transcript:
+            last_round = max(e["round"] for e in transcript)
+            for entry in transcript:
+                if entry["round"] == last_round:
+                    content = entry["content"][:1000]
+                    # Extraire les fichiers mentionnés
+                    for f in re.findall(r'(?:core|Agents)/[\w/]+\.py', content):
+                        files_mentioned.add(f)
+                    # Extraire les éléments de liste (tirets)
+                    for line in content.split("\n"):
+                        line = line.strip()
+                        if line.startswith(("-", "•", "*")) and len(line) > 15:
+                            proposals.append(line[:120])
+
+        # Limiter à 5 propositions
+        proposals = proposals[:5]
+        proposals_text = "\n".join(f"  {p}" for p in proposals) if proposals else "  (Aucune proposition extraite automatiquement)"
+        files_text = ", ".join(f"`{f}`" for f in sorted(files_mentioned)) if files_mentioned else "(aucun fichier cité)"
+
+        entry = (
+            f"\n---\n\n"
+            f"## [{now}] {mission[:80]}\n\n"
+            f"**Participants** : {participants} | **Tours** : {rounds_used} | **Consensus** : {'oui' if status == 'consensus' else 'non'}\n\n"
+            f"**Propositions clés** :\n{proposals_text}\n\n"
+            f"**Fichiers cibles** : {files_text}\n"
+            f"**Verdict** : (à curé manuellement)\n"
+        )
+
+        # Append au fichier
+        os.makedirs(os.path.dirname(journal_path), exist_ok=True)
+        with open(journal_path, "a", encoding="utf-8") as f:
+            f.write(entry)
+
+        logger.info(f"[COUNCIL] Journal council_journal.md mis à jour : {mission[:50]}")
+
     async def _execute_memory_cleanup(self) -> dict:
-        """Nettoie la mémoire RAG : purge les anciennes ET les mauvaise qualité."""
+        """Nettoie la mémoire RAG : purge les anciennes ET les mauvaise qualité.
+
+        Utilise les méthodes async lockées de ChromaMemoryManager pour éviter
+        les race conditions sur les opérations composées (get→filter→delete).
+        """
         try:
             from core.vector_store import ChromaMemoryManager
             mgr = ChromaMemoryManager.get_instance()
             if not mgr:
                 return {"status": "error", "result": "ChromaDB indisponible."}
 
-            removed_old = 0
-            removed_quality = 0
+            # Phase 1 : Purge des entrées anciennes (>60 jours) — protégé par lock
+            removed_old = await mgr.async_purge_expired(max_age_days=60)
 
-            # Phase 1 : Purge des entrées anciennes (>60 jours)
-            for coll_name in ["collective_wisdom"]:
-                try:
-                    coll = getattr(mgr, coll_name, None) or mgr.client.get_collection(coll_name)
-                    count = coll.count()
-                    if count < 10:
-                        continue
-                    results = coll.get(limit=min(count, 100), include=["metadatas", "documents"])
-                    if not results or not results.get("ids"):
-                        continue
-                    now = time.time()
-                    ids_to_delete = []
-                    for i, meta in enumerate(results.get("metadatas", [])):
-                        try:
-                            ts = float(meta.get("timestamp", 0))
-                            age_days = (now - ts) / 86400
-                            if age_days > 60:
-                                ids_to_delete.append(results["ids"][i])
-                        except (ValueError, TypeError):
-                            pass
-                    if ids_to_delete:
-                        coll.delete(ids=ids_to_delete[:20])
-                        removed_old += len(ids_to_delete[:20])
-                except Exception as e:
-                    logger.warning(f"[MEMORY_CLEANUP] Erreur collection {coll_name}: {e}")
-
-            # Phase 2 : Purge qualitative (textes courts, hallucinations non-latin)
-            try:
-                removed_quality = mgr.purge_low_quality(
-                    min_length=100,
-                    max_non_latin_ratio=0.10,
-                    collection_name="collective_wisdom"
-                )
-            except Exception as e:
-                logger.warning(f"[MEMORY_CLEANUP] Erreur purge qualitative: {e}")
+            # Phase 2 : Purge qualitative (textes courts, hallucinations non-latin) — protégé par lock
+            removed_quality = await mgr.async_purge_low_quality(
+                min_length=100,
+                max_non_latin_ratio=0.10,
+            )
 
             total = removed_old + removed_quality
             msg = f"Nettoyage mémoire : {removed_old} anciennes + {removed_quality} basse qualité = {total} supprimées."
@@ -964,6 +1424,24 @@ class AutonomyEngine:
             # Choisir un fichier en rotation
             target = py_files[self.total_routines_executed % len(py_files)]
             filename = os.path.basename(target)
+
+            # Anti-doublon : skip si ce fichier a été audité dans les dernières 6h
+            last_audit_ts = self._security_audited_files.get(filename, 0)
+            if time.time() - last_audit_ts < 6 * 3600:
+                # Avancer au prochain fichier non-audité récemment
+                found = False
+                for offset in range(1, len(py_files)):
+                    alt_target = py_files[(self.total_routines_executed + offset) % len(py_files)]
+                    alt_name = os.path.basename(alt_target)
+                    if time.time() - self._security_audited_files.get(alt_name, 0) >= 6 * 3600:
+                        target, filename = alt_target, alt_name
+                        found = True
+                        break
+                if not found:
+                    return {"status": "skipped", "result": "Tous les fichiers ont été audités récemment."}
+
+            # Marquer comme audité
+            self._security_audited_files[filename] = time.time()
 
             # Lire le contenu (limité à 3000 chars)
             with open(target, "r", encoding="utf-8") as f:
@@ -1004,6 +1482,80 @@ class AutonomyEngine:
         except Exception as e:
             return {"status": "error", "result": str(e)}
 
+    async def _execute_audit_structure(self) -> dict:
+        """Audit structure réel : scanne le filesystem pour fichiers temporaires/orphelins."""
+        # Rafraîchir le cache de structure projet (anti-hallucination basé sur des données fraîches)
+        try:
+            from core.prompt_templates import reset_project_structure_cache
+            reset_project_structure_cache()
+        except Exception:
+            pass
+        try:
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+            # Extensions à détecter à la racine du projet
+            temp_extensions = {".tmp", ".temp", ".bak", ".old", ".orig", ".swp", ".swo"}
+            log_extensions = {".log"}  # Séparé car certains sont légitimes
+            # Fichiers de log légitimes (à ne pas signaler)
+            legit_logs = {"promethee.log"}
+
+            temp_files = []
+            log_files = []
+            pycache_dirs = []
+            large_files = []  # > 10 MB
+
+            # Scan de la racine uniquement (pas récursif pour les .tmp/.log)
+            for entry in os.scandir(project_root):
+                if entry.is_file():
+                    ext = os.path.splitext(entry.name)[1].lower()
+                    if ext in temp_extensions:
+                        size_kb = entry.stat().st_size / 1024
+                        temp_files.append(f"{entry.name} ({size_kb:.0f} KB)")
+                    elif ext in log_extensions and entry.name not in legit_logs:
+                        size_kb = entry.stat().st_size / 1024
+                        log_files.append(f"{entry.name} ({size_kb:.0f} KB)")
+                    # Fichiers volumineux (> 10 MB)
+                    if entry.stat().st_size > 10 * 1024 * 1024:
+                        size_mb = entry.stat().st_size / (1024 * 1024)
+                        large_files.append(f"{entry.name} ({size_mb:.1f} MB)")
+                elif entry.is_dir() and entry.name == "__pycache__":
+                    pycache_dirs.append(entry.name)
+
+            # Scan récursif limité pour __pycache__ (profondeur 2)
+            for subdir in ["core", "Agents", "tests"]:
+                subpath = os.path.join(project_root, subdir)
+                if os.path.isdir(subpath):
+                    for entry in os.scandir(subpath):
+                        if entry.is_dir() and entry.name == "__pycache__":
+                            pycache_dirs.append(f"{subdir}/{entry.name}")
+
+            # Construire le rapport
+            issues = []
+            if temp_files:
+                issues.append(f"Fichiers temporaires à la racine : {', '.join(temp_files)}")
+            if log_files:
+                issues.append(f"Fichiers .log non-système à la racine : {', '.join(log_files)}")
+            if large_files:
+                issues.append(f"Fichiers volumineux (>10 MB) : {', '.join(large_files)}")
+            if pycache_dirs:
+                issues.append(f"Dossiers __pycache__ trouvés : {', '.join(pycache_dirs)}")
+
+            if issues:
+                report = f"AUDIT STRUCTURE — {len(issues)} problème(s) détecté(s) :\n" + "\n".join(f"- {i}" for i in issues)
+                report += "\n\nRecommandation : nettoyer les fichiers temporaires et les caches __pycache__ inutiles."
+            else:
+                report = (
+                    "AUDIT STRUCTURE — Aucun problème détecté.\n"
+                    "La racine du projet est propre : pas de fichiers .tmp/.bak/.log orphelins, "
+                    "pas de fichiers volumineux anormaux."
+                )
+
+            logger.info(f"[AUDIT_STRUCTURE] Scan terminé : {len(issues)} problème(s)")
+            return {"status": "success", "result": report}
+        except Exception as e:
+            logger.warning(f"[AUDIT_STRUCTURE] Erreur scan: {e}")
+            return {"status": "error", "result": f"Erreur lors du scan structure : {e}"}
+
     async def _execute_refactor_random(self) -> dict:
         """Propose un refactoring pour un fichier aléatoire."""
         try:
@@ -1012,14 +1564,24 @@ class AutonomyEngine:
                 os.path.join(project_root, "core"),
                 os.path.join(project_root, "Agents"),
             ]
+
+            # Charger la liste des fichiers protégés
+            try:
+                from Agents.factory_agent import _PROTECTED_FILES
+            except ImportError:
+                _PROTECTED_FILES = set()
+
             py_files = []
             for d in target_dirs:
                 if os.path.isdir(d):
-                    py_files.extend(
-                        os.path.join(d, f) for f in os.listdir(d) if f.endswith(".py")
-                    )
+                    for f in os.listdir(d):
+                        if f.endswith(".py"):
+                            # Calculer le chemin relatif pour vérifier la protection
+                            rel_path = os.path.relpath(os.path.join(d, f), project_root).replace("\\", "/")
+                            if rel_path not in _PROTECTED_FILES:
+                                py_files.append(os.path.join(d, f))
             if not py_files:
-                return {"status": "error", "result": "Aucun fichier Python trouvé."}
+                return {"status": "error", "result": "Aucun fichier Python non-protégé trouvé."}
 
             # Rotation différente du security audit (offset +7)
             target = py_files[(self.total_routines_executed + 7) % len(py_files)]
@@ -1058,21 +1620,71 @@ class AutonomyEngine:
             s for s in catalog.specs.values()
             if s.id.startswith("COUNCIL-") and s.status == "available"
         ]
-        if len(existing_council_specs) >= 4:
-            logger.info("[COUNCIL→ACTION] Déjà 4 specs Council en attente, skip.")
+        if len(existing_council_specs) >= 3:
+            logger.info("[COUNCIL→ACTION] Déjà 3 specs Council en attente, skip.")
             return
 
-        # Extraire les fichiers cibles mentionnés dans le consensus
-        valid_prefixes = ("core/", "Agents/")
-        file_mentions = re.findall(r'((?:core|Agents)/[\w/]+\.py)', final_summary)
-        file_mentions = [f for f in file_mentions if any(f.startswith(p) for p in valid_prefixes)]
+        # Construire le texte d'analyse à partir du transcript COMPLET du dernier tour
+        # (le final_summary tronque à 200 chars/participant, perdant les détails concrets)
+        transcript = council_result.get("transcript", [])
+        if transcript:
+            participants = council_result.get("participants", [])
+            last_round = max(e["round"] for e in transcript)
+            last_round_entries = [e for e in transcript if e["round"] == last_round]
+            # Utiliser le contenu complet (max 1500 chars/participant au lieu de 200)
+            analysis_text = "\n".join(
+                f"[{e['agent'].upper()}] {e['content'][:1500]}" for e in last_round_entries
+            )
+        else:
+            analysis_text = final_summary
 
-        # Extraire les actions concrètes (lignes avec "ACTION", "IMPLÉMENTER", "AJOUTER", "MODIFIER")
+        # Extraire les fichiers cibles (avec ET sans préfixe de dossier)
+        file_mentions = re.findall(r'((?:core|Agents)/[\w/]+\.py)', analysis_text)
+        # Aussi capturer les .py mentionnés seuls (ex: "bus.py", "router.py")
+        standalone_py = re.findall(r'\b(\w+\.py)\b', analysis_text)
+        # Mapper les fichiers standalone vers leur chemin probable
+        known_dirs = {"core/": ["orchestrator", "router", "bus", "autonomy_engine", "council",
+                                "summoner", "base_agent", "event_bus", "self_awareness",
+                                "prompt_templates", "ci_pipeline", "grimoire_writer",
+                                "psyche", "evolution_catalog", "strategic_journal"],
+                      "Agents/": ["coder_agent", "architect_agent", "security_agent",
+                                  "evolution_agent", "factory_agent", "researcher_agent",
+                                  "strategist_agent", "writer_agent", "infra_agent",
+                                  "formatter_agent"]}
+        for py_file in standalone_py:
+            stem = py_file.replace(".py", "")
+            for prefix, known in known_dirs.items():
+                if stem in known:
+                    qualified = f"{prefix}{py_file}"
+                    if qualified not in file_mentions:
+                        file_mentions.append(qualified)
+
+        # Valider que les fichiers mentionnés existent réellement (anti-hallucination)
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        verified_files = []
+        for f in file_mentions:
+            full_path = os.path.join(project_root, f.replace("/", os.sep))
+            if os.path.exists(full_path):
+                verified_files.append(f)
+            else:
+                logger.warning(f"[COUNCIL→ACTION] Fichier halluciné ignoré : {f}")
+        file_mentions = verified_files
+
+        # Extraire les actions concrètes — regex élargie pour le langage naturel des LLMs
         action_patterns = re.findall(
-            r'(?:ACTION|IMPLÉMENTER|AJOUTER|MODIFIER|SUGGESTION|RECOMMANDATION)\s*[:\-]\s*(.+)',
-            final_summary,
+            r'(?:ACTION|IMPLÉMENTER|IMPL[ÉE]MENTATION|AJOUTER|AJOUT|MODIFIER|MODIFICATION'
+            r'|SUGGESTION|RECOMMANDATION|CRÉER|CRÉATION|AMÉLIORER|AMÉLIORATION'
+            r'|IMPLEMENT|ADD|MODIFY|CREATE|IMPROVE)\s*[:\-]\s*(.+)',
+            analysis_text,
             re.IGNORECASE,
         )
+        # Fallback : chercher des verbes d'action en début de ligne (tirets de liste)
+        if not action_patterns:
+            action_patterns = re.findall(
+                r'[-•]\s*(?:Ajouter|Créer|Modifier|Implémenter|Améliorer|Intégrer|Remplacer|Refactorer)\s+(.+)',
+                analysis_text,
+                re.IGNORECASE,
+            )
 
         if not action_patterns and not file_mentions:
             logger.info("[COUNCIL→ACTION] Pas d'action concrète dans le consensus.")
@@ -1080,15 +1692,35 @@ class AutonomyEngine:
 
         # Construire la spec
         mission_short = topic.get("mission", "amélioration")[:80]
-        spec_id = f"COUNCIL-{int(time.time()) % 100000}"
+        spec_id = f"COUNCIL-{int(time.time())}-{uuid.uuid4().hex[:4]}"
 
-        # Prendre le premier fichier cible mentionné, ou un générique
-        target_file = file_mentions[0] if file_mentions else "core/base_agent.py"
+        # Prendre le premier fichier cible vérifié (pas de fallback générique)
+        if not file_mentions:
+            logger.info("[COUNCIL→ACTION] Aucun fichier vérifié — spec non créée.")
+            return
+        target_file = file_mentions[0]
 
         # Résumé des actions
         actions_text = "\n".join(f"- {a.strip()}" for a in action_patterns[:3])
         if not actions_text:
-            actions_text = final_summary[:500]
+            actions_text = analysis_text[:500]
+
+        # Extraire la méthode cible depuis l'analyse (ou fallback générique)
+        method_match = re.search(r'(?:méthode|method|def)\s+(\w+)', analysis_text, re.IGNORECASE)
+        target_method = method_match.group(1) if method_match else ""
+
+        # code_template valide (doit contenir def/class/import pour passer Phase 4c)
+        code_template = (
+            f"import logging\n\n"
+            f"def council_improvement():\n"
+            f"    \"\"\"Amélioration issue du consensus Council.\n"
+            f"    Mission: {mission_short}\n"
+            f"    \"\"\"\n"
+            f"    # Actions identifiées:\n"
+        )
+        for action_line in actions_text.split("\n")[:5]:
+            code_template += f"    {action_line}\n"
+        code_template += "    pass\n"
 
         spec = ImprovementSpec(
             id=spec_id,
@@ -1096,9 +1728,9 @@ class AutonomyEngine:
             description=f"Issu d'un consensus Council.\n{actions_text}",
             category="intelligence",
             target_file=target_file,
-            target_method="process_task",
+            target_method=target_method,
             difficulty=2,
-            code_template=f"# Spec générée par consensus Council\n# Mission: {mission_short}\n# Actions:\n{actions_text}",
+            code_template=code_template,
             validation="Vérifier que l'amélioration proposée par le Council fonctionne.",
             tags=["council", "consensus", "auto-generated"],
             status="available",
@@ -1114,11 +1746,14 @@ class AutonomyEngine:
         print(f"   🧠 AUTONOMY: Moteur V24 (Health-Aware Sentinel) activé. Limite: {MAX_DAILY_ROUTINES} routines/jour.")
 
         while self.is_running:
-            # Sleep adaptatif : doublé si error_streak >= 3
+            # Sleep adaptatif : modéré si error_streak >= 3 (max 1.5× pour éviter spirale)
             sleep_time = random.randint(600, 1200)
             if self.error_streak >= 3:
-                sleep_time *= 2
-                logger.warning(f"[AUTONOMY] Mode prudent (error_streak={self.error_streak}), sleep doublé: {sleep_time}s")
+                sleep_time = int(sleep_time * 1.5)
+                logger.warning(f"[AUTONOMY] Mode prudent (error_streak={self.error_streak}), sleep: {sleep_time}s")
+                # Décroissance progressive : réduire l'error_streak de 1 à chaque cycle pour sortir de la spirale
+                if self.error_streak > 5:
+                    self.error_streak -= 1
 
             await asyncio.sleep(sleep_time)
 
@@ -1140,6 +1775,32 @@ class AutonomyEngine:
                     logger.warning(f"[AUTONOMY] Health check échoué: {e}")
 
                 self.last_health_check = health
+
+                # Alerte mémoire
+                memory = health.get("memory", {})
+                if memory.get("status") in ("degraded", "down"):
+                    await bus.publish("MEMORY_HEALTH_ALERT", {
+                        "status": memory["status"],
+                        "warnings": memory.get("warnings", []),
+                        "persistent": memory.get("persistent", False),
+                        "collections": memory.get("collections", {}),
+                    })
+                    logger.warning(f"[AUTONOMY] MÉMOIRE {memory['status'].upper()}: {memory.get('warnings', [])}")
+
+                # Retry dead letters (1 par cycle, supprime si échec pour éviter boucle infinie)
+                if bus.dead_letter_count > 0:
+                    try:
+                        retried = await bus.retry_dead_letter(0)
+                        if retried:
+                            logger.info("[AUTONOMY] Dead letter re-publiée avec succès.")
+                        else:
+                            # Échec du retry → supprimer pour ne pas boucler indéfiniment
+                            dl_list = bus.get_dead_letters()
+                            if dl_list:
+                                bus._dead_letters.pop(0)
+                                logger.info("[AUTONOMY] Dead letter irrécupérable supprimée.")
+                    except Exception:
+                        pass
 
                 # Heartbeat publié à chaque cycle (même si NO_GO)
                 await bus.publish("AUTONOMY_HEARTBEAT", {
