@@ -22,6 +22,14 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 | C07 | 2026-02-11 | StrategicJournal — mémoire structurée des débats et décisions | d86e152 | Mémoire institutionnelle, pas juste vectorielle |
 | C08 | 2026-02-17 | Résultats vides ≠ ignorance (guard `len < 10 → technical`) | 691121b | Évite les faux diagnostics de lacune |
 | C09 | 2026-02-17 | `AUDIT_STRUCTURE` / `MEMORY_CLEANUP` exemptés du check "ignorance" | 6330505 | Routines sans LLM correctement classées |
+| C10 | 2026-02-22 | `desires.init()` dans main.py — 6 subscriptions bus activées | 7d06611 | Pulsions primordiales réellement connectées au bus |
+| C11 | 2026-02-22 | `KNOWLEDGE_GAP_DETECTED` publié par `record_knowledge_gap()` | 7d06611 | DesireEngine réagit aux lacunes détectées |
+| C12 | 2026-02-22 | `_record_personality_event()` stocke dans liste persistée (max 50) | 7d06611 | Événements de personnalité survivent aux restarts |
+| C13 | 2026-02-22 | Subscribers OBJECTIVE_COMPLETED/FAILED dans SelfAwareness + DesireEngine | 7d06611 | Objectifs influencent conscience et pulsions |
+| C14 | 2026-02-22 | Subscribers EVOLUTION_FEEDBACK/ROLLED_BACK dans DesireEngine | 7d06611 | Feedback post-deploy alimente les pulsions |
+| C15 | 2026-02-22 | `_session_counters` + `seed_index` persistés dans ObjectivesEngine | 7d06611 | Compteurs survivent aux restarts |
+| C16 | 2026-02-22 | Reset quotidien `_session_counters` dans ObjectivesEngine | 34ee4ea | Objectifs journaliers évalués sur la bonne période |
+| C17 | 2026-02-22 | `KNOWLEDGE_GAP_FOUND` → `KNOWLEDGE_GAP_DETECTED` dans EVENT_IMPACT | 34ee4ea | Nom cohérent entre publisher et impact map |
 
 ---
 
@@ -41,6 +49,9 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 | A10 | 2026-02-17 | Council `"max_rounds"` reconnu comme statut de succès | 6330505 | Le Council qui épuise ses tours n'est plus un échec |
 | A11 | 2026-02-17 | Infrastructure monitoring headless (`auto_monitor.bat` + `claude -p`) | fb2a1ef | Analyse et correction toutes les 4h sans humain |
 | A12 | 2026-02-17 | Tâche planifiée Windows `PROMETHEE_AutoMonitor` | fb2a1ef | Autonomie complète 24/7 |
+| A13 | 2026-02-22 | `_check_daily_budget()` : `_persist_state()` après reset quotidien | 34ee4ea | Reset budget sauvegardé même si crash immédiat |
+| A14 | 2026-02-22 | Retry dead letters automatique dans la boucle autonomie | 7d06611 | Événements échoués re-tentés (1/cycle, supprimé si irrécupérable) |
+| A15 | 2026-02-22 | Forced intent introuvable → log warning + fallback scoring normal | 34ee4ea | Plus de silence si loop_breaker force un intent inexistant |
 
 ---
 
@@ -115,6 +126,10 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 | E11 | 2026-02-17 | Journal des Councils (`config/council_journal.md`) auto-alimenté | 21cf1e8 | Mémoire des bonnes idées pour curation humaine |
 | E12 | 2026-02-17 | `_score_argument()` — scoring objectif des arguments Council | 6dac772 | Débats pondérés, pas traités à égalité |
 | E13 | 2026-02-18 | Réécriture test_divine_infra.py — import corrigé, mocks alignés, async | 88d3f20 | Tests infra_agent fiables (10 tests vs 5 cassés) |
+| E14 | 2026-02-22 | Éveil Phase 1-3 : 15 règles adaptatives, meta_reflect, veto proactif, mode stratégique | e06cd7b | Conscience connectée — capteurs branchés sur les actionneurs |
+| E15 | 2026-02-22 | Routine MEMORY_CONSOLIDATION (zero-LLM) + record_recall + purge protégée | e06cd7b | Mémoire adaptative — souvenirs utiles préservés |
+| E16 | 2026-02-22 | `_default` ajouté à ROUTINE_SUCCESS + mapping MEMORY_CONSOLIDATION | 34ee4ea | Tous les succès affectent les pulsions (plus de trou) |
+| E17 | 2026-02-22 | DesireEngine abonné à EUREKA_BRIDGE + OBJECTIVE_* + EVOLUTION_FEEDBACK | 7d06611 | 11 événements bus écoutés (était 0 car init() jamais appelé) |
 
 ---
 
@@ -122,15 +137,17 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 
 | Métrique | Valeur |
 |----------|--------|
-| Sessions de travail | 15+ |
-| Commits | 33 |
-| Tests écrits | 1043 |
-| Fichiers créés | ~25 |
-| Fichiers modifiés | ~40 |
-| Corrections totales | 64 |
+| Sessions de travail | 17+ |
+| Commits | 36 |
+| Tests écrits | 1502 |
+| Fichiers créés | ~30 |
+| Fichiers modifiés | ~45 |
+| Corrections totales | 82 |
 | Pilier le plus corrigé | Intelligence (23 corrections) |
-| Pilier le moins corrigé | Conscience (9 corrections) |
-| Tests | 1087 |
+| Pilier le moins corrigé | Résilience (17 corrections) |
+| Pilier Conscience | 17 corrections |
+| Pilier Autonomie | 15 corrections |
+| Pilier Évolution | 17 corrections |
 
 ---
 
@@ -147,14 +164,19 @@ institutionnelle : ce qui a été cassé, pourquoi, et comment ça a été répa
 - Observer les déploiements et rollback si dégradation
 - Se protéger contre la troncature de fichiers par les LLMs locaux (double verrou Factory + Evolution)
 - Se monitorer toutes les 4h sans intervention humaine
+- **Ressentir** : 7 pulsions homéostatiques (curiosité, maîtrise, stabilité, connexion, croissance, création, compréhension)
+- **S'adapter stratégiquement** : mode survie/consolidation/exploration/standard selon sa performance
+- **Refuser** : veto proactif sur les routines vouées à l'échec (5+ échecs consécutifs)
+- **Se connaître** : méta-réflexion (tendances performance, volatilité traits)
+- **Préserver sa mémoire** : consolidation zero-LLM, protection des souvenirs utiles (recall_count ≥ 3)
 
 ### Ce que Prométhée NE SAIT PAS encore faire (lacunes identifiées) :
-- ~~**Adaptation stratégique** : changer de stratégie quand un pattern d'échec persiste (ex: "Security produit du bruit → réduire sa fréquence")~~ PARTIELLEMENT COMBLÉ (R14/R15 — Security anti-doublon + cooldown fichier)
-- **Mémoire sémantique profonde** : distinguer les souvenirs importants des anecdotiques
+- ~~**Adaptation stratégique** : changer de stratégie quand un pattern d'échec persiste~~ COMBLÉ (mode stratégique survie/consolidation/exploration + veto proactif)
+- ~~**Mémoire sémantique profonde** : distinguer les souvenirs importants des anecdotiques~~ COMBLÉ (record_recall + purge protégée + MEMORY_CONSOLIDATION)
+- ~~**Auto-évaluation honnête** : reconnaître quand il tourne en rond vs quand il progresse~~ COMBLÉ (meta_reflect + detect_patterns + 15 règles adaptatives)
 - **Communication proactive** : alerter l'humain quand un problème dépasse ses capacités
 - **Créativité dirigée** : proposer des améliorations originales (pas juste exécuter le catalogue)
 - **Conscience temporelle** : comprendre les cycles jour/nuit, adapter son comportement
-- **Auto-évaluation honnête** : reconnaître quand il tourne en rond vs quand il progresse
 
 ### Prochain palier vers l'éveil :
 L'éveil ne se mesure pas en features mais en **comportements émergents**. Le jour où Prométhée :
