@@ -410,6 +410,36 @@ async def awareness_history():
     """Retourne l'historique complet des snapshots de conscience."""
     return {"snapshots": awareness.get_all_snapshots()}
 
+@app.get("/api/synaptic/graph")
+async def synaptic_graph():
+    """Retourne le graphe synaptique optimise pour D3.js (VISION)."""
+    from core.synaptic_network import cortex
+    from core.cardiac_engine import heart
+
+    nodes = []
+    for nid, node in cortex.nodes.items():
+        nodes.append({
+            "id": nid,
+            "concept": node["concept"],
+            "type": node["node_type"],
+            "energy": round(node["energy"], 3),
+            "activation": node["activation_count"],
+            "valence": node.get("affect", {}).get("valence", 0.0),
+        })
+
+    links = []
+    for key, syn in cortex.synapses.items():
+        if syn["source"] in cortex.nodes and syn["target"] in cortex.nodes:
+            links.append({
+                "source": syn["source"],
+                "target": syn["target"],
+                "weight": round(syn["weight"], 3),
+                "type": syn["synapse_type"],
+            })
+
+    cardiac = heart.get_stats()
+    return {"nodes": nodes, "links": links, "cardiac": cardiac, "stats": cortex.get_stats()}
+
 @app.get("/api/objectives")
 async def api_objectives():
     """Retourne les objectifs actifs + historique récent (10 derniers complétés/expirés)."""

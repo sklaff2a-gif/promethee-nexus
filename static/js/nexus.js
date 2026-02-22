@@ -240,6 +240,14 @@ ws.onmessage = (event) => {
             psycheChartInstance.update();
         }
     }
+    // 13. CARDIAC_BEAT : overlay cardiaque VISION
+    else if (type === "CARDIAC_BEAT") {
+        if (typeof NeuralVision !== 'undefined') NeuralVision.handleCardiacBeat(payload);
+    }
+    // 14. SYNAPTIC_UPDATE : mise à jour graphe neural VISION
+    else if (type === "SYNAPTIC_UPDATE") {
+        if (typeof NeuralVision !== 'undefined') NeuralVision.handleSynapticUpdate(payload);
+    }
 };
 
 function sendMission() {

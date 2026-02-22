@@ -2,6 +2,7 @@
 # Graphe synaptique persistant avec apprentissage Hebbien, resonance emotionnelle,
 # cascades oscillatoires et mode reve (consolidation stochastique).
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -168,6 +169,17 @@ class SynapticNetwork:
             cls._instance.reset()
             cls._instance = None
 
+    # --- Publication delta temps reel ---
+
+    def _publish_delta(self, change_type: str, data: dict):
+        """Publie un delta SYNAPTIC_UPDATE via le bus (non-bloquant)."""
+        try:
+            loop = asyncio.get_running_loop()
+            from core.event_bus.bus import bus
+            loop.create_task(bus.publish("SYNAPTIC_UPDATE", {"change": change_type, **data}))
+        except RuntimeError:
+            pass  # Pas de boucle asyncio (tests)
+
     # --- Capture d'affect ---
 
     def _capture_affect_signature(self) -> Dict[str, Any]:
@@ -240,12 +252,22 @@ class SynapticNetwork:
             node["dimensions"]["temporal_score"] = round(
                 recency * node["activation_count"] / max(1, node["activation_count"]), 2
             )
+            self._publish_delta("node_activate", {
+                "id": node_id, "concept": node["concept"],
+                "energy": round(node["energy"], 3),
+                "activation": node["activation_count"],
+            })
         else:
             affect = self._capture_affect_signature()
             node = _make_node(concept, node_type, semantic_weight,
                               functional_systems, affect)
             self.nodes[node_id] = node
             self._enforce_node_limit()
+            self._publish_delta("node_new", {
+                "id": node_id, "concept": node["concept"],
+                "type": node["node_type"],
+                "energy": round(node["energy"], 3),
+            })
 
         self._record_activation(node_id)
         self._mutations_since_save += 1
@@ -304,7 +326,8 @@ class SynapticNetwork:
 
         if success:
             # Renforcement : Dw = lr * E_src * E_tgt * (1 - w)
-            if key not in self.synapses:
+            is_new = key not in self.synapses
+            if is_new:
                 syn = _make_synapse(src_id, tgt_id, 0.1, "hebbian", context)
                 self.synapses[key] = syn
                 self._enforce_synapse_limit()
@@ -315,6 +338,12 @@ class SynapticNetwork:
             syn["last_strengthened"] = time.time()
             if context and len(context) > len(syn["context"]):
                 syn["context"] = context[:200]
+            change = "synapse_new" if is_new else "synapse_strengthen"
+            self._publish_delta(change, {
+                "source": src_id, "target": tgt_id,
+                "weight": round(syn["weight"], 3),
+                "type": syn["synapse_type"],
+            })
         else:
             # Anti-Hebb : affaiblir seulement (ne cree PAS de nouvelle synapse)
             if key not in self.synapses:
