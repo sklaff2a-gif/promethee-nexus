@@ -262,6 +262,17 @@ class BaseAgent:
                 except Exception:
                     pass
 
+            # --- Boost synaptique (associations persistantes) ---
+            try:
+                from core.synaptic_network import cortex
+                from core.spreading_activation import extract_concepts
+                query_concepts = [c for c, _ in extract_concepts(query, max_concepts=5)]
+                syn_text = cortex.format_for_prompt(query_concepts, max_chars=150)
+                if syn_text:
+                    base_result = f"{base_result}\n{syn_text}"
+            except Exception:
+                pass
+
             return base_result
         except Exception as e:
             logger.warning(f"[{self.name}] Échec recall mémoire ({collection}) : {e}")

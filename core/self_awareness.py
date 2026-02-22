@@ -334,6 +334,13 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Stats cortex synaptique
+        try:
+            from core.synaptic_network import cortex
+            snapshot["synaptic_network"] = cortex.get_stats()
+        except Exception:
+            pass
+
         self._snapshots.append(snapshot)
         if len(self._snapshots) > MAX_SNAPSHOTS:
             self._snapshots = self._snapshots[-MAX_SNAPSHOTS:]

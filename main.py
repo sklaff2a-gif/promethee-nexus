@@ -229,6 +229,12 @@ async def lifespan(app: FastAPI):
     desires.init()
     print("   💓 DESIRS: Moteur de pulsions primordiales actif.")
 
+    # --- CORTEX ASSOCIATIF ---
+    from core.synaptic_network import cortex
+    cortex.init()
+    print(f"   🧬 SYNAPSE: Cortex associatif actif "
+          f"({len(cortex.nodes)} noeuds, {len(cortex.synapses)} synapses).")
+
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
 
     # --- CI/CD Pipeline (remplace quality_control_listener) ---

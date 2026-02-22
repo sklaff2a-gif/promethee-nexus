@@ -707,6 +707,17 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Bonus cortex synaptique (associations persistantes) ---
+        try:
+            from core.synaptic_network import cortex
+            for i, (routine, s) in enumerate(scored):
+                syn_bonus = cortex.compute_routine_affinity(routine["intent"])
+                if syn_bonus != 0.0:
+                    scored[i] = (routine, s + syn_bonus)
+            scored.sort(key=lambda x: x[1], reverse=True)
+        except Exception:
+            pass
+
         # --- Bonus pulsions (desirs) ---
         try:
             from core.desire_engine import desires
@@ -1107,6 +1118,19 @@ class AutonomyEngine:
                         "collective_wisdom"
                     )
                     consolidated += 1
+
+            # --- Dream Mode (consolidation synaptique) ---
+            try:
+                from core.synaptic_network import cortex
+                dream_report = cortex.dream_consolidation()
+                if dream_report.get("dream_connections", 0) > 0:
+                    result_msg = (f"Consolidation: {consolidated} groupes synthétisés"
+                                  f" à partir de {len(recent)} documents récents."
+                                  f" | Dream: +{dream_report['dream_connections']} connexions"
+                                  f", -{dream_report['pruned_synapses']} pruned")
+                    return {"status": "success", "result": result_msg}
+            except Exception:
+                pass
 
             return {"status": "success", "result": f"Consolidation: {consolidated} groupes synthétisés à partir de {len(recent)} documents récents."}
         except Exception as e:
