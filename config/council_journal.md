@@ -1539,3 +1539,15 @@ Ce fichier est maintenu automatiquement par le moteur d'autonomie et curé manue
 
 **Fichiers cibles** : (aucun fichier cité)
 **Verdict** : (à curé manuellement)
+
+---
+
+## [2026-02-23 09:27] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 4 | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : `core/orchestrator.py`, `core/psyche.py`
+**Verdict** : (à curé manuellement)
