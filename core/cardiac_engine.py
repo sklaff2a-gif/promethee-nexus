@@ -51,6 +51,7 @@ EMOTIONS: Dict[str, Tuple[float, float]] = {
     "inquietude":    (-0.3,  0.5),   # Anxiété sourde
     "fatigue":       (-0.2,  0.1),   # Épuisement
     "determination": ( 0.4,  0.9),   # Volonté face à l'adversité
+    "alerte":        (-0.1,  0.95),  # Hypervigilance pure (cerveau reptilien)
 }
 
 # --- Fichier de persistance ---
@@ -78,6 +79,8 @@ _STIMULUS_MAP: Dict[str, Dict[str, Any]] = {
     "dream":        {"emotion": "serenite",     "bpm_delta": -15,  "ans_shift": -0.25, "intensity": 0.2},
     "veto":         {"emotion": "determination","bpm_delta": +20,  "ans_shift": +0.15, "intensity": 0.6},
     "creation":     {"emotion": "enthousiasme", "bpm_delta": +20,  "ans_shift": +0.05, "intensity": 0.8},
+    "threat":       {"emotion": "alerte",       "bpm_delta": +40,  "ans_shift": +0.30, "intensity": 0.9},
+    "adrenaline":   {"emotion": "determination","bpm_delta": +30,  "ans_shift": +0.25, "intensity": 0.85},
 }
 
 # ============================================================

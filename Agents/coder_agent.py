@@ -116,6 +116,11 @@ RÈGLES ABSOLUES :
                 f"⚠️ Code rejeté : {offtopic_count} mots-clés hors-sujet détectés (trading/blockchain/RSS/etc.)",
                 type="warning"
             )
+            try:
+                from core.event_bus.bus import bus
+                await bus.publish("HALLUCINATION_DETECTED", {"agent": self.name, "type": "offtopic", "intent": mission[:80]})
+            except Exception:
+                pass
             return {
                 "status": "warning",
                 "result": "R.A.S — code hors périmètre projet (trading/blockchain/RSS détecté).",

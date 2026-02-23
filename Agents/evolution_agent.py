@@ -621,6 +621,11 @@ class DivineEvolution(BaseAgent):
             catalog.mark_failed(spec.id, reason)
             self.log_thought(f"🚫 [{spec.id}] {reason}", type="warning")
             try:
+                from core.event_bus.bus import bus
+                await bus.publish("HALLUCINATION_DETECTED", {"agent": self.name, "type": "alien_imports", "intent": spec.name})
+            except Exception:
+                pass
+            try:
                 registry.record(Experience(
                     id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
                     spec_id=spec.id, spec_name=spec.name,
@@ -678,6 +683,11 @@ class DivineEvolution(BaseAgent):
             reason = "Code non-structurel (pas de def/class/import) — hallucination probable"
             catalog.mark_failed(spec.id, reason)
             self.log_thought(f"🚫 [{spec.id}] {reason}", type="warning")
+            try:
+                from core.event_bus.bus import bus
+                await bus.publish("HALLUCINATION_DETECTED", {"agent": self.name, "type": "non_structural", "intent": spec.name})
+            except Exception:
+                pass
             try:
                 registry.record(Experience(
                     id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",

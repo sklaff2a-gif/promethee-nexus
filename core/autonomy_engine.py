@@ -903,6 +903,14 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # Feedback reptilien (apaisement si succès)
+        try:
+            from core.reptilian_core import reptile
+            if quality_score >= 0.6:
+                reptile.on_routine_success(intent)
+        except Exception:
+            pass
+
         # Aperçu du résultat pour comparaison future
         result_preview = ""
         if response and isinstance(response, dict):
@@ -1121,6 +1129,31 @@ class AutonomyEngine:
 
     def _should_veto(self, intent: str, agent: str) -> str:
         """Veto proactif basé sur les signatures d'échec apprises. Retourne la raison ou ''."""
+        # 0. RÉFLEXE REPTILIEN — court-circuite tout
+        try:
+            from core.reptilian_core import reptile
+            if reptile.should_freeze():
+                return f"veto-reptilien: FREEZE actif (menace={reptile.threat_level:.1f})"
+            flinch = reptile.should_flinch(intent)
+            if flinch:
+                return f"veto-reptilien: {flinch}"
+            shed, max_cost = reptile.should_shed()
+            if shed:
+                cost = RESOURCE_COSTS.get(intent, 3)
+                if cost > max_cost:
+                    return f"veto-reptilien: SHED actif, coût {cost} > max {max_cost}"
+        except Exception:
+            pass  # Le reptilien tombe → on continue sans lui (résilience)
+
+        # 0b. MARQUEURS SOMATIQUES — intuitions viscérales
+        try:
+            from core.cardiac_engine import heart
+            signal = heart.get_somatic_signal(intent)
+            if signal < -1.0:
+                return f"veto-somatique: signal viscéral très négatif ({signal:.2f}) pour {intent}"
+        except Exception:
+            pass
+
         # 1. Vérifier les échecs répétés dans l'historique
         recent_failures = [
             r for r in self.routine_history[-20:]

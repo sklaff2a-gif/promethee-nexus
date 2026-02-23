@@ -235,6 +235,12 @@ async def lifespan(app: FastAPI):
     print(f"   🧬 SYNAPSE: Cortex associatif actif "
           f"({len(cortex.nodes)} noeuds, {len(cortex.synapses)} synapses).")
 
+    # --- TRONC CÉRÉBRAL (Cerveau Reptilien) ---
+    from core.reptilian_core import reptile
+    reptile.init()
+    reptile_task = asyncio.create_task(reptile.start_watchdog())
+    print(f"   🦎 REPTILIEN: Tronc cérébral actif (menace={reptile.threat_level:.1f}).")
+
     # --- COEUR (Moteur Cardiaque) ---
     from core.cardiac_engine import heart
     heart.init()
@@ -439,6 +445,12 @@ async def synaptic_graph():
 
     cardiac = heart.get_stats()
     return {"nodes": nodes, "links": links, "cardiac": cardiac, "stats": cortex.get_stats()}
+
+@app.get("/api/reptilian/status")
+async def reptilian_status():
+    """Retourne l'état du tronc cérébral reptilien."""
+    from core.reptilian_core import reptile
+    return reptile.get_stats()
 
 @app.get("/api/objectives")
 async def api_objectives():
