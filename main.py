@@ -374,6 +374,7 @@ async def autonomy_reset_budget():
     """Reset le compteur quotidien de routines autonomes (pour debug/observation)."""
     old_count = autonomy.daily_count
     autonomy.daily_count = 0
+    autonomy.daily_budget_used = 0
     autonomy.error_streak = 0
     autonomy._persist_state()
     await bus.publish("THOUGHT_STREAM", {
