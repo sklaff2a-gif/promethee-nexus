@@ -811,6 +811,12 @@ class AutonomyEngine:
             prefrontal.on_routine_start(intent)
         except Exception:
             pass
+        # Voix intérieure : routine commence → désactiver DMN
+        try:
+            from core.inner_voice import voice as inner_voice
+            inner_voice.set_idle(False)
+        except Exception:
+            pass
 
         # Annonce de l'objectif associé
         try:
@@ -891,6 +897,14 @@ class AutonomyEngine:
                     purpose_ctx += f"\n{delib_ctx}"
             except Exception:
                 pass
+            # Voix intérieure (flux de conscience)
+            try:
+                from core.inner_voice import voice as inner_voice
+                voice_ctx = inner_voice.get_voice_context()
+                if voice_ctx:
+                    purpose_ctx += f"\n{voice_ctx}"
+            except Exception:
+                pass
             # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)
             raw_mission = selected["mission"]
             # Retirer le préfixe [MODE VEILLE] déjà présent dans certaines missions
@@ -966,6 +980,13 @@ class AutonomyEngine:
                 quality_score,
                 result_preview,
             )
+        except Exception:
+            pass
+
+        # Voix intérieure : routine terminée → réactiver DMN
+        try:
+            from core.inner_voice import voice as inner_voice
+            inner_voice.set_idle(True)
         except Exception:
             pass
 

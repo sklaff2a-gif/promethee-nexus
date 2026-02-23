@@ -361,6 +361,20 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Voix intérieure (flux de conscience)
+        try:
+            from core.inner_voice import voice as inner_voice
+            snapshot["inner_voice"] = {
+                "thoughts_total": len(inner_voice.stream),
+                "predictions_active": len([p for p in inner_voice.predictions if not p.resolved]),
+                "precision": inner_voice._precision,
+                "current_mode": inner_voice.stream[-1].mode if inner_voice.stream else "",
+                "identity_tone": inner_voice.identity.emotional_tone if inner_voice.identity else "",
+                "last_thought": inner_voice.stream[-1].content[:80] if inner_voice.stream else "",
+            }
+        except Exception:
+            pass
+
         self._snapshots.append(snapshot)
         if len(self._snapshots) > MAX_SNAPSHOTS:
             self._snapshots = self._snapshots[-MAX_SNAPSHOTS:]

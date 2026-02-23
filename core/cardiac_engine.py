@@ -513,8 +513,17 @@ class CardiacEngine:
             bus.subscribe("MISSION_FINISHED", self._on_mission_finished)
             bus.subscribe("KNOWLEDGE_GAP_DETECTED", self._on_knowledge_gap)
             bus.subscribe("PSYCHE_UPDATE", self._on_psyche_update)
+            bus.subscribe("INNER_VOICE_BROADCAST", self._on_inner_voice)
         except Exception as e:
             logger.warning(f"COEUR: Échec souscription bus: {e}")
+
+    async def _on_inner_voice(self, event: dict):
+        """Résonance émotionnelle au broadcast de la voix intérieure."""
+        mode = event.get("mode", "")
+        if mode == "motiver":
+            self.react("learning")
+        elif mode == "inhiber":
+            self.ans_balance = max(0.0, self.ans_balance - 0.05)
 
     async def _on_routine_complete(self, event: dict):
         """Routine terminée → enthousiasme/frustration selon qualité."""

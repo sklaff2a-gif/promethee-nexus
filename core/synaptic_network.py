@@ -647,8 +647,19 @@ class SynapticNetwork:
             bus.subscribe("KNOWLEDGE_GAP_DETECTED", self._on_knowledge_gap)
             bus.subscribe("EXPERIENCE_RECORDED", self._on_experience_recorded)
             bus.subscribe("MISSION_FINISHED", self._on_mission_finished)
+            bus.subscribe("INNER_VOICE_BROADCAST", self._on_inner_voice)
         except Exception as e:
             logger.warning(f"SYNAPSE: Impossible de souscrire aux evenements: {e}")
+
+    async def _on_inner_voice(self, event: dict):
+        """Active le noeud correspondant au source de la pensee diffusee."""
+        try:
+            source = event.get("source", "")
+            if source:
+                node_id = self.ensure_node(source, node_type="event")
+                self.activate_node(node_id, energy_boost=0.3)
+        except Exception:
+            pass
 
     async def _on_routine_complete(self, event: dict):
         """Routine terminee : creer/renforcer les noeuds correspondants."""

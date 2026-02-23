@@ -248,6 +248,11 @@ async def lifespan(app: FastAPI):
     goals_active = len([g for g in prefrontal.goals if g.status == "active"])
     print(f"   🧠 PRÉFRONTAL: Fonction exécutive active ({goals_active} goals).")
 
+    # --- VOIX INTÉRIEURE (Aires de Broca & Wernicke) ---
+    from core.inner_voice import voice as inner_voice
+    inner_voice.init()
+    print("   🗣️ VOIX INTÉRIEURE: Aires de Broca & Wernicke actives.")
+
     # --- COEUR (Moteur Cardiaque) ---
     from core.cardiac_engine import heart
     heart.init()
@@ -465,6 +470,18 @@ async def prefrontal_status():
     """Retourne l'état du cortex préfrontal (goals, stratégies, narratif)."""
     from core.prefrontal import prefrontal
     return prefrontal.get_stats()
+
+@app.get("/api/inner-voice/status")
+async def inner_voice_status():
+    """Retourne l'état de la voix intérieure (stats, précision, pensée courante)."""
+    from core.inner_voice import voice as inner_voice
+    return inner_voice.get_stats()
+
+@app.get("/api/inner-voice/stream")
+async def inner_voice_stream():
+    """Retourne les 30 dernières pensées du flux de conscience."""
+    from core.inner_voice import voice as inner_voice
+    return inner_voice.get_stream(n=30)
 
 @app.get("/api/objectives")
 async def api_objectives():

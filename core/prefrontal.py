@@ -224,6 +224,20 @@ class PrefrontalCortex:
         bus.subscribe("REPTILIAN_ALERT", self._on_reptilian_alert)
         bus.subscribe("CARDIAC_BEAT", self._on_cardiac_beat)
         bus.subscribe("HALLUCINATION_DETECTED", self._on_hallucination)
+        bus.subscribe("INNER_VOICE_BROADCAST", self._on_inner_voice)
+
+    async def _on_inner_voice(self, data: dict):
+        """Intègre la pensée broadcast dans le narrative_log."""
+        thought = data.get("thought", "")
+        if thought:
+            self.narrative_log.append(NarrativeEntry(
+                timestamp=time.time(),
+                thought=f"[voix] {thought}",
+                category="insight",
+                context={"source": data.get("source", ""), "mode": data.get("mode", "")},
+            ))
+            if len(self.narrative_log) > MAX_NARRATIVE_LOG:
+                self.narrative_log = self.narrative_log[-MAX_NARRATIVE_LOG:]
 
     # ─── Handlers Bus (async) ─────────────────────────────────────────
 

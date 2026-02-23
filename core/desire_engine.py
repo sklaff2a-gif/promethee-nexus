@@ -191,6 +191,11 @@ class DesireEngine:
         bus.subscribe("OBJECTIVE_FAILED", self._on_objective_failed)
         bus.subscribe("EVOLUTION_FEEDBACK", self._on_evolution_feedback)
         bus.subscribe("EVOLUTION_ROLLED_BACK", self._on_evolution_rolled_back)
+        bus.subscribe("INNER_VOICE_BROADCAST", self._on_inner_voice)
+
+    async def _on_inner_voice(self, event: dict):
+        """Tick des pulsions au broadcast de la voix intérieure (montée régulière)."""
+        self.tick()
 
     async def _on_routine_complete(self, event: dict):
         intent = event.get("intent", "")
