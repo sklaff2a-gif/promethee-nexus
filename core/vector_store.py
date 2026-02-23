@@ -24,6 +24,36 @@ class ChromaMemoryManager:
         """Nettoie toutes les instances (pour les tests)."""
         cls._instances.clear()
 
+    def _init_persistent_client(self):
+        """Initialise PersistentClient avec recovery automatique si database corrompue."""
+        # Tentative 1 : ouverture normale
+        try:
+            client = chromadb.PersistentClient(path=self.db_path)
+            client.heartbeat()  # Vérifier que la connexion fonctionne
+            return client
+        except Exception as e1:
+            logger.warning(f"PersistentClient échoué ({e1}), tentative de recovery...")
+
+        # Tentative 2 : backup complet + reset dossier (version incompatible)
+        backup_dir = self.db_path + ".bak"
+        try:
+            if os.path.exists(backup_dir):
+                shutil.rmtree(backup_dir, ignore_errors=True)
+            shutil.copytree(self.db_path, backup_dir)
+            shutil.rmtree(self.db_path)
+            os.makedirs(self.db_path, exist_ok=True)
+            logger.info(f"Database incompatible sauvegardée → {backup_dir}, recréation...")
+            client = chromadb.PersistentClient(path=self.db_path)
+            client.heartbeat()
+            print(f"🔧 [MÉMOIRE] Database recréée avec succès (backup: {backup_dir})")
+            return client
+        except Exception as e2:
+            logger.warning(f"Recovery PersistentClient échoué ({e2})")
+
+        # Tentative 3 : dernier recours — EphemeralClient
+        logger.warning("Fallback EphemeralClient (mémoire non persistante)")
+        return chromadb.EphemeralClient()
+
     def __init__(self, project_id: str = "default"):
         self.project_id = project_id
 
@@ -46,12 +76,8 @@ class ChromaMemoryManager:
         self.db_path = os.path.join(base_dir, project_id, "chroma_db")
         os.makedirs(self.db_path, exist_ok=True)
 
-        # Initialisation du client (fallback EphemeralClient si PersistentClient échoue)
-        try:
-            self.client = chromadb.PersistentClient(path=self.db_path)
-        except Exception as e:
-            logger.warning(f"PersistentClient échoué ({e}), fallback EphemeralClient (mémoire non persistante)")
-            self.client = chromadb.EphemeralClient()
+        # Initialisation du client (avec recovery si database corrompue)
+        self.client = self._init_persistent_client()
 
         # Lock asyncio pour les opérations d'écriture composées (purge, health check)
         # Lazy-init : recréé si l'event loop change (Smart Restart exit 65)
