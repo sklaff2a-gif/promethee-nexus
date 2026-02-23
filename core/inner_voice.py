@@ -715,21 +715,19 @@ class InnerVoice:
 
     def _verify(self, entry: WorkspaceEntry) -> Tuple[bool, float]:
         """Vérifie cohérence factuelle, émotionnelle, temporelle. Retourne (ok, score)."""
-        scores = []
-
-        # 1. Cohérence factuelle (draft vs raw_signal)
-        factual = self._check_factual(entry)
-        scores.append(factual)
-
-        # 2. Cohérence émotionnelle (ton du draft vs émotion cardiaque)
-        emotional = self._check_emotional(entry)
-        scores.append(emotional)
-
-        # 3. Cohérence temporelle (pas de répétition)
+        # 1. Cohérence temporelle — VETO DUR si répétition
         temporal = self._check_temporal(entry)
-        scores.append(temporal)
+        if temporal <= 0.0:
+            self.stats["rejections_wernicke"] += 1
+            return False, 0.0
 
-        avg_score = sum(scores) / len(scores) if scores else 0.0
+        # 2. Cohérence factuelle (draft vs raw_signal)
+        factual = self._check_factual(entry)
+
+        # 3. Cohérence émotionnelle (ton du draft vs émotion cardiaque)
+        emotional = self._check_emotional(entry)
+
+        avg_score = (factual + emotional + temporal) / 3.0
 
         if avg_score < WERNICKE_COHERENCE_THRESHOLD:
             self.stats["rejections_wernicke"] += 1
@@ -796,23 +794,26 @@ class InnerVoice:
         return max(0.1, alignment)
 
     def _check_temporal(self, entry: WorkspaceEntry) -> float:
-        """Pas de répétition récente."""
+        """Pas de répétition récente — veto dur sur doublons."""
         if not self.stream:
             return 1.0
         recent = self.stream[-5:]
-        # Vérifier diversité des sources
+
+        if entry.draft:
+            for t in recent:
+                # Exactement identique → veto dur (score 0)
+                if t.content == entry.draft:
+                    return 0.0
+                # Quasi-doublon : même source + préfixe identique
+                if (t.source == entry.source
+                        and len(t.content) > 10 and len(entry.draft) > 10
+                        and t.content[:20] == entry.draft[:20]):
+                    return 0.0
+
+        # Saturation de source : >= 3 sur les 5 dernières → pénalité forte
         recent_sources = [t.source for t in recent]
         if recent_sources.count(entry.source) >= 3:
-            return 0.2  # Trop de la même source
-        # Vérifier similarité de contenu
-        if entry.draft:
-            for t in recent[-3:]:
-                if t.content == entry.draft:
-                    return 0.0  # Exactement identique
-                # Similarité approximative
-                if (len(t.content) > 10 and len(entry.draft) > 10
-                        and t.content[:20] == entry.draft[:20]):
-                    return 0.2
+            return 0.15
         return 1.0
 
     # ─── IGNITION & BROADCAST ────────────────────────────────────────────

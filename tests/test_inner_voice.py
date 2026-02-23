@@ -364,7 +364,7 @@ class TestWernicke:
         assert score == 1.0
 
     def test_check_temporal_exact_repetition(self, voice):
-        """Pensée identique dans le stream → score = 0."""
+        """Pensée identique dans le stream → veto dur (score = 0)."""
         from core.inner_voice import Thought, WorkspaceEntry
         voice.stream.append(Thought(
             timestamp=1, content="Meme chose", source="cardiac",
@@ -377,8 +377,41 @@ class TestWernicke:
         score = voice._check_temporal(entry)
         assert score == 0.0
 
+    def test_check_temporal_quasi_doublon(self, voice):
+        """Même source + même préfixe → veto dur."""
+        from core.inner_voice import Thought, WorkspaceEntry
+        voice.stream.append(Thought(
+            timestamp=1, content="Tiens. veille <-> synthese.",
+            source="synaptic", mode="evaluer", salience=0.5,
+        ))
+        entry = WorkspaceEntry(
+            source="synaptic", raw_signal={},
+            salience=0.5, timestamp=2,
+            draft="Tiens. veille <-> synthese.",
+        )
+        score = voice._check_temporal(entry)
+        assert score == 0.0
+
+    def test_verify_rejects_repetition_hard(self, voice):
+        """_verify rejette une répétition même si factuel+émotionnel sont OK."""
+        from core.inner_voice import Thought, WorkspaceEntry
+        voice.stream.append(Thought(
+            timestamp=1, content="Flow. Ne pas interrompre.",
+            source="cardiac", mode="evaluer", salience=0.5,
+        ))
+        voice._last_cardiac = {"emotion": "flow"}
+        entry = WorkspaceEntry(
+            source="cardiac",
+            raw_signal={"emotion": "flow", "context": "flow"},
+            salience=0.5, timestamp=2,
+            draft="Flow. Ne pas interrompre.",
+        )
+        ok, score = voice._verify(entry)
+        assert not ok
+        assert score == 0.0
+
     def test_check_temporal_source_saturation(self, voice):
-        """Trop de pensées de la même source → pénalité."""
+        """Trop de pensées de la même source → pénalité forte."""
         from core.inner_voice import Thought, WorkspaceEntry
         for i in range(4):
             voice.stream.append(Thought(
@@ -390,7 +423,7 @@ class TestWernicke:
             salience=0.5, timestamp=5, draft="Encore cardiac",
         )
         score = voice._check_temporal(entry)
-        assert score <= 0.2
+        assert score <= 0.15
 
     def test_reformulation_on_low_coherence(self, voice):
         """Cohérence basse → reformulation tentée + stats."""
