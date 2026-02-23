@@ -750,6 +750,20 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Bonus préfrontal (focus exécutif) ---
+        try:
+            from core.prefrontal import prefrontal
+            for i, (routine, s) in enumerate(scored):
+                focus = prefrontal.compute_focus_bonus(routine["intent"])
+                if focus != 0.0:
+                    scored[i] = (routine, s + focus)
+            scored.sort(key=lambda x: x[1], reverse=True)
+            wm = prefrontal.get_working_memory()
+            if wm:
+                print(f"   🎯 PRÉFRONTAL: Focus sur '{wm[0]['goal_title']}' ({wm[0]['progress']:.0%})")
+        except Exception:
+            pass
+
         if not scored:
             logger.warning("[AUTONOMY] Aucune routine disponible apres filtrage. Cycle avorte.")
             self._persist_state()
@@ -762,22 +776,41 @@ class AutonomyEngine:
         # --- Veto proactif ---
         veto_reason = self._should_veto(intent, agent)
         if veto_reason:
-            print(f"   🚫 VETO: {veto_reason}")
+            # Le préfrontal peut overrider certains vetos (SHED, FLINCH) si un goal est avancé
+            overridden = False
             try:
-                from core.cardiac_engine import heart
-                heart.react("veto")
+                from core.prefrontal import prefrontal
+                inhibition = prefrontal.compute_inhibition(intent, veto_reason)
+                if inhibition["action"] == "override":
+                    print(f"   🧠 PRÉFRONTAL: Override {inhibition['override_target']} — {inhibition['reason']}")
+                    veto_reason = ""  # Annuler le veto
+                    overridden = True
             except Exception:
                 pass
-            # Fallback : prendre la 2ème meilleure routine
-            if len(scored) > 1:
-                selected, score = scored[1]
-                agent = selected["agent"]
-                intent = selected["intent"]
-            else:
-                return  # Aucune alternative
+            if veto_reason:
+                print(f"   🚫 VETO: {veto_reason}")
+                try:
+                    from core.cardiac_engine import heart
+                    heart.react("veto")
+                except Exception:
+                    pass
+                # Fallback : prendre la 2ème meilleure routine
+                if len(scored) > 1:
+                    selected, score = scored[1]
+                    agent = selected["agent"]
+                    intent = selected["intent"]
+                else:
+                    return  # Aucune alternative
 
         routine_cost_preview = RESOURCE_COSTS.get(intent, 2)
         print(f"   ✨ AUTONOMY: Routine [{intent}] (score={score:.1f}, coût={routine_cost_preview}pt) -> [{agent.upper()}] ({self.daily_count + 1}/{MAX_DAILY_ROUTINES}, budget: {self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt)")
+
+        # Notification préfrontale pre-routine
+        try:
+            from core.prefrontal import prefrontal
+            prefrontal.on_routine_start(intent)
+        except Exception:
+            pass
 
         # Annonce de l'objectif associé
         try:
@@ -850,6 +883,14 @@ class AutonomyEngine:
                     purpose_ctx += f"\n[DESIRS] {narrative}"
             except Exception:
                 pass
+            # Contexte délibératif (objectifs préfrontaux)
+            try:
+                from core.prefrontal import prefrontal
+                delib_ctx = prefrontal.get_deliberation_context()
+                if delib_ctx:
+                    purpose_ctx += f"\n{delib_ctx}"
+            except Exception:
+                pass
             # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)
             raw_mission = selected["mission"]
             # Retirer le préfixe [MODE VEILLE] déjà présent dans certaines missions
@@ -915,6 +956,18 @@ class AutonomyEngine:
         result_preview = ""
         if response and isinstance(response, dict):
             result_preview = str(response.get("result", ""))[:200]
+
+        # Feedback préfrontal (avancement des goals)
+        try:
+            from core.prefrontal import prefrontal
+            prefrontal.on_routine_complete(
+                intent,
+                "success" if quality_score >= 0.6 else "error",
+                quality_score,
+                result_preview,
+            )
+        except Exception:
+            pass
 
         # Reset du flag d'apprentissage pour ce cycle
         self._learning_done_this_cycle = False
@@ -1173,6 +1226,17 @@ class AutonomyEngine:
         if self.last_health_check and isinstance(self.last_health_check, dict):
             if self.last_health_check.get("verdict") == "NO_GO" and intent in ("EXPANSION_CODE", "GRIMOIRE_INVOKE"):
                 return f"veto: santé NO_GO, routine risquée {intent} reportée"
+
+        # 3. INHIBITION PRÉFRONTALE — arbitrage cognitif
+        try:
+            from core.prefrontal import prefrontal
+            # Collecter le veto en cours (reptilien/somatique déjà passé sans retourner)
+            # → on passe "" car aucun veto n'a été déclenché à ce stade
+            inhibition = prefrontal.compute_inhibition(intent, "")
+            if inhibition["action"] == "inhibit":
+                return f"veto-prefrontal: {inhibition['reason']}"
+        except Exception:
+            pass
 
         return ""
 

@@ -348,6 +348,19 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Cortex préfrontal (fonction exécutive)
+        try:
+            from core.prefrontal import prefrontal
+            snapshot["prefrontal"] = {
+                "active_goals": len([g for g in prefrontal.goals if g.status == "active"]),
+                "completed_goals": prefrontal.stats.get("goals_completed", 0),
+                "working_memory_slots": len(prefrontal.get_working_memory()),
+                "strategies_crystallized": prefrontal.stats.get("strategies_crystallized", 0),
+                "last_thought": prefrontal.narrative_log[-1].thought[:80] if prefrontal.narrative_log else "",
+            }
+        except Exception:
+            pass
+
         self._snapshots.append(snapshot)
         if len(self._snapshots) > MAX_SNAPSHOTS:
             self._snapshots = self._snapshots[-MAX_SNAPSHOTS:]

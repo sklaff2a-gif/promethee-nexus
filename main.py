@@ -241,6 +241,13 @@ async def lifespan(app: FastAPI):
     reptile_task = asyncio.create_task(reptile.start_watchdog())
     print(f"   🦎 REPTILIEN: Tronc cérébral actif (menace={reptile.threat_level:.1f}).")
 
+    # --- CORTEX PRÉFRONTAL (Fonction Exécutive) ---
+    from core.prefrontal import prefrontal
+    prefrontal.init()
+    delib_task = asyncio.create_task(prefrontal.start_deliberation())
+    goals_active = len([g for g in prefrontal.goals if g.status == "active"])
+    print(f"   🧠 PRÉFRONTAL: Fonction exécutive active ({goals_active} goals).")
+
     # --- COEUR (Moteur Cardiaque) ---
     from core.cardiac_engine import heart
     heart.init()
@@ -452,6 +459,12 @@ async def reptilian_status():
     """Retourne l'état du tronc cérébral reptilien."""
     from core.reptilian_core import reptile
     return reptile.get_stats()
+
+@app.get("/api/prefrontal/status")
+async def prefrontal_status():
+    """Retourne l'état du cortex préfrontal (goals, stratégies, narratif)."""
+    from core.prefrontal import prefrontal
+    return prefrontal.get_stats()
 
 @app.get("/api/objectives")
 async def api_objectives():
