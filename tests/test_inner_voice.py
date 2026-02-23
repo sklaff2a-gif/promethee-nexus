@@ -1079,3 +1079,212 @@ class TestModeVygotsky:
         entry = WorkspaceEntry(source="dmn", raw_signal={"context": "self"},
                                salience=0.3, timestamp=1)
         assert voice._determine_mode(entry) == "refleter"
+
+
+# ============================================================
+# GROUPE 13 : Influence Scoring (Couche 8)
+# ============================================================
+
+
+class TestVoiceBonusScoring:
+    def test_bonus_empty_stream(self, voice):
+        """Bonus 0.0 si pas de pensées."""
+        assert voice.compute_voice_bonus("EXPANSION_CODE") == 0.0
+
+    def test_bonus_reptilian_convergence(self, voice):
+        """Pensées reptiliennes boostent SECURITY_AUDIT."""
+        from core.inner_voice import Thought
+        for i in range(6):
+            voice.stream.append(Thought(
+                timestamp=time.time(), content=f"Menace {i}. SHED.",
+                source="reptilian", mode="inhiber", salience=0.8,
+                emotion="alerte",
+            ))
+        bonus_sec = voice.compute_voice_bonus("SECURITY_AUDIT")
+        bonus_exp = voice.compute_voice_bonus("EXPANSION_CODE")
+        # Reptilian → bonus sécurité, malus expansion
+        assert bonus_sec > 0, f"Attendu > 0, obtenu {bonus_sec}"
+        assert bonus_exp < 0, f"Attendu < 0, obtenu {bonus_exp}"
+
+    def test_bonus_synaptic_creative(self, voice):
+        """Pensées synaptiques boostent COUNCIL_DEBATE."""
+        from core.inner_voice import Thought
+        for i in range(5):
+            voice.stream.append(Thought(
+                timestamp=time.time(), content=f"Tiens. concept_{i} <-> autre.",
+                source="synaptic", mode="evaluer", salience=0.5,
+                emotion="curiosite",
+            ))
+        bonus = voice.compute_voice_bonus("COUNCIL_DEBATE")
+        assert bonus > 0
+
+    def test_bonus_emotion_frustration(self, voice):
+        """Émotion frustration → boost MEMORY_CLEANUP, malus EXPANSION."""
+        from core.inner_voice import Thought
+        for i in range(8):
+            voice.stream.append(Thought(
+                timestamp=time.time(), content=f"Pensée {i}",
+                source="cardiac", mode="evaluer", salience=0.4,
+                emotion="frustration",
+            ))
+        bonus_mem = voice.compute_voice_bonus("MEMORY_CLEANUP")
+        bonus_exp = voice.compute_voice_bonus("EXPANSION_CODE")
+        assert bonus_mem > 0
+        assert bonus_exp < 0
+
+    def test_bonus_prediction_errors(self, voice):
+        """Prédictions violées boostent AUDIT_STRUCTURE et malus EXPANSION."""
+        from core.inner_voice import Thought, Prediction
+        voice.stream.append(Thought(
+            timestamp=time.time(), content="Signal.",
+            source="cardiac", mode="evaluer", salience=0.3,
+            emotion="serenite",
+        ))
+        # Ajouter des prédictions violées récentes
+        for i in range(3):
+            voice.predictions.append(Prediction(
+                id=f"p{i}", content=f"Prevu X, reel Y",
+                target_event="AUTONOMY_ROUTINE_COMPLETE",
+                predicted_value="X", confidence=0.5,
+                created_at=time.time() - 60,
+                resolved=True, outcome="violated",
+                prediction_error=0.7,
+            ))
+        bonus_audit = voice.compute_voice_bonus("AUDIT_STRUCTURE")
+        bonus_exp = voice.compute_voice_bonus("EXPANSION_CODE")
+        assert bonus_audit > 0
+        assert bonus_exp < 0
+
+    def test_bonus_clamping(self, voice):
+        """Bonus clampé à [-1.0, +2.0]."""
+        from core.inner_voice import Thought, Prediction
+        # Saturer toutes les sources vers le positif pour SECURITY_AUDIT
+        for i in range(10):
+            voice.stream.append(Thought(
+                timestamp=time.time(), content=f"Menace {i}. Danger.",
+                source="reptilian", mode="inhiber", salience=0.9,
+                emotion="alerte",
+            ))
+        # Ajouter des prédictions violées
+        for i in range(5):
+            voice.predictions.append(Prediction(
+                id=f"e{i}", content="err",
+                target_event="X", predicted_value="X",
+                confidence=0.5, created_at=time.time() - 30,
+                resolved=True, outcome="violated",
+                prediction_error=0.8,
+            ))
+        bonus = voice.compute_voice_bonus("SECURITY_AUDIT")
+        assert bonus <= 2.0
+        malus = voice.compute_voice_bonus("EXPANSION_CODE")
+        assert malus >= -1.0
+
+    def test_bonus_mode_inhiber(self, voice):
+        """Mode inhiber → bonus AUDIT, malus EXPANSION."""
+        from core.inner_voice import Thought
+        for i in range(7):
+            voice.stream.append(Thought(
+                timestamp=time.time(), content="Non. Stop.",
+                source="reptilian", mode="inhiber", salience=0.6,
+                emotion="inquietude",
+            ))
+        bonus_audit = voice.compute_voice_bonus("AUDIT_STRUCTURE")
+        bonus_exp = voice.compute_voice_bonus("EXPANSION_CODE")
+        assert bonus_audit > 0
+        assert bonus_exp < 0
+
+    def test_bonus_motiver_boosts_expansion(self, voice):
+        """Mode motiver → bonus EXPANSION et VEILLE."""
+        from core.inner_voice import Thought
+        for i in range(6):
+            voice.stream.append(Thought(
+                timestamp=time.time(), content=f"CURIOSITE affamee. Explorer.",
+                source="desire", mode="motiver", salience=0.6,
+                emotion="curiosite",
+            ))
+        bonus_exp = voice.compute_voice_bonus("EXPANSION_CODE")
+        bonus_veille = voice.compute_voice_bonus("VEILLE_SILENCIEUSE")
+        assert bonus_exp > 0
+        assert bonus_veille > 0
+
+    def test_bonus_dmn_vagabonder(self, voice):
+        """Mode vagabonder → bonus COUNCIL et GRIMOIRE."""
+        from core.inner_voice import Thought
+        for i in range(5):
+            voice.stream.append(Thought(
+                timestamp=time.time(), content=f"Idée libre {i}",
+                source="dmn", mode="vagabonder", salience=0.4,
+                emotion="serenite",
+            ))
+        bonus_council = voice.compute_voice_bonus("COUNCIL_DEBATE")
+        bonus_grimoire = voice.compute_voice_bonus("GRIMOIRE_INVOKE")
+        assert bonus_council > 0
+        assert bonus_grimoire > 0
+
+
+# ============================================================
+# GROUPE 14 : Grimoire Suggestion
+# ============================================================
+
+
+class TestGrimoireSuggestion:
+    def test_suggestion_empty_stream(self, voice):
+        """Pas de suggestion si stream vide."""
+        assert voice.get_grimoire_suggestion() is None
+
+    def test_suggestion_debug_keywords(self, voice):
+        """Mots-clés erreur/crash → dr_debug."""
+        from core.inner_voice import Thought
+        voice.stream.extend([
+            Thought(timestamp=time.time(), content="Erreur detectee. Crash imminent.",
+                    source="reptilian", mode="inhiber", salience=0.8),
+            Thought(timestamp=time.time(), content="Exception non geree. Bug grave.",
+                    source="prediction", mode="predire", salience=0.6),
+        ])
+        suggestion = voice.get_grimoire_suggestion()
+        assert suggestion == "dr_debug"
+
+    def test_suggestion_hallucination_keywords(self, voice):
+        """Mots-clés hallucination → hallucination_doctor."""
+        from core.inner_voice import Thought
+        voice.stream.extend([
+            Thought(timestamp=time.time(), content="Hallucination detectee. Alien import.",
+                    source="prediction", mode="predire", salience=0.7),
+            Thought(timestamp=time.time(), content="Offtopic genere. Hors perimetre.",
+                    source="prefrontal", mode="evaluer", salience=0.5),
+        ])
+        suggestion = voice.get_grimoire_suggestion()
+        assert suggestion == "hallucination_doctor"
+
+    def test_suggestion_loop_keywords(self, voice):
+        """Mots-clés boucle/repetition → loop_breaker."""
+        from core.inner_voice import Thought
+        voice.stream.extend([
+            Thought(timestamp=time.time(), content="Boucle detectee. Repetition.",
+                    source="dmn", mode="refleter", salience=0.5),
+            Thought(timestamp=time.time(), content="Cycle infini. Stuck.",
+                    source="prefrontal", mode="evaluer", salience=0.6),
+        ])
+        suggestion = voice.get_grimoire_suggestion()
+        assert suggestion == "loop_breaker"
+
+    def test_suggestion_threshold_below(self, voice):
+        """Score < 2 → pas de suggestion (faux positif)."""
+        from core.inner_voice import Thought
+        voice.stream.append(Thought(
+            timestamp=time.time(), content="Tout va bien. Stable.",
+            source="cardiac", mode="evaluer", salience=0.3,
+        ))
+        assert voice.get_grimoire_suggestion() is None
+
+    def test_suggestion_code_reviewer(self, voice):
+        """Mots-clés code review → code_reviewer."""
+        from core.inner_voice import Thought
+        voice.stream.extend([
+            Thought(timestamp=time.time(), content="Code qualite basse. Revue necessaire.",
+                    source="prefrontal", mode="planifier", salience=0.6),
+            Thought(timestamp=time.time(), content="Review spec. Refactor urgent.",
+                    source="dmn", mode="refleter", salience=0.5),
+        ])
+        suggestion = voice.get_grimoire_suggestion()
+        assert suggestion == "code_reviewer"

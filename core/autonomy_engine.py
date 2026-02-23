@@ -764,6 +764,17 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Bonus voix intérieure (influence cognitive — Couche 8) ---
+        try:
+            from core.inner_voice import voice as inner_voice
+            for i, (routine, s) in enumerate(scored):
+                voice_bonus = inner_voice.compute_voice_bonus(routine["intent"])
+                if voice_bonus != 0.0:
+                    scored[i] = (routine, s + voice_bonus)
+            scored.sort(key=lambda x: x[1], reverse=True)
+        except Exception:
+            pass
+
         if not scored:
             logger.warning("[AUTONOMY] Aucune routine disponible apres filtrage. Cycle avorte.")
             self._persist_state()
@@ -1334,22 +1345,31 @@ class AutonomyEngine:
             if not grimoire_index:
                 return {"status": "error", "result": "Grimoire vide."}
 
-            # Rotation : choisir le slug le moins récemment invoqué
-            recent_grimoire = [
-                h.get("grimoire_slug") for h in self.routine_history
-                if h.get("intent") == "GRIMOIRE_INVOKE" and h.get("grimoire_slug")
-            ]
             slugs = [entry["slug"] for entry in grimoire_index]
 
-            # Trouver le slug absent de l'historique, ou le plus ancien
+            # Suggestion ciblée de la voix intérieure
             best_slug = None
-            for slug in slugs:
-                if slug not in recent_grimoire:
-                    best_slug = slug
-                    break
+            try:
+                from core.inner_voice import voice as inner_voice
+                suggestion = inner_voice.get_grimoire_suggestion()
+                if suggestion and suggestion in slugs:
+                    best_slug = suggestion
+                    print(f"   \U0001f5e3\ufe0f VOIX\u2192GRIMOIRE: Ciblage '{best_slug}'")
+            except Exception:
+                pass
+
+            # Fallback : rotation LRU (le moins récemment invoqué)
             if not best_slug:
-                # Tous ont été invoqués récemment → prendre le premier (le plus ancien dans la rotation)
-                best_slug = slugs[self.total_routines_executed % len(slugs)]
+                recent_grimoire = [
+                    h.get("grimoire_slug") for h in self.routine_history
+                    if h.get("intent") == "GRIMOIRE_INVOKE" and h.get("grimoire_slug")
+                ]
+                for slug in slugs:
+                    if slug not in recent_grimoire:
+                        best_slug = slug
+                        break
+                if not best_slug:
+                    best_slug = slugs[self.total_routines_executed % len(slugs)]
 
             # Trouver la description pour construire la mission
             entry = next((e for e in grimoire_index if e["slug"] == best_slug), None)

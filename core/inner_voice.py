@@ -1195,6 +1195,151 @@ class InnerVoice:
         parts.append(f"[PRECISION] {self._precision:.0%}")
         return " | ".join(parts) if parts else ""
 
+    # ─── INFLUENCE SUR LE SCORING (Couche 8) ─────────────────────────────
+
+    # Mapping source de pensée → affinité avec les routines
+    _SOURCE_ROUTINE_AFFINITY = {
+        "reptilian": {
+            "SECURITY_AUDIT": 0.6, "AUDIT_STRUCTURE": 0.4,
+            "EXPANSION_CODE": -0.4, "GRIMOIRE_INVOKE": -0.2,
+        },
+        "synaptic": {
+            "COUNCIL_DEBATE": 0.4, "GRIMOIRE_INVOKE": 0.3,
+            "EXPANSION_CODE": 0.2,
+        },
+        "dmn": {
+            "VEILLE_SILENCIEUSE": 0.3, "MEMORY_CLEANUP": 0.2,
+            "MEMORY_CONSOLIDATION": 0.2,
+        },
+    }
+
+    # Mapping émotion dominante → affinités routines
+    _EMOTION_ROUTINE_AFFINITY = {
+        "frustration": {"MEMORY_CLEANUP": 0.3, "AUDIT_STRUCTURE": 0.3, "EXPANSION_CODE": -0.3},
+        "inquietude": {"SECURITY_AUDIT": 0.4, "AUDIT_STRUCTURE": 0.3, "EXPANSION_CODE": -0.3},
+        "curiosite": {"VEILLE_SILENCIEUSE": 0.4, "EXPANSION_CODE": 0.2, "COUNCIL_DEBATE": 0.2},
+        "enthousiasme": {"EXPANSION_CODE": 0.3, "GRIMOIRE_INVOKE": 0.2},
+        "flow": {"EXPANSION_CODE": 0.3, "COUNCIL_DEBATE": 0.2},
+        "fatigue": {"MEMORY_CLEANUP": 0.3, "AUDIT_STRUCTURE": 0.2, "EXPANSION_CODE": -0.4},
+        "serenite": {"VEILLE_SILENCIEUSE": 0.2, "COUNCIL_DEBATE": 0.2},
+        "determination": {"EXPANSION_CODE": 0.2, "SECURITY_AUDIT": 0.2},
+        "alerte": {"SECURITY_AUDIT": 0.5, "AUDIT_STRUCTURE": 0.3, "EXPANSION_CODE": -0.5},
+    }
+
+    # Mapping mode Vygotsky → affinités routines
+    _MODE_ROUTINE_AFFINITY = {
+        "inhiber": {"AUDIT_STRUCTURE": 0.3, "SECURITY_AUDIT": 0.2, "EXPANSION_CODE": -0.3},
+        "motiver": {"EXPANSION_CODE": 0.3, "VEILLE_SILENCIEUSE": 0.2},
+        "planifier": {"EXPANSION_CODE": 0.2, "COUNCIL_DEBATE": 0.1},
+        "vagabonder": {"COUNCIL_DEBATE": 0.3, "VEILLE_SILENCIEUSE": 0.2, "GRIMOIRE_INVOKE": 0.2},
+        "predire": {"AUDIT_STRUCTURE": 0.2},
+        "refleter": {"MEMORY_CONSOLIDATION": 0.2, "MEMORY_CLEANUP": 0.1},
+        "evaluer": {},
+    }
+
+    # Mapping mots-clés pensées → slugs Grimoire
+    _THOUGHT_GRIMOIRE_MAP = {
+        "dr_debug": ["erreur", "error", "crash", "bug", "traceback", "exception", "echec"],
+        "hallucination_doctor": ["hallucination", "alien", "offtopic", "hors sujet", "hors perimetre"],
+        "loop_breaker": ["boucle", "repetition", "loop", "stuck", "bloque", "cycle"],
+        "code_reviewer": ["code", "revue", "qualite", "review", "refactor"],
+        "log_analyst": ["log", "monitoring", "alerte", "incident", "pattern erreur"],
+        "doc_writer": ["documentation", "readme", "docstring", "guide"],
+        "data_analyst": ["donnees", "data", "statistique", "tendance", "analyse"],
+    }
+
+    def compute_voice_bonus(self, intent: str) -> float:
+        """Couche 8 du scoring — influence cognitive de la voix intérieure.
+
+        Analyse les 10 dernières pensées : convergence des sources,
+        émotion dominante, mode Vygotsky, erreurs de prédiction.
+        Retourne un bonus clamped [-1.0, +2.0].
+        """
+        if not self.stream:
+            return 0.0
+
+        recent = self.stream[-10:]
+        bonus = 0.0
+
+        # 1. Convergence des sources → routines associées
+        source_counts: Dict[str, int] = {}
+        for t in recent:
+            source_counts[t.source] = source_counts.get(t.source, 0) + 1
+
+        for source, count in source_counts.items():
+            proportion = count / len(recent)
+            affinity = self._SOURCE_ROUTINE_AFFINITY.get(source, {}).get(intent, 0.0)
+            if affinity != 0.0:
+                bonus += affinity * proportion * 2.0
+
+        # 2. Émotion dominante des pensées récentes
+        emotion_counts: Dict[str, int] = {}
+        for t in recent:
+            if t.emotion:
+                emotion_counts[t.emotion] = emotion_counts.get(t.emotion, 0) + 1
+        if emotion_counts:
+            dominant_emotion = max(emotion_counts, key=emotion_counts.get)
+            emo_aff = self._EMOTION_ROUTINE_AFFINITY.get(dominant_emotion, {}).get(intent, 0.0)
+            if emo_aff != 0.0:
+                bonus += emo_aff
+
+        # 3. Mode Vygotsky dominant
+        mode_counts: Dict[str, int] = {}
+        for t in recent:
+            if t.mode:
+                mode_counts[t.mode] = mode_counts.get(t.mode, 0) + 1
+        if mode_counts:
+            dominant_mode = max(mode_counts, key=mode_counts.get)
+            mode_aff = self._MODE_ROUTINE_AFFINITY.get(dominant_mode, {}).get(intent, 0.0)
+            if mode_aff != 0.0:
+                bonus += mode_aff
+
+        # 4. Erreurs de prédiction récentes → boost diagnostic
+        now = time.time()
+        recent_errors = [
+            p for p in self.predictions
+            if p.resolved and p.outcome == "violated"
+            and now - p.created_at < 600
+        ]
+        if recent_errors:
+            error_aff = {
+                "AUDIT_STRUCTURE": 0.3, "SECURITY_AUDIT": 0.2,
+                "GRIMOIRE_INVOKE": 0.3, "EXPANSION_CODE": -0.3,
+            }.get(intent, 0.0)
+            bonus += error_aff * min(len(recent_errors), 3) * 0.5
+
+        return round(max(-1.0, min(2.0, bonus)), 2)
+
+    def get_grimoire_suggestion(self) -> Optional[str]:
+        """Suggère un spécialiste Grimoire basé sur le flux de conscience.
+
+        Analyse les mots-clés des 10 dernières pensées et retourne le slug
+        du spécialiste le plus pertinent, ou None si aucune suggestion forte.
+        Seuil: >= 2 correspondances pour éviter les faux positifs.
+        """
+        if not self.stream:
+            return None
+
+        recent = self.stream[-10:]
+        combined_text = " ".join(t.content.lower() for t in recent)
+
+        scores: Dict[str, int] = {}
+        for slug, keywords in self._THOUGHT_GRIMOIRE_MAP.items():
+            score = sum(1 for kw in keywords if kw in combined_text)
+            if score > 0:
+                scores[slug] = score
+
+        if not scores:
+            return None
+
+        best_slug = max(scores, key=scores.get)
+        if scores[best_slug] >= 2:
+            logger.info(f"INNER_VOICE: Grimoire suggestion '{best_slug}' "
+                        f"(score={scores[best_slug]})")
+            return best_slug
+
+        return None
+
     # ─── Persistance ─────────────────────────────────────────────────────
 
     def save(self):
