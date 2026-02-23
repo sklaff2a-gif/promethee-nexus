@@ -27,6 +27,9 @@ _SUPERVISED_FILES = {
     "core/base_agent.py", "core/router.py", "core/council.py",
     "core/event_bus/bus.py", "core/autonomy_engine.py",
     "core/vector_store.py", "core/grimoire_writer.py", "core/ci_pipeline.py",
+    # Organes vitaux (singletons persistants)
+    "core/cardiac_engine.py", "core/synaptic_network.py", "core/desire_engine.py",
+    "core/self_awareness.py", "core/psyche.py",
 }
 
 # Rétro-compatibilité : union pour les imports externes

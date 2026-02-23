@@ -311,3 +311,11 @@ fetch('/api/psyche/status').then(r => r.json()).then(data => {
         psycheChartInstance.update();
     }
 }).catch(() => {});
+
+// Chargement version depuis /health
+fetch('/health').then(r => r.json()).then(data => {
+    if (data && data.version) {
+        const el = document.getElementById('version-display');
+        if (el) el.textContent = 'V' + data.version;
+    }
+}).catch(() => {});

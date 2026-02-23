@@ -90,6 +90,13 @@ class Orchestrator:
                 if hasattr(agent, "_force_local_next"):
                     agent._force_local_next = True
 
+            # --- Publication dispatch pour loggers/frontend ---
+            from core.event_bus.bus import bus as _bus
+            await _bus.publish("AGENT_TASK_DISPATCH", {
+                "target": target_slug,
+                "mission": mission[:200],
+            })
+
             # --- EXÉCUTION ---
             response = await agent.process_task(task_payload)
 

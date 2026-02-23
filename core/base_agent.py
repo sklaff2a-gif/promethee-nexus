@@ -189,8 +189,8 @@ class BaseAgent:
                     return
             except ImportError:
                 pass
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[{self.name}] Gatekeeper error (ignored): {e}")
 
             doc_id = str(uuid.uuid4())
             meta = metadata or {}
@@ -259,8 +259,8 @@ class BaseAgent:
                             )
                     except RuntimeError:
                         pass  # Pas de loop active, skip silencieusement
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"[{self.name}] Spreading activation error (ignored): {e}")
 
             # --- Boost synaptique (associations persistantes) ---
             try:
@@ -270,8 +270,8 @@ class BaseAgent:
                 syn_text = cortex.format_for_prompt(query_concepts, max_chars=150)
                 if syn_text:
                     base_result = f"{base_result}\n{syn_text}"
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[{self.name}] Synaptic boost error (ignored): {e}")
 
             return base_result
         except Exception as e:

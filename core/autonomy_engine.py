@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import time
 import random
 import logging
@@ -275,6 +276,8 @@ class AutonomyStatePersistence:
         "last_health_check": None,
         "error_streak": 0,
         "total_routines_executed": 0,
+        "learning_history": {},
+        "security_audited_files": {},
     }
 
     @staticmethod
@@ -285,7 +288,7 @@ class AutonomyStatePersistence:
                 data = json.load(f)
             return data
         except (FileNotFoundError, json.JSONDecodeError):
-            return dict(AutonomyStatePersistence.DEFAULT_STATE)
+            return copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)
 
     @staticmethod
     def save(state: dict, path: str = None):
@@ -334,6 +337,9 @@ class AutonomyEngine:
         self._temp_blacklist: set = set()
         # Loop breaker : intent force par le loop_breaker (bypass scoring)
         self._forced_next_intent: str = ""
+        # Transients pour feedback council/grimoire
+        self._current_council_subject: str = ""
+        self._last_grimoire_slug: str = ""
 
         bus.subscribe("USER_COMMAND", self.reset_timer)
 
@@ -744,6 +750,11 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        if not scored:
+            logger.warning("[AUTONOMY] Aucune routine disponible apres filtrage. Cycle avorte.")
+            self._persist_state()
+            return
+
         selected, score = scored[0]
         agent = selected["agent"]
         intent = selected["intent"]
@@ -1078,6 +1089,35 @@ class AutonomyEngine:
         self.daily_count += 1
         self.total_routines_executed += 1
         self.daily_budget_used += routine_cost
+        logger.info(f"[AUTONOMY] Routine FORCED {self.daily_count}/{MAX_DAILY_ROUTINES} (cout: {routine_cost}pt, budget: {self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt)")
+
+        # Feedback bus (meme pipeline que _execute_scored_routine)
+        result_preview = str(response.get("result", ""))[:500] if response else ""
+        participants = []
+        if intent == "COUNCIL_DEBATE" and response:
+            participants = response.get("participants", [])
+        await bus.publish("AUTONOMY_ROUTINE_COMPLETE", {
+            "intent": intent,
+            "agent": agent,
+            "participants": participants,
+            "status": status,
+            "quality_score": quality,
+            "result": result_preview,
+        })
+
+        # Feedback direct desires + heart
+        try:
+            from core.desire_engine import desires
+            event_key = "ROUTINE_SUCCESS" if status == "success" else "ROUTINE_FAILURE"
+            desires.on_event(event_key, {"intent": intent, "quality": quality})
+            desires.save()
+        except Exception:
+            pass
+        try:
+            from core.cardiac_engine import heart
+            heart.form_somatic_marker(intent, status == "success", quality)
+        except Exception:
+            pass
 
     def _should_veto(self, intent: str, agent: str) -> str:
         """Veto proactif basé sur les signatures d'échec apprises. Retourne la raison ou ''."""

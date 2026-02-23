@@ -7,13 +7,8 @@
     "description": "Evolution pipeline complet: sélection LLM + génération code + Architect + Formatter + Factory"
   },
   "COUNCIL_DEBATE": {
-<<<<<<< Updated upstream
-    "cost": 4,
-    "description": "3-5 tours x N participants (chacun = 1 appel LLM) + recherche pré-débat optionnelle"
-=======
     "cost": 12,
     "description": "3-5 tours x 3 participants = 9-15 appels LLM + recherche pré-débat optionnelle"
->>>>>>> Stashed changes
   },
   "REFACTOR_RANDOM": {
     "cost": 4,
@@ -42,5 +37,9 @@
   "MEMORY_CLEANUP": {
     "cost": 1,
     "description": "Opérations ChromaDB locales, pas d'appel LLM"
+  },
+  "MEMORY_CONSOLIDATION": {
+    "cost": 2,
+    "description": "Synthèse thématique des mémoires récentes, appels ChromaDB + 1 LLM"
   }
 }

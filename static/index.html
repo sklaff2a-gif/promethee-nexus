@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>PROMÉTHÉE NEXUS V12 - MONITOR</title>
+    <title>PROMÉTHÉE NEXUS - MONITOR</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
@@ -95,7 +95,7 @@
     <header class="flex justify-between items-center cyber-box px-3 h-12 shrink-0">
         <div class="flex flex-col justify-center">
             <h1 class="text-lg font-bold tracking-[0.2em] leading-none">PROMÉTHÉE <span class="text-white">NEXUS</span></h1>
-            <div class="text-[9px] text-gray-500">V12.3 (AUTO-RAG ENABLED)</div>
+            <div class="text-[9px] text-gray-500" id="version-display">--</div>
         </div>
         <button id="kill-switch" onclick="toggleKillSwitch()" class="border border-red-900 text-red-700 px-3 py-0 text-[10px] font-bold hover:bg-red-900 hover:text-white transition h-6">KILL SWITCH</button>
     </header>

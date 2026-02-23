@@ -193,7 +193,7 @@ async def _on_smart_restart(data: dict):
 async def lifespan(app: FastAPI):
     tracemalloc.start()
     from config import Config as _cfg
-    print(f"🤖 PROMÉTHÉE V12.4 (Smart Restart) [Projet: {_cfg.PROJECT_ID}]: Chargement des modules...")
+    print(f"🤖 PROMÉTHÉE {_cfg.VERSION} (Smart Restart) [Projet: {_cfg.PROJECT_ID}]: Chargement des modules...")
     for slug, class_name, file_name in AGENTS_CONFIG:
         try:
             module = importlib.import_module(f"Agents.{file_name}")
