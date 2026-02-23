@@ -109,9 +109,13 @@ class WebSurfer:
                         snippet = r.get("snippet", "No content")
                         summary += f"- [GOOGLE] {title}\n  LIEN: {link}\n  INFO: {snippet}\n\n"
                     return summary
+                else:
+                    # SerpAPI a répondu mais sans résultats (quota serveur épuisé, etc.)
+                    error_msg = results.get("error", "pas de organic_results")
+                    self.logger.warning(f"SERP: reponse sans resultats ({error_msg}), fallback DDG")
 
             except Exception as e:
-                print(f"⚠️ Erreur SerpApi: {e} -> Bascule sur DuckDuckGo.")
+                self.logger.warning(f"SERP: erreur ({e}), fallback DDG")
         else:
             quota = _load_quota()
             self.logger.info(f"SERP: quota atteint ({quota['count']}/{SERP_DAILY_QUOTA}), fallback DDG")
