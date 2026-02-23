@@ -1451,3 +1451,91 @@ Ce fichier est maintenu automatiquement par le moteur d'autonomie et curé manue
 
 **Fichiers cibles** : (aucun fichier cité)
 **Verdict** : (à curé manuellement)
+
+---
+
+## [2026-02-22 21:24] Le Researcher a trouvé des techniques d'optimisation des ressources pour les age
+
+**Participants** : infra, strategist, architect | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **Détails concrets :**
+  **Justification :
+  **Analyse des points forts de la proposition INFRA :**
+  *   **Simplicité et applicabilité:** La solution est simple à comprendre et à mettre en œuvre, et cible des fichiers exi
+  *   **Stabilité:** En évitant la réduction de `--ctx-size`, elle préserve l'intégrité des données et la cohérence du con
+
+**Fichiers cibles** : `core/capabilities/web_surfer.py`, `core/event_bus/bus.py`, `core/event_bus/publisher.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-02-22 22:41] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-02-23 00:50] Le Researcher a identifié des techniques de sécurisation pour systèmes IA autono
+
+**Participants** : security, architect, strategist | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  - Elle ciblera uniquement le fichier Agent_Ollama.py
+  - Elle utilisera les fonctionnalités de surveillance déjà intégrées à Ollama
+  - Elle évitera toute complexité supplémentaire dans la structure existante
+  - Elle permettra une évaluation continue des performances sans ajout de dépendances externes
+  **Justification des points clés :**
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-02-23 02:56] Le Researcher a trouvé des patterns de communication inter-agents innovants. Com
+
+**Participants** : architect, coder, infra | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  - `core/event_bus/publisher.py` est modifié pour maintenir une liste des abonnés actifs par topic.
+  - Si un abonné échoue ou est déconnecté, cela n’empêche pas la diffusion aux autres.
+  - **`core/event_bus/publisher.py`** est modifié pour maintenir une liste dynamique des abonnés actifs par topic.
+  - Si un abonné échoue ou est bloqué, les événements continuent d’être diffusés aux autres abonnés.
+  - Cela évite la perte d’événements liée à un subscriber défaillant (problème soulevé par CODER).
+
+**Fichiers cibles** : `core/event_bus/publisher.py`, `core/interface_logger.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-02-23 05:04] Le Researcher a découvert des innovations en architecture multi-agents. Comment 
+
+**Participants** : researcher, evolution, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-02-23 07:19] Le Researcher a trouvé des techniques d'optimisation des ressources pour les age
+
+**Participants** : infra, strategist, architect | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  - Recherchez la ligne où le modèle est chargé (ex. `model = load_model("llama3:70b")`).
+  - Remplacez le nom du modèle par une version quantifiée (ex. `llama3:8b`).
+  - Ajoutez un commentaire pour documenter cette modification.
+  - Repérez la logique de chargement des modèles et forcez l’utilisation de modèles quantifiés (ex. `model = OllamaModel("
+  - Ajoutez un check avant de traiter un événement :
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
