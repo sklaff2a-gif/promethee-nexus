@@ -41,5 +41,9 @@
   "MEMORY_CONSOLIDATION": {
     "cost": 2,
     "description": "Synthèse thématique des mémoires récentes, appels ChromaDB + 1 LLM"
+  },
+  "SOLILOQUE_INTERNE": {
+    "cost": 2,
+    "description": "Dialogue introspectif multi-tours avec compagnon intérieur (local only)"
   }
 }

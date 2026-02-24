@@ -253,6 +253,11 @@ async def lifespan(app: FastAPI):
     inner_voice.init()
     print("   🗣️ VOIX INTÉRIEURE: Aires de Broca & Wernicke actives.")
 
+    # --- SOLILOQUE (Dialogue Introspectif) ---
+    from core.soliloque import soliloque
+    soliloque.init()
+    print(f"   🪞 SOLILOQUE: Compagnon intérieur actif ({soliloque.session_count} sessions).")
+
     # --- COEUR (Moteur Cardiaque) ---
     from core.cardiac_engine import heart
     heart.init()
@@ -482,6 +487,18 @@ async def inner_voice_stream():
     """Retourne les 30 dernières pensées du flux de conscience."""
     from core.inner_voice import voice as inner_voice
     return inner_voice.get_stream(n=30)
+
+@app.get("/api/soliloque/status")
+async def soliloque_status():
+    """Retourne l'état du moteur de soliloque."""
+    from core.soliloque import soliloque
+    return soliloque.get_status()
+
+@app.get("/api/soliloque/history")
+async def soliloque_history():
+    """Retourne les 10 dernières sessions de soliloque."""
+    from core.soliloque import soliloque
+    return soliloque.get_history(n=10)
 
 @app.get("/api/objectives")
 async def api_objectives():

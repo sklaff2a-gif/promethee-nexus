@@ -390,6 +390,7 @@ class AutonomyEngine:
             {"agent": "_memory_cleanup", "intent": "MEMORY_CLEANUP", "mission": "Nettoie la mémoire RAG ancienne et les doublons."},
             {"agent": "coder", "intent": "REFACTOR_RANDOM", "mission": "Choisis un fichier Python aléatoire du projet et propose un refactoring pour améliorer la lisibilité (noms de variables, simplification de logique)."},
             {"agent": "_memory_consolidation", "intent": "MEMORY_CONSOLIDATION", "mission": "Consolide les mémoires récentes en synthèses thématiques."},
+            {"agent": "_soliloque", "intent": "SOLILOQUE_INTERNE", "mission": "Engage un dialogue introspectif avec le compagnon intérieur."},
         ]
 
     def _persist_state(self):
@@ -858,6 +859,8 @@ class AutonomyEngine:
             response = await self._execute_refactor_random()
         elif intent == "MEMORY_CONSOLIDATION":
             response = await self._execute_memory_consolidation()
+        elif intent == "SOLILOQUE_INTERNE":
+            response = await self._execute_soliloque()
         elif intent == "DROPZONE_SCAN" and dropzone_count == 0:
             # Dropzone vide → veille YouTube IA (rotation des sujets)
             yt_index = self.total_routines_executed % len(YOUTUBE_AI_VEILLE)
@@ -1147,6 +1150,8 @@ class AutonomyEngine:
             response = await self._execute_refactor_random()
         elif intent == "MEMORY_CONSOLIDATION":
             response = await self._execute_memory_consolidation()
+        elif intent == "SOLILOQUE_INTERNE":
+            response = await self._execute_soliloque()
         else:
             response = await orchestrator.dispatch_task(agent, {
                 "mission": f"[MODE VEILLE] {routine['mission']}",
@@ -1317,6 +1322,15 @@ class AutonomyEngine:
             return {"status": "success", "result": f"Consolidation: {consolidated} groupes synthétisés à partir de {len(recent)} documents récents."}
         except Exception as e:
             return {"status": "error", "result": f"Erreur consolidation: {e}"}
+
+    async def _execute_soliloque(self) -> dict:
+        """Dialogue introspectif avec le compagnon intérieur."""
+        try:
+            from core.soliloque import soliloque
+            result = await soliloque.engage()
+            return result
+        except Exception as e:
+            return {"status": "error", "result": f"Erreur soliloque: {e}"}
 
     async def _execute_grimoire_routine(self) -> dict:
         """Invoque un agent Grimoire en rotation (le moins récemment utilisé)."""
