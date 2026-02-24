@@ -20,6 +20,8 @@ def isolate_soliloque(tmp_path, monkeypatch):
 
     fake_state_file = tmp_path / "soliloque_state.json"
     monkeypatch.setattr(mod, "SOLILOQUE_STATE_FILE", fake_state_file)
+    fake_log_dir = tmp_path / "soliloques"
+    monkeypatch.setattr(mod, "SOLILOQUE_LOG_DIR", fake_log_dir)
 
     with patch.object(mod.SoliloqueEngine, "_load"):
         s = mod.SoliloqueEngine()
