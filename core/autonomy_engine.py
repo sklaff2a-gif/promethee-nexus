@@ -1414,9 +1414,14 @@ class AutonomyEngine:
                         if s.id.startswith("COUNCIL-") and s.status == "available"
                     ]
                 if len(pending_council) >= 3:
-                    logger.info(f"[COUNCIL] {len(pending_council)} specs en attente — débat reporté.")
-                    return {"status": "skipped", "reason": "council_specs_saturated"}
-                else:
+                    # Éviction forcée : expirer les specs les plus anciennes pour garder max 2
+                    sorted_by_age = sorted(pending_council, key=lambda s: s.id)
+                    to_evict = sorted_by_age[:len(pending_council) - 2]
+                    for spec in to_evict:
+                        catalog.mark_rejected(spec.id, "eviction_forcee: place au nouveau debat")
+                        purged += 1
+                    logger.info(f"[COUNCIL] Éviction forcée: {len(to_evict)} spec(s) expirée(s), débat débloqué !")
+                elif purged > 0:
                     logger.info(f"[COUNCIL] Curation: {purged} specs purgées, débat débloqué !")
         except Exception:
             pass  # Catalogue inaccessible — laisser tourner

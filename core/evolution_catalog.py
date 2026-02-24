@@ -1604,6 +1604,10 @@ class EvolutionCatalog:
             # Pénalité échecs
             score -= 0.5 * spec.attempts
 
+            # Bonus specs COUNCIL (priorité de consommation pour éviter la saturation)
+            if spec.id.startswith("COUNCIL-"):
+                score += 1.5
+
             scored.append((spec, score))
 
         scored.sort(key=lambda x: x[1], reverse=True)
@@ -1788,13 +1792,13 @@ class EvolutionCatalog:
         if len(spec.description) < 50:
             return f"description_trop_courte: {len(spec.description)} chars"
 
-        # 3. Âge > 48h
+        # 3. Âge > 12h (les specs council perdent leur pertinence rapidement)
         created_at = self._extract_council_timestamp(spec)
         if created_at:
             age = datetime.now() - created_at
-            if age > timedelta(hours=48):
+            if age > timedelta(hours=12):
                 hours = age.total_seconds() / 3600
-                return f"perimee: {hours:.0f}h (>48h)"
+                return f"perimee: {hours:.0f}h (>12h)"
 
         # 4. Doublon sémantique (même target_file + même target_method qu'une autre spec)
         if spec.target_file and spec.target_method:
