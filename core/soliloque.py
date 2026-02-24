@@ -8,6 +8,7 @@ import os
 import time
 import logging
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -27,6 +28,11 @@ OLLAMA_GENERATE_URL = "http://localhost:11434/api/generate"
 SOLILOQUE_STATE_FILE = Path(
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                  "memory", "soliloque_state.json")
+)
+
+SOLILOQUE_LOG_DIR = Path(
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 "logs", "soliloques")
 )
 
 # 7 thèmes de dialogue
@@ -148,6 +154,10 @@ class SoliloqueEngine:
 
             # Stimuler le coeur
             self._stimulate_heart()
+
+            # Écrire le journal horodaté
+            self._write_journal(theme, messages, emotion_before, emotion_after,
+                                insight, exchanges, time.time() - start_time)
 
             # Enregistrer dans l'historique
             session = {
@@ -406,6 +416,45 @@ class SoliloqueEngine:
             heart.react("learning")
         except Exception as e:
             logger.debug(f"SOLILOQUE: Stimulation cardiaque échouée — {e}")
+
+    # ─── JOURNAL HORODATÉ ──────────────────────────────────────────────
+
+    def _write_journal(self, theme: str, messages: List[Dict],
+                       emotion_before: str, emotion_after: str,
+                       insight: str, exchanges: int, duration: float):
+        """Écrit le dialogue complet dans un fichier Markdown horodaté."""
+        try:
+            SOLILOQUE_LOG_DIR.mkdir(parents=True, exist_ok=True)
+            now = datetime.now()
+            log_file = SOLILOQUE_LOG_DIR / f"soliloque_{now.strftime('%Y-%m-%d')}.md"
+
+            # En-tête de session
+            header = (
+                f"\n---\n\n"
+                f"## {now.strftime('%H:%M:%S')} — {THEMES.get(theme, theme)}\n\n"
+                f"- **Thème** : `{theme}`\n"
+                f"- **Émotion avant** : {emotion_before} | **après** : {emotion_after}\n"
+                f"- **Échanges** : {exchanges} | **Durée** : {duration:.0f}s\n"
+                f"- **Insight** : {insight}\n\n"
+            )
+
+            # Corps du dialogue
+            body = ""
+            for msg in messages:
+                if msg["role"] == "user":
+                    body += f"**Prométhée** :\n> {msg['content']}\n\n"
+                else:
+                    body += f"**Compagnon** :\n> {msg['content']}\n\n"
+
+            with open(log_file, "a", encoding="utf-8") as f:
+                # Si fichier vide, écrire le titre du jour
+                if f.tell() == 0:
+                    f.write(f"# Soliloques — {now.strftime('%Y-%m-%d')}\n")
+                f.write(header)
+                f.write(body)
+
+        except Exception as e:
+            logger.warning(f"SOLILOQUE: Écriture journal échouée — {e}")
 
     # ─── ACCESSEURS CONTEXTE (imports locaux, tolérant aux erreurs) ──────
 
