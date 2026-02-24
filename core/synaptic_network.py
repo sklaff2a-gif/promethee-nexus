@@ -18,12 +18,13 @@ logger = logging.getLogger("SynapticNetwork")
 
 MAX_NODES = 5000
 MAX_SYNAPSES = 20000
-HEBBIAN_LEARNING_RATE = 0.05
+HEBBIAN_LEARNING_RATE = 0.08
 ANTI_HEBBIAN_RATE = 0.03
 SPIKE_TIMING_WINDOW = 300.0       # 5 min pour causalite temporelle
 HOMEOSTATIC_TARGET = 0.3
 SYNAPSE_DECAY_PER_DAY = 0.02
-PRUNING_THRESHOLD = 0.03
+PRUNING_THRESHOLD = 0.08
+MIN_CONCEPT_LENGTH = 3            # Rejeter les concepts trop courts (bruit)
 RESONANCE_CYCLES = 4
 STDP_MULTIPLIER = 1.5             # STDP 1.5x plus fort que Hebb classique
 
@@ -234,7 +235,10 @@ class SynapticNetwork:
     def ensure_node(self, concept: str, node_type: str = "memory",
                     semantic_weight: float = 0.5,
                     functional_systems: Optional[List[str]] = None) -> str:
-        """Cree ou met a jour un noeud. Retourne le node_id."""
+        """Cree ou met a jour un noeud. Retourne le node_id (vide si concept rejete)."""
+        cleaned = concept.strip()
+        if len(cleaned) < MIN_CONCEPT_LENGTH:
+            return ""
         node_id = _make_node_id(concept)
 
         if node_id in self.nodes:
@@ -596,6 +600,7 @@ class SynapticNetwork:
             "REFACTOR_RANDOM": ["refactoring", "simplifier", "lisibilite"],
             "GRIMOIRE_INVOKE": ["grimoire", "specialiste", "recette"],
             "DROPZONE_SCAN": ["dropzone", "fichier", "ingestion"],
+            "SOLILOQUE_INTERNE": ["soliloque", "dialogue", "introspection", "connexion"],
         }
 
         keywords = intent_keywords.get(intent, [])
@@ -823,7 +828,8 @@ class SynapticNetwork:
         nids = []
         for concept, weight in concepts:
             nid = self.ensure_node(concept, node_type, weight, functional_systems)
-            nids.append(nid)
+            if nid:  # Filtrer les concepts rejetes (trop courts)
+                nids.append(nid)
         return nids
 
     # --- Dream Mode ---

@@ -20,6 +20,7 @@ from core.synaptic_network import (
     HOMEOSTATIC_TARGET,
     PRUNING_THRESHOLD,
     SYNAPSE_DECAY_PER_DAY,
+    MIN_CONCEPT_LENGTH,
     MAX_NODES,
     MAX_SYNAPSES,
     STATE_FILE,
@@ -810,3 +811,60 @@ class TestIntegrationAPI:
 
         network._enforce_synapse_limit()
         assert len(network.synapses) <= MAX_SYNAPSES
+
+
+# =====================================================================
+# TestConceptFiltering
+# =====================================================================
+
+class TestConceptFiltering:
+    """Tests du filtre MIN_CONCEPT_LENGTH sur les concepts trop courts."""
+
+    def test_ensure_node_rejects_single_char(self, network):
+        """Les concepts d'un seul caractere sont rejetes."""
+        nid = network.ensure_node("a")
+        assert nid == ""
+        assert len(network.nodes) == 0
+
+    def test_ensure_node_rejects_two_chars(self, network):
+        """Les concepts de deux caracteres sont rejetes."""
+        nid = network.ensure_node("ab")
+        assert nid == ""
+        assert len(network.nodes) == 0
+
+    def test_ensure_node_accepts_three_chars(self, network):
+        """Les concepts de trois caracteres ou plus sont acceptes."""
+        nid = network.ensure_node("abc")
+        assert nid != ""
+        assert nid in network.nodes
+
+    def test_ensure_node_rejects_whitespace_only(self, network):
+        """Les concepts qui ne sont que des espaces sont rejetes."""
+        nid = network.ensure_node("  ")
+        assert nid == ""
+        assert len(network.nodes) == 0
+
+    def test_ensure_node_strips_then_checks(self, network):
+        """Le filtre s'applique apres strip()."""
+        nid = network.ensure_node("  a  ")
+        assert nid == ""  # "a" apres strip = 1 char < MIN_CONCEPT_LENGTH
+
+    def test_extract_and_ensure_filters_short_concepts(self, network):
+        """_extract_and_ensure filtre les concepts courts retournes par extract_concepts."""
+        mock_concepts = [("a", 0.5), ("python", 0.8), ("b", 0.3), ("refactor", 0.7)]
+        with patch("core.spreading_activation.extract_concepts", return_value=mock_concepts):
+            nids = network._extract_and_ensure("test text", "memory", ["dev"])
+        # Seuls "python" et "refactor" doivent passer (>= 3 chars)
+        assert len(nids) == 2
+
+    def test_min_concept_length_constant(self):
+        """La constante MIN_CONCEPT_LENGTH vaut 3."""
+        assert MIN_CONCEPT_LENGTH == 3
+
+    def test_hebbian_learning_rate_value(self):
+        """Verification de la valeur du taux d'apprentissage hebbien."""
+        assert HEBBIAN_LEARNING_RATE == 0.08
+
+    def test_pruning_threshold_value(self):
+        """Verification de la valeur du seuil de pruning."""
+        assert PRUNING_THRESHOLD == 0.08
