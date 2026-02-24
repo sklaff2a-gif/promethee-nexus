@@ -245,8 +245,8 @@ class PrefrontalCortex:
         """Reçoit le résultat d'une routine autonome."""
         intent = data.get("intent", "")
         status = data.get("status", "")
-        quality = data.get("quality", 0.0)
-        preview = data.get("result_preview", "")
+        quality = data.get("quality_score", 0.0)
+        preview = data.get("result", "")
         self.on_routine_complete(intent, status, quality, preview)
 
     async def _on_knowledge_gap(self, data: dict):
@@ -278,8 +278,8 @@ class PrefrontalCortex:
 
     async def _on_eureka_bridge(self, data: dict):
         """Crée un goal pour explorer un pont créatif."""
-        concept_a = data.get("concept_a", data.get("source", "?"))
-        concept_b = data.get("concept_b", data.get("target", "?"))
+        concept_a = data.get("node_a", data.get("source", "?"))
+        concept_b = data.get("node_b", data.get("target", "?"))
         bridge_title = f"Explorer: {concept_a} <-> {concept_b}"
         for g in self.goals:
             if g.status == "active" and concept_a in g.title and concept_b in g.title:
@@ -306,7 +306,7 @@ class PrefrontalCortex:
 
     async def _on_council_end(self, data: dict):
         """Crée un goal si le council a atteint un consensus actionnable."""
-        consensus = data.get("consensus", "")
+        consensus = data.get("final_summary", "")
         status = data.get("status", "")
         if status not in ("consensus", "max_rounds"):
             return

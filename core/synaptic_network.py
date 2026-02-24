@@ -250,7 +250,7 @@ class SynapticNetwork:
             age_hours = (time.time() - node["created_at"]) / 3600
             recency = math.exp(-age_hours / 168)  # demi-vie 1 semaine
             node["dimensions"]["temporal_score"] = round(
-                recency * node["activation_count"] / max(1, node["activation_count"]), 2
+                recency * min(3.0, 1.0 + math.log1p(node["activation_count"]) * 0.3), 2
             )
             self._publish_delta("node_activate", {
                 "id": node_id, "concept": node["concept"],
@@ -657,7 +657,11 @@ class SynapticNetwork:
             source = event.get("source", "")
             if source:
                 node_id = self.ensure_node(source, node_type="event")
-                self.activate_node(node_id, energy_boost=0.3)
+                # Boost d'énergie directement (ensure_node fait +0.1, on ajoute 0.2)
+                if node_id in self.nodes:
+                    self.nodes[node_id]["energy"] = min(
+                        1.0, self.nodes[node_id]["energy"] + 0.2
+                    )
         except Exception:
             pass
 
@@ -698,9 +702,9 @@ class SynapticNetwork:
     async def _on_council_end(self, event: dict):
         """Council termine : concepts du debat."""
         try:
-            topic = event.get("topic", "")
+            topic = event.get("topic", event.get("council_id", ""))
             status = event.get("status", "")
-            summary = event.get("summary", "")
+            summary = event.get("final_summary", event.get("summary", ""))
 
             if not topic:
                 return
@@ -755,7 +759,7 @@ class SynapticNetwork:
     async def _on_knowledge_gap(self, event: dict):
         """Lacune detectee : noeud avec haute energie pour attirer l'attention."""
         try:
-            gap = event.get("gap", event.get("description", ""))
+            gap = event.get("topic", event.get("gap", event.get("description", "")))
             if not gap:
                 return
             self.ensure_node(gap, "objective", 0.9, ["knowledge"])

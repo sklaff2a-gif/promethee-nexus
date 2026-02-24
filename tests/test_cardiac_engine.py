@@ -741,7 +741,7 @@ class TestBusIntegration:
         h = isolate_cardiac
         with patch.object(h, "_get_psyche_resonance", return_value=1.0):
             await h._on_routine_complete({
-                "quality": 0.8, "intent": "CODE_REVIEW", "status": "success"
+                "quality_score": 0.8, "intent": "CODE_REVIEW", "status": "success"
             })
         assert h.bpm > 60.0  # Excitation
         assert "CODE_REVIEW" in h.somatic_markers
@@ -753,7 +753,7 @@ class TestBusIntegration:
         h = isolate_cardiac
         with patch.object(h, "_get_psyche_resonance", return_value=1.0):
             await h._on_routine_complete({
-                "quality": 0.1, "intent": "DEPLOY", "status": "error"
+                "quality_score": 0.1, "intent": "DEPLOY", "status": "error"
             })
         assert h.bpm > 60.0  # Stress
         assert "DEPLOY" in h.somatic_markers
@@ -772,7 +772,7 @@ class TestBusIntegration:
         """CI passé → succès."""
         h = isolate_cardiac
         with patch.object(h, "_get_psyche_resonance", return_value=1.0):
-            await h._on_ci_result({"passed": True})
+            await h._on_ci_result({"success": True})
         assert h.current_emotion == "enthousiasme"
 
     @pytest.mark.asyncio

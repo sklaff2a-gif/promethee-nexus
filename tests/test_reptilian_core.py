@@ -533,14 +533,14 @@ class TestBusEvents:
     async def test_on_ci_success_calms(self, rept):
         """CI réussie → réduit la menace."""
         rept.threat_level = 4.0
-        await rept._on_ci_result({"passed": True})
+        await rept._on_ci_result({"success": True})
         assert rept.threat_level == 3.0
 
     @pytest.mark.asyncio
     async def test_on_ci_failure_increases(self, rept):
         """CI échouée → augmente la menace."""
         rept.threat_level = 2.0
-        await rept._on_ci_result({"passed": False})
+        await rept._on_ci_result({"success": False})
         assert rept.threat_level == 4.0
 
     @pytest.mark.asyncio

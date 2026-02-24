@@ -48,7 +48,7 @@ VOICE_MODES = [
 
 # Poids de base pour la compétition du workspace
 SOURCE_BASE_WEIGHTS = {
-    "cardiac":    0.3,
+    "cardiac":    0.6,
     "reptilian":  0.9,
     "desire":     0.5,
     "synaptic":   0.4,
@@ -74,7 +74,7 @@ _BROCA_TEMPLATES = {
     ("reptilian", "threat"):      "Menace {level:.0f}. {reflex}.",
     ("reptilian", "calm"):        "Calme. Menace retombee.",
     ("desire", "frustrated"):     "{drive} affame ({deprivation:.0f}). {action}.",
-    ("desire", "satisfied"):      "{drive} satisfait.",
+    ("desire", "emerging"):       "{drive} emerge.",
     ("desire", "rising"):         "{drive} monte ({deprivation:.0f}).",
     ("synaptic", "unexpected"):   "Tiens. {concept_a} <-> {concept_b}.",
     ("synaptic", "recurring"):    "{concept} revient. Important?",
@@ -251,9 +251,15 @@ class InnerVoice:
     async def _on_reptilian_alert(self, event: dict):
         self._last_reptilian_alert = event
         self._last_reptilian = event
+        # Résoudre les prédictions reptiliennes
+        await self._resolve_reptilian_predictions(event)
 
     async def _on_reptilian_state(self, event: dict):
         self._last_reptilian = event
+        # Réinitialiser l'alerte si la menace est retombée
+        threat = event.get("threat_level", 0)
+        if isinstance(threat, (int, float)) and threat <= 1:
+            self._last_reptilian_alert = {}
 
     async def _on_prefrontal_thought(self, event: dict):
         self._last_prefrontal_thought = event
@@ -411,8 +417,7 @@ class InnerVoice:
             from core.desire_engine import desires
             if not hasattr(desires, 'drives') or not desires.drives:
                 return
-            # Tick les drives (force la montée même entre routines)
-            desires.tick()
+            # NOTE: tick() est déjà appelé via INNER_VOICE_BROADCAST → _on_inner_voice
             max_drive = None
             max_dep = 0
             for name, drive in desires.drives.items():
@@ -422,7 +427,7 @@ class InnerVoice:
 
             if max_drive and max_dep > 30:
                 salience = SOURCE_BASE_WEIGHTS["desire"] * max(0, (max_dep - 30) / 70.0)
-                context = "frustrated" if max_dep > 70 else "rising" if max_dep > 50 else "satisfied"
+                context = "frustrated" if max_dep > 70 else "rising" if max_dep > 50 else "emerging"
                 actions = {
                     "CURIOSITE": "Explorer", "MAITRISE": "Parfaire",
                     "STABILITE": "Securiser", "CONNEXION": "Connecter",
@@ -989,12 +994,30 @@ class InnerVoice:
             except Exception:
                 pass
 
+    async def _resolve_reptilian_predictions(self, event: dict):
+        """Résout les prédictions ciblant REPTILIAN_ALERT."""
+        reflex = event.get("reflex", "")
+        for p in self.predictions:
+            if p.resolved or p.target_event != "REPTILIAN_ALERT":
+                continue
+            p.resolved = True
+            if reflex and p.predicted_value.lower() in reflex.lower():
+                p.outcome = "confirmed"
+                p.prediction_error = 0.1
+                self.stats["predictions_confirmed"] += 1
+                self._update_precision(True)
+            else:
+                p.outcome = "violated"
+                p.prediction_error = 0.5
+                self.stats["predictions_violated"] += 1
+                self._update_precision(False)
+
     def _update_precision(self, confirmed: bool):
         """Met à jour la précision globale."""
         if confirmed:
             self._precision = min(0.95, self._precision + 0.05)
         else:
-            self._precision = max(0.1, self._precision - 0.1)
+            self._precision = max(0.1, self._precision - 0.05)
 
     # ─── NARRATEUR (Dennett) ─────────────────────────────────────────────
 

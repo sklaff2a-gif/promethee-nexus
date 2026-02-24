@@ -950,26 +950,7 @@ class AutonomyEngine:
         # Score qualité post-routine
         quality_score = self._score_result_quality(response, intent)
 
-        # Feedback pulsions
-        try:
-            from core.desire_engine import desires
-            if quality_score >= 0.6:
-                desires.on_event("ROUTINE_SUCCESS", {"intent": intent, "quality": quality_score})
-            else:
-                desires.on_event("ROUTINE_FAILURE", {"intent": intent, "quality": quality_score})
-            desires.save()
-        except Exception:
-            pass
-
-        # Feedback cardiaque (marqueurs somatiques)
-        try:
-            from core.cardiac_engine import heart
-            outcome = "success" if quality_score >= 0.6 else "failure"
-            heart.form_somatic_marker(intent, outcome, quality_score, response.get("result", "")[:80] if isinstance(response, dict) else "")
-        except Exception:
-            pass
-
-        # Feedback reptilien (apaisement si succès)
+        # Feedback reptilien (apaisement si succès — pas de handler bus dupliqué)
         try:
             from core.reptilian_core import reptile
             if quality_score >= 0.6:
@@ -982,17 +963,9 @@ class AutonomyEngine:
         if response and isinstance(response, dict):
             result_preview = str(response.get("result", ""))[:200]
 
-        # Feedback préfrontal (avancement des goals)
-        try:
-            from core.prefrontal import prefrontal
-            prefrontal.on_routine_complete(
-                intent,
-                "success" if quality_score >= 0.6 else "error",
-                quality_score,
-                result_preview,
-            )
-        except Exception:
-            pass
+        # NOTE: desires, cardiac, prefrontal recoivent le feedback via le bus
+        # (AUTONOMY_ROUTINE_COMPLETE) — pas d'appel direct pour eviter le double-comptage.
+        # desires.save() est appele via le handler bus _on_routine_complete.
 
         # Voix intérieure : routine terminée → réactiver DMN
         try:
@@ -1148,6 +1121,16 @@ class AutonomyEngine:
         agent = routine["agent"]
         intent = routine["intent"]
         routine_cost = RESOURCE_COSTS.get(intent, 2)
+
+        # Veto FREEZE — même forcée, un FREEZE reptilien bloque tout
+        try:
+            from core.reptilian_core import reptile
+            if reptile.should_freeze():
+                logger.warning(f"[AUTONOMY] Routine FORCED {intent} bloquée par FREEZE reptilien")
+                return
+        except Exception:
+            pass
+
         print(f"   ✨ AUTONOMY [FORCED]: [{intent}] -> [{agent.upper()}] (cout={routine_cost}pt)")
 
         # Reutiliser la logique standard de dispatch
@@ -1184,8 +1167,23 @@ class AutonomyEngine:
         self.daily_budget_used += routine_cost
         logger.info(f"[AUTONOMY] Routine FORCED {self.daily_count}/{MAX_DAILY_ROUTINES} (cout: {routine_cost}pt, budget: {self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt)")
 
-        # Feedback bus (meme pipeline que _execute_scored_routine)
-        result_preview = str(response.get("result", ""))[:500] if response else ""
+        # Feedback reptilien (apaisement si succès — pas de handler bus dupliqué)
+        try:
+            from core.reptilian_core import reptile
+            if quality >= 0.6:
+                reptile.on_routine_success(intent)
+        except Exception:
+            pass
+
+        # Voix intérieure : routine terminée → réactiver DMN
+        try:
+            from core.inner_voice import voice as inner_voice
+            inner_voice.set_idle(True)
+        except Exception:
+            pass
+
+        # Feedback bus (desires, cardiac, prefrontal via handlers)
+        result_preview = str(response.get("result", ""))[:200] if response else ""
         participants = []
         if intent == "COUNCIL_DEBATE" and response:
             participants = response.get("participants", [])
@@ -1197,20 +1195,6 @@ class AutonomyEngine:
             "quality_score": quality,
             "result": result_preview,
         })
-
-        # Feedback direct desires + heart
-        try:
-            from core.desire_engine import desires
-            event_key = "ROUTINE_SUCCESS" if status == "success" else "ROUTINE_FAILURE"
-            desires.on_event(event_key, {"intent": intent, "quality": quality})
-            desires.save()
-        except Exception:
-            pass
-        try:
-            from core.cardiac_engine import heart
-            heart.form_somatic_marker(intent, status == "success", quality)
-        except Exception:
-            pass
 
     def _should_veto(self, intent: str, agent: str) -> str:
         """Veto proactif basé sur les signatures d'échec apprises. Retourne la raison ou ''."""

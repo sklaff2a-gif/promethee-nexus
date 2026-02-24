@@ -527,7 +527,7 @@ class CardiacEngine:
 
     async def _on_routine_complete(self, event: dict):
         """Routine terminée → enthousiasme/frustration selon qualité."""
-        quality = event.get("quality", 0.5)
+        quality = event.get("quality_score", 0.5)
         intent = event.get("intent", "")
         status = event.get("status", "")
 
@@ -555,7 +555,7 @@ class CardiacEngine:
 
     async def _on_ci_result(self, event: dict):
         """Résultat CI/CD → succès ou failure."""
-        passed = event.get("passed", False)
+        passed = event.get("success", False)
         if passed:
             self.react("success")
         else:

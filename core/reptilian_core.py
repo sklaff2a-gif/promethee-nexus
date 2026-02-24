@@ -465,7 +465,7 @@ class ReptilianCore:
 
     async def _on_ci_result(self, event: dict):
         """Résultat CI → calme si succès, menace si échec."""
-        if event.get("passed"):
+        if event.get("success"):
             self.threat_level = max(0, self.threat_level - 1.0)
         else:
             self.threat_level = min(10.0, self.threat_level + 2.0)

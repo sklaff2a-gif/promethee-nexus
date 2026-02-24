@@ -784,7 +784,7 @@ class TestBusHandlers:
     @pytest.mark.asyncio
     async def test_on_eureka_bridge(self):
         pf = _make_prefrontal()
-        await pf._on_eureka_bridge({"concept_a": "security", "concept_b": "evolution"})
+        await pf._on_eureka_bridge({"node_a": "security", "node_b": "evolution"})
         assert len(pf.goals) == 1
         assert "security" in pf.goals[0].title
 
@@ -792,13 +792,13 @@ class TestBusHandlers:
     async def test_on_council_end(self):
         pf = _make_prefrontal()
         long_consensus = "Nous proposons d'implémenter un nouveau système de validation " * 3
-        await pf._on_council_end({"consensus": long_consensus, "status": "consensus"})
+        await pf._on_council_end({"final_summary": long_consensus, "status": "consensus"})
         assert len(pf.goals) == 1
 
     @pytest.mark.asyncio
     async def test_on_council_end_ignores_short(self):
         pf = _make_prefrontal()
-        await pf._on_council_end({"consensus": "ok", "status": "consensus"})
+        await pf._on_council_end({"final_summary": "ok", "status": "consensus"})
         assert len(pf.goals) == 0
 
     @pytest.mark.asyncio

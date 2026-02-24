@@ -209,8 +209,9 @@ class DesireEngine:
         quality = event.get("quality_score", 0.0)
         if status == "success" and quality >= 0.6:
             self.on_event("ROUTINE_SUCCESS", {"intent": intent, "quality": quality})
-        elif status == "error" or quality < 0.3:
+        else:
             self.on_event("ROUTINE_FAILURE", {"intent": intent, "quality": quality})
+        self.save()
 
     async def _on_council_end(self, event: dict):
         status = event.get("status", "")
