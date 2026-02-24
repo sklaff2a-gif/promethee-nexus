@@ -9,7 +9,8 @@ from unittest.mock import patch, MagicMock
 from core.desire_engine import (
     DesireEngine, Drive, DRIVE_NAMES, TRAIT_RESONANCE,
     EVENT_IMPACT, DRIVE_ROUTINE_AFFINITY, DRIVE_NARRATIVES,
-    NATURAL_RISE_PER_HOUR,
+    NATURAL_RISE_PER_HOUR, TOLERANCE_HALF_LIFE, TOLERANCE_MIN,
+    TOLERANCE_RECOVERY_PER_HOUR,
 )
 
 
@@ -399,3 +400,89 @@ class TestSingleton:
         with patch("core.desire_engine.DesireEngine._load"):
             e2 = DesireEngine()
         assert e1 is not e2
+
+
+class TestTolerance:
+    """Tests pour le mecanisme de tolerance biologique (habituation)."""
+
+    def test_tolerance_reduces_satisfaction(self, engine):
+        """Les satisfactions repetees ont un effet decroissant."""
+        engine.drives["CREATION"].deprivation = 90.0
+        # Premiere satisfaction : plein effet (tolerance_accumulator = 0)
+        engine.on_event("ARTIFACT_CREATED")  # delta = -20 CREATION
+        first_drop = 90.0 - engine.drives["CREATION"].deprivation
+
+        # Remonter et satisfaire 10 fois pour accumuler la tolerance
+        for _ in range(10):
+            engine.drives["CREATION"].deprivation = 90.0
+            engine.on_event("ARTIFACT_CREATED")
+
+        # La derniere satisfaction devrait avoir un effet reduit
+        engine.drives["CREATION"].deprivation = 90.0
+        engine.on_event("ARTIFACT_CREATED")
+        last_drop = 90.0 - engine.drives["CREATION"].deprivation
+
+        assert last_drop < first_drop * 0.6  # Au moins 40% de reduction
+
+    def test_tolerance_never_below_minimum(self, engine):
+        """Meme apres 100 satisfactions, l'effet reste >= TOLERANCE_MIN."""
+        # Accumuler massivement
+        for _ in range(100):
+            engine.drives["CREATION"].deprivation = 90.0
+            engine.on_event("ARTIFACT_CREATED")
+
+        # Verifier que l'effet n'est pas nul
+        engine.drives["CREATION"].deprivation = 90.0
+        engine.on_event("ARTIFACT_CREATED")  # delta brut = -20
+        drop = 90.0 - engine.drives["CREATION"].deprivation
+        assert drop >= 20.0 * TOLERANCE_MIN * 0.95  # ~3.0 minimum (marge flottante)
+
+    def test_tolerance_recovery_over_time(self, engine):
+        """L'accumulateur de tolerance diminue avec le temps (repos)."""
+        # Accumuler de la tolerance
+        for _ in range(5):
+            engine.drives["CREATION"].deprivation = 90.0
+            engine.on_event("ARTIFACT_CREATED")
+        accum_before = engine.drives["CREATION"].tolerance_accumulator
+        assert accum_before > 0
+
+        # Simuler 2 heures de repos
+        engine._last_tick = time.time() - 7200
+        with patch.object(engine, "_get_traits_avg", return_value={}):
+            engine.tick()
+
+        accum_after = engine.drives["CREATION"].tolerance_accumulator
+        expected_recovery = TOLERANCE_RECOVERY_PER_HOUR * 2.0
+        assert accum_after < accum_before
+        assert abs(accum_after - max(0.0, accum_before - expected_recovery)) < 0.5
+
+    def test_tolerance_no_effect_on_positive_delta(self, engine):
+        """Les frustrations (delta > 0) ne sont pas attenuees par la tolerance."""
+        # Accumuler de la tolerance sur MAITRISE
+        engine.drives["MAITRISE"].tolerance_accumulator = 50.0
+        engine.drives["MAITRISE"].deprivation = 50.0
+        engine.on_event("ROUTINE_FAILURE", {"intent": "_default"})
+        # delta +8 pour MAITRISE (pas de tolerance appliquee)
+        assert engine.drives["MAITRISE"].deprivation == 58.0
+
+    def test_tolerance_persisted(self, engine, tmp_path):
+        """save/load preserve tolerance_accumulator."""
+        state_file = str(tmp_path / "desire_state.json")
+        engine.drives["CURIOSITE"].tolerance_accumulator = 12.5
+
+        with patch("core.desire_engine.STATE_FILE", state_file):
+            engine.save()
+
+        DesireEngine.reset_singleton()
+        with patch("core.desire_engine.STATE_FILE", state_file):
+            engine2 = DesireEngine()
+
+        assert abs(engine2.drives["CURIOSITE"].tolerance_accumulator - 12.5) < 0.1
+
+    def test_tolerance_accumulator_starts_zero(self, engine):
+        """Un nouveau Drive a tolerance_accumulator = 0 (plein effet)."""
+        for drive in engine.drives.values():
+            assert drive.tolerance_accumulator == 0.0
+        # Verifier que _compute_tolerance renvoie 1.0 (plein effet)
+        for drive in engine.drives.values():
+            assert engine._compute_tolerance(drive) == 1.0

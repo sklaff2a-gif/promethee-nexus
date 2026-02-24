@@ -27,6 +27,11 @@ STATE_FILE = os.path.join(
 # Rise naturelle par heure
 NATURAL_RISE_PER_HOUR = 3.0
 
+# Tolerance biologique (habituation)
+TOLERANCE_HALF_LIFE = 8.0        # Apres 8 satisfactions, effet divise par 2
+TOLERANCE_MIN = 0.15             # Plancher : meme sature, 15% d'effet reste
+TOLERANCE_RECOVERY_PER_HOUR = 2.0  # L'accumulateur diminue de 2.0/h (repos)
+
 
 @dataclass
 class Drive:
@@ -37,6 +42,7 @@ class Drive:
     last_satisfied: float = 0.0    # timestamp
     total_satisfied: int = 0       # Compteur historique
     frustration_streak: int = 0    # Echecs consecutifs
+    tolerance_accumulator: float = 0.0  # Habituation (monte aux satisfactions, descend au repos)
 
 
 # --- Resonance PSYCHE-Pulsions ---
@@ -286,6 +292,11 @@ class DesireEngine:
 
             drive.deprivation = min(100.0, drive.deprivation + rise)
 
+            # Recuperation tolerance (l'organisme se deshabitue au repos)
+            if drive.tolerance_accumulator > 0:
+                recovery = TOLERANCE_RECOVERY_PER_HOUR * elapsed_hours
+                drive.tolerance_accumulator = max(0.0, drive.tolerance_accumulator - recovery)
+
     def _get_traits_avg(self) -> Dict[str, float]:
         """Recupere la moyenne des traits PSYCHE (import local)."""
         try:
@@ -296,6 +307,12 @@ class DesireEngine:
 
     # --- Traitement des evenements ---
 
+    def _compute_tolerance(self, drive: Drive) -> float:
+        """Facteur de tolerance biologique [TOLERANCE_MIN, 1.0].
+        Plus un drive est satisfait souvent, moins l'effet est fort."""
+        return max(TOLERANCE_MIN,
+                   1.0 / (1.0 + drive.tolerance_accumulator / TOLERANCE_HALF_LIFE))
+
     def on_event(self, event_type: str, context: dict = None):
         """Traite un evenement et met a jour les pulsions affectees."""
         context = context or {}
@@ -304,8 +321,14 @@ class DesireEngine:
             drive = self.drives.get(drive_name)
             if not drive:
                 continue
-            drive.deprivation = max(0.0, min(100.0, drive.deprivation + delta))
-            if delta < 0:  # Satisfaction
+            if delta < 0:  # Satisfaction → appliquer tolerance
+                tolerance = self._compute_tolerance(drive)
+                effective_delta = delta * tolerance
+                drive.tolerance_accumulator += abs(delta)
+                drive.deprivation = max(0.0, min(100.0, drive.deprivation + effective_delta))
+            else:  # Frustration → plein effet
+                drive.deprivation = max(0.0, min(100.0, drive.deprivation + delta))
+            if delta < 0:  # Satisfaction bookkeeping
                 drive.satiation_count += 1
                 drive.total_satisfied += 1
                 drive.last_satisfied = time.time()
@@ -398,6 +421,7 @@ class DesireEngine:
                         last_satisfied=d.get("last_satisfied", 0.0),
                         total_satisfied=d.get("total_satisfied", 0),
                         frustration_streak=d.get("frustration_streak", 0),
+                        tolerance_accumulator=d.get("tolerance_accumulator", 0.0),
                     )
             self._last_tick = data.get("last_tick", time.time())
         except (FileNotFoundError, json.JSONDecodeError):
@@ -416,6 +440,7 @@ class DesireEngine:
                     "last_satisfied": d.last_satisfied,
                     "total_satisfied": d.total_satisfied,
                     "frustration_streak": d.frustration_streak,
+                    "tolerance_accumulator": round(d.tolerance_accumulator, 2),
                 }
                 for name, d in self.drives.items()
             },

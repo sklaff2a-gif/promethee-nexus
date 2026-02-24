@@ -420,8 +420,8 @@ class InnerVoice:
                     max_dep = drive.deprivation
                     max_drive = name
 
-            if max_drive and max_dep > 40:
-                salience = SOURCE_BASE_WEIGHTS["desire"] * max(0, (max_dep - 50) / 50.0)
+            if max_drive and max_dep > 30:
+                salience = SOURCE_BASE_WEIGHTS["desire"] * max(0, (max_dep - 30) / 70.0)
                 context = "frustrated" if max_dep > 70 else "rising" if max_dep > 50 else "satisfied"
                 actions = {
                     "CURIOSITE": "Explorer", "MAITRISE": "Parfaire",
