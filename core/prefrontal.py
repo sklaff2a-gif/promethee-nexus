@@ -193,7 +193,7 @@ class PrefrontalCortex:
         self._alive: bool = False
         self._delib_task: Optional[asyncio.Task] = None
         self._subscribed: bool = False
-        self._current_routine_intent: str = ""  # Tracking de la routine en cours
+        self._recent_events: List[str] = []  # Events bus reçus depuis la dernière délibération
 
         self._load()
 
@@ -228,6 +228,7 @@ class PrefrontalCortex:
 
     async def _on_inner_voice(self, data: dict):
         """Intègre la pensée broadcast dans le narrative_log."""
+        self._recent_events.append("INNER_VOICE_BROADCAST")
         thought = data.get("thought", "")
         if thought:
             self.narrative_log.append(NarrativeEntry(
@@ -243,6 +244,7 @@ class PrefrontalCortex:
 
     async def _on_routine_complete(self, data: dict):
         """Reçoit le résultat d'une routine autonome."""
+        self._recent_events.append("AUTONOMY_ROUTINE_COMPLETE")
         intent = data.get("intent", "")
         status = data.get("status", "")
         quality = data.get("quality_score", 0.0)
@@ -251,6 +253,7 @@ class PrefrontalCortex:
 
     async def _on_knowledge_gap(self, data: dict):
         """Crée un goal pour combler une lacune de connaissance."""
+        self._recent_events.append("KNOWLEDGE_GAP_DETECTED")
         topic = data.get("topic", data.get("gap", "inconnu"))
         # Vérifier qu'on n'a pas déjà un goal similaire
         for g in self.goals:
@@ -278,6 +281,7 @@ class PrefrontalCortex:
 
     async def _on_eureka_bridge(self, data: dict):
         """Crée un goal pour explorer un pont créatif."""
+        self._recent_events.append("EUREKA_BRIDGE")
         concept_a = data.get("node_a", data.get("source", "?"))
         concept_b = data.get("node_b", data.get("target", "?"))
         bridge_title = f"Explorer: {concept_a} <-> {concept_b}"
@@ -306,6 +310,7 @@ class PrefrontalCortex:
 
     async def _on_council_end(self, data: dict):
         """Crée un goal si le council a atteint un consensus actionnable."""
+        self._recent_events.append("COUNCIL_END")
         consensus = data.get("final_summary", "")
         status = data.get("status", "")
         if status not in ("consensus", "max_rounds"):
@@ -338,6 +343,7 @@ class PrefrontalCortex:
 
     async def _on_reptilian_alert(self, data: dict):
         """Mode survie si menace critique."""
+        self._recent_events.append("REPTILIAN_ALERT")
         reflex = data.get("reflex", "")
         threat_level = data.get("threat_level", 0.0)
         if reflex == "FREEZE" or threat_level >= 7:
@@ -347,6 +353,7 @@ class PrefrontalCortex:
 
     async def _on_cardiac_beat(self, data: dict):
         """Détecte l'état flow pour ajuster la stratégie."""
+        self._recent_events.append("CARDIAC_BEAT")
         emotion = data.get("emotion", "")
         coherence = data.get("coherence", 0.0)
         if emotion == "flow" and coherence > 0.7:
@@ -358,6 +365,7 @@ class PrefrontalCortex:
 
     async def _on_hallucination(self, data: dict):
         """Crée un trigger prospectif pour auditer après hallucination."""
+        self._recent_events.append("HALLUCINATION_DETECTED")
         self.add_trigger(
             condition_type="event",
             condition_key="ARTIFACT_CREATED",
@@ -841,7 +849,9 @@ class PrefrontalCortex:
                         matched = True
                 except (ValueError, TypeError):
                     pass
-            # "event" triggers sont traités via les handlers bus directement
+            elif trigger.condition_type == "event":
+                if trigger.condition_key in self._recent_events:
+                    matched = True
 
             if matched:
                 trigger.triggered_count += 1
@@ -944,6 +954,7 @@ class PrefrontalCortex:
         fired = self._check_triggers(state)
         for trigger in fired:
             self._narrate("decision", f"Trigger prospectif tiré: {trigger.action_intent}")
+        self._recent_events.clear()  # Reset après évaluation
 
         # 7. APPRENDRE — (déjà fait dans on_routine_complete)
 
@@ -1090,6 +1101,7 @@ class PrefrontalCortex:
                     )
                     self.goals.append(goal)
                     self.stats["goals_created"] += 1
+                    active_count += 1
                     suggested.last_used = time.time()
                     self._narrate("decision", f"Habitude cristallisée déclenchée: {seq_str}")
                     self._publish_goal_event("PREFRONTAL_GOAL_CREATED", goal)
@@ -1121,6 +1133,7 @@ class PrefrontalCortex:
                         )
                         self.goals.append(goal)
                         self.stats["goals_created"] += 1
+                        active_count += 1
                         self._narrate("goal", "Mode consolidation → goal redressement créé")
                         self._publish_goal_event("PREFRONTAL_GOAL_CREATED", goal)
         except Exception:
@@ -1175,7 +1188,6 @@ class PrefrontalCortex:
 
     def on_routine_start(self, intent: str):
         """Notification pre-routine. Marque le step comme in_progress."""
-        self._current_routine_intent = intent
         for goal in self.goals:
             if goal.status != "active":
                 continue

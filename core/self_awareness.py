@@ -26,8 +26,8 @@ MOOD_MAP = [
     ("fatigue",    lambda sr, traits: sr < 0.5),
     ("instable",   lambda sr, traits: sr < 0.6 and traits.get("survie", 50) > 65),
     ("curieux",    lambda sr, traits: traits.get("curiosite", 50) > 65 and sr > 0.7),
-    ("anime",      lambda sr, traits: sr > 0.6 and _has_urgent_desires()),
     ("créatif",    lambda sr, traits: traits.get("creativite", 50) > 65 and sr > 0.7),
+    ("animé",      lambda sr, traits: sr > 0.6 and _has_urgent_desires()),
     ("prudent",    lambda sr, traits: traits.get("survie", 50) > 70),
     ("audacieux",  lambda sr, traits: traits.get("audace", 50) > 65 and sr > 0.6),
     ("équilibré",  lambda sr, traits: True),
@@ -78,6 +78,9 @@ class SelfAwarenessEngine:
         self._ci_pass = 0
         self._ci_fail = 0
         self._council_aborted = 0
+        # Compteurs routines autonomes
+        self._routine_count = 0
+        self._routine_success = 0
         # Lacunes de connaissances détectées
         self._knowledge_gaps: List[Dict[str, Any]] = []
         # Santé mémoire vectorielle (mise à jour via bus)
@@ -105,6 +108,8 @@ class SelfAwarenessEngine:
         self._ci_pass = 0
         self._ci_fail = 0
         self._council_aborted = 0
+        self._routine_count = 0
+        self._routine_success = 0
         self._knowledge_gaps = []
         self._memory_status = "unknown"
         self._memory_warnings = []
@@ -129,6 +134,7 @@ class SelfAwarenessEngine:
         bus.subscribe("PSYCHE_UPDATE", self._on_psyche_update)
         bus.subscribe("OBJECTIVE_COMPLETED", self._on_objective_completed)
         bus.subscribe("OBJECTIVE_FAILED", self._on_objective_failed)
+        bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
 
     async def _on_agent_response(self, event: dict):
         self._mission_count += 1
@@ -164,11 +170,18 @@ class SelfAwarenessEngine:
                 elif value < 25:
                     self._record_personality_event(f"trait_extreme_low:{trait}={value:.0f}")
 
+    async def _on_routine_complete(self, event: dict):
+        """Compte les routines autonomes pour le success_rate global."""
+        self._routine_count += 1
+        if event.get("status") == "success":
+            self._routine_success += 1
+
     async def _on_objective_completed(self, event: dict):
         """Un objectif atteint enrichit le snapshot."""
         title = event.get("title", "?")
         logger.info(f"CONSCIENCE: Objectif atteint — {title}")
-        self._mission_success += 1  # Compte comme un succès global
+        self._mission_count += 1
+        self._mission_success += 1
 
     async def _on_objective_failed(self, event: dict):
         """Un objectif expiré est noté."""
@@ -266,9 +279,10 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
-        # Performance
-        total_missions = self._mission_count
-        success_rate = (self._mission_success / total_missions) if total_missions > 0 else 1.0
+        # Performance (missions + routines autonomes)
+        total_missions = self._mission_count + self._routine_count
+        total_success = self._mission_success + self._routine_success
+        success_rate = (total_success / total_missions) if total_missions > 0 else 1.0
         council_consensus_rate = (
             self._council_consensus / self._council_count
         ) if self._council_count > 0 else 0.0
@@ -620,6 +634,11 @@ class SelfAwarenessEngine:
         error_streak = 0
         if latest:
             error_streak = latest.get("performance", {}).get("error_streak", 0)
+        try:
+            from core.autonomy_engine import autonomy
+            error_streak = max(error_streak, autonomy.error_streak)
+        except Exception:
+            pass
 
         if error_streak >= 5:
             _add("EXPANSION_CODE", -3.0)
@@ -639,7 +658,7 @@ class SelfAwarenessEngine:
         elif mood == "curieux":
             _add("VEILLE_SILENCIEUSE", 1.5)
             _add("COUNCIL_DEBATE", 0.5)
-        elif mood in ("créatif", "anime"):
+        elif mood in ("créatif", "animé"):
             _add("EXPANSION_CODE", 1.0)
             _add("GRIMOIRE_INVOKE", 1.0)
         elif mood == "prudent":

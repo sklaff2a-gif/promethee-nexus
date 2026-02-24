@@ -31,7 +31,6 @@ logger = logging.getLogger("prometheev11.reptilian")
 WATCHDOG_INTERVAL = 5.0       # Scan toutes les 5 secondes
 THREAT_DECAY_RATE = 0.85      # Décroissance menace par tick (retour au calme)
 ADRENALINE_DECAY = 0.92       # Décroissance adrénaline par tick
-ADRENALINE_DURATION = 120.0   # Durée max d'un rush (secondes)
 
 # Niveaux de menace (0-10)
 THREAT_CALM = 0               # Tout va bien
@@ -422,7 +421,7 @@ class ReptilianCore:
             mem.severity = mem.severity * 0.7 + severity * 0.3  # Moyenne mobile
             mem.last_seen = time.time()
             # Le réflexe le plus grave l'emporte
-            reflex_order = ["ADRENALINE", "FLINCH", "SHED", "FREEZE", "FIGHT"]
+            reflex_order = ["ADRENALINE", "FLINCH", "SHED", "FIGHT", "FREEZE"]
             if reflex in reflex_order and mem.conditioned_reflex in reflex_order:
                 if reflex_order.index(reflex) > reflex_order.index(mem.conditioned_reflex):
                     mem.conditioned_reflex = reflex

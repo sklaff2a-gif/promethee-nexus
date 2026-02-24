@@ -671,7 +671,6 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 obj_bonus = obj_engine.get_routine_bonus(routine["intent"])
                 scored[i] = (routine, s + obj_bonus)
-            scored.sort(key=lambda x: x[1], reverse=True)
         except Exception:
             pass
 
@@ -693,7 +692,6 @@ class AutonomyEngine:
                     adj = adaptive_adjustments.get(routine["intent"], 0.0)
                     if adj != 0.0:
                         scored[i] = (routine, s + adj)
-                scored.sort(key=lambda x: x[1], reverse=True)
                 # Log des ajustements actifs
                 active = {k: v for k, v in adaptive_adjustments.items() if v != 0.0}
                 if active:
@@ -709,7 +707,6 @@ class AutonomyEngine:
                 sa_bonus = sa_engine.compute_routine_affinity(routine["intent"])
                 if sa_bonus != 0.0:
                     scored[i] = (routine, s + sa_bonus)
-            scored.sort(key=lambda x: x[1], reverse=True)
         except Exception:
             pass
 
@@ -720,7 +717,6 @@ class AutonomyEngine:
                 syn_bonus = cortex.compute_routine_affinity(routine["intent"])
                 if syn_bonus != 0.0:
                     scored[i] = (routine, s + syn_bonus)
-            scored.sort(key=lambda x: x[1], reverse=True)
         except Exception:
             pass
 
@@ -732,7 +728,6 @@ class AutonomyEngine:
                 desire_bonus = desires.compute_desire_bonus(routine["intent"])
                 if desire_bonus > 0:
                     scored[i] = (routine, s + desire_bonus)
-            scored.sort(key=lambda x: x[1], reverse=True)
             urgent = [d.name for d in desires.drives.values() if d.deprivation >= 75]
             if urgent:
                 print(f"   \U0001FA90 DESIRS: Pulsions urgentes: {', '.join(urgent)}")
@@ -746,7 +741,6 @@ class AutonomyEngine:
                 somatic = heart.get_somatic_signal(routine["intent"])
                 if somatic != 0.0:
                     scored[i] = (routine, s + somatic)
-            scored.sort(key=lambda x: x[1], reverse=True)
         except Exception:
             pass
 
@@ -757,7 +751,6 @@ class AutonomyEngine:
                 focus = prefrontal.compute_focus_bonus(routine["intent"])
                 if focus != 0.0:
                     scored[i] = (routine, s + focus)
-            scored.sort(key=lambda x: x[1], reverse=True)
             wm = prefrontal.get_working_memory()
             if wm:
                 print(f"   🎯 PRÉFRONTAL: Focus sur '{wm[0]['goal_title']}' ({wm[0]['progress']:.0%})")
@@ -805,13 +798,19 @@ class AutonomyEngine:
                     heart.react("veto")
                 except Exception:
                     pass
-                # Fallback : prendre la 2ème meilleure routine
-                if len(scored) > 1:
-                    selected, score = scored[1]
-                    agent = selected["agent"]
-                    intent = selected["intent"]
-                else:
-                    return  # Aucune alternative
+                # Fallback : prendre la prochaine routine non-vetoed
+                fallback_found = False
+                for alt_selected, alt_score in scored[1:]:
+                    alt_intent = alt_selected["intent"]
+                    alt_veto = self._should_veto(alt_intent)
+                    if not alt_veto:
+                        selected, score = alt_selected, alt_score
+                        agent = selected["agent"]
+                        intent = alt_intent
+                        fallback_found = True
+                        break
+                if not fallback_found:
+                    return  # Aucune alternative non-vetoed
 
         routine_cost_preview = RESOURCE_COSTS.get(intent, 2)
         print(f"   ✨ AUTONOMY: Routine [{intent}] (score={score:.1f}, coût={routine_cost_preview}pt) -> [{agent.upper()}] ({self.daily_count + 1}/{MAX_DAILY_ROUTINES}, budget: {self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt)")
@@ -1957,7 +1956,7 @@ class AutonomyEngine:
                 except Exception:
                     pass
                 # Décroissance progressive : réduire l'error_streak de 1 à chaque cycle pour sortir de la spirale
-                if self.error_streak > 5:
+                if self.error_streak >= 5:
                     self.error_streak -= 1
 
             await asyncio.sleep(sleep_time)

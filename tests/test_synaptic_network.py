@@ -445,8 +445,9 @@ class TestDreamMode:
         # Creer une synapse faible et tres ancienne
         key = _synapse_key(nid_a, nid_b)
         network.synapses[key] = _make_synapse(nid_a, nid_b, 0.04, "hebbian")
-        # Simuler une synapse datant de 30 jours
+        # Simuler une synapse datant de 30 jours et un dernier dream il y a 30 jours
         network.synapses[key]["last_strengthened"] = time.time() - 30 * 86400
+        network._last_dream_time = time.time() - 30 * 86400
 
         report = network.dream_consolidation()
         assert report["pruned_synapses"] >= 1

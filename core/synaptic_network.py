@@ -141,6 +141,7 @@ class SynapticNetwork:
         self._activation_buffer: List[Tuple[str, float]] = []   # (node_id, timestamp)
         self._mutations_since_save: int = 0
         self._subscribed = False
+        self._last_dream_time: float = time.time()  # Pour decay incrémental entre dreams
         self._load()
 
     # --- Init & Reset ---
@@ -160,6 +161,7 @@ class SynapticNetwork:
         self._activation_buffer = []
         self._mutations_since_save = 0
         self._subscribed = False
+        self._last_dream_time = time.time()
         self._initialized = False
 
     @classmethod
@@ -888,12 +890,12 @@ class SynapticNetwork:
                         )
                         report["dream_connections"] += 1
 
-        # 3. PRUNING SYNAPTIQUE
+        # 3. PRUNING SYNAPTIQUE (decay incrémental depuis le dernier dream)
+        now = time.time()
+        days_since_last_dream = (now - self._last_dream_time) / 86400
         to_prune = []
         for key, syn in self.synapses.items():
-            # Decay temporel
-            age_days = (time.time() - syn["last_strengthened"]) / 86400
-            decay = SYNAPSE_DECAY_PER_DAY * age_days
+            decay = SYNAPSE_DECAY_PER_DAY * days_since_last_dream
             syn["weight"] = max(0.0, syn["weight"] - decay)
             if syn["weight"] < PRUNING_THRESHOLD:
                 to_prune.append(key)
@@ -917,6 +919,7 @@ class SynapticNetwork:
         # Enforce limits
         self._enforce_synapse_limit()
 
+        self._last_dream_time = time.time()
         self._mutations_since_save += 10
         self._auto_save()
 
@@ -1003,6 +1006,7 @@ class SynapticNetwork:
                 data = json.load(f)
             self.nodes = data.get("nodes", {})
             self.synapses = data.get("synapses", {})
+            self._last_dream_time = data.get("last_dream_time", time.time())
             logger.info(
                 f"SYNAPSE: Charge {len(self.nodes)} noeuds, "
                 f"{len(self.synapses)} synapses."
@@ -1022,6 +1026,7 @@ class SynapticNetwork:
             "saved_at": time.time(),
             "nodes": self.nodes,
             "synapses": self.synapses,
+            "last_dream_time": self._last_dream_time,
         }
         tmp_path = STATE_FILE + ".tmp"
         try:

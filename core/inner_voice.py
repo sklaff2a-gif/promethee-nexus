@@ -24,8 +24,6 @@ logger = logging.getLogger("inner_voice")
 
 # ─── Constantes ───────────────────────────────────────────────────────────────
 
-VOICE_TICK_INTERVAL = 30.0          # Synchronisé avec CARDIAC_BEAT
-DMN_TICK_INTERVAL = 45.0            # Mode vagabondage (plus lent, plus rêveur)
 IGNITION_THRESHOLD = 0.4            # Seuil de saillance pour broadcast
 MAX_STREAM = 200                    # Buffer du flux de conscience (FIFO)
 MAX_PREDICTIONS = 30                # Prédictions actives
@@ -39,12 +37,6 @@ INNER_VOICE_STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "memory", "inner_voice_state.json"
 )
-
-# Modes de la voix (Vygotsky)
-VOICE_MODES = [
-    "planifier", "inhiber", "evaluer", "motiver",
-    "vagabonder", "predire", "refleter"
-]
 
 # Poids de base pour la compétition du workspace
 SOURCE_BASE_WEIGHTS = {

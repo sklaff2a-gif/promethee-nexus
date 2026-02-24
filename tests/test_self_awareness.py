@@ -815,7 +815,7 @@ class TestAwakeningPhase1:
                             "cloud_budget_used": 0, "cloud_budget_max": 100,
                             "council_consensus_rate": 0.5},
             "health": {"verdict": "GO"},
-            "mood": "anime",
+            "mood": "animé",
         })
         adj = self.engine.compute_adaptive_scoring([])
         assert adj.get("EXPANSION_CODE", 0) >= 1.0
