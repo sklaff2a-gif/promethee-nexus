@@ -615,7 +615,8 @@ class BaseAgent:
                     _temperature = heart.get_temperature()
                 except Exception:
                     _temperature = 0.7
-                payload = { "model": model, "prompt": prompt, "stream": False, "options": { "temperature": _temperature, "num_ctx": 4096 } }
+                _num_ctx = getattr(Config, "AGENT_NUM_CTX", {}).get(self.name, getattr(Config, "AGENT_NUM_CTX", {}).get("default", 8192))
+                payload = { "model": model, "prompt": prompt, "stream": False, "options": { "temperature": _temperature, "num_ctx": _num_ctx } }
                 async with httpx.AsyncClient() as client:
                     response = await client.post(url, json=payload, timeout=300)
                 if response.status_code == 200: return response.json().get("response", "Ollama vide.")
@@ -636,7 +637,8 @@ class BaseAgent:
                     _temperature = heart.get_temperature()
                 except Exception:
                     _temperature = 0.7
-                payload = { "model": model, "prompt": prompt, "stream": True, "options": { "temperature": _temperature, "num_ctx": 4096 } }
+                _num_ctx = getattr(Config, "AGENT_NUM_CTX", {}).get(self.name, getattr(Config, "AGENT_NUM_CTX", {}).get("default", 8192))
+                payload = { "model": model, "prompt": prompt, "stream": True, "options": { "temperature": _temperature, "num_ctx": _num_ctx } }
 
                 # Signal de début
                 await bus.publish("AGENT_STREAM", {

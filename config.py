@@ -52,16 +52,23 @@ class Config:
 
     # Configuration Locale (Ollama)
     OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-    DEFAULT_LOCAL_MODEL = "gemma3:12b"  # Modèle local par défaut (évaluation complexité + routing + fallback)
+    DEFAULT_LOCAL_MODEL = "promethee-general"  # Modèle local par défaut (guardrails bakés)
     AGENT_SPECIFIC_LOCAL_MODELS = {
-        "coder": "qwen3-coder:30b",
-        "factory": "qwen3:8b",
+        "coder": "promethee-coder",
+        "factory": "qwen3:8b",           # Exécuteur simple, pas de LLM critique
         "infra": "qwen3:8b",
-        "security": "deepseek-r1:8b",
-        "writer": "gemma3:12b",
-        "strategist": "gemma3:12b",
-        "architect": "gemma3:12b",
-        "researcher": "qwen3-vl:8b"
+        "security": "promethee-security",
+        "writer": "promethee-general",
+        "strategist": "promethee-strategist",
+        "architect": "promethee-architect",
+        "researcher": "promethee-researcher",
+    }
+
+    # Contexte par agent (override le num_ctx du Modelfile si besoin)
+    AGENT_NUM_CTX = {
+        "coder": 16384,
+        "evolution": 16384,
+        "default": 8192,
     }
     
     # Matériel du serveur (utilisé par infra_agent pour les seuils d'alerte)
