@@ -25,7 +25,7 @@ STATE_FILE = os.path.join(
 )
 
 # Rise naturelle par heure
-NATURAL_RISE_PER_HOUR = 0.3
+NATURAL_RISE_PER_HOUR = 3.0
 
 
 @dataclass

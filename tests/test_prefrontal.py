@@ -620,9 +620,9 @@ class TestDeliberation:
     @patch("core.prefrontal.desires", create=True)
     def test_deliberate_generates_goals_from_drives(self, mock_desires):
         pf = _make_prefrontal()
-        # Mock une pulsion frustrée
+        # Mock une pulsion frustrée (seuil >= 40)
         mock_drive = MagicMock()
-        mock_drive.deprivation = 85
+        mock_drive.deprivation = 45
         mock_drive.name = "CURIOSITE"
         mock_desires.drives = {"CURIOSITE": mock_drive}
 

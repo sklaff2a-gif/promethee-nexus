@@ -1024,7 +1024,7 @@ class PrefrontalCortex:
         try:
             from core.desire_engine import desires
             for name, drive in desires.drives.items():
-                if drive.deprivation >= 80 and active_count < MAX_GOALS:
+                if drive.deprivation >= 40 and active_count < MAX_GOALS:
                     # Vérifier qu'on n'a pas déjà un goal pour cette pulsion
                     already = any(
                         g.status == "active" and name.lower() in g.title.lower()
@@ -1053,8 +1053,8 @@ class PrefrontalCortex:
                     active_count += 1
                     self._narrate("goal", f"Pulsion {name} frustrée (déprivation={drive.deprivation:.0f}). Goal créé.")
                     self._publish_goal_event("PREFRONTAL_GOAL_CREATED", goal)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"PREFRONTAL: _generate_goals erreur pulsions: {e}")
 
         # Stratégie cristallisée → goal automatique
         if active_count < MAX_GOALS:

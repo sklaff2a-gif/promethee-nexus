@@ -59,9 +59,9 @@ class TestTick:
         engine._last_tick = time.time() - 3600  # 1 heure avant
         with patch.object(engine, "_get_traits_avg", return_value={}):
             engine.tick()
-        # ~0.3 point de montee attendu
-        assert engine.drives["CURIOSITE"].deprivation > 50.0
-        assert engine.drives["CURIOSITE"].deprivation < 51.0
+        # ~3.0 points de montee attendu (NATURAL_RISE_PER_HOUR=3.0)
+        assert engine.drives["CURIOSITE"].deprivation > 52.0
+        assert engine.drives["CURIOSITE"].deprivation < 54.0
 
     def test_trait_resonance_amplifies(self, engine):
         """Un trait PSYCHE eleve amplifie la montee de la pulsion correspondante."""
@@ -358,8 +358,8 @@ class TestTraitResonance:
         with patch.object(engine, "_get_traits_avg", return_value=traits):
             engine.tick()
         # amplifier = (90-50)/50 * 0.4 = 0.32
-        # rise = 0.3 * 1.32 = 0.396
-        assert engine.drives["CURIOSITE"].deprivation > 50.3
+        # rise = 3.0 * 1.32 = 3.96
+        assert engine.drives["CURIOSITE"].deprivation > 53.0
 
     def test_neutral_traits_no_amplification(self, engine):
         """Des traits neutres (50) n'amplifient pas."""
@@ -368,8 +368,8 @@ class TestTraitResonance:
         traits = {"curiosite": 50.0, "creativite": 50.0}
         with patch.object(engine, "_get_traits_avg", return_value=traits):
             engine.tick()
-        # rise = 0.3 * (1 + 0) = 0.3
-        assert abs(engine.drives["CURIOSITE"].deprivation - 50.3) < 0.05
+        # rise = 3.0 * (1 + 0) = 3.0
+        assert abs(engine.drives["CURIOSITE"].deprivation - 53.0) < 0.5
 
     def test_low_traits_reduces_rise(self, engine):
         """Des traits bas reduisent la montee de la pulsion."""
@@ -379,8 +379,8 @@ class TestTraitResonance:
         with patch.object(engine, "_get_traits_avg", return_value=traits):
             engine.tick()
         # amplifier = (20-50)/50 * 0.4 = -0.24
-        # rise = 0.3 * 0.76 = 0.228
-        assert engine.drives["CURIOSITE"].deprivation < 50.3
+        # rise = 3.0 * 0.76 = 2.28
+        assert engine.drives["CURIOSITE"].deprivation < 53.0
 
 
 class TestSingleton:
