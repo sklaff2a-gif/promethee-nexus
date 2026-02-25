@@ -148,8 +148,9 @@ class SynapticNetwork:
     # --- Init & Reset ---
 
     def init(self):
-        """Souscrit aux evenements bus."""
+        """Souscrit aux evenements bus et injecte les noeuds organes."""
         self._subscribe_events()
+        self._seed_organ_nodes()
         logger.info(
             f"SYNAPSE: Cortex associatif actif "
             f"({len(self.nodes)} noeuds, {len(self.synapses)} synapses)."
@@ -655,8 +656,83 @@ class SynapticNetwork:
             bus.subscribe("EXPERIENCE_RECORDED", self._on_experience_recorded)
             bus.subscribe("MISSION_FINISHED", self._on_mission_finished)
             bus.subscribe("INNER_VOICE_BROADCAST", self._on_inner_voice)
+            bus.subscribe("PSYCHE_UPDATE", self._on_psyche_update)
         except Exception as e:
             logger.warning(f"SYNAPSE: Impossible de souscrire aux evenements: {e}")
+
+    def _seed_organ_nodes(self):
+        """Cree les noeuds desire et trait au demarrage (idempotent)."""
+        # 7 pulsions
+        DRIVE_NAMES = [
+            "curiosite", "maitrise", "stabilite", "connexion",
+            "croissance", "creation", "comprehension",
+        ]
+        for drive in DRIVE_NAMES:
+            self.ensure_node(f"pulsion:{drive}", "desire", 0.4, ["desire_engine"])
+
+        # 6 traits PSYCHE
+        TRAIT_NAMES = [
+            "curiosite", "creativite", "audace", "savoir", "survie", "respect",
+        ]
+        for trait in TRAIT_NAMES:
+            self.ensure_node(f"trait:{trait}", "trait", 0.4, ["psyche"])
+
+        # Liens TRAIT_RESONANCE (pulsion -> trait)
+        try:
+            from core.desire_engine import TRAIT_RESONANCE
+            for drive, traits in TRAIT_RESONANCE.items():
+                drive_nid = _make_node_id(f"pulsion:{drive.lower()}")
+                for trait_name, weight in traits.items():
+                    trait_nid = _make_node_id(f"trait:{trait_name}")
+                    if drive_nid in self.nodes and trait_nid in self.nodes:
+                        key = _synapse_key(drive_nid, trait_nid)
+                        if key not in self.synapses:
+                            self.synapses[key] = _make_synapse(
+                                drive_nid, trait_nid, weight,
+                                "emotional",
+                                f"resonance:{drive.lower()}->{trait_name}",
+                            )
+        except ImportError:
+            logger.warning("SYNAPSE: desire_engine non disponible pour seed")
+
+        count_d = sum(1 for n in self.nodes.values() if n["node_type"] == "desire")
+        count_t = sum(1 for n in self.nodes.values() if n["node_type"] == "trait")
+        logger.info(
+            f"SYNAPSE: Seed organes -> {count_d} desire, {count_t} trait noeuds"
+        )
+
+    async def _on_psyche_update(self, event: dict):
+        """PSYCHE_UPDATE : reactive les noeuds trait et renforce les liens dominants."""
+        try:
+            avg = event.get("system_average", {})
+            if not avg:
+                return
+
+            # Reactiver chaque trait (boost energy via ensure_node)
+            for trait_name, value in avg.items():
+                nid = self.ensure_node(
+                    f"trait:{trait_name}", "trait", 0.4, ["psyche"]
+                )
+                if nid in self.nodes:
+                    self.nodes[nid]["affect"]["trait_value"] = round(value, 1)
+
+            # Renforcer le lien trait dominant -> ses pulsions
+            dominant = max(avg, key=avg.get)
+            dominant_nid = _make_node_id(f"trait:{dominant}")
+            try:
+                from core.desire_engine import TRAIT_RESONANCE
+                for drive, traits in TRAIT_RESONANCE.items():
+                    if dominant in traits:
+                        drive_nid = _make_node_id(f"pulsion:{drive.lower()}")
+                        if drive_nid in self.nodes and dominant_nid in self.nodes:
+                            self.hebbian_strengthen(
+                                dominant_nid, drive_nid, success=True,
+                                context=f"psyche_resonance:{dominant}",
+                            )
+            except ImportError:
+                pass
+        except Exception as e:
+            logger.warning(f"SYNAPSE: Erreur _on_psyche_update: {e}")
 
     async def _on_inner_voice(self, event: dict):
         """Active le noeud correspondant au source de la pensee diffusee."""
@@ -702,6 +778,23 @@ class SynapticNetwork:
             for cnid in concept_nids:
                 self.hebbian_strengthen(intent_nid, cnid, success=success,
                                         context=f"routine:{intent}")
+
+            # Liens entre routine et pulsions satisfaites
+            if success:
+                try:
+                    from core.desire_engine import DRIVE_ROUTINE_AFFINITY
+                    for drive, routines in DRIVE_ROUTINE_AFFINITY.items():
+                        if intent in routines:
+                            drive_nid = _make_node_id(
+                                f"pulsion:{drive.lower()}"
+                            )
+                            if drive_nid in self.nodes:
+                                self.hebbian_strengthen(
+                                    intent_nid, drive_nid, success=True,
+                                    context=f"affinity:{intent}->{drive}",
+                                )
+                except ImportError:
+                    pass
 
             logger.info(
                 f"SYNAPSE: Routine '{intent}' -> +1 noeud, "

@@ -868,3 +868,169 @@ class TestConceptFiltering:
     def test_pruning_threshold_value(self):
         """Verification de la valeur du seuil de pruning."""
         assert PRUNING_THRESHOLD == 0.08
+
+
+# =====================================================================
+# TestOrganSeed — Noeuds desire/trait et liens TRAIT_RESONANCE
+# =====================================================================
+
+class TestOrganSeed:
+
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature",
+           return_value={"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                         "dominant_trait": "", "trait_value": 50.0, "valence": 0.0})
+    def test_seed_organ_nodes_creates_desires(self, mock_affect, network):
+        """7 noeuds desire existent apres seed."""
+        network._seed_organ_nodes()
+        desire_nodes = [n for n in network.nodes.values() if n["node_type"] == "desire"]
+        assert len(desire_nodes) == 7
+        concepts = {n["concept"] for n in desire_nodes}
+        assert "pulsion:curiosite" in concepts
+        assert "pulsion:creation" in concepts
+
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature",
+           return_value={"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                         "dominant_trait": "", "trait_value": 50.0, "valence": 0.0})
+    def test_seed_organ_nodes_creates_traits(self, mock_affect, network):
+        """6 noeuds trait existent apres seed."""
+        network._seed_organ_nodes()
+        trait_nodes = [n for n in network.nodes.values() if n["node_type"] == "trait"]
+        assert len(trait_nodes) == 6
+        concepts = {n["concept"] for n in trait_nodes}
+        assert "trait:audace" in concepts
+        assert "trait:survie" in concepts
+
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature",
+           return_value={"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                         "dominant_trait": "", "trait_value": 50.0, "valence": 0.0})
+    def test_seed_creates_resonance_synapses(self, mock_affect, network):
+        """Les liens TRAIT_RESONANCE sont crees entre pulsions et traits."""
+        network._seed_organ_nodes()
+        # CURIOSITE -> curiosite (0.4) doit exister
+        drive_nid = _make_node_id("pulsion:curiosite")
+        trait_nid = _make_node_id("trait:curiosite")
+        key = _synapse_key(drive_nid, trait_nid)
+        assert key in network.synapses
+        assert network.synapses[key]["synapse_type"] == "emotional"
+        assert network.synapses[key]["weight"] == pytest.approx(0.4, abs=0.01)
+
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature",
+           return_value={"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                         "dominant_trait": "", "trait_value": 50.0, "valence": 0.0})
+    def test_seed_idempotent(self, mock_affect, network):
+        """Appeler 2x ne cree pas de doublons (noeuds + synapses resonance)."""
+        network._seed_organ_nodes()
+        n1 = len(network.nodes)
+        # Compter seulement les synapses resonance (pas STDP temporelles)
+        resonance_s1 = sum(
+            1 for s in network.synapses.values()
+            if s["synapse_type"] == "emotional"
+        )
+
+        # Vider le buffer STDP pour eviter les synapses temporelles parasites
+        network._activation_buffer = []
+        network._seed_organ_nodes()
+        n2 = len(network.nodes)
+        resonance_s2 = sum(
+            1 for s in network.synapses.values()
+            if s["synapse_type"] == "emotional"
+        )
+
+        assert n1 == n2
+        assert resonance_s1 == resonance_s2
+
+    @pytest.mark.asyncio
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature")
+    async def test_on_psyche_update_activates_traits(self, mock_affect, network):
+        """PSYCHE_UPDATE reactive les noeuds trait et met a jour trait_value."""
+        _fresh = lambda: {"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                          "dominant_trait": "", "trait_value": 50.0, "valence": 0.0}
+        mock_affect.side_effect = lambda: _fresh()
+        network._seed_organ_nodes()
+        trait_nid = _make_node_id("trait:curiosite")
+        energy_before = network.nodes[trait_nid]["energy"]
+
+        await network._on_psyche_update({
+            "system_average": {
+                "curiosite": 72.5, "creativite": 60.0, "audace": 55.0,
+                "savoir": 65.0, "survie": 50.0, "respect": 58.0,
+            }
+        })
+
+        # Energy boostee par ensure_node (+0.1)
+        assert network.nodes[trait_nid]["energy"] > energy_before
+        # trait_value mise a jour
+        assert network.nodes[trait_nid]["affect"]["trait_value"] == 72.5
+
+    @pytest.mark.asyncio
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature")
+    async def test_on_psyche_update_strengthens_dominant(self, mock_affect, network):
+        """Le lien du trait dominant vers ses pulsions est renforce."""
+        _fresh = lambda: {"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                          "dominant_trait": "", "trait_value": 50.0, "valence": 0.0}
+        mock_affect.side_effect = lambda: _fresh()
+        network._seed_organ_nodes()
+
+        # curiosite est dominant (72.5 > les autres)
+        dominant_nid = _make_node_id("trait:curiosite")
+        # CURIOSITE a curiosite dans TRAIT_RESONANCE, et CONNEXION aussi
+        drive_nid = _make_node_id("pulsion:curiosite")
+        key = _synapse_key(dominant_nid, drive_nid)
+
+        # Noter le poids avant (peut ne pas exister en sens inverse)
+        weight_before = network.synapses.get(key, {}).get("weight", 0.0)
+
+        await network._on_psyche_update({
+            "system_average": {
+                "curiosite": 72.5, "creativite": 60.0, "audace": 55.0,
+                "savoir": 65.0, "survie": 50.0, "respect": 58.0,
+            }
+        })
+
+        # Le lien dominant_trait -> pulsion doit etre cree ou renforce
+        assert key in network.synapses
+        assert network.synapses[key]["weight"] > weight_before
+
+    @pytest.mark.asyncio
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature")
+    async def test_routine_complete_links_to_desires(self, mock_affect, network):
+        """Liens intent->pulsion crees via DRIVE_ROUTINE_AFFINITY sur succes."""
+        _fresh = lambda: {"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                          "dominant_trait": "", "trait_value": 50.0, "valence": 0.0}
+        mock_affect.side_effect = lambda: _fresh()
+        network._seed_organ_nodes()
+
+        await network._on_routine_complete({
+            "intent": "EXPANSION_CODE",
+            "status": "success",
+            "quality_score": 0.8,
+            "result": "Refactoring du module base_agent pour optimisation"
+        })
+
+        intent_nid = _make_node_id("EXPANSION_CODE")
+        # MAITRISE a EXPANSION_CODE dans DRIVE_ROUTINE_AFFINITY
+        drive_nid = _make_node_id("pulsion:maitrise")
+        key = _synapse_key(intent_nid, drive_nid)
+        assert key in network.synapses
+
+    @pytest.mark.asyncio
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature")
+    async def test_routine_complete_no_link_on_failure(self, mock_affect, network):
+        """Pas de lien intent->pulsion si la routine echoue."""
+        _fresh = lambda: {"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                          "dominant_trait": "", "trait_value": 50.0, "valence": 0.0}
+        mock_affect.side_effect = lambda: _fresh()
+        network._seed_organ_nodes()
+
+        await network._on_routine_complete({
+            "intent": "EXPANSION_CODE",
+            "status": "failure",
+            "quality_score": 0.2,
+            "result": "Erreur lors du refactoring"
+        })
+
+        intent_nid = _make_node_id("EXPANSION_CODE")
+        drive_nid = _make_node_id("pulsion:maitrise")
+        key = _synapse_key(intent_nid, drive_nid)
+        # Pas de lien car echec
+        assert key not in network.synapses
