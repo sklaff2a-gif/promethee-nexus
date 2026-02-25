@@ -372,6 +372,11 @@ class TestAutonomyStatePersistence:
         assert os.path.exists(path)
         assert not os.path.exists(path + ".tmp")
 
+    def test_default_state_has_daily_budget_used(self):
+        """DEFAULT_STATE contient daily_budget_used pour cohérence avec _persist_state."""
+        assert "daily_budget_used" in AutonomyStatePersistence.DEFAULT_STATE
+        assert AutonomyStatePersistence.DEFAULT_STATE["daily_budget_used"] == 0
+
 
 # ═══════════════════════════════════════════════════════════
 # TestAutonomyEngineV24 (15 tests)

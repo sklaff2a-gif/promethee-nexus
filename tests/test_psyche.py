@@ -327,6 +327,26 @@ class TestCouncilForge:
         self.engine.apply_deltas("coder", {"curiosite": 0.1}, event="COUNCIL_END/consensus")
         assert self.engine.get_debate_index() == 1
 
+    def test_council_curiosite_dedup(self):
+        """Curiosité > 80 + 'curiosite' in recent → skip ce topic."""
+        for name in self.engine.agents:
+            self.engine.agents[name]["curiosite"] = 85.0
+        topic = self.engine.select_council_topic(
+            recent_subjects=["curiosite"]
+        )
+        # Ne doit PAS re-sélectionner "curiosite" comme subject_key
+        assert topic["subject_key"] != "curiosite"
+
+    def test_council_survie_dedup(self):
+        """Survie > 80 + 'survie' in recent → skip ce topic."""
+        for name in self.engine.agents:
+            self.engine.agents[name]["survie"] = 85.0
+        topic = self.engine.select_council_topic(
+            recent_subjects=["survie"]
+        )
+        # Ne doit PAS re-sélectionner "survie" comme subject_key
+        assert topic["subject_key"] != "survie"
+
 
 @pytest.mark.asyncio
 class TestEventHandlers:

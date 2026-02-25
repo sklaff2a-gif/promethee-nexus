@@ -476,14 +476,14 @@ class PsycheEngine:
             theme_key = theme["query"][:30].lower()
 
         # Priorité 3 : traits extrêmes — REMPLACE le thème de recherche (rare)
-        if avg.get("curiosite", 50) > 80:
+        if avg.get("curiosite", 50) > 80 and "curiosite" not in recent:
             return {
                 "participants": ["researcher", "evolution", "coder"],
                 "mission": "La curiosité du système est très élevée. Quel domaine explorer en priorité ?",
                 "needs_research": True, "research_query": theme["query"],
                 "subject_key": "curiosite",
             }
-        if avg.get("survie", 50) > 80:
+        if avg.get("survie", 50) > 80 and "survie" not in recent:
             return {
                 "participants": ["architect", "security", "strategist"],
                 "mission": "L'instinct de survie est extrême. Est-ce de la prudence excessive ?",

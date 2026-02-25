@@ -401,7 +401,7 @@ class TestReflexes:
         rept.threat_level = 3.5
         with patch.dict("sys.modules", {"core.cardiac_engine": MagicMock()}):
             with patch.object(rept, "_publish_alert", new_callable=AsyncMock):
-                await rept._trigger_reflexes({"budget": 4.0})
+                await rept._trigger_reflexes({"error_streak": 3.0})
         assert rept.adrenaline > 0
 
     @pytest.mark.asyncio
@@ -691,3 +691,50 @@ class TestIntegration:
             await rept._trigger_reflexes(threats)
         active, _ = rept.should_shed()
         assert active
+
+
+# ============================================================
+# 11. Budget-only supprime les réflexes
+# ============================================================
+
+class TestBudgetOnlyReflexes:
+
+    @pytest.mark.asyncio
+    async def test_budget_only_suppresses_reflexes(self, rept):
+        """Budget seule menace → pas de SHED/FLINCH/ADRENALINE."""
+        rept.threat_level = 5.0
+        threats = {"budget": 5.0}
+        with patch.object(rept, "_publish_alert", new_callable=AsyncMock), \
+             patch.dict("sys.modules", {"core.cardiac_engine": MagicMock()}):
+            await rept._trigger_reflexes(threats)
+        # Aucun réflexe ne doit être déclenché
+        assert rept.reflexes_triggered.get("SHED", 0) == 0
+        assert rept.reflexes_triggered.get("FLINCH", 0) == 0
+        assert rept.reflexes_triggered.get("ADRENALINE", 0) == 0
+        assert rept.adrenaline == 0.0
+
+    @pytest.mark.asyncio
+    async def test_budget_plus_other_threat_still_triggers(self, rept):
+        """Budget + autre menace → SHED se déclenche normalement."""
+        rept.threat_level = 5.5
+        threats = {"budget": 5.0, "error_streak": 3.0}
+        with patch.object(rept, "_publish_alert", new_callable=AsyncMock), \
+             patch.dict("sys.modules", {"core.cardiac_engine": MagicMock()}):
+            await rept._trigger_reflexes(threats)
+        active, _ = rept.should_shed()
+        assert active
+
+    @pytest.mark.asyncio
+    async def test_budget_only_logs_once(self, rept):
+        """Le message INFO n'est émis qu'une fois par cooldown SHED."""
+        rept.threat_level = 5.0
+        threats = {"budget": 5.0}
+        with patch.object(rept, "_publish_alert", new_callable=AsyncMock), \
+             patch.dict("sys.modules", {"core.cardiac_engine": MagicMock()}), \
+             patch("core.reptilian_core.logger") as mock_logger:
+            # Premier appel → log
+            await rept._trigger_reflexes(threats)
+            assert mock_logger.info.call_count == 1
+            # Deuxième appel immédiat → cooldown SHED empêche le re-log
+            await rept._trigger_reflexes(threats)
+            assert mock_logger.info.call_count == 1  # Toujours 1

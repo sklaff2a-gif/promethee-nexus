@@ -272,6 +272,7 @@ class AutonomyStatePersistence:
     DEFAULT_STATE = {
         "version": "24.0",
         "daily_count": 0,
+        "daily_budget_used": 0,
         "last_reset_day": None,
         "routine_history": [],
         "last_health_check": None,

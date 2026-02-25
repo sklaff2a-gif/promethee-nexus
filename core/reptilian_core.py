@@ -312,6 +312,14 @@ class ReptilianCore:
         """Déclenche le réflexe approprié selon le niveau de menace."""
         now = time.time()
 
+        # Budget épuisé seul → pas de réflexes (l'autonomie gère déjà la pause)
+        budget_only = (len(threats) == 1 and "budget" in threats)
+        if budget_only:
+            if self._can_trigger("SHED", now):
+                self._reflex_cooldowns["SHED"] = now
+                logger.info(f"REPTILIEN: Budget épuisé (menace={self.threat_level:.1f}) — pas de réflexe, autonomie gère.")
+            return
+
         # FREEZE — threat >= 7 (arrêt complet)
         if self.threat_level >= 7.0 and self._can_trigger("FREEZE", now):
             self._activate_freeze(now)
