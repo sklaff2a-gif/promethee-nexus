@@ -253,6 +253,11 @@ async def lifespan(app: FastAPI):
     inner_voice.init()
     print("   🗣️ VOIX INTÉRIEURE: Aires de Broca & Wernicke actives.")
 
+    # --- IMPACT ANALYZER (Dépendances & Santé) ---
+    from core.impact_analyzer import analyzer as impact_analyzer
+    impact_analyzer.init()
+    print("   📊 IMPACT: Analyseur de dépendances actif.")
+
     # --- SOLILOQUE (Dialogue Introspectif) ---
     from core.soliloque import soliloque
     soliloque.init()
@@ -487,6 +492,12 @@ async def inner_voice_stream():
     """Retourne les 30 dernières pensées du flux de conscience."""
     from core.inner_voice import voice as inner_voice
     return inner_voice.get_stream(n=30)
+
+@app.get("/api/health/impact")
+async def health_impact():
+    """Retourne le graphe de dépendances et santé des modules."""
+    from core.impact_analyzer import analyzer as impact_analyzer
+    return impact_analyzer.build_graph()
 
 @app.get("/api/soliloque/status")
 async def soliloque_status():

@@ -254,6 +254,10 @@ ws.onmessage = (event) => {
     else if (type === "REPTILIAN_STATE") {
         updateTelemReptilian(payload);
     }
+    // 16. IMPACT_UPDATE : invalidation graphe dépendances
+    else if (type === "IMPACT_UPDATE") {
+        if (typeof ImpactView !== 'undefined') ImpactView.handleUpdate(payload);
+    }
 };
 
 function sendMission() {
