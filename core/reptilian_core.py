@@ -255,7 +255,9 @@ class ReptilianCore:
             ratio = max(count_ratio, budget_ratio)
 
             if ratio >= THRESHOLDS["budget_crit_ratio"]:
-                threats["budget"] = 7.0
+                # Budget épuisé → SHED (limiter aux routines pas chères), PAS FREEZE
+                # Le budget ne peut pas baisser pendant FREEZE → spirale infinie sinon
+                threats["budget"] = 5.0
             elif ratio >= THRESHOLDS["budget_warn_ratio"]:
                 threats["budget"] = 4.0
 
