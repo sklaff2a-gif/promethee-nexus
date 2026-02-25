@@ -389,6 +389,13 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Dopamine (systeme de recompense)
+        try:
+            from core.dopamine_system import dopamine
+            snapshot["dopamine"] = dopamine.get_stats()
+        except Exception:
+            pass
+
         self._snapshots.append(snapshot)
         if len(self._snapshots) > MAX_SNAPSHOTS:
             self._snapshots = self._snapshots[-MAX_SNAPSHOTS:]

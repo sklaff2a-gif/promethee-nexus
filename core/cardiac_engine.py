@@ -514,8 +514,18 @@ class CardiacEngine:
             bus.subscribe("KNOWLEDGE_GAP_DETECTED", self._on_knowledge_gap)
             bus.subscribe("PSYCHE_UPDATE", self._on_psyche_update)
             bus.subscribe("INNER_VOICE_BROADCAST", self._on_inner_voice)
+            bus.subscribe("DOPAMINE_SURGE", self._on_dopamine_surge)
+            bus.subscribe("DOPAMINE_DIP", self._on_dopamine_dip)
         except Exception as e:
             logger.warning(f"COEUR: Échec souscription bus: {e}")
+
+    async def _on_dopamine_surge(self, event: dict):
+        """Surge dopaminique → excitation (eureka)."""
+        self.react("eureka")
+
+    async def _on_dopamine_dip(self, event: dict):
+        """Creux dopaminique → deception (failure)."""
+        self.react("failure")
 
     async def _on_inner_voice(self, event: dict):
         """Résonance émotionnelle au broadcast de la voix intérieure."""

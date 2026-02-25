@@ -767,6 +767,16 @@ class AutonomyEngine:
                 voice_bonus = inner_voice.compute_voice_bonus(routine["intent"])
                 if voice_bonus != 0.0:
                     scored[i] = (routine, s + voice_bonus)
+        except Exception:
+            pass
+
+        # --- Bonus dopaminique (motivation — Couche 9) ---
+        try:
+            from core.dopamine_system import dopamine
+            for i, (routine, s) in enumerate(scored):
+                dopa_bonus = dopamine.compute_motivation_bonus(routine["intent"])
+                if dopa_bonus != 0.0:
+                    scored[i] = (routine, s + dopa_bonus)
             scored.sort(key=lambda x: x[1], reverse=True)
         except Exception:
             pass

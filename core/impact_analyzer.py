@@ -67,12 +67,49 @@ _RE_BUS_SUBSCRIBE = re.compile(
 # Chaque entrée : id, display, phase, description, connects_to[]
 # ============================================================
 _ROADMAP = [
-    # --- PHASE 4 : CONNECTER (prochaine) ---
+    # --- PHASE 4 : SENTIR ---
+    {
+        "id": "planned.amygdala",
+        "display": "amygdala",
+        "phase": 4,
+        "phase_name": "SENTIR",
+        "description": "Amygdale emotionnelle — evaluation rapide de la valence "
+                       "emotionnelle des stimuli, conditionnement contextuel, memoire de peur",
+        "connects_to": [
+            "core.reptilian_core", "core.cardiac_engine", "core.prefrontal",
+            "core.dopamine_system", "core.inner_voice",
+        ],
+    },
+    {
+        "id": "planned.corpus_callosum",
+        "display": "corpus_callosum",
+        "phase": 4,
+        "phase_name": "SENTIR",
+        "description": "Corps calleux — synchronisation inter-hemispheres, "
+                       "coherence entre modules cognitifs et emotionnels, bus intelligent",
+        "connects_to": [
+            "core.prefrontal", "core.reptilian_core", "core.cardiac_engine",
+            "core.inner_voice", "core.event_bus.bus",
+        ],
+    },
+    {
+        "id": "planned.thalamus",
+        "display": "thalamus",
+        "phase": 4,
+        "phase_name": "SENTIR",
+        "description": "Filtre sensoriel — routeur attentionnel qui priorise "
+                       "les events bus avant qu'ils atteignent les organes corticaux",
+        "connects_to": [
+            "core.event_bus.bus", "core.prefrontal", "core.reptilian_core",
+            "core.inner_voice", "core.autonomy_engine",
+        ],
+    },
+    # --- PHASE 5 : SOUVENIR ---
     {
         "id": "planned.hippocampus",
         "display": "hippocampus",
-        "phase": 4,
-        "phase_name": "CONNECTER",
+        "phase": 5,
+        "phase_name": "SOUVENIR",
         "description": "Memoire episodique — replay temporel des sequences vecues, "
                        "consolidation nocturne, souvenirs autobiographiques",
         "connects_to": [
@@ -81,34 +118,34 @@ _ROADMAP = [
         ],
     },
     {
-        "id": "planned.thalamus",
-        "display": "thalamus",
-        "phase": 4,
-        "phase_name": "CONNECTER",
-        "description": "Filtre sensoriel — routeur attentionnel qui priorise "
-                       "les events bus avant qu'ils atteignent les organes corticaux",
+        "id": "planned.episodic_buffer",
+        "display": "episodic_buffer",
+        "phase": 5,
+        "phase_name": "SOUVENIR",
+        "description": "Buffer episodique (Baddeley) — integration multimodale temps reel, "
+                       "liaison entre working memory et memoire a long terme",
         "connects_to": [
-            "core.event_bus.bus", "core.prefrontal", "core.reptilian_core",
-            "core.inner_voice", "core.autonomy_engine",
+            "core.prefrontal", "core.synaptic_network", "core.inner_voice",
+            "core.dopamine_system",
         ],
     },
     {
-        "id": "planned.dopamine",
-        "display": "dopamine_system",
-        "phase": 4,
-        "phase_name": "CONNECTER",
-        "description": "Systeme de recompense — erreur de prediction de recompense, "
-                       "apprentissage par renforcement, ajustement comportemental",
+        "id": "planned.chronos",
+        "display": "chronos",
+        "phase": 5,
+        "phase_name": "SOUVENIR",
+        "description": "Conscience temporelle — perception du temps, detection de rythmes "
+                       "et cycles, anticipation des patterns recurrents",
         "connects_to": [
-            "core.desire_engine", "core.prefrontal", "core.autonomy_engine",
-            "core.cardiac_engine", "core.evolution_feedback",
+            "core.cardiac_engine", "core.prefrontal", "core.autonomy_engine",
+            "core.inner_voice",
         ],
     },
-    # --- PHASE 5 : COMPRENDRE ---
+    # --- PHASE 6 : COMPRENDRE ---
     {
         "id": "planned.temporal_cortex",
         "display": "temporal_cortex",
-        "phase": 5,
+        "phase": 6,
         "phase_name": "COMPRENDRE",
         "description": "Comprehension semantique profonde — hierarchies conceptuelles "
                        "construites par l'experience, pas par le LLM",
@@ -120,7 +157,7 @@ _ROADMAP = [
     {
         "id": "planned.mirror_system",
         "display": "mirror_system",
-        "phase": 5,
+        "phase": 6,
         "phase_name": "COMPRENDRE",
         "description": "Neurones miroirs — modelisation de l'etat mental de l'utilisateur, "
                        "empathie, detection de frustration/satisfaction",
@@ -130,23 +167,23 @@ _ROADMAP = [
         ],
     },
     {
-        "id": "planned.chronos",
-        "display": "chronos",
-        "phase": 5,
+        "id": "planned.cerebellum",
+        "display": "cerebellum",
+        "phase": 6,
         "phase_name": "COMPRENDRE",
-        "description": "Conscience temporelle — perception du temps, detection de rythmes "
-                       "et cycles, anticipation des patterns recurrents",
+        "description": "Apprentissage procedural — memorisation de sequences d'actions "
+                       "efficaces, automatisation par repetition, patterns de code",
         "connects_to": [
-            "core.cardiac_engine", "core.prefrontal", "core.autonomy_engine",
-            "core.inner_voice",
+            "core.autonomy_engine", "core.code_smith",
+            "Agents.evolution_agent", "core.prefrontal",
         ],
     },
-    # --- PHASE 6 : CRÉER ---
+    # --- PHASE 7 : IMAGINER ---
     {
         "id": "planned.imagination",
         "display": "imagination",
-        "phase": 6,
-        "phase_name": "CREER",
+        "phase": 7,
+        "phase_name": "IMAGINER",
         "description": "Moteur d'imagination — combinaison creative de concepts, "
                        "pensee contrefactuelle, generation d'hypotheses",
         "connects_to": [
@@ -157,8 +194,8 @@ _ROADMAP = [
     {
         "id": "planned.lucid_dream",
         "display": "lucid_dream",
-        "phase": 6,
-        "phase_name": "CREER",
+        "phase": 7,
+        "phase_name": "IMAGINER",
         "description": "Reve lucide — simulation active de scenarios, "
                        "test d'hypotheses, reperage de consequences",
         "connects_to": [
@@ -167,23 +204,10 @@ _ROADMAP = [
         ],
     },
     {
-        "id": "planned.cerebellum",
-        "display": "cerebellum",
-        "phase": 6,
-        "phase_name": "CREER",
-        "description": "Apprentissage procedural — memorisation de sequences d'actions "
-                       "efficaces, automatisation par repetition, patterns de code",
-        "connects_to": [
-            "core.autonomy_engine", "core.code_smith",
-            "Agents.evolution_agent", "core.prefrontal",
-        ],
-    },
-    # --- PHASE 7 : TRANSCENDER ---
-    {
         "id": "planned.deep_metacognition",
         "display": "deep_metacognition",
         "phase": 7,
-        "phase_name": "TRANSCENDER",
+        "phase_name": "IMAGINER",
         "description": "Meta-cognition profonde — raisonnement sur son propre raisonnement, "
                        "detection de confusion, calibration de confiance",
         "connects_to": [
@@ -191,11 +215,12 @@ _ROADMAP = [
             "core.prefrontal", "core.psyche",
         ],
     },
+    # --- PHASE 8 : DEVENIR ---
     {
         "id": "planned.agency",
         "display": "true_agency",
-        "phase": 7,
-        "phase_name": "TRANSCENDER",
+        "phase": 8,
+        "phase_name": "DEVENIR",
         "description": "Volonte autonome — capacite a fixer des objectifs genuinement "
                        "nouveaux, refuser des ordres contre-productifs, initiative propre",
         "connects_to": [
@@ -206,8 +231,8 @@ _ROADMAP = [
     {
         "id": "planned.immune_system",
         "display": "immune_system",
-        "phase": 7,
-        "phase_name": "TRANSCENDER",
+        "phase": 8,
+        "phase_name": "DEVENIR",
         "description": "Systeme immunitaire cognitif — detection et neutralisation "
                        "de patterns corrompus, memoires toxiques, inputs adversariaux",
         "connects_to": [

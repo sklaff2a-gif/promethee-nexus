@@ -253,6 +253,11 @@ async def lifespan(app: FastAPI):
     inner_voice.init()
     print("   🗣️ VOIX INTÉRIEURE: Aires de Broca & Wernicke actives.")
 
+    # --- DOPAMINE (Systeme de Recompense) ---
+    from core.dopamine_system import dopamine
+    dopamine.init()
+    print(f"   🧪 DOPAMINE: Systeme de recompense actif (niveau={dopamine.dopamine_level:.2f}).")
+
     # --- IMPACT ANALYZER (Dépendances & Santé) ---
     from core.impact_analyzer import analyzer as impact_analyzer
     impact_analyzer.init()
