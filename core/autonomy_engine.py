@@ -176,6 +176,7 @@ CONTEXT_KEYWORDS = {
     "MEMORY_CLEANUP": ["mémoire", "nettoyage", "ancien", "doublon", "rag"],
     "REFACTOR_RANDOM": ["refactoring", "simplifier", "lisibilité", "dette", "technique"],
     "MEMORY_CONSOLIDATION": ["consolidation", "synthèse", "résumé", "regrouper", "mémoire"],
+    "SOLILOQUE_INTERNE": ["soliloque", "dialogue", "introspection", "connexion", "réflexion", "compagnon"],
 }
 
 
@@ -803,7 +804,8 @@ class AutonomyEngine:
                 fallback_found = False
                 for alt_selected, alt_score in scored[1:]:
                     alt_intent = alt_selected["intent"]
-                    alt_veto = self._should_veto(alt_intent)
+                    alt_agent = alt_selected["agent"]
+                    alt_veto = self._should_veto(alt_intent, alt_agent)
                     if not alt_veto:
                         selected, score = alt_selected, alt_score
                         agent = selected["agent"]

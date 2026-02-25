@@ -278,7 +278,11 @@ class ReptilianCore:
             threats["hallucination_storm"] = 6.0
 
         # --- Inactivité prolongée ---
-        if now - self._last_activity > THRESHOLDS["idle_too_long"]:
+        # Ne PAS compter l'idle pendant FREEZE/SHED (c'est le système qui bloque,
+        # sinon cercle vicieux : FREEZE→pas de routine→idle monte→menace reste→FREEZE)
+        freeze_active = time.time() < self._freeze_until
+        shed_active = time.time() < self._shed_until
+        if now - self._last_activity > THRESHOLDS["idle_too_long"] and not freeze_active and not shed_active:
             threats["idle"] = 2.0
 
         self._last_threats = threats
@@ -350,6 +354,7 @@ class ReptilianCore:
     def _activate_freeze(self, now: float):
         """Arrêt complet des routines autonomes."""
         self._freeze_until = now + 180  # 3 minutes de freeze
+        self._last_activity = now  # Reset idle pour éviter spirale FREEZE→idle→FREEZE
         self._record_reflex("FREEZE")
         logger.warning(f"REPTILIEN: FREEZE activé (menace={self.threat_level:.1f})")
 
