@@ -27,7 +27,7 @@ from pathlib import Path
 RE_TIMESTAMP = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]")
 
 RE_AUTONOMY_ROUTINE = re.compile(
-    r"✨ AUTONOMY: Routine \[(.+?)\] \(score=([0-9.e+-]+)[^)]*\) -> \[(.+?)\] \((\d+)/(\d+)\)"
+    r"✨ AUTONOMY: Routine \[(.+?)\] \(score=([0-9.e+-]+)[^)]*\) -> \[(.+?)\] \((\d+)/(\d+)[^)]*\)"
 )
 
 RE_ROUTINE_END = re.compile(
