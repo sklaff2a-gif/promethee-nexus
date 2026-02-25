@@ -126,6 +126,12 @@ class ReptilianCore:
         self._beat_counter: int = 0
         self._last_activity: float = time.time()
 
+        # --- Capteurs bruts (pour télémétrie) ---
+        self._last_cpu: float = 0.0
+        self._last_ram: float = 0.0
+        self._last_budget_ratio: float = 0.0
+        self._ollama_ok: bool = True
+
         # --- Flags de réflexes actifs ---
         self._freeze_until: float = 0.0          # timestamp de fin de FREEZE
         self._shed_until: float = 0.0            # timestamp de fin de SHED
@@ -205,6 +211,8 @@ class ReptilianCore:
             cpu = psutil.cpu_percent(interval=0)
             mem = psutil.virtual_memory()
             ram = mem.percent
+            self._last_cpu = cpu
+            self._last_ram = ram
 
             if cpu >= THRESHOLDS["cpu_crit"]:
                 threats["cpu"] = 8.0
@@ -231,8 +239,12 @@ class ReptilianCore:
                 resp = await client.get("http://localhost:11434/api/tags", timeout=2.0)
                 if resp.status_code != 200:
                     threats["ollama"] = 9.0
+                    self._ollama_ok = False
+                else:
+                    self._ollama_ok = True
         except Exception:
             threats["ollama"] = 9.0  # Ollama injoignable = menace critique
+            self._ollama_ok = False
 
         # --- Error Streak (depuis AutonomyEngine) ---
         try:
@@ -253,6 +265,7 @@ class ReptilianCore:
             count_ratio = daily_count / max(1, MAX_DAILY_ROUTINES)
             budget_ratio = budget_used / max(1, DAILY_BUDGET_POINTS)
             ratio = max(count_ratio, budget_ratio)
+            self._last_budget_ratio = ratio
 
             if ratio >= THRESHOLDS["budget_crit_ratio"]:
                 # Budget épuisé → SHED (limiter aux routines pas chères), PAS FREEZE
@@ -567,7 +580,7 @@ class ReptilianCore:
         return self.threat_level
 
     def get_stats(self) -> Dict[str, Any]:
-        """État complet pour endpoint API."""
+        """État complet pour endpoint API et télémétrie."""
         return {
             "threat_level": round(self.threat_level, 1),
             "adrenaline": round(self.adrenaline, 2),
@@ -579,6 +592,11 @@ class ReptilianCore:
             "hallucination_count_window": len(self._hallucination_timestamps),
             "beat_counter": self._beat_counter,
             "alive": self._alive,
+            # Capteurs bruts pour télémétrie
+            "cpu_percent": round(self._last_cpu, 1),
+            "ram_percent": round(self._last_ram, 1),
+            "budget_ratio": round(self._last_budget_ratio, 3),
+            "ollama_ok": self._ollama_ok,
         }
 
     # ============================================================

@@ -161,19 +161,43 @@
                 </div>
             </div>
             <div class="cyber-box flex-1 min-h-0">
-                <div class="absolute top-0 left-0 right-0 bg-gray-900 text-gray-400 text-[9px] px-1 font-bold h-5 flex items-center">TÉLÉMÉTRIE</div>
+                <div class="absolute top-0 left-0 right-0 bg-gray-900 text-gray-400 text-[9px] px-1 font-bold h-5 flex items-center justify-between">
+                    <span>TÉLÉMÉTRIE</span>
+                    <span id="telem-threat" class="text-[8px]" style="color:#00ff41">THREAT 0.0</span>
+                </div>
                 <div class="locked-scroll-area">
-                    <div class="space-y-3 mt-1">
-                        <div><div class="flex justify-between text-[9px] mb-1 text-gray-400"><span>CPU</span> <span>12%</span></div><div class="h-1 bg-gray-900"><div class="h-full bg-green-600" style="width: 12%"></div></div></div>
-                        <div><div class="flex justify-between text-[9px] mb-1 text-gray-400"><span>RAM</span> <span>34%</span></div><div class="h-1 bg-gray-900"><div class="h-full bg-blue-600" style="width: 34%"></div></div></div>
-                        <div><div class="flex justify-between text-[9px] mb-1 text-gray-400"><span>NET</span> <span class="text-purple-400">OK</span></div><div class="h-1 bg-gray-900"><div class="h-full bg-purple-600 animate-pulse" style="width: 100%"></div></div></div>
+                    <div class="space-y-2 mt-1">
+                        <div>
+                            <div class="flex justify-between text-[9px] mb-1 text-gray-400"><span>CPU</span> <span id="telem-cpu-val">--%</span></div>
+                            <div class="h-1 bg-gray-900"><div id="telem-cpu-bar" class="h-full bg-green-600 transition-all duration-500" style="width: 0%"></div></div>
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-[9px] mb-1 text-gray-400"><span>RAM</span> <span id="telem-ram-val">--%</span></div>
+                            <div class="h-1 bg-gray-900"><div id="telem-ram-bar" class="h-full bg-blue-600 transition-all duration-500" style="width: 0%"></div></div>
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-[9px] mb-1 text-gray-400"><span>OLLAMA</span> <span id="telem-ollama-val" class="text-gray-600">--</span></div>
+                            <div class="h-1 bg-gray-900"><div id="telem-ollama-bar" class="h-full bg-purple-600 transition-all duration-500" style="width: 0%"></div></div>
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-[9px] mb-1 text-gray-400"><span>BPM</span> <span id="telem-bpm-val">--</span></div>
+                            <div class="h-1 bg-gray-900"><div id="telem-bpm-bar" class="h-full transition-all duration-500" style="width: 0%; background-color: #00ff41"></div></div>
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-[9px] mb-1 text-gray-400"><span>BUDGET</span> <span id="telem-budget-val">--</span></div>
+                            <div class="h-1 bg-gray-900"><div id="telem-budget-bar" class="h-full bg-yellow-600 transition-all duration-500" style="width: 0%"></div></div>
+                        </div>
+                        <div class="border-t border-gray-900 pt-1 mt-1">
+                            <div class="flex justify-between text-[8px] text-gray-600"><span>ADRENALINE</span> <span id="telem-adrenaline-val">0%</span></div>
+                            <div class="flex justify-between text-[8px] text-gray-600 mt-1"><span>REFLEXES</span> <span id="telem-reflexes-val">--</span></div>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="/static/js/vision.js?v=1.0"></script>
-    <script src="/static/js/nexus.js?v=12.4"></script>
+    <script src="/static/js/vision.js?v=1.1"></script>
+    <script src="/static/js/nexus.js?v=12.5"></script>
 </body>
 </html>

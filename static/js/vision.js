@@ -32,6 +32,7 @@ const NeuralVision = (function() {
         inquietude:    "#ff9100",
         fatigue:       "#78909c",
         determination: "#448aff",
+        alerte:        "#ff1744",
     };
 
     // --- Etat ---
@@ -349,7 +350,7 @@ const NeuralVision = (function() {
         if (!statsEl) return;
         var text = (stats.total_nodes || 0) + "N " + (stats.total_synapses || 0) + "S";
         if (cardiac && cardiac.bpm) {
-            var emotion = cardiac.dominant_emotion || "---";
+            var emotion = cardiac.emotion || "---";
             var color = EMOTION_COLORS[emotion] || "#00ff41";
             text += " | " + Math.round(cardiac.bpm) + " BPM";
             statsEl.style.color = color;
@@ -427,6 +428,21 @@ const NeuralVision = (function() {
                     .attr("class", "synapse-new");
             }
         }
+        else if (change === "node_removed") {
+            // Noeud pruné par _enforce_node_limit
+            var idx = nodeData.findIndex(function(n) { return n.id === payload.id; });
+            if (idx !== -1) {
+                nodeData.splice(idx, 1);
+                delete nodeMap[payload.id];
+                // Supprimer les liens associés
+                linkData = linkData.filter(function(l) {
+                    var sid = typeof l.source === "object" ? l.source.id : l.source;
+                    var tid = typeof l.target === "object" ? l.target.id : l.target;
+                    return sid !== payload.id && tid !== payload.id;
+                });
+                rebindGraph();
+            }
+        }
         else if (change === "synapse_strengthen") {
             // Renforcement
             var found = false;
@@ -450,7 +466,7 @@ const NeuralVision = (function() {
         if (!initialized || !g) return;
 
         var bpm = payload.bpm || 60;
-        var emotion = payload.dominant_emotion || "serenite";
+        var emotion = payload.emotion || "serenite";
         var coherence = payload.coherence || 0.5;
         var color = EMOTION_COLORS[emotion] || "#00ff41";
 

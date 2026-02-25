@@ -295,6 +295,7 @@ class SynapticNetwork:
             # Supprimer aussi les synapses associees
             self._remove_node_synapses(node_id)
             del self.nodes[node_id]
+            self._publish_delta("node_removed", {"id": node_id})
 
     def _enforce_synapse_limit(self):
         """Supprime les synapses les plus faibles si > MAX_SYNAPSES."""

@@ -240,13 +240,19 @@ ws.onmessage = (event) => {
             psycheChartInstance.update();
         }
     }
-    // 13. CARDIAC_BEAT : overlay cardiaque VISION
+    // 13. CARDIAC_BEAT : overlay cardiaque VISION + télémétrie BPM
     else if (type === "CARDIAC_BEAT") {
         if (typeof NeuralVision !== 'undefined') NeuralVision.handleCardiacBeat(payload);
+        // Télémétrie BPM
+        updateTelemBpm(payload);
     }
     // 14. SYNAPTIC_UPDATE : mise à jour graphe neural VISION
     else if (type === "SYNAPTIC_UPDATE") {
         if (typeof NeuralVision !== 'undefined') NeuralVision.handleSynapticUpdate(payload);
+    }
+    // 15. REPTILIAN_STATE : télémétrie CPU/RAM/Ollama/Threat
+    else if (type === "REPTILIAN_STATE") {
+        updateTelemReptilian(payload);
     }
 };
 
@@ -311,6 +317,99 @@ fetch('/api/psyche/status').then(r => r.json()).then(data => {
         psycheChartInstance.update();
     }
 }).catch(() => {});
+
+// --- Télémétrie : fonctions de mise à jour ---
+
+function updateTelemReptilian(p) {
+    // CPU
+    var cpuVal = document.getElementById('telem-cpu-val');
+    var cpuBar = document.getElementById('telem-cpu-bar');
+    if (cpuVal && p.cpu_percent !== undefined) {
+        var cpu = Math.round(p.cpu_percent);
+        cpuVal.textContent = cpu + '%';
+        cpuBar.style.width = cpu + '%';
+        cpuBar.className = 'h-full transition-all duration-500 ' +
+            (cpu > 80 ? 'bg-red-600' : cpu > 50 ? 'bg-yellow-600' : 'bg-green-600');
+    }
+    // RAM
+    var ramVal = document.getElementById('telem-ram-val');
+    var ramBar = document.getElementById('telem-ram-bar');
+    if (ramVal && p.ram_percent !== undefined) {
+        var ram = Math.round(p.ram_percent);
+        ramVal.textContent = ram + '%';
+        ramBar.style.width = ram + '%';
+        ramBar.className = 'h-full transition-all duration-500 ' +
+            (ram > 80 ? 'bg-red-600' : ram > 60 ? 'bg-yellow-600' : 'bg-blue-600');
+    }
+    // Ollama
+    var olVal = document.getElementById('telem-ollama-val');
+    var olBar = document.getElementById('telem-ollama-bar');
+    if (olVal) {
+        var ok = p.ollama_ok;
+        olVal.textContent = ok ? 'OK' : 'DOWN';
+        olVal.className = 'text-[9px] ' + (ok ? 'text-green-500' : 'text-red-500');
+        olBar.style.width = ok ? '100%' : '0%';
+        olBar.className = 'h-full transition-all duration-500 ' + (ok ? 'bg-purple-600' : 'bg-red-600');
+    }
+    // Budget
+    var budVal = document.getElementById('telem-budget-val');
+    var budBar = document.getElementById('telem-budget-bar');
+    if (budVal && p.budget_ratio !== undefined) {
+        var pct = Math.round(p.budget_ratio * 100);
+        var remaining = Math.max(0, 100 - pct);
+        budVal.textContent = remaining + '% restant';
+        budBar.style.width = pct + '%';
+        budBar.className = 'h-full transition-all duration-500 ' +
+            (pct > 90 ? 'bg-red-600' : pct > 70 ? 'bg-yellow-600' : 'bg-yellow-600');
+    }
+    // Threat level
+    var threatEl = document.getElementById('telem-threat');
+    if (threatEl && p.threat_level !== undefined) {
+        var tl = p.threat_level;
+        threatEl.textContent = 'THREAT ' + tl.toFixed(1);
+        threatEl.style.color = tl >= 7 ? '#ff1744' : tl >= 4 ? '#ff9100' : tl >= 2 ? '#ffea00' : '#00ff41';
+    }
+    // Adrenaline
+    var adrVal = document.getElementById('telem-adrenaline-val');
+    if (adrVal && p.adrenaline !== undefined) {
+        adrVal.textContent = Math.round(p.adrenaline * 100) + '%';
+        adrVal.style.color = p.adrenaline > 0.5 ? '#ff5252' : p.adrenaline > 0 ? '#ff9100' : '#4b5563';
+    }
+    // Reflexes
+    var refVal = document.getElementById('telem-reflexes-val');
+    if (refVal && p.reflexes_triggered) {
+        var parts = [];
+        for (var k in p.reflexes_triggered) {
+            if (p.reflexes_triggered[k] > 0) parts.push(k + ':' + p.reflexes_triggered[k]);
+        }
+        refVal.textContent = parts.length > 0 ? parts.join(' ') : 'aucun';
+    }
+}
+
+function updateTelemBpm(p) {
+    var bpmVal = document.getElementById('telem-bpm-val');
+    var bpmBar = document.getElementById('telem-bpm-bar');
+    if (!bpmVal || !p.bpm) return;
+    var bpm = Math.round(p.bpm);
+    var emotion = p.emotion || 'serenite';
+    var emotionColors = {
+        serenite: '#00ff41', curiosite: '#00e5ff', enthousiasme: '#ffea00',
+        flow: '#e040fb', frustration: '#ff5252', inquietude: '#ff9100',
+        fatigue: '#78909c', determination: '#448aff', alerte: '#ff1744'
+    };
+    var color = emotionColors[emotion] || '#00ff41';
+    bpmVal.textContent = bpm + ' ' + emotion;
+    bpmVal.style.color = color;
+    // BPM 40-180 → barre 0-100%
+    var pct = Math.max(0, Math.min(100, ((bpm - 40) / 140) * 100));
+    bpmBar.style.width = pct + '%';
+    bpmBar.style.backgroundColor = color;
+}
+
+// Chargement initial télémétrie
+fetch('/api/reptilian/status').then(function(r) { return r.json(); }).then(function(data) {
+    updateTelemReptilian(data);
+}).catch(function() {});
 
 // Chargement version depuis /health
 fetch('/health').then(r => r.json()).then(data => {
