@@ -688,8 +688,14 @@ class SynapticNetwork:
                 intent, "event", 0.6, ["autonomy"]
             )
 
-            # Extraire concepts du resultat
-            concept_nids = self._extract_and_ensure(result_text, "memory", ["autonomy"])
+            # Extraire concepts du resultat (limite differenciee selon richesse)
+            _ROUTINE_CONCEPT_LIMITS = {
+                "COUNCIL_DEBATE": 12, "EXPANSION_CODE": 8, "REFACTOR_RANDOM": 8,
+                "VEILLE_SILENCIEUSE": 8, "SOLILOQUE_INTERNE": 10,
+                "GRIMOIRE_INVOKE": 8, "SECURITY_AUDIT": 6,
+            }
+            max_c = _ROUTINE_CONCEPT_LIMITS.get(intent, 5)
+            concept_nids = self._extract_and_ensure(result_text, "memory", ["autonomy"], max_c)
 
             # Liens Hebbiens entre intent et concepts
             success = (status == "success" and quality >= 0.5)
@@ -718,7 +724,7 @@ class SynapticNetwork:
 
             topic_nid = self.ensure_node(topic, "event", 0.7, ["council"])
             concept_nids = self._extract_and_ensure(
-                summary or topic, "memory", ["council"]
+                summary or topic, "memory", ["council"], max_concepts=12
             )
 
             success = (status == "consensus")
@@ -779,7 +785,7 @@ class SynapticNetwork:
             description = event.get("description", "")
             if not description:
                 return
-            self._extract_and_ensure(description, "memory", ["experience"])
+            self._extract_and_ensure(description, "memory", ["experience"], max_concepts=8)
         except Exception as e:
             logger.warning(f"SYNAPSE: Erreur _on_experience_recorded: {e}")
 
@@ -802,7 +808,7 @@ class SynapticNetwork:
                                         context=f"mission:{mission[:80]}")
 
             concept_nids = self._extract_and_ensure(
-                result or mission, "memory", ["mission"]
+                result or mission, "memory", ["mission"], max_concepts=10
             )
             for cnid in concept_nids:
                 self.hebbian_strengthen(mission_nid, cnid, success=success,
