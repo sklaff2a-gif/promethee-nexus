@@ -3,10 +3,12 @@
 IMPACT GRAPH — Analyseur de dépendances et santé des modules.
 
 Scan AST des imports top-level, construction du graphe de dépendances,
-collecte de l'état de santé de chaque module. 0 LLM, pur déterministe.
+connexions event bus (publish/subscribe), collecte santé modules.
+0 LLM, pur déterministe.
 """
 import ast
 import os
+import re
 import time
 import logging
 from datetime import datetime
@@ -48,6 +50,16 @@ _AGENT_MODULE_MAP = {
     "formatter": "Agents.formatter_agent",
 }
 
+# Regex pour détecter bus.publish / bus.subscribe dans le source
+_RE_BUS_PUBLISH = re.compile(
+    r'''bus\.publish\(\s*["']([A-Z_]+)["']''',
+    re.MULTILINE,
+)
+_RE_BUS_SUBSCRIBE = re.compile(
+    r'''bus\.subscribe\(\s*["']([A-Z_*]+)["']''',
+    re.MULTILINE,
+)
+
 
 class ImpactAnalyzer:
     """Singleton — Analyseur de dépendances et santé des modules Prométhée."""
@@ -69,6 +81,8 @@ class ImpactAnalyzer:
             from core.event_bus.bus import bus
             bus.subscribe("CI_PIPELINE_RESULT", self._on_invalidate)
             bus.subscribe("HALLUCINATION_DETECTED", self._on_invalidate)
+            bus.subscribe("ARTIFACT_CREATED", self._on_invalidate)
+            bus.subscribe("SMART_RESTART_REQUESTED", self._on_invalidate)
             logger.info("[IMPACT] Analyseur de dépendances initialisé.")
         except Exception:
             pass  # Bus pas encore dispo, pas grave
@@ -144,24 +158,20 @@ class ImpactAnalyzer:
 
         return modules
 
-    # --- EXTRACTION DES IMPORTS TOP-LEVEL ---
+    # --- EXTRACTION DES IMPORTS ---
 
-    def _extract_top_level_imports(self, filepath: str, known_modules: set) -> list:
-        """Extrait les imports top-level d'un fichier qui matchent des modules du projet.
-
-        Seuls les imports au niveau ast.Module.body (pas ast.walk) sont pris.
-
-        Args:
-            filepath: Chemin absolu du fichier Python.
-            known_modules: Set des module_ids connus du projet.
-
-        Returns:
-            Liste de module_ids importés.
-        """
+    def _read_source(self, filepath: str) -> str:
+        """Lit le source d'un fichier Python. Retourne '' si erreur."""
         try:
             with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-                source = f.read()
+                return f.read()
         except (OSError, IOError):
+            return ""
+
+    def _extract_top_level_imports(self, filepath: str, known_modules: set) -> list:
+        """Extrait les imports top-level d'un fichier qui matchent des modules du projet."""
+        source = self._read_source(filepath)
+        if not source:
             return []
 
         try:
@@ -170,7 +180,6 @@ class ImpactAnalyzer:
             return []
 
         imports = set()
-        # Seulement les statements top-level
         for node in tree.body:
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -181,24 +190,114 @@ class ImpactAnalyzer:
 
         return sorted(imports)
 
-    def _match_import(self, import_name: str, known_modules: set, result: set):
-        """Tente de matcher un import avec un module connu du projet.
+    def _count_local_imports(self, filepath: str, known_modules: set) -> int:
+        """Compte les imports locaux (dans les fonctions) qui matchent le projet.
 
-        Essaie le nom complet, puis des préfixes de plus en plus courts.
+        Ne compte que les imports DANS des fonctions/méthodes (pas top-level).
         """
-        # Match exact
+        source = self._read_source(filepath)
+        if not source:
+            return 0
+
+        try:
+            tree = ast.parse(source, filename=filepath)
+        except SyntaxError:
+            return 0
+
+        # Collecter les imports top-level pour les exclure
+        top_level_nodes = set()
+        for node in tree.body:
+            top_level_nodes.add(id(node))
+
+        local_imports = set()
+        for node in ast.walk(tree):
+            if id(node) in top_level_nodes:
+                continue
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    self._match_import(alias.name, known_modules, local_imports)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    self._match_import(node.module, known_modules, local_imports)
+
+        return len(local_imports)
+
+    def _match_import(self, import_name: str, known_modules: set, result: set):
+        """Tente de matcher un import avec un module connu du projet."""
         if import_name in known_modules:
             result.add(import_name)
             return
 
-        # Match partiel : "core.event_bus.bus" → cherche "core.event_bus.bus"
-        # ou "core.event_bus" → cherche si un module commence par ça
         parts = import_name.split(".")
         for i in range(len(parts), 0, -1):
             candidate = ".".join(parts[:i])
             if candidate in known_modules:
                 result.add(candidate)
                 return
+
+    # --- CONNEXIONS EVENT BUS ---
+
+    def _extract_bus_connections(self, filepath: str) -> dict:
+        """Scanne un fichier pour trouver les bus.publish() et bus.subscribe().
+
+        Returns:
+            {"publishes": ["EVENT_A", ...], "subscribes": ["EVENT_B", ...]}
+        """
+        source = self._read_source(filepath)
+        if not source:
+            return {"publishes": [], "subscribes": []}
+
+        publishes = sorted(set(_RE_BUS_PUBLISH.findall(source)))
+        subscribes = sorted(set(_RE_BUS_SUBSCRIBE.findall(source)))
+        # Exclure le wildcard "*" des subscribes
+        subscribes = [s for s in subscribes if s != "*"]
+
+        return {"publishes": publishes, "subscribes": subscribes}
+
+    def _build_bus_graph(self, modules: dict) -> tuple:
+        """Construit le graphe de connexions event bus.
+
+        Returns:
+            (bus_links, bus_info) :
+            - bus_links: list de {source, target, event, type:"bus"}
+            - bus_info: dict module_id → {publishes: [...], subscribes: [...]}
+        """
+        bus_info = {}
+        # event → list of module_ids qui le publient
+        publishers = {}
+        # event → list of module_ids qui y souscrivent
+        subscribers = {}
+
+        for mid, info in modules.items():
+            conn = self._extract_bus_connections(info["path"])
+            bus_info[mid] = conn
+
+            for evt in conn["publishes"]:
+                publishers.setdefault(evt, []).append(mid)
+            for evt in conn["subscribes"]:
+                subscribers.setdefault(evt, []).append(mid)
+
+        # Créer les liens : publisher → subscriber pour chaque event
+        bus_links = []
+        seen = set()
+        for evt in publishers:
+            if evt not in subscribers:
+                continue
+            for pub_mid in publishers[evt]:
+                for sub_mid in subscribers[evt]:
+                    if pub_mid == sub_mid:
+                        continue  # pas d'auto-lien
+                    key = (pub_mid, sub_mid, evt)
+                    if key not in seen:
+                        seen.add(key)
+                        bus_links.append({
+                            "source": pub_mid,
+                            "target": sub_mid,
+                            "event": evt,
+                            "type": "bus",
+                        })
+
+        return bus_links, bus_info
 
     # --- GRAPHE DE DÉPENDANCES ---
 
@@ -302,20 +401,25 @@ class ImpactAnalyzer:
         """Point d'entrée principal. Retourne le graphe complet pour l'API.
 
         Résultat mis en cache pour _CACHE_TTL secondes.
-        Invalidé par CI_PIPELINE_RESULT et HALLUCINATION_DETECTED.
+        Invalidé par CI_PIPELINE_RESULT, HALLUCINATION_DETECTED,
+        ARTIFACT_CREATED, SMART_RESTART_REQUESTED.
         """
         now = time.time()
         if self._cache and (now - self._cache_time) < _CACHE_TTL:
             return self._cache
 
         modules = self._discover_modules()
+        known = set(modules.keys())
         imports_of, imported_by = self._build_dependency_graph(modules)
+        bus_links, bus_info = self._build_bus_graph(modules)
         health = self._collect_health_data(modules)
 
         # Construire les nodes
         nodes = []
         for mid, info in modules.items():
             h = health.get(mid, {})
+            bi = bus_info.get(mid, {})
+            local_count = self._count_local_imports(info["path"], known)
             nodes.append({
                 "id": mid,
                 "name": info["name"],
@@ -327,9 +431,12 @@ class ImpactAnalyzer:
                 "last_modified": h.get("last_modified", 0.0),
                 "import_count": len(imports_of.get(mid, [])),
                 "imported_by_count": len(imported_by.get(mid, [])),
+                "local_import_count": local_count,
+                "publishes": bi.get("publishes", []),
+                "subscribes": bi.get("subscribes", []),
             })
 
-        # Construire les links
+        # Construire les links (imports structurels)
         links = []
         for mid, deps in imports_of.items():
             for dep in deps:
@@ -339,13 +446,30 @@ class ImpactAnalyzer:
                     "type": "imports",
                 })
 
+        # Ajouter les liens bus (dédupliqués par paire source→target)
+        bus_pairs_seen = set()
+        for bl in bus_links:
+            pair = (bl["source"], bl["target"])
+            if pair not in bus_pairs_seen:
+                bus_pairs_seen.add(pair)
+                links.append({
+                    "source": bl["source"],
+                    "target": bl["target"],
+                    "type": "bus",
+                    "event": bl["event"],
+                })
+
         # Stats
         statuses = [n["status"] for n in nodes]
+        import_links = [l for l in links if l["type"] == "imports"]
+        bus_link_list = [l for l in links if l["type"] == "bus"]
         stats = {
             "total_modules": len(nodes),
             "healthy": statuses.count("healthy"),
             "degraded": statuses.count("degraded"),
             "error": statuses.count("error"),
+            "import_links": len(import_links),
+            "bus_links": len(bus_link_list),
             "computed_at": datetime.now().isoformat(timespec="seconds"),
         }
 
