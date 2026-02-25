@@ -657,6 +657,11 @@ class SynapticNetwork:
             bus.subscribe("MISSION_FINISHED", self._on_mission_finished)
             bus.subscribe("INNER_VOICE_BROADCAST", self._on_inner_voice)
             bus.subscribe("PSYCHE_UPDATE", self._on_psyche_update)
+            bus.subscribe("CARDIAC_BEAT", self._on_cardiac_beat)
+            bus.subscribe("REPTILIAN_ALERT", self._on_reptilian_alert)
+            bus.subscribe("PREFRONTAL_GOAL_CREATED", self._on_goal_created)
+            bus.subscribe("PREFRONTAL_GOAL_COMPLETE", self._on_goal_complete)
+            bus.subscribe("PREFRONTAL_GOAL_ABANDONED", self._on_goal_abandoned)
         except Exception as e:
             logger.warning(f"SYNAPSE: Impossible de souscrire aux evenements: {e}")
 
@@ -692,6 +697,11 @@ class SynapticNetwork:
                                 "emotional",
                                 f"resonance:{drive.lower()}->{trait_name}",
                             )
+                            self._publish_delta("synapse_new", {
+                                "source": drive_nid, "target": trait_nid,
+                                "weight": round(weight, 3),
+                                "type": "emotional",
+                            })
         except ImportError:
             logger.warning("SYNAPSE: desire_engine non disponible pour seed")
 
@@ -733,6 +743,156 @@ class SynapticNetwork:
                 pass
         except Exception as e:
             logger.warning(f"SYNAPSE: Erreur _on_psyche_update: {e}")
+
+    async def _on_cardiac_beat(self, event: dict):
+        """Battement cardiaque : module l'energie des noeuds organes."""
+        try:
+            emotion = event.get("emotion", "serenite")
+            intensity = event.get("emotion_intensity", 0.3)
+            coherence = event.get("coherence", 0.5)
+
+            # Importer arousal depuis cardiac
+            try:
+                from core.cardiac_engine import EMOTIONS
+                _, arousal = EMOTIONS.get(emotion, (0.0, 0.3))
+            except ImportError:
+                arousal = intensity
+
+            # Sync deprivation reelle -> energie pulsions
+            try:
+                from core.desire_engine import desires
+                for drive in desires.drives.values():
+                    nid = _make_node_id(f"pulsion:{drive.name.lower()}")
+                    if nid in self.nodes:
+                        base = drive.deprivation / 100.0
+                        pulse = (arousal - 0.5) * 0.06  # [-0.03, +0.03]
+                        new_energy = max(0.1, min(1.0, base + pulse))
+                        if abs(new_energy - self.nodes[nid]["energy"]) > 0.01:
+                            self.nodes[nid]["energy"] = round(new_energy, 3)
+                            self.nodes[nid]["affect"]["desire_intensity"] = round(drive.deprivation, 1)
+                            self._publish_delta("node_activate", {
+                                "id": nid,
+                                "concept": self.nodes[nid]["concept"],
+                                "energy": self.nodes[nid]["energy"],
+                                "activation": self.nodes[nid]["activation_count"],
+                            })
+            except ImportError:
+                pass
+
+            # Module energie traits avec coherence
+            for nid, node in self.nodes.items():
+                if node["node_type"] == "trait":
+                    base = node["affect"].get("trait_value", 50.0) / 100.0
+                    pulse = (coherence - 0.5) * 0.04  # [-0.02, +0.02]
+                    new_energy = max(0.1, min(1.0, base + pulse))
+                    if abs(new_energy - node["energy"]) > 0.01:
+                        node["energy"] = round(new_energy, 3)
+                        self._publish_delta("node_activate", {
+                            "id": nid,
+                            "concept": node["concept"],
+                            "energy": node["energy"],
+                            "activation": node["activation_count"],
+                        })
+        except Exception as e:
+            logger.warning(f"SYNAPSE: Erreur _on_cardiac_beat: {e}")
+
+    async def _on_goal_created(self, event: dict):
+        """Nouveau goal -> noeud objective (rouge) dans le reseau."""
+        try:
+            title = event.get("title", "")
+            if not title or len(title) < MIN_CONCEPT_LENGTH:
+                return
+            source = event.get("source", "")
+            horizon = event.get("horizon", "short")
+
+            weight_map = {"immediate": 0.5, "short": 0.6, "medium": 0.7, "long": 0.8}
+            weight = weight_map.get(horizon, 0.6)
+
+            nid = self.ensure_node(
+                f"goal:{title}", "objective", weight, ["prefrontal", source]
+            )
+            if not nid:
+                return
+
+            # Lier le goal a la pulsion dominante
+            try:
+                from core.desire_engine import desires
+                dominant = max(desires.drives.values(), key=lambda d: d.deprivation)
+                drive_nid = _make_node_id(f"pulsion:{dominant.name.lower()}")
+                if drive_nid in self.nodes:
+                    self.hebbian_strengthen(
+                        nid, drive_nid, success=True,
+                        context=f"goal_drive:{title[:50]}",
+                    )
+            except ImportError:
+                pass
+        except Exception as e:
+            logger.warning(f"SYNAPSE: Erreur _on_goal_created: {e}")
+
+    async def _on_goal_complete(self, event: dict):
+        """Goal accompli -> boost energie."""
+        try:
+            title = event.get("title", "")
+            if not title:
+                return
+            nid = _make_node_id(f"goal:{title}")
+            if nid in self.nodes:
+                self.nodes[nid]["energy"] = 0.95
+                self._publish_delta("node_activate", {
+                    "id": nid, "concept": self.nodes[nid]["concept"],
+                    "energy": 0.95, "activation": self.nodes[nid]["activation_count"],
+                })
+        except Exception as e:
+            logger.warning(f"SYNAPSE: Erreur _on_goal_complete: {e}")
+
+    async def _on_goal_abandoned(self, event: dict):
+        """Goal abandonne -> energy chute."""
+        try:
+            title = event.get("title", "")
+            if not title:
+                return
+            nid = _make_node_id(f"goal:{title}")
+            if nid in self.nodes:
+                self.nodes[nid]["energy"] = 0.1
+                self._publish_delta("node_activate", {
+                    "id": nid, "concept": self.nodes[nid]["concept"],
+                    "energy": 0.1, "activation": self.nodes[nid]["activation_count"],
+                })
+        except Exception as e:
+            logger.warning(f"SYNAPSE: Erreur _on_goal_abandoned: {e}")
+
+    async def _on_reptilian_alert(self, event: dict):
+        """Reflexe reptilien -> flash intense dans le reseau."""
+        try:
+            reflex = event.get("reflex", "")
+            threat_level = event.get("threat_level", 0.0)
+            if not reflex or threat_level < 3.0:
+                return
+
+            energy = min(1.0, 0.5 + threat_level * 0.05)
+            nid = self.ensure_node(
+                f"reflex:{reflex}", "event", energy, ["reptilian"]
+            )
+            if not nid:
+                return
+
+            # Lier a pulsion:stabilite (instinct de survie)
+            stab_nid = _make_node_id("pulsion:stabilite")
+            if stab_nid in self.nodes:
+                self.hebbian_strengthen(
+                    nid, stab_nid, success=True,
+                    context=f"threat:{reflex}:{threat_level:.0f}",
+                )
+
+            # Lier a trait:survie
+            surv_nid = _make_node_id("trait:survie")
+            if surv_nid in self.nodes:
+                self.hebbian_strengthen(
+                    nid, surv_nid, success=True,
+                    context=f"survival:{reflex}",
+                )
+        except Exception as e:
+            logger.warning(f"SYNAPSE: Erreur _on_reptilian_alert: {e}")
 
     async def _on_inner_voice(self, event: dict):
         """Active le noeud correspondant au source de la pensee diffusee."""
@@ -795,6 +955,18 @@ class SynapticNetwork:
                                 )
                 except ImportError:
                     pass
+
+            # Sync immediat deprivation -> energie pulsions
+            try:
+                from core.desire_engine import desires
+                for drive in desires.drives.values():
+                    drive_nid = _make_node_id(f"pulsion:{drive.name.lower()}")
+                    if drive_nid in self.nodes:
+                        new_e = max(0.1, min(1.0, drive.deprivation / 100.0))
+                        self.nodes[drive_nid]["energy"] = round(new_e, 3)
+                        self.nodes[drive_nid]["affect"]["desire_intensity"] = round(drive.deprivation, 1)
+            except ImportError:
+                pass
 
             logger.info(
                 f"SYNAPSE: Routine '{intent}' -> +1 noeud, "

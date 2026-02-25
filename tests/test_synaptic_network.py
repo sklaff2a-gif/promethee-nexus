@@ -1034,3 +1034,277 @@ class TestOrganSeed:
         key = _synapse_key(intent_nid, drive_nid)
         # Pas de lien car echec
         assert key not in network.synapses
+
+
+# =====================================================================
+# TestOrganIntegration — L'Etincelle : organes unifies dans le reseau
+# =====================================================================
+
+class TestOrganIntegration:
+    """Tests de l'integration des organes (coeur, prefrontal, reptilien) dans le reseau synaptique."""
+
+    @staticmethod
+    def _seed_with_organs(network):
+        """Helper : seed les noeuds organes sans STDP parasite."""
+        affect = {"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                  "dominant_trait": "", "trait_value": 50.0, "valence": 0.0}
+        for drive in ["curiosite", "maitrise", "stabilite", "connexion",
+                       "croissance", "creation", "comprehension"]:
+            nid = _make_node_id(f"pulsion:{drive}")
+            network.nodes[nid] = _make_node(f"pulsion:{drive}", "desire", 0.4, ["desire_engine"], dict(affect))
+        for trait in ["curiosite", "creativite", "audace", "savoir", "survie", "respect"]:
+            nid = _make_node_id(f"trait:{trait}")
+            node = _make_node(f"trait:{trait}", "trait", 0.4, ["psyche"], dict(affect))
+            node["affect"]["trait_value"] = 60.0
+            network.nodes[nid] = node
+
+    @pytest.mark.asyncio
+    async def test_cardiac_beat_modulates_desire_energy(self, network):
+        """CARDIAC_BEAT module l'energie des pulsions via arousal."""
+        self._seed_with_organs(network)
+        nid = _make_node_id("pulsion:curiosite")
+        network.nodes[nid]["energy"] = 0.4
+
+        # Mock desire_engine avec une pulsion a deprivation 70
+        mock_drive = MagicMock()
+        mock_drive.name = "CURIOSITE"
+        mock_drive.deprivation = 70.0
+        mock_desires = MagicMock()
+        mock_desires.drives = {"CURIOSITE": mock_drive}
+
+        # Arousal eleve (enthousiasme: valence 0.8, arousal 0.8)
+        with patch.dict("sys.modules", {"core.cardiac_engine": MagicMock(EMOTIONS={"enthousiasme": (0.8, 0.8)})}):
+            with patch.dict("sys.modules", {"core.desire_engine": MagicMock(desires=mock_desires)}):
+                await network._on_cardiac_beat({
+                    "emotion": "enthousiasme", "emotion_intensity": 0.8, "coherence": 0.7
+                })
+
+        # Energie = deprivation/100 + pulse arousal = 0.7 + (0.8-0.5)*0.06 = 0.718
+        assert abs(network.nodes[nid]["energy"] - 0.718) < 0.02
+
+    @pytest.mark.asyncio
+    async def test_cardiac_beat_modulates_trait_energy(self, network):
+        """CARDIAC_BEAT module l'energie des traits via coherence."""
+        self._seed_with_organs(network)
+        trait_nid = _make_node_id("trait:audace")
+        network.nodes[trait_nid]["affect"]["trait_value"] = 75.0
+        network.nodes[trait_nid]["energy"] = 0.4
+
+        with patch.dict("sys.modules", {"core.cardiac_engine": MagicMock(EMOTIONS={"serenite": (0.3, 0.2)})}):
+            with patch.dict("sys.modules", {"core.desire_engine": MagicMock()}):
+                # ImportError sur desires.drives pour sauter la partie desire
+                mock_de = MagicMock()
+                mock_de.desires = MagicMock()
+                mock_de.desires.drives = MagicMock(side_effect=AttributeError)
+                with patch.dict("sys.modules", {"core.desire_engine": mock_de}):
+                    await network._on_cardiac_beat({
+                        "emotion": "serenite", "coherence": 0.9
+                    })
+
+        # Energie = trait_value/100 + (coherence-0.5)*0.04 = 0.75 + 0.016 = 0.766
+        assert abs(network.nodes[trait_nid]["energy"] - 0.766) < 0.02
+
+    @pytest.mark.asyncio
+    async def test_cardiac_beat_syncs_deprivation(self, network):
+        """desire_intensity reflete la deprivation reelle apres CARDIAC_BEAT."""
+        self._seed_with_organs(network)
+        nid = _make_node_id("pulsion:maitrise")
+
+        mock_drive = MagicMock()
+        mock_drive.name = "MAITRISE"
+        mock_drive.deprivation = 85.0
+        mock_desires = MagicMock()
+        mock_desires.drives = {"MAITRISE": mock_drive}
+
+        with patch.dict("sys.modules", {"core.cardiac_engine": MagicMock(EMOTIONS={"serenite": (0.3, 0.3)})}):
+            with patch.dict("sys.modules", {"core.desire_engine": MagicMock(desires=mock_desires)}):
+                await network._on_cardiac_beat({"emotion": "serenite", "coherence": 0.5})
+
+        assert network.nodes[nid]["affect"]["desire_intensity"] == 85.0
+
+    @pytest.mark.asyncio
+    async def test_cardiac_beat_no_stdp(self, network):
+        """Pas de synapse temporelle creee par CARDIAC_BEAT (buffer STDP inchange)."""
+        self._seed_with_organs(network)
+        buffer_before = list(network._activation_buffer)
+        synapses_before = len(network.synapses)
+
+        with patch.dict("sys.modules", {"core.cardiac_engine": MagicMock(EMOTIONS={"serenite": (0.3, 0.3)})}):
+            with patch.dict("sys.modules", {"core.desire_engine": MagicMock()}):
+                mock_de = MagicMock()
+                mock_de.desires = MagicMock()
+                mock_de.desires.drives.values.side_effect = ImportError
+                with patch.dict("sys.modules", {"core.desire_engine": mock_de}):
+                    await network._on_cardiac_beat({"emotion": "serenite", "coherence": 0.5})
+
+        # Buffer STDP identique (pas d'ajout via _record_activation)
+        assert network._activation_buffer == buffer_before
+        # Pas de nouvelles synapses
+        assert len(network.synapses) == synapses_before
+
+    @pytest.mark.asyncio
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature",
+           return_value={"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                         "dominant_trait": "", "trait_value": 50.0, "valence": 0.0})
+    async def test_goal_created_makes_objective_node(self, mock_affect, network):
+        """PREFRONTAL_GOAL_CREATED cree un noeud objective."""
+        await network._on_goal_created({
+            "title": "Optimiser base_agent",
+            "goal_id": "g1",
+            "source": "knowledge_gap",
+            "horizon": "medium",
+        })
+        nid = _make_node_id("goal:Optimiser base_agent")
+        assert nid in network.nodes
+        assert network.nodes[nid]["node_type"] == "objective"
+
+    @pytest.mark.asyncio
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature",
+           return_value={"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                         "dominant_trait": "", "trait_value": 50.0, "valence": 0.0})
+    async def test_goal_created_links_to_dominant_drive(self, mock_affect, network):
+        """Le goal est lie a la pulsion dominante."""
+        self._seed_with_organs(network)
+
+        mock_drive = MagicMock()
+        mock_drive.name = "CROISSANCE"
+        mock_drive.deprivation = 90.0
+        mock_other = MagicMock()
+        mock_other.name = "STABILITE"
+        mock_other.deprivation = 20.0
+        mock_desires = MagicMock()
+        mock_desires.drives = {"CROISSANCE": mock_drive, "STABILITE": mock_other}
+
+        with patch.dict("sys.modules", {"core.desire_engine": MagicMock(desires=mock_desires)}):
+            await network._on_goal_created({
+                "title": "Apprendre design patterns",
+                "horizon": "long",
+            })
+
+        goal_nid = _make_node_id("goal:Apprendre design patterns")
+        drive_nid = _make_node_id("pulsion:croissance")
+        key = _synapse_key(goal_nid, drive_nid)
+        assert key in network.synapses
+
+    @pytest.mark.asyncio
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature",
+           return_value={"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                         "dominant_trait": "", "trait_value": 50.0, "valence": 0.0})
+    async def test_goal_complete_peaks_energy(self, mock_affect, network):
+        """PREFRONTAL_GOAL_COMPLETE met l'energie a 0.95."""
+        # Creer le goal d'abord
+        await network._on_goal_created({
+            "title": "Optimiser base_agent", "horizon": "short"
+        })
+        nid = _make_node_id("goal:Optimiser base_agent")
+        assert nid in network.nodes
+
+        await network._on_goal_complete({"title": "Optimiser base_agent"})
+        assert network.nodes[nid]["energy"] == 0.95
+
+    @pytest.mark.asyncio
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature",
+           return_value={"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                         "dominant_trait": "", "trait_value": 50.0, "valence": 0.0})
+    async def test_goal_abandoned_fades_energy(self, mock_affect, network):
+        """PREFRONTAL_GOAL_ABANDONED fait chuter l'energie a 0.1."""
+        await network._on_goal_created({
+            "title": "Migrer vers Redis", "horizon": "long"
+        })
+        nid = _make_node_id("goal:Migrer vers Redis")
+        assert network.nodes[nid]["energy"] > 0.1
+
+        await network._on_goal_abandoned({"title": "Migrer vers Redis"})
+        assert network.nodes[nid]["energy"] == 0.1
+
+    @pytest.mark.asyncio
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature",
+           return_value={"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                         "dominant_trait": "", "trait_value": 50.0, "valence": 0.0})
+    async def test_reptilian_alert_creates_reflex_node(self, mock_affect, network):
+        """REPTILIAN_ALERT cree un noeud event haute energie."""
+        self._seed_with_organs(network)
+        await network._on_reptilian_alert({
+            "reflex": "ADRENALINE", "threat_level": 5.0,
+        })
+        nid = _make_node_id("reflex:ADRENALINE")
+        assert nid in network.nodes
+        assert network.nodes[nid]["node_type"] == "event"
+        # energy = min(1.0, 0.5 + 5.0*0.05) = 0.75
+        assert network.nodes[nid]["energy"] >= 0.7
+
+    @pytest.mark.asyncio
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature",
+           return_value={"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                         "dominant_trait": "", "trait_value": 50.0, "valence": 0.0})
+    async def test_reptilian_alert_links_to_survival(self, mock_affect, network):
+        """REPTILIAN_ALERT lie le reflexe a stabilite et survie."""
+        self._seed_with_organs(network)
+        await network._on_reptilian_alert({
+            "reflex": "FREEZE", "threat_level": 7.0,
+        })
+        reflex_nid = _make_node_id("reflex:FREEZE")
+        stab_nid = _make_node_id("pulsion:stabilite")
+        surv_nid = _make_node_id("trait:survie")
+
+        assert _synapse_key(reflex_nid, stab_nid) in network.synapses
+        assert _synapse_key(reflex_nid, surv_nid) in network.synapses
+
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature",
+           return_value={"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                         "dominant_trait": "", "trait_value": 50.0, "valence": 0.0})
+    def test_seed_publishes_synapse_deltas(self, mock_affect, network):
+        """_seed_organ_nodes publie des deltas synapse_new pour les liens resonance."""
+        deltas = []
+        original_publish = network._publish_delta
+        def capture_delta(change_type, data):
+            deltas.append((change_type, data))
+            original_publish(change_type, data)
+        network._publish_delta = capture_delta
+
+        network._seed_organ_nodes()
+
+        synapse_new_deltas = [d for d in deltas if d[0] == "synapse_new"]
+        # Au moins quelques synapses resonance publiees
+        assert len(synapse_new_deltas) > 0
+        # Toutes de type emotional
+        for _, data in synapse_new_deltas:
+            assert data["type"] == "emotional"
+
+    @pytest.mark.asyncio
+    @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature")
+    async def test_routine_complete_syncs_deprivation(self, mock_affect, network):
+        """_on_routine_complete sync la deprivation des pulsions."""
+        _fresh = lambda: {"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
+                          "dominant_trait": "", "trait_value": 50.0, "valence": 0.0}
+        mock_affect.side_effect = lambda: _fresh()
+        self._seed_with_organs(network)
+
+        mock_drive_cur = MagicMock()
+        mock_drive_cur.name = "CURIOSITE"
+        mock_drive_cur.deprivation = 42.0
+        mock_drive_mai = MagicMock()
+        mock_drive_mai.name = "MAITRISE"
+        mock_drive_mai.deprivation = 88.0
+        mock_desires = MagicMock()
+        mock_desires.drives = {"CURIOSITE": mock_drive_cur, "MAITRISE": mock_drive_mai}
+
+        with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
+            desires=mock_desires,
+            DRIVE_ROUTINE_AFFINITY={"MAITRISE": ["EXPANSION_CODE"]},
+        )}):
+            await network._on_routine_complete({
+                "intent": "EXPANSION_CODE",
+                "status": "success",
+                "quality_score": 0.8,
+                "result": "Refactoring du module base_agent"
+            })
+
+        cur_nid = _make_node_id("pulsion:curiosite")
+        mai_nid = _make_node_id("pulsion:maitrise")
+        # Energie = deprivation / 100
+        assert network.nodes[cur_nid]["energy"] == pytest.approx(0.42, abs=0.01)
+        assert network.nodes[mai_nid]["energy"] == pytest.approx(0.88, abs=0.01)
+        # desire_intensity mis a jour
+        assert network.nodes[cur_nid]["affect"]["desire_intensity"] == 42.0
+        assert network.nodes[mai_nid]["affect"]["desire_intensity"] == 88.0
