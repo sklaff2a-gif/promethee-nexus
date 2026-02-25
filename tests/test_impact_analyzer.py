@@ -523,7 +523,9 @@ class TestBuildGraphCache:
         }):
             result = analyzer_instance.build_graph()
         stats = result["stats"]
-        assert stats["total_modules"] == len(result["nodes"])
+        # total_modules exclut les planned
+        real_nodes = [n for n in result["nodes"] if n["type"] != "planned"]
+        assert stats["total_modules"] == len(real_nodes)
         assert stats["healthy"] + stats["degraded"] + stats["error"] == stats["total_modules"]
 
     def test_stats_has_link_counts(self, analyzer_instance, mock_project, monkeypatch):
@@ -638,3 +640,99 @@ class TestCascade:
         cascade = analyzer_instance.get_cascade("core.event_bus.bus")
         assert "core.orchestrator" in cascade
         assert "main" in cascade
+
+
+# ===== TestRoadmap =====
+
+class TestRoadmap:
+    """Tests pour les nœuds roadmap (modules planifiés)."""
+
+    def test_planned_nodes_present(self, analyzer_instance, mock_project, monkeypatch):
+        """build_graph() inclut les nœuds roadmap avec type='planned'."""
+        _patch_project_root(monkeypatch, mock_project)
+        with patch.dict("sys.modules", {
+            "core.autonomy_engine": MagicMock(autonomy=MagicMock(routine_history=[])),
+            "core.reptilian_core": MagicMock(reptile=MagicMock(get_stats=lambda: {"threat_level": 0})),
+        }):
+            result = analyzer_instance.build_graph()
+        planned = [n for n in result["nodes"] if n["type"] == "planned"]
+        assert len(planned) == 12
+        ids = {n["id"] for n in planned}
+        assert "planned.hippocampus" in ids
+        assert "planned.agency" in ids
+        assert "planned.immune_system" in ids
+
+    def test_planned_node_fields(self, analyzer_instance, mock_project, monkeypatch):
+        """Les nœuds planned ont les champs phase, phase_name, description."""
+        _patch_project_root(monkeypatch, mock_project)
+        with patch.dict("sys.modules", {
+            "core.autonomy_engine": MagicMock(autonomy=MagicMock(routine_history=[])),
+            "core.reptilian_core": MagicMock(reptile=MagicMock(get_stats=lambda: {"threat_level": 0})),
+        }):
+            result = analyzer_instance.build_graph()
+        hippo = next(n for n in result["nodes"] if n["id"] == "planned.hippocampus")
+        assert hippo["phase"] == 4
+        assert hippo["phase_name"] == "CONNECTER"
+        assert "episodique" in hippo["description"].lower()
+        assert hippo["status"] == "planned"
+        assert hippo["connects_to_count"] > 0
+
+    def test_planned_links_to_existing(self, analyzer_instance, mock_project, monkeypatch):
+        """Les liens planned ne ciblent que des modules existants."""
+        _patch_project_root(monkeypatch, mock_project)
+        with patch.dict("sys.modules", {
+            "core.autonomy_engine": MagicMock(autonomy=MagicMock(routine_history=[])),
+            "core.reptilian_core": MagicMock(reptile=MagicMock(get_stats=lambda: {"threat_level": 0})),
+        }):
+            result = analyzer_instance.build_graph()
+        planned_links = [l for l in result["links"] if l["type"] == "planned"]
+        node_ids = {n["id"] for n in result["nodes"]}
+        for link in planned_links:
+            assert link["source"] in node_ids, f"source {link['source']} inconnue"
+            assert link["target"] in node_ids, f"target {link['target']} inconnue"
+
+    def test_planned_links_exist(self, analyzer_instance, mock_project, monkeypatch):
+        """Il y a des liens planned vers les modules du mock_project."""
+        _patch_project_root(monkeypatch, mock_project)
+        with patch.dict("sys.modules", {
+            "core.autonomy_engine": MagicMock(autonomy=MagicMock(routine_history=[])),
+            "core.reptilian_core": MagicMock(reptile=MagicMock(get_stats=lambda: {"threat_level": 0})),
+        }):
+            result = analyzer_instance.build_graph()
+        planned_links = [l for l in result["links"] if l["type"] == "planned"]
+        # Au moins certains connects_to matchent des modules existants
+        assert len(planned_links) > 0
+
+    def test_stats_planned_counts(self, analyzer_instance, mock_project, monkeypatch):
+        """Les stats incluent planned_modules et planned_links."""
+        _patch_project_root(monkeypatch, mock_project)
+        with patch.dict("sys.modules", {
+            "core.autonomy_engine": MagicMock(autonomy=MagicMock(routine_history=[])),
+            "core.reptilian_core": MagicMock(reptile=MagicMock(get_stats=lambda: {"threat_level": 0})),
+        }):
+            result = analyzer_instance.build_graph()
+        assert result["stats"]["planned_modules"] == 12
+        assert result["stats"]["planned_links"] >= 0
+
+    def test_total_modules_excludes_planned(self, analyzer_instance, mock_project, monkeypatch):
+        """total_modules ne compte pas les planned."""
+        _patch_project_root(monkeypatch, mock_project)
+        with patch.dict("sys.modules", {
+            "core.autonomy_engine": MagicMock(autonomy=MagicMock(routine_history=[])),
+            "core.reptilian_core": MagicMock(reptile=MagicMock(get_stats=lambda: {"threat_level": 0})),
+        }):
+            result = analyzer_instance.build_graph()
+        planned_count = len([n for n in result["nodes"] if n["type"] == "planned"])
+        real_count = len(result["nodes"]) - planned_count
+        assert result["stats"]["total_modules"] == real_count
+
+    def test_planned_phases_coverage(self, analyzer_instance, mock_project, monkeypatch):
+        """Les 4 phases (4-7) sont représentées."""
+        _patch_project_root(monkeypatch, mock_project)
+        with patch.dict("sys.modules", {
+            "core.autonomy_engine": MagicMock(autonomy=MagicMock(routine_history=[])),
+            "core.reptilian_core": MagicMock(reptile=MagicMock(get_stats=lambda: {"threat_level": 0})),
+        }):
+            result = analyzer_instance.build_graph()
+        phases = {n["phase"] for n in result["nodes"] if n["type"] == "planned"}
+        assert phases == {4, 5, 6, 7}

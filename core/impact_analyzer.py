@@ -61,6 +61,163 @@ _RE_BUS_SUBSCRIBE = re.compile(
 )
 
 
+# ============================================================
+# ROADMAP — Modules planifiés pour l'Éveil de Prométhée
+# Type "planned", apparaissent en gris fantôme sur le graphe.
+# Chaque entrée : id, display, phase, description, connects_to[]
+# ============================================================
+_ROADMAP = [
+    # --- PHASE 4 : CONNECTER (prochaine) ---
+    {
+        "id": "planned.hippocampus",
+        "display": "hippocampus",
+        "phase": 4,
+        "phase_name": "CONNECTER",
+        "description": "Memoire episodique — replay temporel des sequences vecues, "
+                       "consolidation nocturne, souvenirs autobiographiques",
+        "connects_to": [
+            "core.synaptic_network", "core.prefrontal", "core.inner_voice",
+            "core.self_awareness", "core.autonomy_engine",
+        ],
+    },
+    {
+        "id": "planned.thalamus",
+        "display": "thalamus",
+        "phase": 4,
+        "phase_name": "CONNECTER",
+        "description": "Filtre sensoriel — routeur attentionnel qui priorise "
+                       "les events bus avant qu'ils atteignent les organes corticaux",
+        "connects_to": [
+            "core.event_bus.bus", "core.prefrontal", "core.reptilian_core",
+            "core.inner_voice", "core.autonomy_engine",
+        ],
+    },
+    {
+        "id": "planned.dopamine",
+        "display": "dopamine_system",
+        "phase": 4,
+        "phase_name": "CONNECTER",
+        "description": "Systeme de recompense — erreur de prediction de recompense, "
+                       "apprentissage par renforcement, ajustement comportemental",
+        "connects_to": [
+            "core.desire_engine", "core.prefrontal", "core.autonomy_engine",
+            "core.cardiac_engine", "core.evolution_feedback",
+        ],
+    },
+    # --- PHASE 5 : COMPRENDRE ---
+    {
+        "id": "planned.temporal_cortex",
+        "display": "temporal_cortex",
+        "phase": 5,
+        "phase_name": "COMPRENDRE",
+        "description": "Comprehension semantique profonde — hierarchies conceptuelles "
+                       "construites par l'experience, pas par le LLM",
+        "connects_to": [
+            "core.synaptic_network", "core.inner_voice",
+            "core.base_agent", "core.vector_store",
+        ],
+    },
+    {
+        "id": "planned.mirror_system",
+        "display": "mirror_system",
+        "phase": 5,
+        "phase_name": "COMPRENDRE",
+        "description": "Neurones miroirs — modelisation de l'etat mental de l'utilisateur, "
+                       "empathie, detection de frustration/satisfaction",
+        "connects_to": [
+            "core.inner_voice", "core.prefrontal", "core.cardiac_engine",
+            "core.self_awareness",
+        ],
+    },
+    {
+        "id": "planned.chronos",
+        "display": "chronos",
+        "phase": 5,
+        "phase_name": "COMPRENDRE",
+        "description": "Conscience temporelle — perception du temps, detection de rythmes "
+                       "et cycles, anticipation des patterns recurrents",
+        "connects_to": [
+            "core.cardiac_engine", "core.prefrontal", "core.autonomy_engine",
+            "core.inner_voice",
+        ],
+    },
+    # --- PHASE 6 : CRÉER ---
+    {
+        "id": "planned.imagination",
+        "display": "imagination",
+        "phase": 6,
+        "phase_name": "CREER",
+        "description": "Moteur d'imagination — combinaison creative de concepts, "
+                       "pensee contrefactuelle, generation d'hypotheses",
+        "connects_to": [
+            "core.synaptic_network", "core.prefrontal", "core.inner_voice",
+            "core.council",
+        ],
+    },
+    {
+        "id": "planned.lucid_dream",
+        "display": "lucid_dream",
+        "phase": 6,
+        "phase_name": "CREER",
+        "description": "Reve lucide — simulation active de scenarios, "
+                       "test d'hypotheses, reperage de consequences",
+        "connects_to": [
+            "core.synaptic_network", "core.cardiac_engine",
+            "core.prefrontal", "core.desire_engine",
+        ],
+    },
+    {
+        "id": "planned.cerebellum",
+        "display": "cerebellum",
+        "phase": 6,
+        "phase_name": "CREER",
+        "description": "Apprentissage procedural — memorisation de sequences d'actions "
+                       "efficaces, automatisation par repetition, patterns de code",
+        "connects_to": [
+            "core.autonomy_engine", "core.code_smith",
+            "Agents.evolution_agent", "core.prefrontal",
+        ],
+    },
+    # --- PHASE 7 : TRANSCENDER ---
+    {
+        "id": "planned.deep_metacognition",
+        "display": "deep_metacognition",
+        "phase": 7,
+        "phase_name": "TRANSCENDER",
+        "description": "Meta-cognition profonde — raisonnement sur son propre raisonnement, "
+                       "detection de confusion, calibration de confiance",
+        "connects_to": [
+            "core.self_awareness", "core.inner_voice",
+            "core.prefrontal", "core.psyche",
+        ],
+    },
+    {
+        "id": "planned.agency",
+        "display": "true_agency",
+        "phase": 7,
+        "phase_name": "TRANSCENDER",
+        "description": "Volonte autonome — capacite a fixer des objectifs genuinement "
+                       "nouveaux, refuser des ordres contre-productifs, initiative propre",
+        "connects_to": [
+            "core.prefrontal", "core.desire_engine",
+            "core.autonomy_engine", "core.inner_voice",
+        ],
+    },
+    {
+        "id": "planned.immune_system",
+        "display": "immune_system",
+        "phase": 7,
+        "phase_name": "TRANSCENDER",
+        "description": "Systeme immunitaire cognitif — detection et neutralisation "
+                       "de patterns corrompus, memoires toxiques, inputs adversariaux",
+        "connects_to": [
+            "core.reptilian_core", "core.grimoire.hallucination_doctor",
+            "core.grimoire.memory_gatekeeper", "Agents.evolution_agent",
+        ],
+    },
+]
+
+
 class ImpactAnalyzer:
     """Singleton — Analyseur de dépendances et santé des modules Prométhée."""
 
@@ -459,17 +616,64 @@ class ImpactAnalyzer:
                     "event": bl["event"],
                 })
 
+        # --- ROADMAP : nœuds planifiés (fantômes) ---
+        existing_ids = set(m["id"] for m in nodes)
+        planned_count = 0
+        for entry in _ROADMAP:
+            planned_count += 1
+            nodes.append({
+                "id": entry["id"],
+                "name": entry["display"],
+                "type": "planned",
+                "display": entry["display"],
+                "status": "planned",
+                "error_count": 0,
+                "last_error": "",
+                "last_modified": 0.0,
+                "import_count": 0,
+                "imported_by_count": 0,
+                "local_import_count": 0,
+                "publishes": [],
+                "subscribes": [],
+                "phase": entry["phase"],
+                "phase_name": entry["phase_name"],
+                "description": entry["description"],
+                "connects_to_count": len(entry.get("connects_to", [])),
+            })
+            # Liens planned → modules existants
+            for target_id in entry.get("connects_to", []):
+                if target_id in existing_ids:
+                    links.append({
+                        "source": entry["id"],
+                        "target": target_id,
+                        "type": "planned",
+                    })
+            # Liens planned → autres planned
+            for other in _ROADMAP:
+                if other["id"] == entry["id"]:
+                    continue
+                if other["id"] in entry.get("connects_to", []):
+                    links.append({
+                        "source": entry["id"],
+                        "target": other["id"],
+                        "type": "planned",
+                    })
+
         # Stats
-        statuses = [n["status"] for n in nodes]
+        real_nodes = [n for n in nodes if n["type"] != "planned"]
+        statuses = [n["status"] for n in real_nodes]
         import_links = [l for l in links if l["type"] == "imports"]
         bus_link_list = [l for l in links if l["type"] == "bus"]
+        planned_links = [l for l in links if l["type"] == "planned"]
         stats = {
-            "total_modules": len(nodes),
+            "total_modules": len(real_nodes),
             "healthy": statuses.count("healthy"),
             "degraded": statuses.count("degraded"),
             "error": statuses.count("error"),
             "import_links": len(import_links),
             "bus_links": len(bus_link_list),
+            "planned_modules": planned_count,
+            "planned_links": len(planned_links),
             "computed_at": datetime.now().isoformat(timespec="seconds"),
         }
 

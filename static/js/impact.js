@@ -10,6 +10,7 @@ const ImpactView = (function() {
         capability: "#e040fb",
         grimoire: "#ff9100",
         root: "#ffffff",
+        planned: "#555555",
     };
     const TYPE_LABELS = {
         core: "CORE",
@@ -17,6 +18,13 @@ const ImpactView = (function() {
         capability: "CAPABILITY",
         grimoire: "GRIMOIRE",
         root: "ROOT",
+        planned: "ROADMAP",
+    };
+    const PHASE_COLORS = {
+        4: "#7986cb",  // CONNECTER — indigo clair
+        5: "#4dd0e1",  // COMPRENDRE — cyan
+        6: "#ba68c8",  // CRÉER — violet
+        7: "#ef5350",  // TRANSCENDER — rouge
     };
     // Positions cibles Y par type (% de la hauteur) pour le clustering
     const TYPE_CLUSTER_Y = {
@@ -25,6 +33,7 @@ const ImpactView = (function() {
         agent: 0.35,
         grimoire: 0.30,
         capability: 0.65,
+        planned: 0.80,
     };
     // Positions cibles X par type
     const TYPE_CLUSTER_X = {
@@ -33,11 +42,13 @@ const ImpactView = (function() {
         agent: 0.70,
         grimoire: 0.72,
         capability: 0.75,
+        planned: 0.50,
     };
 
     const STATUS_RING = { degraded: "#ffea00", error: "#ff1744" };
     const BUS_LINK_COLOR = "#ffd740";  // doré pour les connexions bus
     const IMPORT_LINK_COLOR = "#006622";
+    const PLANNED_LINK_COLOR = "#444444";  // gris discret pour les projections
     const MIN_ZOOM = 0.3, MAX_ZOOM = 5;
 
     // --- STATE ---
@@ -48,16 +59,19 @@ const ImpactView = (function() {
     let initialized = false;
     let showBusLinks = true;
     let showImportLinks = true;
+    let showPlannedLinks = true;
 
     // --- HELPERS ---
     function nodeRadius(d) {
-        // Taille par total de connexions (imports + bus)
+        if (d.type === "planned") return 5;  // nœuds fantômes : petits
         var total = (d.imported_by_count || 0) + (d.subscribes ? d.subscribes.length : 0);
         return 6 + Math.sqrt(total) * 2.5;
     }
     function nodeColor(d) {
+        if (d.type === "planned" && d.phase) return PHASE_COLORS[d.phase] || "#555";
         return TYPE_COLORS[d.type] || "#888";
     }
+    function isPlanned(d) { return d.type === "planned"; }
 
     // --- INIT (lazy, uniquement à l'ouverture) ---
     function init() {
@@ -180,13 +194,18 @@ const ImpactView = (function() {
         var visibleLinks = data.links.filter(function(l) {
             if (l.type === "bus" && !showBusLinks) return false;
             if (l.type === "imports" && !showImportLinks) return false;
+            if (l.type === "planned" && !showPlannedLinks) return false;
             return true;
         });
 
-        simulation = d3.forceSimulation(data.nodes)
+        // Filtrer les nœuds planned si les liens planned sont masqués
+        var visibleNodes = showPlannedLinks ? data.nodes :
+            data.nodes.filter(function(n) { return n.type !== "planned"; });
+
+        simulation = d3.forceSimulation(visibleNodes)
             .force("link", d3.forceLink(visibleLinks).id(function(d) { return d.id; })
-                .distance(function(d) { return d.type === "bus" ? 120 : 80; })
-                .strength(function(d) { return d.type === "bus" ? 0.3 : 0.7; }))
+                .distance(function(d) { return d.type === "planned" ? 150 : d.type === "bus" ? 120 : 80; })
+                .strength(function(d) { return d.type === "planned" ? 0.15 : d.type === "bus" ? 0.3 : 0.7; }))
             .force("charge", d3.forceManyBody().strength(-180).distanceMax(500))
             .force("center", d3.forceCenter(w / 2, h / 2))
             .force("collision", d3.forceCollide().radius(function(d) { return nodeRadius(d) + 6; }));
@@ -200,17 +219,26 @@ const ImpactView = (function() {
             .selectAll("line")
             .data(visibleLinks)
             .join("line")
-            .attr("stroke", function(d) { return d.type === "bus" ? BUS_LINK_COLOR : IMPORT_LINK_COLOR; })
-            .attr("stroke-width", function(d) { return d.type === "bus" ? 0.8 : 1; })
-            .attr("stroke-opacity", function(d) { return d.type === "bus" ? 0.35 : 0.5; })
-            .attr("stroke-dasharray", function(d) { return d.type === "bus" ? "4,3" : null; })
-            .attr("marker-end", function(d) { return d.type === "bus" ? "url(#arrow-bus)" : "url(#arrow-import)"; });
+            .attr("stroke", function(d) {
+                if (d.type === "planned") return PLANNED_LINK_COLOR;
+                return d.type === "bus" ? BUS_LINK_COLOR : IMPORT_LINK_COLOR;
+            })
+            .attr("stroke-width", function(d) { return d.type === "planned" ? 0.5 : d.type === "bus" ? 0.8 : 1; })
+            .attr("stroke-opacity", function(d) { return d.type === "planned" ? 0.25 : d.type === "bus" ? 0.35 : 0.5; })
+            .attr("stroke-dasharray", function(d) {
+                if (d.type === "planned") return "2,4";
+                return d.type === "bus" ? "4,3" : null;
+            })
+            .attr("marker-end", function(d) {
+                if (d.type === "planned") return null;  // pas de flèche pour les planned
+                return d.type === "bus" ? "url(#arrow-bus)" : "url(#arrow-import)";
+            });
 
         // Nodes
         nodeEls = g.append("g")
             .attr("class", "nodes")
             .selectAll("g")
-            .data(data.nodes)
+            .data(visibleNodes)
             .join("g")
             .call(d3.drag()
                 .on("start", dragStart)
@@ -239,29 +267,34 @@ const ImpactView = (function() {
         // Cercle principal
         nodeEls.append("circle")
             .attr("r", nodeRadius)
-            .attr("fill", nodeColor)
-            .attr("fill-opacity", 0.85)
+            .attr("fill", function(d) { return isPlanned(d) ? "transparent" : nodeColor(d); })
+            .attr("fill-opacity", function(d) { return isPlanned(d) ? 0 : 0.85; })
             .attr("stroke", nodeColor)
-            .attr("stroke-width", 0.5)
-            .attr("stroke-opacity", 0.3);
+            .attr("stroke-width", function(d) { return isPlanned(d) ? 1.2 : 0.5; })
+            .attr("stroke-opacity", function(d) { return isPlanned(d) ? 0.6 : 0.3; })
+            .attr("stroke-dasharray", function(d) { return isPlanned(d) ? "2,2" : null; });
 
         // Labels
         labelEls = g.append("g")
             .attr("class", "labels")
             .selectAll("text")
-            .data(data.nodes)
+            .data(visibleNodes)
             .join("text")
-            .text(function(d) { return d.display || d.name; })
-            .attr("font-size", "9px")
+            .text(function(d) {
+                if (isPlanned(d)) return "P" + d.phase + " " + (d.display || d.name);
+                return d.display || d.name;
+            })
+            .attr("font-size", function(d) { return isPlanned(d) ? "8px" : "9px"; })
             .attr("font-family", "'Courier New', monospace")
+            .attr("font-style", function(d) { return isPlanned(d) ? "italic" : "normal"; })
             .attr("fill", nodeColor)
-            .attr("fill-opacity", 0.8)
+            .attr("fill-opacity", function(d) { return isPlanned(d) ? 0.45 : 0.8; })
             .attr("dx", function(d) { return nodeRadius(d) + 4; })
             .attr("dy", 3)
             .attr("paint-order", "stroke")
             .attr("stroke", "#000")
             .attr("stroke-width", 2.5)
-            .attr("stroke-opacity", 0.8);
+            .attr("stroke-opacity", function(d) { return isPlanned(d) ? 0.4 : 0.8; });
 
         // Légende
         renderLegend(w, h);
@@ -281,19 +314,19 @@ const ImpactView = (function() {
     function renderLegend(w, h) {
         var legend = g.append("g")
             .attr("class", "legend")
-            .attr("transform", "translate(20," + (h - 160) + ")");
+            .attr("transform", "translate(20," + (h - 290) + ")");
 
         // Fond
         legend.append("rect")
             .attr("x", -8).attr("y", -14)
-            .attr("width", 140).attr("height", 150)
+            .attr("width", 165).attr("height", 285)
             .attr("rx", 3)
             .attr("fill", "rgba(0,5,0,0.85)")
             .attr("stroke", "#003300").attr("stroke-width", 0.5);
 
-        // Types
-        var types = Object.entries(TYPE_COLORS);
-        types.forEach(function(entry, i) {
+        // Types existants (sans planned)
+        var realTypes = Object.entries(TYPE_COLORS).filter(function(e) { return e[0] !== "planned"; });
+        realTypes.forEach(function(entry, i) {
             var type = entry[0], color = entry[1];
             var row = legend.append("g").attr("transform", "translate(0," + (i * 17) + ")");
             row.append("circle").attr("r", 4).attr("fill", color).attr("fill-opacity", 0.85);
@@ -303,10 +336,10 @@ const ImpactView = (function() {
                 .text(TYPE_LABELS[type] || type);
         });
 
-        // Séparateur
-        var sep = types.length * 17 + 4;
+        // Séparateur avant liens
+        var sep = realTypes.length * 17 + 4;
         legend.append("line")
-            .attr("x1", -4).attr("x2", 120).attr("y1", sep).attr("y2", sep)
+            .attr("x1", -4).attr("x2", 150).attr("y1", sep).attr("y2", sep)
             .attr("stroke", "#003300").attr("stroke-width", 0.5);
 
         // Liens
@@ -342,6 +375,47 @@ const ImpactView = (function() {
                 showBusLinks = !showBusLinks;
                 if (graphData) render(graphData);
             });
+
+        // Séparateur avant roadmap
+        var sep2 = busY + 12;
+        legend.append("line")
+            .attr("x1", -4).attr("x2", 150).attr("y1", sep2).attr("y2", sep2)
+            .attr("stroke", "#003300").attr("stroke-width", 0.5);
+
+        // Titre ROADMAP
+        var rmY = sep2 + 14;
+        legend.append("text").attr("x", 0).attr("y", rmY)
+            .attr("font-size", "8px").attr("font-family", "'Courier New', monospace")
+            .attr("fill", "#888").attr("font-weight", "bold")
+            .text("ROADMAP \u2014 \u00c9veil")
+            .style("cursor", "pointer")
+            .on("click", function(e) {
+                e.stopPropagation();
+                showPlannedLinks = !showPlannedLinks;
+                if (graphData) render(graphData);
+            });
+
+        // Phases
+        var phases = [
+            [4, "CONNECTER"],
+            [5, "COMPRENDRE"],
+            [6, "CR\u00c9ER"],
+            [7, "TRANSCENDER"],
+        ];
+        phases.forEach(function(p, i) {
+            var py = rmY + 16 + i * 17;
+            var pc = PHASE_COLORS[p[0]] || "#555";
+            var row = legend.append("g").attr("transform", "translate(4," + py + ")");
+            // Cercle pointillé (comme les nœuds planned)
+            row.append("circle").attr("r", 4)
+                .attr("fill", "transparent")
+                .attr("stroke", pc).attr("stroke-width", 1)
+                .attr("stroke-dasharray", "2,2").attr("stroke-opacity", 0.6);
+            row.append("text").attr("x", 10).attr("dy", 3)
+                .attr("font-size", "7px").attr("font-family", "'Courier New', monospace")
+                .attr("fill", pc).attr("fill-opacity", 0.7).attr("font-style", "italic")
+                .text("P" + p[0] + " " + p[1]);
+        });
     }
 
     // --- INTERACTIONS ---
@@ -432,16 +506,29 @@ const ImpactView = (function() {
         if (!nodeEls) return;
         nodeEls.select("circle:last-of-type")
             .transition().duration(300)
-            .attr("fill-opacity", 0.85).attr("stroke-opacity", 0.3);
+            .attr("fill-opacity", function(d) { return isPlanned(d) ? 0 : 0.85; })
+            .attr("stroke-opacity", function(d) { return isPlanned(d) ? 0.6 : 0.3; });
         labelEls
             .transition().duration(300)
-            .attr("fill-opacity", 0.8);
+            .attr("fill-opacity", function(d) { return isPlanned(d) ? 0.45 : 0.8; });
         linkEls
             .transition().duration(300)
-            .attr("stroke-opacity", function(d) { return d.type === "bus" ? 0.35 : 0.5; })
-            .attr("stroke", function(d) { return d.type === "bus" ? BUS_LINK_COLOR : IMPORT_LINK_COLOR; })
-            .attr("stroke-width", function(d) { return d.type === "bus" ? 0.8 : 1; })
-            .attr("marker-end", function(d) { return d.type === "bus" ? "url(#arrow-bus)" : "url(#arrow-import)"; });
+            .attr("stroke-opacity", function(d) {
+                if (d.type === "planned") return 0.25;
+                return d.type === "bus" ? 0.35 : 0.5;
+            })
+            .attr("stroke", function(d) {
+                if (d.type === "planned") return PLANNED_LINK_COLOR;
+                return d.type === "bus" ? BUS_LINK_COLOR : IMPORT_LINK_COLOR;
+            })
+            .attr("stroke-width", function(d) {
+                if (d.type === "planned") return 0.5;
+                return d.type === "bus" ? 0.8 : 1;
+            })
+            .attr("marker-end", function(d) {
+                if (d.type === "planned") return null;
+                return d.type === "bus" ? "url(#arrow-bus)" : "url(#arrow-import)";
+            });
 
         var el = document.getElementById("impact-cascade-info");
         if (el) el.innerHTML = "";
@@ -449,28 +536,40 @@ const ImpactView = (function() {
 
     function onNodeHover(event, d) {
         if (!tooltip) return;
-        var statusColor = d.status === "error" ? "#ff1744" : d.status === "degraded" ? "#ffea00" : "#00ff41";
-        var lines = [
-            '<b style="color:' + nodeColor(d) + '">' + d.id + '</b>',
-            '<span style="color:#888">Type:</span> <span style="color:' + nodeColor(d) + '">' + (TYPE_LABELS[d.type] || d.type) + '</span>',
-            '<span style="color:#888">Sant\u00e9:</span> <span style="color:' + statusColor + '">' + d.status.toUpperCase() + '</span>',
-        ];
-        if (d.error_count > 0) {
-            lines.push('<span style="color:#888">Erreurs:</span> <span style="color:#ff5252">' + d.error_count + '</span>');
-        }
-        lines.push('<span style="color:#888">Imports top-level:</span> ' + d.import_count);
-        if (d.local_import_count > 0) {
-            lines.push('<span style="color:#888">Imports locaux:</span> <span style="color:#aaa">' + d.local_import_count + '</span>');
-        }
-        lines.push('<span style="color:#888">Import\u00e9 par:</span> ' + d.imported_by_count);
-        if (d.publishes && d.publishes.length > 0) {
-            lines.push('<span style="color:' + BUS_LINK_COLOR + '">Publie:</span> ' + d.publishes.join(', '));
-        }
-        if (d.subscribes && d.subscribes.length > 0) {
-            lines.push('<span style="color:' + BUS_LINK_COLOR + '">\u00c9coute:</span> ' + d.subscribes.join(', '));
-        }
-        if (d.last_modified) {
-            lines.push('<span style="color:#888">Modifi\u00e9:</span> ' + new Date(d.last_modified * 1000).toLocaleDateString("fr-FR"));
+        var lines = [];
+
+        if (isPlanned(d)) {
+            // Tooltip spécial pour les nœuds planifiés
+            var pc = PHASE_COLORS[d.phase] || "#555";
+            lines.push('<b style="color:' + pc + '">' + d.display + '</b> <span style="color:#666">(planifi\u00e9)</span>');
+            lines.push('<span style="color:' + pc + '">Phase ' + d.phase + ' \u2014 ' + (d.phase_name || '') + '</span>');
+            if (d.description) {
+                lines.push('<span style="color:#aaa;font-style:italic">' + d.description + '</span>');
+            }
+            lines.push('<span style="color:#666">Connexions pr\u00e9vues: ' + (d.connects_to_count || 0) + ' modules</span>');
+        } else {
+            // Tooltip normal
+            var statusColor = d.status === "error" ? "#ff1744" : d.status === "degraded" ? "#ffea00" : "#00ff41";
+            lines.push('<b style="color:' + nodeColor(d) + '">' + d.id + '</b>');
+            lines.push('<span style="color:#888">Type:</span> <span style="color:' + nodeColor(d) + '">' + (TYPE_LABELS[d.type] || d.type) + '</span>');
+            lines.push('<span style="color:#888">Sant\u00e9:</span> <span style="color:' + statusColor + '">' + d.status.toUpperCase() + '</span>');
+            if (d.error_count > 0) {
+                lines.push('<span style="color:#888">Erreurs:</span> <span style="color:#ff5252">' + d.error_count + '</span>');
+            }
+            lines.push('<span style="color:#888">Imports top-level:</span> ' + d.import_count);
+            if (d.local_import_count > 0) {
+                lines.push('<span style="color:#888">Imports locaux:</span> <span style="color:#aaa">' + d.local_import_count + '</span>');
+            }
+            lines.push('<span style="color:#888">Import\u00e9 par:</span> ' + d.imported_by_count);
+            if (d.publishes && d.publishes.length > 0) {
+                lines.push('<span style="color:' + BUS_LINK_COLOR + '">Publie:</span> ' + d.publishes.join(', '));
+            }
+            if (d.subscribes && d.subscribes.length > 0) {
+                lines.push('<span style="color:' + BUS_LINK_COLOR + '">\u00c9coute:</span> ' + d.subscribes.join(', '));
+            }
+            if (d.last_modified) {
+                lines.push('<span style="color:#888">Modifi\u00e9:</span> ' + new Date(d.last_modified * 1000).toLocaleDateString("fr-FR"));
+            }
         }
         tooltip.innerHTML = lines.join("<br>");
         tooltip.style.display = "block";
@@ -504,8 +603,9 @@ const ImpactView = (function() {
             '<span style="color:#ffea00">' + stats.degraded + ' DEG</span> ' +
             '<span style="color:#ff1744">' + stats.error + ' ERR</span> ' +
             '<span style="color:#666">/ ' + stats.total_modules + '</span> ' +
-            '<span style="color:' + IMPORT_LINK_COLOR + '">' + stats.import_links + ' imports</span> ' +
-            '<span style="color:' + BUS_LINK_COLOR + '">' + stats.bus_links + ' bus</span>';
+            '<span style="color:' + IMPORT_LINK_COLOR + '">' + stats.import_links + ' imp</span> ' +
+            '<span style="color:' + BUS_LINK_COLOR + '">' + stats.bus_links + ' bus</span> ' +
+            '<span style="color:#555">' + (stats.planned_modules || 0) + ' roadmap</span>';
     }
 
     // --- OPEN / CLOSE ---
