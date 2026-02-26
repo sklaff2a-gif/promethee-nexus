@@ -850,12 +850,22 @@ class AutonomyEngine:
                 inhibition = prefrontal.compute_inhibition(intent, veto_reason)
                 if inhibition["action"] == "override":
                     print(f"   🧠 PRÉFRONTAL: Override {inhibition['override_target']} — {inhibition['reason']}")
+                    try:
+                        from core.hippocampus import hippocampus
+                        hippocampus.record_veto_override(intent, agent, inhibition['reason'])
+                    except Exception:
+                        pass
                     veto_reason = ""  # Annuler le veto
                     overridden = True
             except Exception:
                 pass
             if veto_reason:
                 print(f"   🚫 VETO: {veto_reason}")
+                try:
+                    from core.hippocampus import hippocampus
+                    hippocampus.record_veto(intent, agent, veto_reason)
+                except Exception:
+                    pass
                 try:
                     from core.cardiac_engine import heart
                     heart.react("veto")
@@ -987,6 +997,14 @@ class AutonomyEngine:
                 cog_ctx = callosum.get_cognitive_context()
                 if cog_ctx:
                     purpose_ctx += f"\n{cog_ctx}"
+            except Exception:
+                pass
+            # Memoire episodique (hippocampe)
+            try:
+                from core.hippocampus import hippocampus
+                hippo_ctx = hippocampus.get_hippocampus_context()
+                if hippo_ctx:
+                    purpose_ctx += f"\n{hippo_ctx}"
             except Exception:
                 pass
             # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)
@@ -1139,6 +1157,17 @@ class AutonomyEngine:
                     elif loop_action == "escalate":
                         print(f"   🚨 LOOP_BREAKER: Escalade Council recommandee (streak={self.error_streak})")
                         self._forced_next_intent = "COUNCIL_DEBATE"
+                        try:
+                            from core.hippocampus import hippocampus
+                            hippocampus.record_council_forced(self.error_streak)
+                        except Exception:
+                            pass
+                    # Enregistrer le loop breaker dans l'hippocampe
+                    try:
+                        from core.hippocampus import hippocampus as _hippo
+                        _hippo.record_loop_breaker(loop_action, intent, self.error_streak)
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.warning(f"[AUTONOMY] Loop breaker echoue: {e}")
 

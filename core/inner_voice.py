@@ -205,6 +205,14 @@ class InnerVoice:
         """Appelé depuis main.py — souscrit aux événements bus."""
         self._subscribe_events()
         self._alive = True
+        # Injecter le recap de la session precedente depuis l'hippocampe
+        try:
+            from core.hippocampus import hippocampus
+            recap = hippocampus.get_startup_recap()
+            if recap:
+                self._record_thought(recap[:500], source="hippocampus", mode="retrospect", salience=0.8)
+        except Exception:
+            pass
         logger.info("INNER_VOICE: Aires de Broca & Wernicke actives.")
 
     def _subscribe_events(self):

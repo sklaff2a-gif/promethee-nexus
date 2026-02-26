@@ -308,6 +308,11 @@ async def lifespan(app: FastAPI):
     callosum_task = asyncio.create_task(callosum.start_resonance())
     print(f"   🌉 CORPUS CALLOSUM: Pont inter-organes actif (coherence={callosum.global_coherence:.2f}).")
 
+    # --- HIPPOCAMPE (Mémoire Épisodique) ---
+    from core.hippocampus import hippocampus
+    hippocampus.init()
+    print(f"   🧠 HIPPOCAMPE: Mémoire épisodique active ({len(hippocampus._episodes)} épisodes, {len(hippocampus._arcs)} arcs).")
+
     # --- IMPACT ANALYZER (Dépendances & Santé) ---
     from core.impact_analyzer import analyzer as impact_analyzer
     impact_analyzer.init()
@@ -559,6 +564,12 @@ async def callosum_status():
     """Retourne l'etat du corpus callosum (resonance inter-organes)."""
     from core.corpus_callosum import callosum
     return callosum.get_stats()
+
+@app.get("/api/hippocampus/status")
+async def hippocampus_status():
+    """Retourne l'etat de la memoire episodique (hippocampe)."""
+    from core.hippocampus import hippocampus
+    return hippocampus.get_stats()
 
 @app.get("/api/soliloque/status")
 async def soliloque_status():
