@@ -822,6 +822,19 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Intuition somatique (Couche 11) ---
+        # Les marqueurs somatiques du coeur colorent les décisions :
+        # un intent associé à des échecs passés reçoit un malus viscéral
+        try:
+            from core.cardiac_engine import heart
+            for i, (routine, s) in enumerate(scored):
+                somatic_signal = heart.get_somatic_signal(routine["intent"])
+                if somatic_signal != 0.0:
+                    scored[i] = (routine, s + somatic_signal)
+            scored.sort(key=lambda x: x[1], reverse=True)
+        except Exception:
+            pass
+
         if not scored:
             logger.warning("[AUTONOMY] Aucune routine disponible apres filtrage. Cycle avorte.")
             self._persist_state()

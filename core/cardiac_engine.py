@@ -29,8 +29,13 @@ logger = logging.getLogger("prometheev11.cardiac")
 RESTING_BPM = 60.0           # Rythme de repos (équilibre)
 MIN_BPM = 40.0                # Bradycardie profonde (sommeil réparateur)
 MAX_BPM = 180.0               # Tachycardie max (panique)
-BPM_DECAY_RATE = 0.92         # Retour au repos (8% par battement)
 BEAT_INTERVAL = 30.0          # Un "battement" toutes les 30 secondes
+
+# --- Demi-vies temporelles (en secondes) ---
+# Découplées du BEAT_INTERVAL : la décroissance est calculée sur le temps réel écoulé
+BPM_HALF_LIFE = 240.0         # BPM revient à mi-chemin du repos en 4 min
+EMOTION_HALF_LIFE = 1200.0    # Émotions persistent ~20 min (survit entre 2 routines)
+ANS_HALF_LIFE = 300.0         # ANS revient au neutre en ~5 min
 
 # --- Système nerveux autonome ---
 SYMPATHETIC_BOOST = 1.4       # Multiplicateur fight-or-flight
@@ -125,6 +130,12 @@ class CardiacEngine:
         self.rr_intervals: List[float] = []  # Intervalles R-R (millisecondes)
         self.somatic_markers: Dict[str, Dict[str, Any]] = {}
 
+        # --- Tracking transitions émotionnelles ---
+        self._emotion_since: float = time.time()    # Quand l'émotion actuelle a commencé
+        self._emotion_cause: str = ""                # Stimulus ayant causé l'émotion
+        self._prev_emotion: str = "serenite"         # Émotion précédente
+        self._transition_count: int = 0              # Nombre de transitions cette session
+
         # --- Interne ---
         self._beat_task: Optional[asyncio.Task] = None
         self._last_beat: float = time.time()
@@ -170,9 +181,15 @@ class CardiacEngine:
             self._beat()
 
     def _beat(self):
-        """Un seul battement : R-R interval, décroissance BPM, équilibrage ANS, atténuation émotion."""
+        """Un seul battement : R-R interval, décroissance BPM, équilibrage ANS, atténuation émotion.
+
+        Toutes les décroissances sont basées sur le temps réel écoulé (demi-vies),
+        pas sur un multiplicateur fixe par beat. Ainsi changer BEAT_INTERVAL
+        ne modifie pas la dynamique émotionnelle du système.
+        """
         now = time.time()
         elapsed_ms = (now - self._last_beat) * 1000.0
+        elapsed_s = elapsed_ms / 1000.0
         self._last_beat = now
         self._beat_count += 1
 
@@ -181,26 +198,29 @@ class CardiacEngine:
         if len(self.rr_intervals) > HRV_WINDOW * 2:
             self.rr_intervals = self.rr_intervals[-HRV_WINDOW * 2:]
 
-        # Décroissance BPM vers le repos
-        if self.bpm > RESTING_BPM:
-            self.bpm = RESTING_BPM + (self.bpm - RESTING_BPM) * BPM_DECAY_RATE
-        elif self.bpm < RESTING_BPM:
-            self.bpm = RESTING_BPM - (RESTING_BPM - self.bpm) * BPM_DECAY_RATE
+        # Décroissance BPM vers le repos (demi-vie BPM_HALF_LIFE)
+        bpm_decay = 0.5 ** (elapsed_s / BPM_HALF_LIFE)
+        if self.bpm != RESTING_BPM:
+            self.bpm = RESTING_BPM + (self.bpm - RESTING_BPM) * bpm_decay
 
         # Clamping BPM
         self.bpm = max(MIN_BPM, min(MAX_BPM, self.bpm))
 
-        # Retour ANS vers le neutre
-        if self.ans_balance > ANS_BALANCE_NEUTRAL:
-            self.ans_balance = max(ANS_BALANCE_NEUTRAL, self.ans_balance - 0.03)
-        elif self.ans_balance < ANS_BALANCE_NEUTRAL:
-            self.ans_balance = min(ANS_BALANCE_NEUTRAL, self.ans_balance + 0.03)
+        # Retour ANS vers le neutre (demi-vie ANS_HALF_LIFE)
+        ans_decay = 0.5 ** (elapsed_s / ANS_HALF_LIFE)
+        if self.ans_balance != ANS_BALANCE_NEUTRAL:
+            self.ans_balance = ANS_BALANCE_NEUTRAL + (self.ans_balance - ANS_BALANCE_NEUTRAL) * ans_decay
 
-        # Atténuation progressive de l'intensité émotionnelle
-        self.emotion_intensity *= 0.95
+        # Atténuation progressive de l'intensité émotionnelle (demi-vie EMOTION_HALF_LIFE)
+        emotion_decay = 0.5 ** (elapsed_s / EMOTION_HALF_LIFE)
+        self.emotion_intensity *= emotion_decay
         if self.emotion_intensity < 0.05:
             self.emotion_intensity = 0.0
-            self.current_emotion = "serenite"
+            if self.current_emotion != "serenite":
+                self._prev_emotion = self.current_emotion
+                self._emotion_since = now
+                self._emotion_cause = "decay"
+                self.current_emotion = "serenite"
 
         # Publier CARDIAC_BEAT (async fire-and-forget)
         self._try_publish_beat()
@@ -268,6 +288,11 @@ class CardiacEngine:
 
         # Mise à jour émotion (seulement si plus intense que l'actuelle)
         if intensity > self.emotion_intensity:
+            if emotion != self.current_emotion:
+                self._prev_emotion = self.current_emotion
+                self._emotion_since = time.time()
+                self._emotion_cause = stimulus
+                self._transition_count += 1
             self.current_emotion = emotion
             self.emotion_intensity = min(1.0, intensity)
 
@@ -631,6 +656,83 @@ class CardiacEngine:
             return f"Mon coeur bat régulièrement ({self.bpm:.0f} BPM), prêt pour l'action."
 
     # ============================================================
+    # Phase 5 : Conscience affective
+    # ============================================================
+
+    def get_affect_summary(self) -> str:
+        """Résumé de l'état émotionnel actuel pour injection dans purpose_context.
+
+        Retourne une phrase du type :
+        "Je ressens de la frustration depuis 12 min (causé par: failure), intensité 65%"
+        ou "" si l'émotion est neutre (sérénité faible).
+        """
+        # Pas d'affect notable si sérénité basse intensité
+        if self.current_emotion == "serenite" and self.emotion_intensity < 0.2:
+            return ""
+
+        duration_s = time.time() - self._emotion_since
+        duration_min = int(duration_s / 60)
+
+        # Noms lisibles pour les émotions
+        emotion_names = {
+            "serenite": "sérénité", "curiosite": "curiosité",
+            "enthousiasme": "enthousiasme", "flow": "flow",
+            "frustration": "frustration", "anxiete": "anxiété",
+            "fatigue": "fatigue", "ennui": "ennui",
+        }
+        emotion_name = emotion_names.get(self.current_emotion, self.current_emotion)
+
+        # Noms lisibles pour les causes (stimuli)
+        cause_names = {
+            "eureka": "une découverte", "failure": "un échec",
+            "threat": "une menace détectée", "veto": "un veto",
+            "dream": "une rêverie", "council": "un débat collectif",
+            "creation": "un acte créatif", "routine_done": "une routine terminée",
+            "learning": "un apprentissage", "decay": "un retour au calme",
+        }
+        cause_text = cause_names.get(self._emotion_cause, self._emotion_cause)
+
+        intensity_pct = int(self.emotion_intensity * 100)
+
+        if duration_min < 1:
+            duration_text = "quelques secondes"
+        elif duration_min == 1:
+            duration_text = "1 minute"
+        else:
+            duration_text = f"{duration_min} minutes"
+
+        return (
+            f"Je ressens {emotion_name} depuis {duration_text} "
+            f"(après {cause_text}), intensité {intensity_pct}%"
+        )
+
+    def get_somatic_intuition(self, intent: str) -> str:
+        """Retourne une phrase d'intuition viscérale pour un intent donné.
+
+        Utilise les marqueurs somatiques pour verbaliser le pressentiment.
+        Retourne "" si pas de marqueur significatif.
+        """
+        signal = self.get_somatic_signal(intent)
+        if abs(signal) < 0.3:
+            return ""
+
+        marker = self.somatic_markers.get(intent)
+        if not marker:
+            return ""
+
+        emotion_at = marker.get("emotion_at_mark", "")
+        count = marker.get("formation_count", 1)
+
+        if signal > 0.8:
+            return f"Mon coeur se souvient : {intent} m'a réussi ({count} fois). Bonne intuition."
+        elif signal > 0.3:
+            return f"Un pressentiment positif pour {intent} (signal +{signal:.1f})."
+        elif signal < -0.8:
+            return f"Mon coeur se serre à l'idée de {intent} — trop d'échecs passés ({count} fois, émotion: {emotion_at})."
+        else:
+            return f"Un malaise léger autour de {intent} (signal {signal:.1f})."
+
+    # ============================================================
     # Persistance
     # ============================================================
 
@@ -644,6 +746,10 @@ class CardiacEngine:
             "emotion_intensity": self.emotion_intensity,
             "rr_intervals": self.rr_intervals[-HRV_WINDOW * 2:],
             "somatic_markers": self.somatic_markers,
+            "emotion_since": self._emotion_since,
+            "emotion_cause": self._emotion_cause,
+            "prev_emotion": self._prev_emotion,
+            "transition_count": self._transition_count,
             "beat_count": self._beat_count,
             "total_stimuli": self._total_stimuli,
             "timestamp": time.time(),
@@ -671,6 +777,10 @@ class CardiacEngine:
             self.emotion_intensity = float(state.get("emotion_intensity", 0.3))
             self.rr_intervals = state.get("rr_intervals", [])
             self.somatic_markers = state.get("somatic_markers", {})
+            self._emotion_since = float(state.get("emotion_since", time.time()))
+            self._emotion_cause = state.get("emotion_cause", "")
+            self._prev_emotion = state.get("prev_emotion", "serenite")
+            self._transition_count = int(state.get("transition_count", 0))
             self._beat_count = int(state.get("beat_count", 0))
             self._total_stimuli = int(state.get("total_stimuli", 0))
 
@@ -686,6 +796,10 @@ class CardiacEngine:
         self.emotion_intensity = 0.3
         self.rr_intervals = []
         self.somatic_markers = {}
+        self._emotion_since = time.time()
+        self._emotion_cause = ""
+        self._prev_emotion = "serenite"
+        self._transition_count = 0
         self._beat_count = 0
         self._total_stimuli = 0
         self._alive = False

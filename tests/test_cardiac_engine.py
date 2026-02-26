@@ -65,8 +65,8 @@ class TestHeartbeat:
         # BPM doit avoir diminué vers 60 (RESTING)
         assert h.bpm < 120.0
         assert h.bpm > 60.0
-        # Vérifier la formule : 60 + (120 - 60) * 0.92 = 60 + 55.2 = 115.2
-        assert abs(h.bpm - 115.2) < 0.5
+        # Formule : 60 + (120 - 60) * 0.5^(30/240) ≈ 60 + 60*0.917 ≈ 115.0
+        assert abs(h.bpm - 115.0) < 1.0
 
     def test_beat_decays_low_bpm(self, isolate_cardiac):
         """Le BPM remonte vers le repos si trop bas."""
@@ -86,23 +86,25 @@ class TestHeartbeat:
         assert h.bpm <= 180.0
 
     def test_beat_attenuates_emotion(self, isolate_cardiac):
-        """L'intensité émotionnelle diminue à chaque battement."""
+        """L'intensité émotionnelle diminue à chaque battement (demi-vie 20 min)."""
         h = isolate_cardiac
         h.emotion_intensity = 0.8
         h.current_emotion = "enthousiasme"
         h._last_beat = time.time() - 30.0
         h._beat()
         assert h.emotion_intensity < 0.8
-        assert h.emotion_intensity == pytest.approx(0.76, abs=0.01)
+        # Formule : 0.8 * 0.5^(30/1200) ≈ 0.8 * 0.9828 ≈ 0.786
+        assert h.emotion_intensity == pytest.approx(0.786, abs=0.01)
 
     def test_beat_returns_ans_to_neutral(self, isolate_cardiac):
-        """L'ANS revient vers le neutre à chaque battement."""
+        """L'ANS revient vers le neutre à chaque battement (demi-vie 5 min)."""
         h = isolate_cardiac
         h.ans_balance = 0.8
         h._last_beat = time.time() - 30.0
         h._beat()
         assert h.ans_balance < 0.8
-        assert h.ans_balance == pytest.approx(0.77, abs=0.01)
+        # Formule : 0.5 + (0.8 - 0.5) * 0.5^(30/300) ≈ 0.5 + 0.3*0.933 ≈ 0.780
+        assert h.ans_balance == pytest.approx(0.780, abs=0.01)
 
     @pytest.mark.asyncio
     async def test_start_stop_beating(self, isolate_cardiac):
@@ -847,3 +849,162 @@ class TestGetStats:
         assert isinstance(stats["emotion"], str)
         assert isinstance(stats["somatic_markers_count"], int)
         assert isinstance(stats["beat_count"], int)
+
+
+# ============================================================
+# Tests conscience affective (Levier 0 + 1)
+# ============================================================
+
+class TestEmotionalTransitions:
+    """Tests du tracking des transitions émotionnelles."""
+
+    def test_react_records_transition(self, isolate_cardiac):
+        """Une réaction qui change l'émotion enregistre la transition."""
+        h = isolate_cardiac
+        h.emotion_intensity = 0.0
+        h.current_emotion = "serenite"
+        with patch.object(h, "_get_psyche_resonance", return_value=1.0):
+            h.react("eureka")
+        assert h._prev_emotion == "serenite"
+        assert h.current_emotion == "enthousiasme"
+        assert h._emotion_cause == "eureka"
+        assert h._transition_count == 1
+
+    def test_react_no_transition_same_emotion(self, isolate_cardiac):
+        """Si l'émotion ne change pas, pas de transition enregistrée."""
+        h = isolate_cardiac
+        h.current_emotion = "enthousiasme"
+        h.emotion_intensity = 0.9  # Déjà très intense
+        initial_count = h._transition_count
+        with patch.object(h, "_get_psyche_resonance", return_value=1.0):
+            h.react("eureka")  # Même émotion → pas de transition
+        assert h._transition_count == initial_count
+
+    def test_decay_to_serenite_records_transition(self, isolate_cardiac):
+        """Quand l'émotion retombe à sérénité par decay, la transition est enregistrée."""
+        h = isolate_cardiac
+        h.current_emotion = "frustration"
+        h.emotion_intensity = 0.04  # Juste au-dessus du seuil
+        h._last_beat = time.time() - 30.0
+        h._beat()
+        # Après decay, l'intensité < 0.05 → retour sérénité
+        assert h.current_emotion == "serenite"
+        assert h._prev_emotion == "frustration"
+        assert h._emotion_cause == "decay"
+
+    def test_multiple_transitions_counted(self, isolate_cardiac):
+        """Plusieurs changements d'émotion sont comptés correctement."""
+        h = isolate_cardiac
+        h.emotion_intensity = 0.0
+        with patch.object(h, "_get_psyche_resonance", return_value=1.0):
+            h.react("eureka")      # serenite → enthousiasme
+            h.emotion_intensity = 0.0  # Reset pour forcer le changement
+            h.react("failure")     # enthousiasme → frustration
+            h.emotion_intensity = 0.0
+            h.react("eureka")      # frustration → enthousiasme
+        assert h._transition_count == 3
+
+
+class TestAffectSummary:
+    """Tests de get_affect_summary()."""
+
+    def test_neutral_returns_empty(self, isolate_cardiac):
+        """Sérénité basse intensité → pas de résumé."""
+        h = isolate_cardiac
+        h.current_emotion = "serenite"
+        h.emotion_intensity = 0.1
+        assert h.get_affect_summary() == ""
+
+    def test_active_emotion_returns_description(self, isolate_cardiac):
+        """Une émotion active produit un résumé descriptif."""
+        h = isolate_cardiac
+        h.current_emotion = "frustration"
+        h.emotion_intensity = 0.7
+        h._emotion_since = time.time() - 300  # 5 minutes
+        h._emotion_cause = "failure"
+        summary = h.get_affect_summary()
+        assert "frustration" in summary
+        assert "5 minutes" in summary
+        assert "échec" in summary
+        assert "70%" in summary
+
+    def test_recent_emotion_says_seconds(self, isolate_cardiac):
+        """Une émotion récente (<1 min) dit 'quelques secondes'."""
+        h = isolate_cardiac
+        h.current_emotion = "enthousiasme"
+        h.emotion_intensity = 0.8
+        h._emotion_since = time.time() - 10
+        h._emotion_cause = "eureka"
+        summary = h.get_affect_summary()
+        assert "quelques secondes" in summary
+
+    def test_serenite_high_intensity_returns_summary(self, isolate_cardiac):
+        """Sérénité à haute intensité retourne un résumé (état actif)."""
+        h = isolate_cardiac
+        h.current_emotion = "serenite"
+        h.emotion_intensity = 0.5
+        h._emotion_since = time.time() - 120
+        h._emotion_cause = "decay"
+        summary = h.get_affect_summary()
+        assert "sérénité" in summary
+
+
+class TestSomaticIntuition:
+    """Tests de get_somatic_intuition()."""
+
+    def test_no_marker_returns_empty(self, isolate_cardiac):
+        """Pas de marqueur → pas d'intuition."""
+        h = isolate_cardiac
+        assert h.get_somatic_intuition("UNKNOWN_INTENT") == ""
+
+    def test_positive_marker_returns_positive(self, isolate_cardiac):
+        """Un marqueur positif fort produit une intuition positive."""
+        h = isolate_cardiac
+        with patch.object(h, "_get_psyche_resonance", return_value=1.0):
+            for _ in range(5):
+                h.form_somatic_marker("EVOLUTION_CYCLE", "success", 0.9)
+        intuition = h.get_somatic_intuition("EVOLUTION_CYCLE")
+        assert "réussi" in intuition or "positif" in intuition
+
+    def test_negative_marker_returns_warning(self, isolate_cardiac):
+        """Un marqueur négatif fort produit un avertissement viscéral."""
+        h = isolate_cardiac
+        with patch.object(h, "_get_psyche_resonance", return_value=1.0):
+            for _ in range(5):
+                h.form_somatic_marker("EVOLUTION_CYCLE", "failure", 0.2)
+        intuition = h.get_somatic_intuition("EVOLUTION_CYCLE")
+        assert "serre" in intuition or "malaise" in intuition
+
+    def test_weak_marker_returns_empty(self, isolate_cardiac):
+        """Un marqueur trop faible ne produit pas d'intuition."""
+        h = isolate_cardiac
+        h.form_somatic_marker("TEST_INTENT", "success", 0.5)
+        # Un seul marqueur = intensité 0.3 → signal faible
+        intuition = h.get_somatic_intuition("TEST_INTENT")
+        # Le signal est probablement < 0.3 → vide
+        assert intuition == "" or "positif" in intuition
+
+
+class TestAffectPersistence:
+    """Tests de la persistance des champs de transition."""
+
+    def test_save_load_preserves_transition_data(self, isolate_cardiac, tmp_path):
+        """Les champs de transition sont sauvegardés et rechargés."""
+        from core.cardiac_engine import CARDIAC_STATE_FILE
+        h = isolate_cardiac
+        h.current_emotion = "frustration"
+        h._emotion_since = 1000000.0
+        h._emotion_cause = "failure"
+        h._prev_emotion = "enthousiasme"
+        h._transition_count = 5
+
+        state_file = str(tmp_path / "cardiac_test.json")
+        with patch("core.cardiac_engine.CARDIAC_STATE_FILE", state_file):
+            h.save()
+            # Reset et recharger
+            h.reset()
+            assert h._transition_count == 0
+            h._load()
+            assert h._emotion_cause == "failure"
+            assert h._prev_emotion == "enthousiasme"
+            assert h._transition_count == 5

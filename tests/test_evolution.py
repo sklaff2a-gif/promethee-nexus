@@ -1137,3 +1137,376 @@ class TestCouncilSpecCuration:
         assert len(pending_after) == 0
         # Le résultat ne devrait PAS être "skipped" car la curation a débloqué
         assert result.get("reason") != "council_specs_saturated"
+
+
+# ============================================================================
+# Tests Micro-Découpage + Feedback Loop
+# ============================================================================
+
+_SAMPLE_SOURCE = '''import os
+import logging
+
+logger = logging.getLogger("sample")
+
+class SampleAgent:
+    """Un agent d'exemple."""
+
+    def __init__(self, name):
+        self.name = name
+        self.count = 0
+
+    def process(self, data):
+        """Traite les données."""
+        self.count += 1
+        result = data.upper()
+        return result
+
+    async def async_process(self, data):
+        """Traitement asynchrone."""
+        import asyncio
+        await asyncio.sleep(0.1)
+        return data.lower()
+
+def standalone_function(x):
+    return x * 2
+'''
+
+
+class TestExtractMethodContext:
+
+    def test_extract_class_method(self):
+        """Extraction d'une méthode de classe avec contexte complet."""
+        agent = DivineEvolution()
+        ctx = agent._extract_method_context(_SAMPLE_SOURCE, "process")
+        assert ctx is not None
+        assert "def process(self, data):" in ctx["method_source"]
+        assert ctx["class_name"] == "SampleAgent"
+        assert ctx["class_signature"] == "class SampleAgent:"
+        assert ctx["method_start_line"] > 0
+        assert ctx["method_end_line"] >= ctx["method_start_line"]
+
+    def test_extract_includes_imports(self):
+        """Les imports du fichier sont inclus dans le contexte."""
+        agent = DivineEvolution()
+        ctx = agent._extract_method_context(_SAMPLE_SOURCE, "process")
+        assert ctx is not None
+        assert "import os" in ctx["imports"]
+        assert "import logging" in ctx["imports"]
+
+    def test_extract_sibling_signatures(self):
+        """Les signatures des méthodes voisines sont extraites."""
+        agent = DivineEvolution()
+        ctx = agent._extract_method_context(_SAMPLE_SOURCE, "process")
+        assert ctx is not None
+        assert "__init__" in ctx["sibling_signatures"]
+        assert "async_process" in ctx["sibling_signatures"]
+        # La méthode ciblée ne doit PAS être dans les voisines
+        assert "def process(" not in ctx["sibling_signatures"]
+
+    def test_extract_method_not_found_returns_none(self):
+        """Retourne None si la méthode n'existe pas."""
+        agent = DivineEvolution()
+        ctx = agent._extract_method_context(_SAMPLE_SOURCE, "nonexistent_method")
+        assert ctx is None
+
+    def test_extract_empty_target_returns_none(self):
+        """Retourne None si target_method est vide."""
+        agent = DivineEvolution()
+        assert agent._extract_method_context(_SAMPLE_SOURCE, "") is None
+        assert agent._extract_method_context(_SAMPLE_SOURCE, None) is None
+
+    def test_extract_standalone_function(self):
+        """Extraction d'une fonction top-level (pas dans une classe)."""
+        agent = DivineEvolution()
+        ctx = agent._extract_method_context(_SAMPLE_SOURCE, "standalone_function")
+        assert ctx is not None
+        assert "def standalone_function(x):" in ctx["method_source"]
+        assert ctx["class_name"] is None
+        assert ctx["class_signature"] == ""
+
+
+class TestReassembleCode:
+
+    def test_basic_reassembly(self):
+        """Remplacement basique d'une méthode."""
+        agent = DivineEvolution()
+        ctx = agent._extract_method_context(_SAMPLE_SOURCE, "process")
+        new_method = "    def process(self, data):\n        self.count += 1\n        return data.strip()"
+        result = agent._reassemble_code(_SAMPLE_SOURCE, ctx, new_method)
+        assert "return data.strip()" in result
+        assert "return data.upper()" not in result  # ancien code supprimé
+
+    def test_reassembly_preserves_other_methods(self):
+        """Les autres méthodes ne sont pas affectées."""
+        agent = DivineEvolution()
+        ctx = agent._extract_method_context(_SAMPLE_SOURCE, "process")
+        new_method = "    def process(self, data):\n        return 'modified'"
+        result = agent._reassemble_code(_SAMPLE_SOURCE, ctx, new_method)
+        assert "def __init__" in result
+        assert "async def async_process" in result
+        assert "def standalone_function" in result
+
+    def test_reassembly_adjusts_indentation(self):
+        """L'indentation est ajustée si le code généré a un niveau différent."""
+        agent = DivineEvolution()
+        ctx = agent._extract_method_context(_SAMPLE_SOURCE, "process")
+        # Code sans indentation (comme si le LLM avait oublié)
+        new_method = "def process(self, data):\n    return 'no_indent'"
+        result = agent._reassemble_code(_SAMPLE_SOURCE, ctx, new_method)
+        # Le résultat doit être parseable
+        import ast
+        ast.parse(result)  # Ne doit pas lever d'exception
+
+    def test_reassembly_produces_valid_ast(self):
+        """Le fichier réassemblé est valide syntaxiquement."""
+        agent = DivineEvolution()
+        ctx = agent._extract_method_context(_SAMPLE_SOURCE, "process")
+        new_method = "    def process(self, data):\n        self.count += 2\n        return data.lower()"
+        result = agent._reassemble_code(_SAMPLE_SOURCE, ctx, new_method)
+        import ast
+        tree = ast.parse(result)
+        # Vérifier que la classe existe toujours
+        classes = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
+        assert len(classes) >= 1
+
+
+class TestMicroModeIntegration:
+    """Tests d'intégration du mode micro dans le pipeline Phase 3."""
+
+    @pytest.fixture(autouse=True)
+    def disable_protected_files_guard(self):
+        with patch("Agents.factory_agent._CRITICAL_FILES", set()):
+            yield
+
+    def _make_spec(self, cat, target_method="process"):
+        spec = ImprovementSpec(
+            id="MICRO-001", name="Test micro mode", description="Test du micro-découpage",
+            category="performance", target_file="core/sample.py", target_method=target_method,
+            difficulty=1, code_template="# amélioration", validation="test",
+            status="available", attempts=0,
+        )
+        cat.specs[spec.id] = spec
+        return spec
+
+    @pytest.mark.asyncio
+    async def test_micro_mode_activates_with_target_method(self):
+        """Le mode micro s'active quand target_method est renseigné et trouvé."""
+        evo = DivineEvolution()
+        thoughts = []
+        evo.log_thought = lambda msg, **kw: thoughts.append(msg)
+
+        cat = EvolutionCatalog()
+        cat.specs.clear()  # Vider les specs built-in pour forcer notre spec
+        self._make_spec(cat, target_method="process")
+
+        # Le cloud retourne juste la méthode modifiée — le réassemblage produit un fichier complet
+        mock_method = "    def process(self, data):\n        self.count += 1\n        return data.strip()"
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "Validé"})
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=_SAMPLE_SOURCE), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=mock_method), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # Vérifier que le mode micro a été mentionné dans les logs
+        micro_logs = [t for t in thoughts if "micro" in t.lower() or "🔬" in t or "Réassemblage" in t]
+        assert len(micro_logs) >= 1, f"Aucun log micro trouvé dans: {thoughts}"
+
+    @pytest.mark.asyncio
+    async def test_fallback_when_no_target_method(self):
+        """Fallback fichier complet quand target_method est vide."""
+        evo = DivineEvolution()
+        thoughts = []
+        evo.log_thought = lambda msg, **kw: thoughts.append(msg)
+
+        cat = EvolutionCatalog()
+        cat.specs.clear()
+        self._make_spec(cat, target_method="")
+
+        valid_code = "import os\nimport sys\ndef hello():\n    print('hello from full file mode padding')"
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "Validé"})
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=_SAMPLE_SOURCE), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=valid_code), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # Pas de log micro
+        micro_logs = [t for t in thoughts if "🔬" in t]
+        assert len(micro_logs) == 0
+
+    @pytest.mark.asyncio
+    async def test_reassembly_produces_full_file(self):
+        """En mode micro, le réassemblage produit un fichier complet qui passe les validations."""
+        evo = DivineEvolution()
+
+        cat = EvolutionCatalog()
+        cat.specs.clear()
+        self._make_spec(cat, target_method="process")
+
+        # Le LLM retourne juste la méthode modifiée
+        mock_method = "    def process(self, data):\n        self.count += 1\n        return 'reassembled'"
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "Validé"})
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=_SAMPLE_SOURCE), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=mock_method), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # Le pipeline ne devrait PAS échouer en anti-troncature (le réassemblage fait un fichier complet)
+        assert "Anti-troncature" not in result.get("result", "")
+
+
+class TestFeedbackLoop:
+    """Tests de la boucle de retries syntaxiques Phase 4."""
+
+    @pytest.fixture(autouse=True)
+    def disable_protected_files_guard(self):
+        with patch("Agents.factory_agent._CRITICAL_FILES", set()):
+            yield
+
+    def _make_spec(self, cat):
+        spec = ImprovementSpec(
+            id="RETRY-001", name="Test retry", description="Test feedback loop",
+            category="resilience", target_file="core/sample.py", target_method="process",
+            difficulty=1, code_template="# fix", validation="test",
+            status="available", attempts=0,
+        )
+        cat.specs[spec.id] = spec
+        return spec
+
+    @pytest.mark.asyncio
+    async def test_retry_fixes_syntax_on_second_attempt(self):
+        """Le retry corrige une erreur de syntaxe au 2ème essai."""
+        evo = DivineEvolution()
+
+        cat = EvolutionCatalog()
+        self._make_spec(cat)
+
+        bad_code = "def broken(:\n    pass\n# padding minimum 50 chars for the test to work here"
+        good_code = "import os\ndef fixed():\n    pass\n# padding minimum 50 chars for the test to work here ok"
+
+        call_count = [0]
+
+        async def mock_cloud(prompt):
+            nonlocal call_count
+            call_count[0] += 1
+            return bad_code if call_count[0] == 1 else good_code
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "Validé"})
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
+             patch.object(evo, "_generate_code_cloud", side_effect=mock_cloud), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # Le retry cloud a été appelé au moins 2 fois
+        assert call_count[0] >= 2
+        # Le résultat ne devrait pas être une erreur de syntaxe
+        assert "ast.parse error" not in result.get("result", "")
+
+    @pytest.mark.asyncio
+    async def test_retry_uses_local_coder_when_cloud_fails(self):
+        """Le retry utilise le coder local quand Cloud retourne rien."""
+        evo = DivineEvolution()
+
+        cat = EvolutionCatalog()
+        self._make_spec(cat)
+
+        bad_code = "def broken(:\n    pass\n# padding minimum 50 chars for the test to work here"
+        good_code = "import os\ndef fixed():\n    pass\n# padding minimum 50 chars for the test to work here ok"
+
+        call_count = [0]
+
+        async def mock_cloud(prompt):
+            nonlocal call_count
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return bad_code
+            return ""  # Cloud échoue pour les retries
+
+        mock_orch = MagicMock()
+        # Le coder local retourne du code valide pour le retry syntax
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": good_code})
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
+             patch.object(evo, "_generate_code_cloud", side_effect=mock_cloud), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # Le coder local a été appelé pour le retry syntax
+        syntax_fix_calls = [
+            c for c in mock_orch.dispatch_task.call_args_list
+            if c[0][0] == "coder" and "SYNTAX_FIX" in str(c)
+        ]
+        assert len(syntax_fix_calls) >= 1
+
+    @pytest.mark.asyncio
+    async def test_dead_end_after_max_retries(self):
+        """Après MAX_SYNTAX_RETRIES, le code est rejeté."""
+        evo = DivineEvolution()
+
+        cat = EvolutionCatalog()
+        self._make_spec(cat)
+
+        bad_code = "def broken(:\n    pass\n# padding minimum 50 chars for the test to work here"
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"result": bad_code})
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=bad_code), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        assert result["status"] == "error"
+        assert "ast.parse error" in result["result"]
+        assert "retries" in result["result"]
+
+    @pytest.mark.asyncio
+    async def test_error_line_in_retry_prompt(self):
+        """Le prompt de retry contient le numéro de ligne exact de l'erreur."""
+        evo = DivineEvolution()
+        retry_prompts = []
+
+        cat = EvolutionCatalog()
+        self._make_spec(cat)
+
+        bad_code = "def broken(:\n    pass\n# padding minimum 50 chars for the test to work here"
+        good_code = "import os\ndef fixed():\n    pass\n# padding minimum 50 chars for the test to work here ok"
+
+        call_count = [0]
+
+        async def mock_cloud(prompt):
+            nonlocal call_count
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return bad_code
+            retry_prompts.append(prompt)
+            return good_code
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "Validé"})
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
+             patch.object(evo, "_generate_code_cloud", side_effect=mock_cloud), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # Le prompt de retry doit contenir l'info d'erreur
+        assert len(retry_prompts) >= 1
+        assert "ERREUR DE SYNTAXE" in retry_prompts[0]

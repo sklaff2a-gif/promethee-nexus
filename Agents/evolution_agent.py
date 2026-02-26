@@ -251,6 +251,125 @@ class DivineEvolution(BaseAgent):
             logger.warning(f"Impossible de lire {target_file}: {e}")
             return ""
 
+    @staticmethod
+    def _extract_method_context(source_code: str, target_method: str) -> dict | None:
+        """Extrait le contexte AST d'une méthode ciblée pour le mode micro-découpage.
+
+        Retourne un dict avec method_source, class_name, class_signature,
+        imports, sibling_signatures, method_start_line, method_end_line.
+        Retourne None si target_method est vide ou introuvable.
+        """
+        if not target_method or not source_code:
+            return None
+
+        try:
+            tree = ast.parse(source_code)
+        except SyntaxError:
+            return None
+
+        source_lines = source_code.splitlines()
+
+        # Collecter les imports
+        import_lines = []
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for ln in range(node.lineno, (node.end_lineno or node.lineno) + 1):
+                    import_lines.append(source_lines[ln - 1])
+        imports_str = "\n".join(import_lines)
+
+        # Chercher la méthode dans les classes et au top-level
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == target_method:
+                method_start = node.lineno
+                method_end = node.end_lineno or node.lineno
+                method_source = "\n".join(source_lines[method_start - 1:method_end])
+
+                # Déterminer la classe parente
+                class_name = None
+                class_signature = ""
+                sibling_sigs = []
+
+                for cls_node in ast.walk(tree):
+                    if not isinstance(cls_node, ast.ClassDef):
+                        continue
+                    for item in cls_node.body:
+                        if item is node:
+                            class_name = cls_node.name
+                            # Reconstruire la signature de la classe
+                            bases = []
+                            for b in cls_node.bases:
+                                if isinstance(b, ast.Name):
+                                    bases.append(b.id)
+                                elif isinstance(b, ast.Attribute):
+                                    bases.append(ast.unparse(b))
+                            base_str = f"({', '.join(bases)})" if bases else ""
+                            class_signature = f"class {cls_node.name}{base_str}:"
+
+                            # Signatures des méthodes voisines (sans corps)
+                            for sibling in cls_node.body:
+                                if isinstance(sibling, (ast.FunctionDef, ast.AsyncFunctionDef)) and sibling is not node:
+                                    prefix = "async def" if isinstance(sibling, ast.AsyncFunctionDef) else "def"
+                                    args_str = ast.unparse(sibling.args)
+                                    sibling_sigs.append(f"    {prefix} {sibling.name}({args_str}): ...")
+                            break
+                    if class_name:
+                        break
+
+                return {
+                    "method_source": method_source,
+                    "class_name": class_name,
+                    "class_signature": class_signature,
+                    "imports": imports_str,
+                    "sibling_signatures": "\n".join(sibling_sigs),
+                    "method_start_line": method_start,
+                    "method_end_line": method_end,
+                }
+
+        return None
+
+    @staticmethod
+    def _reassemble_code(source_code: str, method_ctx: dict, new_method_code: str) -> str:
+        """Remplace la méthode originale dans le source par le nouveau code généré.
+
+        Ajuste l'indentation de base si nécessaire.
+        """
+        source_lines = source_code.splitlines()
+        start = method_ctx["method_start_line"] - 1  # 0-indexed
+        end = method_ctx["method_end_line"]           # exclusive
+
+        # Détecter l'indentation de base de la méthode originale
+        original_first_line = source_lines[start] if start < len(source_lines) else ""
+        original_indent = len(original_first_line) - len(original_first_line.lstrip())
+
+        # Détecter l'indentation du code généré
+        new_lines = new_method_code.splitlines()
+        # Trouver la première ligne non-vide pour référence d'indentation
+        new_indent = 0
+        for nl in new_lines:
+            stripped = nl.lstrip()
+            if stripped:
+                new_indent = len(nl) - len(stripped)
+                break
+
+        # Ajuster l'indentation si différente
+        if new_indent != original_indent:
+            delta = original_indent - new_indent
+            adjusted = []
+            for nl in new_lines:
+                if not nl.strip():
+                    adjusted.append("")
+                elif delta > 0:
+                    adjusted.append(" " * delta + nl)
+                else:
+                    # Retirer du padding (sans aller en négatif)
+                    remove = min(abs(delta), len(nl) - len(nl.lstrip()))
+                    adjusted.append(nl[remove:])
+            new_lines = adjusted
+
+        # Réassembler
+        result_lines = source_lines[:start] + new_lines + source_lines[end:]
+        return "\n".join(result_lines)
+
     async def _run_grimoire_creation(self) -> Dict[str, Any]:
         """Crée une nouvelle recette Grimoire quand le catalogue est épuisé."""
         from core.orchestrator import orchestrator
@@ -474,26 +593,55 @@ class DivineEvolution(BaseAgent):
                 generated_code = ""
 
         # Tentative 2 : LLM Cloud/Local (si CodeSmith n'a pas produit de résultat)
+        micro_mode = False
         if not generated_code or len(generated_code) < 50:
             self.log_thought(f"🛠️ Phase 3 : Génération du code via Gemini Cloud [{spec.id}]...", type="info")
 
             # Consulter le registre d'expériences
             past_failures = registry.get_failure_summary(spec.id)
 
-            code_prompt = (
-                f"Applique cette amélioration au fichier {spec.target_file} (méthode: {spec.target_method}).\n"
-                f"AMÉLIORATION [{spec.id}] : {spec.name}\n"
-                f"DESCRIPTION : {spec.description}\n"
-                f"TEMPLATE DE CODE À INTÉGRER :\n{spec.code_template}\n\n"
-                f"CODE SOURCE ACTUEL DU FICHIER :\n{source_code[:3000]}\n\n"
-                f"INSTRUCTIONS :\n"
-                f"- Intègre le template dans le code existant\n"
-                f"- Conserve TOUT le code existant fonctionnel\n"
-                f"- Adapte les noms de variables si nécessaire\n"
-                f"- Retourne LE FICHIER COMPLET modifié (pas juste le diff)\n"
-                f"- Donne UNIQUEMENT le code Python, sans explication ni commentaire hors-code."
-                f"{CODE_GENERATION_GUARDRAIL}"
-            )
+            # Tenter le micro-découpage contextuel (méthode seule au lieu du fichier entier)
+            method_ctx = self._extract_method_context(source_code, spec.target_method)
+
+            if method_ctx and method_ctx["method_source"]:
+                # MODE MICRO — prompt ciblé sur la méthode seule
+                micro_mode = True
+                self.log_thought(
+                    f"🔬 Mode micro: {spec.target_method} "
+                    f"(L{method_ctx['method_start_line']}-{method_ctx['method_end_line']})",
+                    type="info"
+                )
+                code_prompt = (
+                    f"AMÉLIORATION [{spec.id}] : {spec.name}\n"
+                    f"DESCRIPTION : {spec.description}\n"
+                    f"TEMPLATE :\n{spec.code_template}\n\n"
+                    f"CONTEXTE ({spec.target_file}) :\n"
+                    f"{method_ctx['imports']}\n\n"
+                    f"{method_ctx['class_signature']}\n"
+                    f"  # Méthodes existantes:\n{method_ctx['sibling_signatures']}\n\n"
+                    f"MÉTHODE À MODIFIER :\n{method_ctx['method_source']}\n\n"
+                    f"INSTRUCTIONS :\n"
+                    f"- Retourne UNIQUEMENT la méthode modifiée\n"
+                    f"- Conserve la signature et l'indentation\n"
+                    f"- Donne UNIQUEMENT le code Python."
+                    f"{CODE_GENERATION_GUARDRAIL}"
+                )
+            else:
+                # FALLBACK — prompt fichier complet (mode historique)
+                code_prompt = (
+                    f"Applique cette amélioration au fichier {spec.target_file} (méthode: {spec.target_method}).\n"
+                    f"AMÉLIORATION [{spec.id}] : {spec.name}\n"
+                    f"DESCRIPTION : {spec.description}\n"
+                    f"TEMPLATE DE CODE À INTÉGRER :\n{spec.code_template}\n\n"
+                    f"CODE SOURCE ACTUEL DU FICHIER :\n{source_code[:3000]}\n\n"
+                    f"INSTRUCTIONS :\n"
+                    f"- Intègre le template dans le code existant\n"
+                    f"- Conserve TOUT le code existant fonctionnel\n"
+                    f"- Adapte les noms de variables si nécessaire\n"
+                    f"- Retourne LE FICHIER COMPLET modifié (pas juste le diff)\n"
+                    f"- Donne UNIQUEMENT le code Python, sans explication ni commentaire hors-code."
+                    f"{CODE_GENERATION_GUARDRAIL}"
+                )
 
             if past_failures:
                 code_prompt += f"\n\nATTENTION — {past_failures}\nÉVITE de reproduire ces erreurs.\n"
@@ -513,6 +661,12 @@ class DivineEvolution(BaseAgent):
                 if generated_code and len(generated_code) >= 50:
                     code_source = "local"
 
+            # Si mode micro et code généré → réassembler dans le fichier complet
+            if micro_mode and generated_code and len(generated_code) >= 50:
+                generated_code = self._extract_python_code(generated_code)
+                generated_code = self._reassemble_code(source_code, method_ctx, generated_code)
+                self.log_thought(f"🔧 Réassemblage micro terminé ({len(generated_code)} chars)", type="info")
+
         if not generated_code or len(generated_code) < 50:
             reason = "Aucun code produit (CodeSmith + Cloud + Local)"
             catalog.mark_failed(spec.id, reason)
@@ -531,66 +685,80 @@ class DivineEvolution(BaseAgent):
                 pass
             return {"status": "warning", "result": f"R.A.S — {reason}."}
 
-        # --- PHASE 4 : VALIDATION SYNTAXE ---
+        # --- PHASE 4 : VALIDATION SYNTAXE (avec boucle de retries) ---
         self.log_thought("🔍 Phase 4 : Validation syntaxe (ast.parse)...", type="thought")
 
         # Extraction du code Python depuis les blocs markdown
         generated_code = self._extract_python_code(generated_code)
 
-        try:
-            ast.parse(generated_code)
-        except SyntaxError as e:
-            # Retry : renvoyer l'erreur à Gemini pour correction
-            self.log_thought(f"⚠️ Syntaxe invalide ({e}), tentative de correction via Gemini...", type="warning")
-            retry_prompt = (
-                f"Le code Python suivant contient une erreur de syntaxe : {e}\n"
-                f"CODE AVEC ERREUR :\n{generated_code[:4000]}\n\n"
-                f"Corrige l'erreur et retourne UNIQUEMENT le code Python corrigé complet, sans explication."
-            )
-            retry_code = await self._generate_code_cloud(retry_prompt)
-            if retry_code:
-                retry_code = self._extract_python_code(retry_code)
-                try:
-                    ast.parse(retry_code)
-                    generated_code = retry_code
-                    code_source = "cloud+retry"
-                    self.log_thought("✅ Code corrigé avec succès après retry !", type="info")
-                except SyntaxError as e2:
-                    reason = f"ast.parse error (après retry): {e2}"
-                    catalog.mark_failed(spec.id, reason)
-                    self.log_thought(f"❌ Syntaxe toujours invalide après retry : {e2}", type="error")
+        MAX_SYNTAX_RETRIES = 3
+        syntax_ok = False
+        last_syntax_error = None
+
+        for retry_num in range(MAX_SYNTAX_RETRIES):
+            try:
+                ast.parse(generated_code)
+                syntax_ok = True
+                if retry_num > 0:
+                    code_source += f"+retry{retry_num}"
+                    self.log_thought(f"✅ Code corrigé au retry {retry_num}!", type="info")
+                break
+            except SyntaxError as e:
+                last_syntax_error = e
+                if retry_num >= MAX_SYNTAX_RETRIES - 1:
+                    break
+
+                error_line = getattr(e, 'lineno', '?')
+                self.log_thought(
+                    f"⚠️ Syntaxe invalide ligne {error_line} ({e}), "
+                    f"retry {retry_num + 1}/{MAX_SYNTAX_RETRIES}...",
+                    type="warning"
+                )
+
+                retry_prompt = (
+                    f"ERREUR DE SYNTAXE ligne {error_line} : {e}\n"
+                    f"CODE :\n{generated_code[:4000]}\n\n"
+                    f"Corrige l'erreur et retourne le code Python corrigé."
+                )
+
+                # Tenter Cloud d'abord
+                retry_code = await self._generate_code_cloud(retry_prompt)
+
+                # Si Cloud indisponible → coder local
+                if not retry_code:
+                    self.log_thought("☁️ Cloud indisponible, retry via coder local...", type="warning")
                     try:
-                        registry.record(Experience(
-                            id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
-                            spec_id=spec.id, spec_name=spec.name,
-                            attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
-                            phase_reached="phase4", outcome="failed", failure_reason=reason,
-                            code_source=code_source, code_length=len(generated_code),
-                            syntax_error=str(e2),
-                            system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
-                            error_streak_at_attempt=ctx["error_streak"],
-                        ))
+                        coder_resp = await orchestrator.dispatch_task("coder", {
+                            "mission": retry_prompt,
+                            "context": f"EVOLUTION_PIPELINE\nSPEC_ID: {spec.id}\nSYNTAX_FIX"
+                        })
+                        retry_code = coder_resp.get("result", "")
                     except Exception:
-                        pass
-                    return {"status": "error", "result": f"Spec [{spec.id}] rejetée : {reason}"}
-            else:
-                reason = f"ast.parse error: {e}"
-                catalog.mark_failed(spec.id, reason)
-                self.log_thought(f"❌ Syntaxe invalide (retry Cloud indisponible) : {e}", type="error")
-                try:
-                    registry.record(Experience(
-                        id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
-                        spec_id=spec.id, spec_name=spec.name,
-                        attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
-                        phase_reached="phase4", outcome="failed", failure_reason=reason,
-                        code_source=code_source, code_length=len(generated_code),
-                        syntax_error=str(e),
-                        system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
-                        error_streak_at_attempt=ctx["error_streak"],
-                    ))
-                except Exception:
-                    pass
-                return {"status": "error", "result": f"Spec [{spec.id}] rejetée : {reason}"}
+                        retry_code = ""
+
+                if retry_code:
+                    generated_code = self._extract_python_code(retry_code)
+                else:
+                    break  # Aucune source disponible pour retry
+
+        if not syntax_ok:
+            reason = f"ast.parse error (après {MAX_SYNTAX_RETRIES} retries): {last_syntax_error}"
+            catalog.mark_failed(spec.id, reason)
+            self.log_thought(f"❌ Syntaxe invalide après {MAX_SYNTAX_RETRIES} retries : {last_syntax_error}", type="error")
+            try:
+                registry.record(Experience(
+                    id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                    spec_id=spec.id, spec_name=spec.name,
+                    attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                    phase_reached="phase4", outcome="failed", failure_reason=reason,
+                    code_source=code_source, code_length=len(generated_code),
+                    syntax_error=str(last_syntax_error),
+                    system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                    error_streak_at_attempt=ctx["error_streak"],
+                ))
+            except Exception:
+                pass
+            return {"status": "error", "result": f"Spec [{spec.id}] rejetée : {reason}"}
 
         # --- PHASE 4b : FILTRE ANTI-HALLUCINATION (imports aliens) ---
         aliens = _detect_alien_imports(generated_code)

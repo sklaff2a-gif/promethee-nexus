@@ -929,6 +929,15 @@ class SelfAwarenessEngine:
             gap_topics = [g["topic"][:30] for g in open_gaps[:2]]
             parts.append(f"[LACUNES] {', '.join(gap_topics)}")
 
+        # Conscience affective (état émotionnel du coeur)
+        try:
+            from core.cardiac_engine import heart
+            affect = heart.get_affect_summary()
+            if affect:
+                parts.append(f"[AFFECT] {affect}")
+        except Exception:
+            pass
+
         # Pulsions frustrées
         try:
             from core.desire_engine import desires as _desires
