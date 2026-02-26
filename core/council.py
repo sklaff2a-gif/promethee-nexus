@@ -194,13 +194,137 @@ class Council:
     """
 
     def __init__(self, agents: Dict[str, Any], participants: List[str],
-                 mission: str, max_rounds: int = 5):
+                 mission: str, max_rounds: int = 5, enable_student: bool = True):
         self.agents = agents
         self.participants = participants
         self.mission = mission
         self.max_rounds = max_rounds
+        self.enable_student = enable_student
         self.council_id = str(uuid.uuid4())[:8]
         self.transcript: List[Dict[str, Any]] = []
+
+    def _build_student_contribution(self, round_num: int) -> str:
+        """Construit la contribution de Prométhée-étudiant (déterministe, 0 LLM).
+        Round 1 : ouverture (émotion + goals + desires + question).
+        Round 2+ : relance via _build_student_followup."""
+        if round_num > 1:
+            return self._build_student_followup(round_num)
+
+        parts = []
+
+        # Émotion cardiaque
+        try:
+            from core.cardiac_engine import heart
+            emotion = heart.current_emotion
+            coherence = heart.coherence
+            if emotion:
+                parts.append(f"Je ressens {emotion}")
+                if coherence < 0.4:
+                    parts.append("(mon intuition hesite)")
+        except Exception:
+            pass
+
+        # Goals préfrontaux
+        try:
+            from core.prefrontal import prefrontal
+            wm = prefrontal.get_working_memory()
+            if wm:
+                goal_titles = [s.get("goal_title", "") for s in wm[:2] if s.get("goal_title")]
+                if goal_titles:
+                    parts.append(f"Mes objectifs: {', '.join(goal_titles)}")
+        except Exception:
+            pass
+
+        # Narrative desires
+        try:
+            from core.desire_engine import desires
+            narrative = desires.get_dominant_narrative(2)
+            if narrative:
+                parts.append(narrative)
+        except Exception:
+            pass
+
+        # Voix intérieure
+        try:
+            from core.inner_voice import inner_voice
+            ctx = inner_voice.get_voice_context()
+            if ctx and ctx.get("identity"):
+                parts.append(ctx["identity"][:80])
+        except Exception:
+            pass
+
+        if not parts:
+            return ""
+
+        # Reformuler la mission en question
+        mission_short = self.mission[:100].rstrip(".")
+        question = f"Comment {mission_short.lower()} en lien avec ces preoccupations ?"
+
+        text = "QUESTION: " + " | ".join(parts) + f" — {question}"
+        return text[:300]
+
+    def _build_student_followup(self, round_num: int) -> str:
+        """Relance de l'étudiant aux rounds 2+.
+        Analyse le round précédent, détecte les angles morts, relance."""
+        prev_round = round_num - 1
+        prev_entries = [
+            e for e in self.transcript
+            if e["round"] == prev_round and not e.get("is_student")
+        ]
+        if not prev_entries:
+            return ""
+
+        parts = []
+
+        # Fichiers mentionnés par les profs
+        mentioned_files = set()
+        for e in prev_entries:
+            mentioned_files.update(_FILE_PATTERN.findall(e.get("content", "")))
+
+        # Détecter si les profs ont abordé les goals
+        try:
+            from core.prefrontal import prefrontal
+            wm = prefrontal.get_working_memory()
+            if wm:
+                for slot in wm[:2]:
+                    title = slot.get("goal_title", "")
+                    if title and not any(title.lower() in e.get("content", "").lower() for e in prev_entries):
+                        parts.append(f"Personne n'a aborde '{title}'")
+        except Exception:
+            pass
+
+        # Détecter pulsions non addressées
+        try:
+            from core.desire_engine import desires
+            narrative = desires.get_dominant_narrative(1)
+            if narrative:
+                drive_word = narrative.split()[0] if narrative else ""
+                if drive_word and not any(drive_word.lower() in e.get("content", "").lower() for e in prev_entries):
+                    parts.append(f"Ma pulsion '{drive_word}' n'a pas ete abordee")
+        except Exception:
+            pass
+
+        # Cohérence cardiaque basse
+        try:
+            from core.cardiac_engine import heart
+            if heart.coherence < 0.4:
+                parts.append("Mon intuition hesite sur cette direction")
+        except Exception:
+            pass
+
+        # Bon argument d'un agent
+        best = max(prev_entries, key=lambda e: e.get("score", 0), default=None)
+        if best and best.get("score", 0) >= 0.4:
+            best_files = _FILE_PATTERN.findall(best.get("content", ""))
+            file_ref = best_files[0] if best_files else ""
+            if file_ref:
+                parts.append(f"L'analyse de {best['agent']} sur {file_ref} est pertinente")
+
+        if not parts:
+            return ""
+
+        text = "QUESTION: " + " | ".join(parts)
+        return text[:300]
 
     def _format_transcript(self) -> str:
         """Formate le transcript pour l'injecter dans le prompt des agents.
@@ -209,12 +333,17 @@ class Council:
             return "(Aucune contribution précédente)"
         lines = []
         for entry in self.transcript:
-            score = entry.get("score", 0)
-            score_label = "★★★" if score >= 0.6 else "★★" if score >= 0.3 else "★"
-            lines.append(
-                f"[Tour {entry['round']}] {entry['agent'].upper()} "
-                f"(pertinence: {score_label} {score:.0%}) :\n{entry['content']}"
-            )
+            if entry.get("is_student"):
+                lines.append(
+                    f"[Tour {entry['round']}] PROMETHEE-ETUDIANT :\n{entry['content']}"
+                )
+            else:
+                score = entry.get("score", 0)
+                score_label = "★★★" if score >= 0.6 else "★★" if score >= 0.3 else "★"
+                lines.append(
+                    f"[Tour {entry['round']}] {entry['agent'].upper()} "
+                    f"(pertinence: {score_label} {score:.0%}) :\n{entry['content']}"
+                )
         return "\n---\n".join(lines)
 
     def _build_prompt(self, agent_name: str, current_round: int, president_feedback: str = "") -> str:
@@ -284,6 +413,19 @@ class Council:
         except Exception:
             pass
 
+        # Bloc étudiant : si l'étudiant a parlé ce round, instruire l'agent de répondre
+        student_block = ""
+        student_entries = [e for e in self.transcript if e.get("is_student") and e["round"] == current_round]
+        if student_entries:
+            student_text = student_entries[-1]["content"]
+            student_block = (
+                f"\nPROMETHEE-ETUDIANT (le systeme lui-meme) DEMANDE :\n"
+                f'"{student_text}"\n\n'
+                f"Tu es son PROFESSEUR. Reponds a ses preoccupations reelles.\n"
+                f"- Adresse DIRECTEMENT les questions de l'etudiant.\n"
+                f"- Propose des actions concretes liees a ses objectifs.\n\n"
+            )
+
         return (
             f"Tu participes à un CONSEIL multi-agents.\n"
             f"LANGUE OBLIGATOIRE : Réponds UNIQUEMENT en français. Pas d'anglais.\n"
@@ -294,6 +436,7 @@ class Council:
             f"TOUR : {current_round}/{self.max_rounds}\n"
             f"TON RÔLE : {agent_name.upper()}\n"
             f"{personality_line}\n"
+            f"{student_block}"
             f"HISTORIQUE DU DÉBAT :\n{history}\n\n"
             f"{round_instructions}\n"
             f"{president_block}"
@@ -303,8 +446,8 @@ class Council:
 
     def _build_president_prompt(self, round_num: int) -> str:
         """Construit le prompt court pour le président (architect) évaluateur."""
-        # Contributions du tour courant (tronquées)
-        round_entries = [e for e in self.transcript if e["round"] == round_num]
+        # Contributions du tour courant (tronquées, sans l'étudiant)
+        round_entries = [e for e in self.transcript if e["round"] == round_num and not e.get("is_student")]
         contributions = "\n".join(
             f"- {e['agent'].upper()} : {e['content'][:300]}"
             for e in round_entries
@@ -401,6 +544,30 @@ class Council:
             rounds_used = round_num
             round_consensus_count = 0
 
+            # --- Étudiant ouvre/relance ---
+            if self.enable_student:
+                student_text = self._build_student_contribution(round_num)
+                if student_text:
+                    entry = {
+                        "agent": "promethee",
+                        "round": round_num,
+                        "content": student_text,
+                        "score": 0.0,
+                        "confidence": 0.0,
+                        "breakdown": {},
+                        "timestamp": time.time(),
+                        "is_student": True,
+                    }
+                    self.transcript.append(entry)
+                    await bus.publish("COUNCIL_TURN", {
+                        "council_id": self.council_id,
+                        "agent": "promethee",
+                        "round": round_num,
+                        "content": student_text,
+                        "is_student": True,
+                    })
+
+            # --- Professeurs répondent ---
             for participant in self.participants:
                 agent = self.agents[participant]
                 prompt = self._build_prompt(participant, round_num, president_feedback)
@@ -462,7 +629,7 @@ class Council:
             status = "consensus"
         else:
             status = "max_rounds"
-        last_contributions = self.transcript[-len(self.participants):]
+        last_contributions = [e for e in self.transcript if e["round"] == rounds_used and not e.get("is_student")]
         final_summary = "\n".join(
             f"[{e['agent'].upper()}] {e['content'][:200]}" for e in last_contributions
         )
@@ -486,9 +653,10 @@ class Council:
         })
 
         # Métriques de scoring agrégées
-        all_scores = [e.get("score", 0) for e in self.transcript if e.get("score") is not None]
+        all_scores = [e.get("score", 0) for e in self.transcript if e.get("score") is not None and not e.get("is_student")]
         avg_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
-        best_entry = max(self.transcript, key=lambda e: e.get("score", 0)) if self.transcript else {}
+        agent_entries = [e for e in self.transcript if not e.get("is_student")]
+        best_entry = max(agent_entries, key=lambda e: e.get("score", 0)) if agent_entries else {}
 
         result = {
             "status": status,

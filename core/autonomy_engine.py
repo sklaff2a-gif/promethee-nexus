@@ -1508,6 +1508,29 @@ class AutonomyEngine:
         except Exception as e:
             logger.warning(f"[COUNCIL] Conscience indisponible: {e}")
 
+        # Injection des objectifs préfrontaux
+        try:
+            from core.prefrontal import prefrontal
+            wm = prefrontal.get_working_memory()
+            if wm:
+                goal_context = "; ".join(
+                    f"Goal: {s['goal_title']} ({s['progress']:.0%})"
+                    for s in wm[:2] if s.get("goal_title") is not None
+                )
+                if goal_context:
+                    mission += f"\n\nOBJECTIFS ACTIFS: {goal_context}"
+        except Exception:
+            pass
+
+        # Injection des pulsions dominantes
+        try:
+            from core.desire_engine import desires
+            narrative = desires.get_dominant_narrative(2)
+            if narrative:
+                mission += f"\n\nPULSIONS: {narrative}"
+        except Exception:
+            pass
+
         print(f"   🗣️ COUNCIL DEBATE: {topic['participants']} — {topic['mission'][:80]}")
         result = await orchestrator.dispatch_council(
             participants=topic["participants"],
@@ -1848,11 +1871,15 @@ class AutonomyEngine:
 
         # Construire le texte d'analyse à partir du transcript COMPLET du dernier tour
         # (le final_summary tronque à 200 chars/participant, perdant les détails concrets)
+        # Exclure les entries étudiant pour ne garder que les contributions des agents
         transcript = council_result.get("transcript", [])
         if transcript:
             participants = council_result.get("participants", [])
             last_round = max(e["round"] for e in transcript)
-            last_round_entries = [e for e in transcript if e["round"] == last_round]
+            last_round_entries = [
+                e for e in transcript
+                if e["round"] == last_round and not e.get("is_student")
+            ]
             # Utiliser le contenu complet (max 1500 chars/participant au lieu de 200)
             analysis_text = "\n".join(
                 f"[{e['agent'].upper()}] {e['content'][:1500]}" for e in last_round_entries

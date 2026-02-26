@@ -158,12 +158,12 @@ class TestCouncilRun:
             "coder": self._make_mock_agent(),
             "security": self._make_mock_agent(),
         }
-        council = Council(agents, ["coder", "security"], "test mission", max_rounds=3)
+        council = Council(agents, ["coder", "security"], "test mission", max_rounds=3, enable_student=False)
         result = await council.run()
 
         assert result["status"] == "max_rounds"
         assert result["rounds_used"] == 3
-        # 2 participants * 3 rounds = 6 entrées
+        # 2 participants * 3 rounds = 6 entrées (enable_student=False)
         assert len(result["transcript"]) == 6
 
     @pytest.mark.asyncio
@@ -323,7 +323,7 @@ class TestCouncilRun:
             "coder": self._make_mock_agent(),
             "security": self._make_mock_agent(),
         }
-        council = Council(agents, ["coder", "security"], "test", max_rounds=1)
+        council = Council(agents, ["coder", "security"], "test", max_rounds=1, enable_student=False)
         await council.run()
 
         # On attend que les tâches asynchrones du bus soient terminées
@@ -694,3 +694,318 @@ class TestPresidentEvaluation:
         result = await council.run()
         assert result["status"] == "max_rounds"
         assert result["rounds_used"] == 3
+
+
+# ============================================================
+# TESTS ÉTUDIANT (Prométhée Table Ronde)
+# ============================================================
+
+class TestStudentParticipation:
+    """Tests de la participation de Prométhée-étudiant dans les Council debates."""
+
+    def _make_mock_agent(self, responses=None):
+        agent = MagicMock()
+        if responses:
+            agent.generate_content = AsyncMock(side_effect=responses)
+        else:
+            agent.generate_content = AsyncMock(return_value="Voici mon analyse.")
+        return agent
+
+    def test_student_contribution_empty_without_organs(self):
+        """Sans organes (cardiac, prefrontal, desire, inner_voice), contribution vide."""
+        agents = {"coder": MagicMock(), "security": MagicMock()}
+        council = Council(agents, ["coder", "security"], "test mission", max_rounds=3)
+
+        # Simuler l'absence des organes en faisant échouer les imports
+        broken = MagicMock()
+        broken.heart = property(lambda self: (_ for _ in ()).throw(ImportError))
+        with patch.dict("sys.modules", {
+            "core.cardiac_engine": None,
+            "core.prefrontal": None,
+            "core.desire_engine": None,
+            "core.inner_voice": None,
+        }):
+            result = council._build_student_contribution(1)
+        assert result == ""
+
+    def test_student_contribution_with_mocked_organs(self):
+        """Avec mocks organes, texte non-vide contenant goals/desires."""
+        agents = {"coder": MagicMock(), "security": MagicMock()}
+        council = Council(agents, ["coder", "security"], "test mission", max_rounds=3)
+
+        mock_heart = MagicMock()
+        mock_heart.current_emotion = "curiosite"
+        mock_heart.coherence = 0.7
+
+        mock_prefrontal = MagicMock()
+        mock_prefrontal.get_working_memory.return_value = [
+            {"goal_title": "Ameliorer router", "progress": 0.3}
+        ]
+
+        mock_desires = MagicMock()
+        mock_desires.get_dominant_narrative.return_value = "CURIOSITE me pousse a explorer"
+
+        mock_voice = MagicMock()
+        mock_voice.get_voice_context.return_value = {"identity": "Je suis Promethee"}
+
+        with patch.dict("sys.modules", {
+            "core.cardiac_engine": MagicMock(heart=mock_heart),
+            "core.prefrontal": MagicMock(prefrontal=mock_prefrontal),
+            "core.desire_engine": MagicMock(desires=mock_desires),
+            "core.inner_voice": MagicMock(inner_voice=mock_voice),
+        }):
+            result = council._build_student_contribution(1)
+
+        assert result != ""
+        assert "QUESTION:" in result
+        assert len(result) <= 300
+
+    def test_student_includes_emotion(self):
+        """L'emotion cardiaque est presente dans la contribution."""
+        agents = {"coder": MagicMock(), "security": MagicMock()}
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+
+        mock_heart = MagicMock()
+        mock_heart.current_emotion = "enthousiasme"
+        mock_heart.coherence = 0.8
+
+        with patch.dict("sys.modules", {
+            "core.cardiac_engine": MagicMock(heart=mock_heart),
+        }):
+            result = council._build_student_contribution(1)
+
+        assert "enthousiasme" in result
+
+    def test_student_includes_goals(self):
+        """Les goals prefrontaux sont presents."""
+        agents = {"coder": MagicMock(), "security": MagicMock()}
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+
+        mock_prefrontal = MagicMock()
+        mock_prefrontal.get_working_memory.return_value = [
+            {"goal_title": "Optimiser le bus", "progress": 0.5}
+        ]
+
+        with patch.dict("sys.modules", {
+            "core.prefrontal": MagicMock(prefrontal=mock_prefrontal),
+        }):
+            result = council._build_student_contribution(1)
+
+        assert "Optimiser le bus" in result
+
+    def test_student_includes_desires(self):
+        """La narrative desires est presente."""
+        agents = {"coder": MagicMock(), "security": MagicMock()}
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+
+        mock_desires = MagicMock()
+        mock_desires.get_dominant_narrative.return_value = "MAITRISE domine mes pulsions"
+
+        with patch.dict("sys.modules", {
+            "core.desire_engine": MagicMock(desires=mock_desires),
+        }):
+            result = council._build_student_contribution(1)
+
+        assert "MAITRISE" in result
+
+    def test_student_followup_references_previous(self):
+        """Round 2+ reference le round precedent."""
+        agents = {"coder": MagicMock(), "security": MagicMock()}
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+        # Simuler un transcript de round 1 avec un bon score
+        council.transcript = [
+            {"agent": "coder", "round": 1, "content": "Modifier core/router.py pour optimiser", "score": 0.6, "confidence": 0.5},
+            {"agent": "security", "round": 1, "content": "Attention aux injections", "score": 0.2, "confidence": 0.1},
+        ]
+        result = council._build_student_followup(2)
+        # Le best agent (coder, score 0.6) avec fichier mentionné devrait être référencé
+        assert "coder" in result
+        assert "core/router.py" in result
+
+    def test_student_followup_detects_unaddressed_desire(self):
+        """Relance sur angle mort (pulsion non addressee)."""
+        agents = {"coder": MagicMock(), "security": MagicMock()}
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+        council.transcript = [
+            {"agent": "coder", "round": 1, "content": "Parlons du router", "score": 0.3},
+            {"agent": "security", "round": 1, "content": "Le code est sur", "score": 0.2},
+        ]
+
+        mock_desires = MagicMock()
+        mock_desires.get_dominant_narrative.return_value = "CURIOSITE en exploration"
+
+        with patch.dict("sys.modules", {
+            "core.desire_engine": MagicMock(desires=mock_desires),
+        }):
+            result = council._build_student_followup(2)
+
+        assert "CURIOSITE" in result
+
+    @pytest.mark.asyncio
+    async def test_student_entry_in_transcript(self):
+        """Les entries avec is_student=True sont dans le transcript."""
+        agents = {"coder": self._make_mock_agent(), "security": self._make_mock_agent()}
+        council = Council(agents, ["coder", "security"], "test", max_rounds=1)
+
+        mock_heart = MagicMock()
+        mock_heart.current_emotion = "curiosite"
+        mock_heart.coherence = 0.7
+
+        with patch.dict("sys.modules", {
+            "core.cardiac_engine": MagicMock(heart=mock_heart),
+        }):
+            result = await council.run()
+
+        student_entries = [e for e in result["transcript"] if e.get("is_student")]
+        assert len(student_entries) >= 1
+        assert student_entries[0]["agent"] == "promethee"
+        assert student_entries[0]["is_student"] is True
+
+    def test_student_not_in_participants_list(self):
+        """'promethee' n'est PAS dans self.participants."""
+        agents = {"coder": MagicMock(), "security": MagicMock()}
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+        assert "promethee" not in council.participants
+
+    @pytest.mark.asyncio
+    async def test_student_does_not_count_for_consensus(self):
+        """Le quorum est base sur participants seulement (pas l'etudiant)."""
+        _S = TestConsensus._SUBSTANCE
+        n = MIN_ROUNDS_BEFORE_CONSENSUS
+        # Les 2 agents ne font PAS consensus
+        agents = {
+            "coder": self._make_mock_agent(["Non, je refuse."] * (n + 1)),
+            "security": self._make_mock_agent(["Pas d'accord non plus."] * (n + 1)),
+        }
+        council = Council(agents, ["coder", "security"], "test", max_rounds=n)
+
+        mock_heart = MagicMock()
+        mock_heart.current_emotion = "curiosite"
+        mock_heart.coherence = 0.7
+
+        with patch.dict("sys.modules", {
+            "core.cardiac_engine": MagicMock(heart=mock_heart),
+        }):
+            result = await council.run()
+
+        # L'etudiant ne peut pas faire basculer vers un consensus
+        assert result["status"] == "max_rounds"
+
+    @pytest.mark.asyncio
+    async def test_enable_student_false_no_entries(self):
+        """enable_student=False produit 0 entries etudiant."""
+        agents = {"coder": self._make_mock_agent(), "security": self._make_mock_agent()}
+        council = Council(agents, ["coder", "security"], "test", max_rounds=1, enable_student=False)
+
+        mock_heart = MagicMock()
+        mock_heart.current_emotion = "curiosite"
+        mock_heart.coherence = 0.7
+
+        with patch.dict("sys.modules", {
+            "core.cardiac_engine": MagicMock(heart=mock_heart),
+        }):
+            result = await council.run()
+
+        student_entries = [e for e in result["transcript"] if e.get("is_student")]
+        assert len(student_entries) == 0
+
+    @pytest.mark.asyncio
+    async def test_professor_prompt_contains_student_block(self):
+        """Le prompt agent contient 'PROMETHEE-ETUDIANT' quand l'etudiant a parle."""
+        agents = {"coder": self._make_mock_agent(), "security": self._make_mock_agent()}
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+        # Simuler une entry etudiant au round 1
+        council.transcript.append({
+            "agent": "promethee", "round": 1, "content": "QUESTION: Mes objectifs?",
+            "score": 0.0, "confidence": 0.0, "breakdown": {},
+            "timestamp": 0.0, "is_student": True,
+        })
+        prompt = council._build_prompt("coder", 1)
+        assert "PROMETHEE-ETUDIANT" in prompt
+
+    @pytest.mark.asyncio
+    async def test_professor_prompt_instructs_respond(self):
+        """Le prompt demande de repondre aux questions de l'etudiant."""
+        agents = {"coder": self._make_mock_agent(), "security": self._make_mock_agent()}
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+        council.transcript.append({
+            "agent": "promethee", "round": 1, "content": "QUESTION: Comment optimiser?",
+            "score": 0.0, "confidence": 0.0, "breakdown": {},
+            "timestamp": 0.0, "is_student": True,
+        })
+        prompt = council._build_prompt("coder", 1)
+        assert "PROFESSEUR" in prompt
+        assert "preoccupations" in prompt
+
+    @pytest.mark.asyncio
+    async def test_student_turn_event_published(self):
+        """Event COUNCIL_TURN avec is_student=True est publie."""
+        events = []
+
+        async def capture(payload):
+            events.append(payload)
+
+        bus.subscribe("COUNCIL_TURN", capture)
+
+        agents = {"coder": self._make_mock_agent(), "security": self._make_mock_agent()}
+        council = Council(agents, ["coder", "security"], "test", max_rounds=1)
+
+        mock_heart = MagicMock()
+        mock_heart.current_emotion = "curiosite"
+        mock_heart.coherence = 0.7
+
+        with patch.dict("sys.modules", {
+            "core.cardiac_engine": MagicMock(heart=mock_heart),
+        }):
+            await council.run()
+
+        import asyncio
+        await asyncio.sleep(0.1)
+
+        student_events = [e for e in events if e.get("is_student")]
+        assert len(student_events) >= 1
+        assert student_events[0]["agent"] == "promethee"
+
+    @pytest.mark.asyncio
+    async def test_president_excludes_student(self):
+        """Le president n'evalue pas les entries etudiant."""
+        agents = {"coder": MagicMock(), "security": MagicMock()}
+        council = Council(agents, ["coder", "security"], "test", max_rounds=3)
+        # Ajouter des entries: etudiant + agents
+        council.transcript = [
+            {"agent": "promethee", "round": 1, "content": "QUESTION: test?",
+             "score": 0.0, "is_student": True},
+            {"agent": "coder", "round": 1, "content": "Voici mon analyse de core/router.py",
+             "score": 0.5},
+            {"agent": "security", "round": 1, "content": "Attention aux failles",
+             "score": 0.3},
+        ]
+        prompt = council._build_president_prompt(1)
+        # L'etudiant ne doit PAS apparaitre dans les contributions evaluees
+        assert "PROMETHEE" not in prompt
+        assert "CODER" in prompt
+        assert "SECURITY" in prompt
+
+    @pytest.mark.asyncio
+    async def test_scoring_excludes_student(self):
+        """avg_score est calcule sans les entries etudiant."""
+        agents = {"coder": self._make_mock_agent(), "security": self._make_mock_agent()}
+        council = Council(agents, ["coder", "security"], "test", max_rounds=1)
+
+        mock_heart = MagicMock()
+        mock_heart.current_emotion = "curiosite"
+        mock_heart.coherence = 0.7
+
+        with patch.dict("sys.modules", {
+            "core.cardiac_engine": MagicMock(heart=mock_heart),
+        }):
+            result = await council.run()
+
+        # Verifier que le scoring ne prend pas l'etudiant en compte
+        scoring = result.get("scoring", {})
+        assert scoring.get("best_agent", "") != "promethee"
+        # L'avg_score devrait etre basé sur les 2 agents uniquement
+        agent_entries = [e for e in result["transcript"] if not e.get("is_student")]
+        if agent_entries:
+            expected_avg = sum(e.get("score", 0) for e in agent_entries) / len(agent_entries)
+            assert abs(scoring["avg_score"] - round(expected_avg, 2)) < 0.01
