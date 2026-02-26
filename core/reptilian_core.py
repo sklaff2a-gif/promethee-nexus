@@ -232,7 +232,7 @@ class ReptilianCore:
         except Exception:
             pass  # psutil indisponible → pas de menace détectée
 
-        # --- Ollama ---
+        # --- Ollama process ---
         try:
             import httpx
             async with httpx.AsyncClient() as client:
@@ -245,6 +245,19 @@ class ReptilianCore:
         except Exception:
             threats["ollama"] = 9.0  # Ollama injoignable = menace critique
             self._ollama_ok = False
+
+        # --- Ollama GPU hang (circuit breaker) ---
+        # Le process Ollama peut répondre à /api/tags mais le GPU est bloqué
+        # → les inférences timeout. Le circuit breaker de BaseAgent le détecte.
+        try:
+            from core.base_agent import BaseAgent
+            health = BaseAgent.get_ollama_health()
+            if health["circuit_open"]:
+                threats["ollama_hung"] = 8.0
+            elif health["consecutive_timeouts"] >= 2:
+                threats["ollama_hung"] = 5.0
+        except Exception:
+            pass
 
         # --- Error Streak (depuis AutonomyEngine) ---
         try:

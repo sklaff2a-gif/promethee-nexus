@@ -61,6 +61,13 @@ class BaseAgent:
     _ollama_loop_id = None    # Détecte si l'event loop a changé (Smart Restart)
     MAX_CONCURRENT_OLLAMA = 2
 
+    # Circuit Breaker Ollama — protection anti-GPU-hang
+    _ollama_consecutive_timeouts = 0       # Compteur de ReadTimeout consécutifs
+    _ollama_circuit_open_until = 0.0       # Timestamp jusqu'auquel le circuit est ouvert (bloqué)
+    _ollama_last_success = 0.0             # Timestamp du dernier appel Ollama réussi
+    OLLAMA_CIRCUIT_BREAKER_THRESHOLD = 3   # Nombre de timeouts avant ouverture du circuit
+    OLLAMA_CIRCUIT_BREAKER_DURATION = 300  # Durée du circuit ouvert (5 min)
+
     # Cooldown après erreur 429 (quota exceeded)
     _cloud_cooldown_until = 0.0  # timestamp jusqu'auquel le Cloud est désactivé
     CLOUD_COOLDOWN_SECONDS = 900  # 15 min de cooldown après un 429 (Tier 1)
@@ -606,7 +613,54 @@ class BaseAgent:
             cls._ollama_loop_id = loop_id
         return cls._ollama_semaphore
 
+    @classmethod
+    def _ollama_circuit_is_open(cls) -> bool:
+        """Vérifie si le circuit breaker Ollama est ouvert (appels bloqués)."""
+        return time.time() < cls._ollama_circuit_open_until
+
+    @classmethod
+    def _ollama_record_timeout(cls):
+        """Enregistre un ReadTimeout et ouvre le circuit si le seuil est atteint."""
+        cls._ollama_consecutive_timeouts += 1
+        if cls._ollama_consecutive_timeouts >= cls.OLLAMA_CIRCUIT_BREAKER_THRESHOLD:
+            cls._ollama_circuit_open_until = time.time() + cls.OLLAMA_CIRCUIT_BREAKER_DURATION
+            logger.critical(
+                f"[CIRCUIT BREAKER] Ollama non-responsive ({cls._ollama_consecutive_timeouts} timeouts) "
+                f"— appels bloqués pour {cls.OLLAMA_CIRCUIT_BREAKER_DURATION}s"
+            )
+            try:
+                from core.event_bus.bus import bus
+                asyncio.ensure_future(bus.publish("OLLAMA_UNRESPONSIVE", {
+                    "consecutive_timeouts": cls._ollama_consecutive_timeouts,
+                    "blocked_until": cls._ollama_circuit_open_until,
+                    "last_success": cls._ollama_last_success,
+                }))
+            except Exception:
+                pass
+
+    @classmethod
+    def _ollama_record_success(cls):
+        """Enregistre un appel Ollama réussi et referme le circuit."""
+        cls._ollama_consecutive_timeouts = 0
+        cls._ollama_circuit_open_until = 0.0
+        cls._ollama_last_success = time.time()
+
+    @classmethod
+    def get_ollama_health(cls) -> dict:
+        """État de santé Ollama pour les autres modules (reptilian, autonomy)."""
+        return {
+            "circuit_open": cls._ollama_circuit_is_open(),
+            "consecutive_timeouts": cls._ollama_consecutive_timeouts,
+            "blocked_until": cls._ollama_circuit_open_until,
+            "last_success": cls._ollama_last_success,
+        }
+
     async def _call_ollama(self, prompt: str, model: str) -> str:
+        # Circuit breaker : bloquer immédiatement si Ollama est non-responsive
+        if self._ollama_circuit_is_open():
+            remaining = int(self._ollama_circuit_open_until - time.time())
+            logger.warning(f"[{self.name}] Circuit breaker Ollama actif — skip ({remaining}s restantes)")
+            return "OLLAMA CIRCUIT BREAKER: GPU probablement bloqué, attente récupération."
         try:
             async with self._get_ollama_semaphore():
                 url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
@@ -619,14 +673,25 @@ class BaseAgent:
                 payload = { "model": model, "prompt": prompt, "stream": False, "options": { "temperature": _temperature, "num_ctx": _num_ctx } }
                 async with httpx.AsyncClient() as client:
                     response = await client.post(url, json=payload, timeout=300)
-                if response.status_code == 200: return response.json().get("response", "Ollama vide.")
+                if response.status_code == 200:
+                    self._ollama_record_success()
+                    return response.json().get("response", "Ollama vide.")
                 else: return f"Erreur OLLAMA: {response.status_code}"
+        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
+            self._ollama_record_timeout()
+            logger.error(f"[{self.name}] _call_ollama({model}) TIMEOUT ({self._ollama_consecutive_timeouts}x): {e}")
+            return "ÉCHEC TOTAL SYSTÈME."
         except Exception as e:
             logger.error(f"[{self.name}] _call_ollama({model}) échoué: {e}")
             return "ÉCHEC TOTAL SYSTÈME."
 
     async def _call_ollama_stream(self, prompt: str, model: str) -> str:
         """Appel Ollama en streaming avec publication temps réel sur le bus."""
+        # Circuit breaker : bloquer immédiatement si Ollama est non-responsive
+        if self._ollama_circuit_is_open():
+            remaining = int(self._ollama_circuit_open_until - time.time())
+            logger.warning(f"[{self.name}] Circuit breaker Ollama actif — skip streaming ({remaining}s restantes)")
+            return "OLLAMA CIRCUIT BREAKER: GPU probablement bloqué, attente récupération."
         stream_id = str(uuid.uuid4())[:8]
         full_text = ""
         try:
@@ -673,12 +738,24 @@ class BaseAgent:
                                 break
 
             # Signal de fin (hors sémaphore — libère le slot dès la fin du streaming)
+            self._ollama_record_success()
             await bus.publish("AGENT_STREAM", {
                 "agent": self.name, "stream_id": stream_id,
                 "chunk": "", "done": True, "status": "end"
             })
             return full_text or "Ollama vide."
 
+        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
+            self._ollama_record_timeout()
+            logger.error(f"[{self.name}] Erreur streaming Ollama TIMEOUT ({self._ollama_consecutive_timeouts}x): {e}")
+            try:
+                await bus.publish("AGENT_STREAM", {
+                    "agent": self.name, "stream_id": stream_id,
+                    "chunk": "", "done": True, "status": "end"
+                })
+            except Exception:
+                pass
+            return full_text or "ÉCHEC TOTAL SYSTÈME."
         except Exception as e:
             logger.error(f"[{self.name}] Erreur streaming Ollama ({type(e).__name__}): {e}")
             # Toujours envoyer le signal de fin pour fermer la bulle frontend

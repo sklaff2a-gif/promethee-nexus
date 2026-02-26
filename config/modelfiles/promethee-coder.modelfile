@@ -1,6 +1,6 @@
 # Modelfile Prométhée — Coder Agent
 # Génération de code Python pour le projet Prométhée
-FROM qwen3-coder:30b
+FROM qwen3:14b
 
 PARAMETER num_ctx 16384
 PARAMETER num_predict -1
