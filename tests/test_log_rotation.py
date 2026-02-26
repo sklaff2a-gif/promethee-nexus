@@ -1,65 +1,57 @@
-# tests/test_log_rotation.py — Tests pour _SafeTimedRotatingFileHandler
+# tests/test_log_rotation.py — Tests pour _DailyFileHandler
 import logging
-from unittest.mock import patch, MagicMock
+import os
+import time
+from unittest.mock import patch
+from datetime import datetime, timedelta
+
+import pytest
 
 
-class TestSafeTimedRotatingFileHandler:
-    """Vérifie que _SafeTimedRotatingFileHandler survive à PermissionError."""
+class TestDailyFileHandler:
+    """Vérifie que _DailyFileHandler crée un fichier par jour sans rotation."""
 
-    def test_doRollover_permission_error_is_caught(self):
-        """Si le fichier est verrouillé (Windows), doRollover skip sans crash."""
-        from main import _SafeTimedRotatingFileHandler
+    def test_creates_file_with_date(self, tmp_path):
+        """Le fichier créé contient la date du jour."""
+        from main import _DailyFileHandler
+        h = _DailyFileHandler(str(tmp_path), prefix="promethee", keep_days=14)
+        today = time.strftime("%Y-%m-%d")
+        expected = tmp_path / f"promethee_{today}.log"
+        assert expected.exists()
+        h.close()
 
-        handler = _SafeTimedRotatingFileHandler.__new__(_SafeTimedRotatingFileHandler)
-        handler.stream = None
-        handler.baseFilename = "fake.log"
+    def test_emit_writes_to_file(self, tmp_path):
+        """emit() écrit bien dans le fichier du jour."""
+        from main import _DailyFileHandler
+        h = _DailyFileHandler(str(tmp_path), prefix="promethee", keep_days=14)
+        h.setFormatter(logging.Formatter("%(message)s"))
+        record = logging.LogRecord("test", logging.INFO, "", 0, "hello", (), None)
+        h.emit(record)
+        h.close()
 
-        with patch.object(
-            logging.handlers.TimedRotatingFileHandler,
-            "doRollover",
-            side_effect=PermissionError("locked by _TeeStream"),
-        ):
-            # Ne doit PAS lever d'exception
-            handler.doRollover()
+        today = time.strftime("%Y-%m-%d")
+        content = (tmp_path / f"promethee_{today}.log").read_text(encoding="utf-8")
+        assert "hello" in content
 
-    def test_doRollover_success_passthrough(self):
-        """Si le fichier n'est pas verrouillé, la rotation fonctionne normalement."""
-        from main import _SafeTimedRotatingFileHandler
+    def test_no_permission_error_on_rotation(self, tmp_path):
+        """Pas de PermissionError car pas de rename — nouveau fichier directement."""
+        from main import _DailyFileHandler
+        h = _DailyFileHandler(str(tmp_path), prefix="promethee", keep_days=14)
+        h.setFormatter(logging.Formatter("%(message)s"))
 
-        handler = _SafeTimedRotatingFileHandler.__new__(_SafeTimedRotatingFileHandler)
-        handler.stream = None
-        handler.baseFilename = "fake.log"
+        # Écrire jour 1
+        record = logging.LogRecord("test", logging.INFO, "", 0, "jour1", (), None)
+        h.emit(record)
 
-        with patch.object(
-            logging.handlers.TimedRotatingFileHandler,
-            "doRollover",
-        ) as mock_rollover:
-            handler.doRollover()
-            mock_rollover.assert_called_once()
+        # Simuler changement de jour (pas de rename, juste nouveau fichier)
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        with patch.object(type(h), '_today', staticmethod(lambda: tomorrow)):
+            record2 = logging.LogRecord("test", logging.INFO, "", 0, "jour2", (), None)
+            h.emit(record2)  # Ne doit PAS lever PermissionError
 
-    def test_emit_continues_after_failed_rollover(self):
-        """Après un PermissionError dans doRollover, emit() continue à fonctionner."""
-        from main import _SafeTimedRotatingFileHandler
+        h.close()
 
-        handler = _SafeTimedRotatingFileHandler.__new__(_SafeTimedRotatingFileHandler)
-        handler.stream = None
-        handler.baseFilename = "fake.log"
-
-        with patch.object(
-            logging.handlers.TimedRotatingFileHandler,
-            "doRollover",
-            side_effect=PermissionError("locked"),
-        ):
-            handler.doRollover()
-
-        # emit() via le parent devrait fonctionner ensuite
-        record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="test après rollover échoué", args=(), exc_info=None,
-        )
-        with patch.object(
-            logging.handlers.TimedRotatingFileHandler,
-            "emit",
-        ) as mock_emit:
-            handler.emit(record)
-            mock_emit.assert_called_once_with(record)
+        # Les deux fichiers existent
+        today = time.strftime("%Y-%m-%d")
+        assert (tmp_path / f"promethee_{today}.log").exists()
+        assert (tmp_path / f"promethee_{tomorrow}.log").exists()

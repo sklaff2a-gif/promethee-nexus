@@ -138,6 +138,10 @@ class ReptilianCore:
         self._shed_max_cost: int = 2             # Coût max pendant SHED
         self._flinch_reason: str = ""            # Raison du dernier FLINCH
 
+        # --- Anti-spam FLINCH (cooldown exponentiel) ---
+        self._flinch_consecutive: int = 0        # Déclenchements consécutifs même menace
+        self._flinch_last_threat: str = ""       # Dernière menace top ayant déclenché FLINCH
+
         # Charger l'état persisté
         self._load()
 
@@ -187,6 +191,11 @@ class ReptilianCore:
             # 5. RÉAGIR — déclencher les réflexes appropriés
             if self.threat_level >= THREAT_ALERT:
                 await self._trigger_reflexes(threats)
+
+            # Reset escalade FLINCH quand la menace passe sous le seuil
+            if self.threat_level < 4.0 and self._flinch_consecutive > 0:
+                self._flinch_consecutive = 0
+                self._flinch_last_threat = ""
 
             # 6. SIGNALER — publier l'état sur le bus
             if self.threat_level >= THREAT_ALERT or self._beat_counter % 12 == 0:
@@ -376,8 +385,13 @@ class ReptilianCore:
             self._condition_threat_from_current(threats, "ADRENALINE")
 
     def _can_trigger(self, reflex: str, now: float) -> bool:
-        """Vérifie le cooldown d'un réflexe."""
+        """Vérifie le cooldown d'un réflexe (avec escalade anti-spam pour FLINCH)."""
         cooldown = REFLEX_COOLDOWNS.get(reflex, 30)
+        # Anti-spam FLINCH : cooldown exponentiel si même menace persistante
+        # 30s → 60s → 120s → 240s → 300s cap
+        if reflex == "FLINCH" and self._flinch_consecutive > 1:
+            escalation = min(2 ** (self._flinch_consecutive - 1), 10)
+            cooldown = min(cooldown * escalation, 300)
         last = self._reflex_cooldowns.get(reflex, 0)
         return (now - last) >= cooldown
 
@@ -406,9 +420,19 @@ class ReptilianCore:
     def _activate_flinch(self, threats: Dict[str, float]):
         """Veto immédiat de la routine en cours."""
         top_threat = max(threats, key=threats.get) if threats else "unknown"
+        # Anti-spam : tracker les déclenchements consécutifs pour la même menace
+        if top_threat == self._flinch_last_threat:
+            self._flinch_consecutive += 1
+        else:
+            self._flinch_consecutive = 1
+            self._flinch_last_threat = top_threat
         self._flinch_reason = f"FLINCH: menace {top_threat} (niveau={self.threat_level:.1f})"
         self._record_reflex("FLINCH")
-        logger.warning(f"REPTILIEN: {self._flinch_reason}")
+        # Log uniquement les 2 premiers, puis supprimé (anti-spam logs)
+        if self._flinch_consecutive <= 2:
+            logger.warning(f"REPTILIEN: {self._flinch_reason}")
+        else:
+            logger.debug(f"REPTILIEN: {self._flinch_reason} (supprimé x{self._flinch_consecutive})")
 
     # --- ADRENALINE ---
     def _inject_adrenaline(self):
@@ -525,8 +549,10 @@ class ReptilianCore:
         self.threat_level = max(0, self.threat_level - 1.0)
         self.adrenaline = max(0, self.adrenaline - 0.1)
 
-        # Reset FLINCH
+        # Reset FLINCH + anti-spam
         self._flinch_reason = ""
+        self._flinch_consecutive = 0
+        self._flinch_last_threat = ""
 
     # ============================================================
     # Publication bus

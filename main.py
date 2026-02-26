@@ -28,26 +28,70 @@ _log_formatter = logging.Formatter(
 )
 
 
-class _SafeTimedRotatingFileHandler(logging.handlers.TimedRotatingFileHandler):
-    """Sous-classe qui catch PermissionError dans doRollover().
-    Sur Windows, _TeeStream tient un handle sur le fichier log,
-    ce qui empêche la rotation. On skip et on retente au prochain emit."""
+class _DailyFileHandler(logging.FileHandler):
+    """Handler qui écrit dans promethee_YYYY-MM-DD.log.
+    Pas de rotation : un nouveau fichier par jour automatiquement.
+    Contourne le bug Windows où _TeeStream empêchait la rotation.
+    Nettoyage automatique des fichiers > keep_days jours."""
 
-    def doRollover(self):
+    def __init__(self, logs_dir: str, prefix: str = "promethee", keep_days: int = 14):
+        self._logs_dir = logs_dir
+        self._prefix = prefix
+        self._keep_days = keep_days
+        self._current_date = self._today()
+        filepath = os.path.join(logs_dir, f"{prefix}_{self._current_date}.log")
+        super().__init__(filepath, mode="a", encoding="utf-8")
+        self._cleanup_old_files()
+
+    @staticmethod
+    def _today() -> str:
+        return time.strftime("%Y-%m-%d")
+
+    def emit(self, record):
+        today = self._today()
+        if today != self._current_date:
+            self._rotate_to_new_day(today)
+        super().emit(record)
+
+    def _rotate_to_new_day(self, new_date: str):
+        """Ferme le fichier actuel et ouvre celui du nouveau jour."""
         try:
-            super().doRollover()
-        except PermissionError:
-            # Le fichier est verrouillé (probablement par _TeeStream) — on skip la rotation
+            if self.stream:
+                self.stream.close()
+            self._current_date = new_date
+            self.baseFilename = os.path.abspath(
+                os.path.join(self._logs_dir, f"{self._prefix}_{new_date}.log")
+            )
+            self.stream = self._open()
+            self._cleanup_old_files()
+        except Exception:
+            pass
+
+    def _cleanup_old_files(self):
+        """Supprime les fichiers de log plus vieux que keep_days."""
+        try:
+            import glob as glob_mod
+            from datetime import datetime, timedelta
+            cutoff = datetime.now() - timedelta(days=self._keep_days)
+            # Nettoyer les fichiers au nouveau format (promethee_YYYY-MM-DD.log)
+            for pattern in [f"{self._prefix}_*.log", f"{self._prefix}.log.*"]:
+                for filepath in glob_mod.glob(os.path.join(self._logs_dir, pattern)):
+                    fname = os.path.basename(filepath)
+                    try:
+                        # Extraire la date du nom de fichier
+                        date_str = fname.replace(f"{self._prefix}_", "").replace(f"{self._prefix}.log.", "").replace(".log", "")
+                        fdate = datetime.strptime(date_str, "%Y-%m-%d")
+                        if fdate < cutoff:
+                            os.remove(filepath)
+                    except (ValueError, OSError):
+                        pass
+        except Exception:
             pass
 
 
-# FileHandler rotatif : 1 fichier par jour, garde 14 jours
-_file_handler = _SafeTimedRotatingFileHandler(
-    os.path.join(_LOGS_DIR, "promethee.log"),
-    when="midnight", backupCount=14, encoding="utf-8"
-)
+# FileHandler quotidien : 1 fichier par jour, garde 14 jours
+_file_handler = _DailyFileHandler(_LOGS_DIR, prefix="promethee", keep_days=14)
 _file_handler.setFormatter(_log_formatter)
-_file_handler.suffix = "%Y-%m-%d"
 
 # Console handler (comportement existant)
 _console_handler = logging.StreamHandler(sys.stdout)
