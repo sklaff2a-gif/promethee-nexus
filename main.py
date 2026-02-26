@@ -302,6 +302,12 @@ async def lifespan(app: FastAPI):
     dopamine.init()
     print(f"   🧪 DOPAMINE: Systeme de recompense actif (niveau={dopamine.dopamine_level:.2f}).")
 
+    # --- CORPUS CALLOSUM (Resonance Inter-Organes) ---
+    from core.corpus_callosum import callosum
+    callosum.init()
+    callosum_task = asyncio.create_task(callosum.start_resonance())
+    print(f"   🌉 CORPUS CALLOSUM: Pont inter-organes actif (coherence={callosum.global_coherence:.2f}).")
+
     # --- IMPACT ANALYZER (Dépendances & Santé) ---
     from core.impact_analyzer import analyzer as impact_analyzer
     impact_analyzer.init()
@@ -547,6 +553,12 @@ async def health_impact():
     """Retourne le graphe de dépendances et santé des modules."""
     from core.impact_analyzer import analyzer as impact_analyzer
     return impact_analyzer.build_graph()
+
+@app.get("/api/callosum/status")
+async def callosum_status():
+    """Retourne l'etat du corpus callosum (resonance inter-organes)."""
+    from core.corpus_callosum import callosum
+    return callosum.get_stats()
 
 @app.get("/api/soliloque/status")
 async def soliloque_status():

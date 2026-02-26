@@ -396,6 +396,13 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Corpus callosum (resonance inter-organes)
+        try:
+            from core.corpus_callosum import callosum
+            snapshot["corpus_callosum"] = callosum.get_stats()
+        except Exception:
+            pass
+
         self._snapshots.append(snapshot)
         if len(self._snapshots) > MAX_SNAPSHOTS:
             self._snapshots = self._snapshots[-MAX_SNAPSHOTS:]

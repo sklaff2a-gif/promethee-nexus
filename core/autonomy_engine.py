@@ -781,6 +781,17 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Bonus resonance inter-organes (Couche 10) ---
+        try:
+            from core.corpus_callosum import callosum
+            for i, (routine, s) in enumerate(scored):
+                resonance_bonus = callosum.compute_resonance_bonus(routine["intent"])
+                if resonance_bonus != 0.0:
+                    scored[i] = (routine, s + resonance_bonus)
+            scored.sort(key=lambda x: x[1], reverse=True)
+        except Exception:
+            pass
+
         if not scored:
             logger.warning("[AUTONOMY] Aucune routine disponible apres filtrage. Cycle avorte.")
             self._persist_state()
@@ -929,6 +940,14 @@ class AutonomyEngine:
                 voice_ctx = inner_voice.get_voice_context()
                 if voice_ctx:
                     purpose_ctx += f"\n{voice_ctx}"
+            except Exception:
+                pass
+            # Resonance inter-organes (corpus callosum)
+            try:
+                from core.corpus_callosum import callosum
+                cog_ctx = callosum.get_cognitive_context()
+                if cog_ctx:
+                    purpose_ctx += f"\n{cog_ctx}"
             except Exception:
                 pass
             # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)
