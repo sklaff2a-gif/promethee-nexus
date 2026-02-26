@@ -16,6 +16,11 @@ from core.autonomy_engine import (
     AutonomyEngine,
     CONTEXT_KEYWORDS,
     MAX_DAILY_ROUTINES,
+    DAILY_BUDGET_POINTS,
+    BUDGET_RESERVE_POINTS,
+    POST_BUDGET_INTENTS,
+    RESOURCE_COSTS,
+    RESOURCE_COSTS_DEGRADED,
 )
 
 
@@ -579,7 +584,7 @@ class TestAutonomyEngineV24:
         self.engine.daily_count = 15
         self.engine.last_reset_day = date(2026, 1, 1)  # Jour passé
         result = self.engine._check_daily_budget()
-        assert result is True
+        assert result == "full"
         assert self.engine.daily_count == 0
 
     def test_get_status_complete(self):
@@ -1768,3 +1773,178 @@ class TestVetoProactif:
         """Historique vide → pas de veto."""
         reason = self.engine._should_veto("EXPANSION_CODE", "evolution")
         assert reason == ""
+
+
+# ═══════════════════════════════════════════════════════════
+# TestBudgetPostEpuisement (10 tests)
+# ═══════════════════════════════════════════════════════════
+
+class TestBudgetPostEpuisement:
+    """Tests du système Budget Post-Épuisement : routines gratuites, council dégradé, réserve."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        self.state_path = str(tmp_path / "state.json")
+        with patch("core.autonomy_engine.STATE_FILE", self.state_path):
+            with patch("core.autonomy_engine.AutonomyStatePersistence.load",
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
+                self.engine = AutonomyEngine(idle_threshold_seconds=300)
+        yield
+
+    # --- _check_daily_budget retourne str ---
+
+    def test_check_budget_returns_full(self):
+        """Budget < 180pt → 'full'."""
+        self.engine.daily_budget_used = 100
+        self.engine.daily_count = 10
+        result = self.engine._check_daily_budget()
+        assert result == "full"
+
+    def test_check_budget_returns_reserve(self):
+        """Budget 180-199pt → 'reserve'."""
+        self.engine.daily_budget_used = 185
+        self.engine.daily_count = 30
+        result = self.engine._check_daily_budget()
+        assert result == "reserve"
+
+    def test_check_budget_returns_reserve_at_boundary(self):
+        """Budget exactement à DAILY_BUDGET_POINTS - BUDGET_RESERVE_POINTS → 'reserve'."""
+        self.engine.daily_budget_used = DAILY_BUDGET_POINTS - BUDGET_RESERVE_POINTS
+        self.engine.daily_count = 30
+        result = self.engine._check_daily_budget()
+        assert result == "reserve"
+
+    def test_check_budget_returns_exhausted(self):
+        """Budget >= 200pt → 'exhausted'."""
+        self.engine.daily_budget_used = 200
+        self.engine.daily_count = 30
+        result = self.engine._check_daily_budget()
+        assert result == "exhausted"
+
+    def test_check_budget_returns_exhausted_max_routines(self):
+        """80 routines → 'exhausted' même si budget restant."""
+        self.engine.daily_count = MAX_DAILY_ROUTINES
+        self.engine.daily_budget_used = 50
+        result = self.engine._check_daily_budget()
+        assert result == "exhausted"
+
+    # --- Filtrage reserve ---
+
+    @pytest.mark.asyncio
+    async def test_reserve_filters_expensive_routines(self):
+        """En reserve, routines > 4pt filtrées (sauf COUNCIL_DEBATE)."""
+        self.engine.daily_budget_used = 185
+        health = _make_health("GO")
+        # Créer des routines avec différents coûts
+        routines = [
+            {"agent": "evolution", "intent": "EXPANSION_CODE", "mission": "test"},  # coût 5
+            {"agent": "architect", "intent": "AUDIT_STRUCTURE", "mission": "test"},  # coût 1
+            {"agent": "security", "intent": "SECURITY_AUDIT", "mission": "test"},  # coût 2
+        ]
+        scored = [(r, 5.0 - i) for i, r in enumerate(routines)]
+        with patch("core.autonomy_engine.RoutineScorer.score_routines", return_value=scored), \
+             patch.object(self.engine, "_get_routines", return_value=routines), \
+             patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "ok"})
+            await self.engine._execute_scored_routine(health, budget_status="reserve")
+            # EXPANSION_CODE (coût 5) doit être filtré, AUDIT_STRUCTURE (coût 1) exécuté
+            if mock_orch.dispatch_task.called:
+                call_args = mock_orch.dispatch_task.call_args
+                # L'agent appelé ne doit pas être evolution (EXPANSION_CODE coût 5)
+                assert call_args[0][0] != "evolution"
+
+    @pytest.mark.asyncio
+    async def test_reserve_keeps_council(self):
+        """En reserve, COUNCIL_DEBATE reste disponible malgré son coût > 4."""
+        self.engine.daily_budget_used = 185
+        health = _make_health("GO")
+        routines = [
+            {"agent": "council", "intent": "COUNCIL_DEBATE", "mission": "test"},  # coût 12 mais gardé
+        ]
+        scored = [(routines[0], 5.0)]
+        with patch("core.autonomy_engine.RoutineScorer.score_routines", return_value=scored), \
+             patch.object(self.engine, "_get_routines", return_value=routines), \
+             patch.object(self.engine, "_execute_council_debate", new_callable=AsyncMock,
+                         return_value={"status": "consensus", "result": "ok", "final_summary": "ok"}) as mock_council:
+            await self.engine._execute_scored_routine(health, budget_status="reserve")
+            mock_council.assert_called_once()
+
+    # --- Post-budget routines gratuites ---
+
+    @pytest.mark.asyncio
+    async def test_post_budget_executes_free_routine(self):
+        """En exhausted, AUDIT_STRUCTURE ou MEMORY_CLEANUP s'exécutent."""
+        self.engine.routine_history = []  # Pas de cooldown
+        with patch.object(self.engine, "_execute_audit_structure", new_callable=AsyncMock,
+                         return_value={"status": "success", "result": "audit ok"}) as mock_audit, \
+             patch.object(self.engine, "_execute_memory_cleanup", new_callable=AsyncMock,
+                         return_value={"status": "success", "result": "cleanup ok"}) as mock_cleanup:
+            await self.engine._execute_post_budget_routine()
+            # Au moins une des deux doit avoir été appelée
+            assert mock_audit.called or mock_cleanup.called
+
+    @pytest.mark.asyncio
+    async def test_post_budget_no_cost(self):
+        """Routine post-budget ne décompte pas de budget."""
+        self.engine.daily_budget_used = 200
+        self.engine.daily_count = 50
+        initial_budget = self.engine.daily_budget_used
+        initial_count = self.engine.daily_count
+        with patch.object(self.engine, "_execute_audit_structure", new_callable=AsyncMock,
+                         return_value={"status": "success", "result": "ok"}):
+            await self.engine._execute_post_budget_routine()
+        assert self.engine.daily_budget_used == initial_budget
+        assert self.engine.daily_count == initial_count
+
+    # --- Council dégradé ---
+
+    @pytest.mark.asyncio
+    async def test_council_degraded_mode(self):
+        """Council en reserve → 2 participants, 3 tours max."""
+        self.engine.daily_budget_used = DAILY_BUDGET_POINTS - BUDGET_RESERVE_POINTS  # Exactement en reserve
+        mock_psyche = MagicMock()
+        mock_psyche.get_debate_index.return_value = 0
+        mock_psyche.select_council_topic.return_value = {
+            "participants": ["strategist", "coder", "architect"],
+            "mission": "Test council dégradé",
+            "needs_research": True,
+            "research_query": "test query",
+            "subject_key": "test",
+        }
+        with patch.dict("sys.modules", {"core.psyche": MagicMock(psyche=mock_psyche)}), \
+             patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_council = AsyncMock(return_value={
+                "status": "consensus",
+                "final_summary": "Test consensus result for degraded council mode.",
+                "transcript": [],
+            })
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "research"})
+            result = await self.engine._execute_council_debate()
+            # Vérifier que dispatch_council a été appelé avec max_rounds=3
+            call_kwargs = mock_orch.dispatch_council.call_args
+            assert call_kwargs.kwargs.get("max_rounds") == 3 or call_kwargs[1].get("max_rounds") == 3
+            # Vérifier que seulement 2 participants
+            participants = call_kwargs.kwargs.get("participants") or call_kwargs[1].get("participants")
+            assert len(participants) == 2
+            # Vérifier que needs_research a été désactivé (pas d'appel dispatch_task pour la recherche)
+            mock_orch.dispatch_task.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_council_degraded_cost(self):
+        """Council dégradé coûte 4pt au lieu de 12."""
+        # Vérifier que RESOURCE_COSTS_DEGRADED contient la valeur attendue
+        assert "COUNCIL_DEBATE" in RESOURCE_COSTS_DEGRADED
+        assert RESOURCE_COSTS_DEGRADED["COUNCIL_DEBATE"] == 4
+        # Simuler le flag _council_degraded et vérifier le coût
+        self.engine.daily_budget_used = 180
+        self.engine.daily_count = 30
+        self.engine._council_degraded = True
+        initial_budget = self.engine.daily_budget_used
+        # Simuler la zone de coût post-exécution
+        intent = "COUNCIL_DEBATE"
+        routine_cost = RESOURCE_COSTS.get(intent, 2)
+        if intent == "COUNCIL_DEBATE" and getattr(self.engine, "_council_degraded", False):
+            routine_cost = RESOURCE_COSTS_DEGRADED.get(intent, routine_cost)
+            self.engine._council_degraded = False
+        assert routine_cost == 4  # Au lieu de 12
+        assert self.engine._council_degraded is False  # Flag reset

@@ -19,6 +19,12 @@ MAX_DAILY_ROUTINES = 80
 # Budget quotidien en points (chaque routine a un coût différent)
 DAILY_BUDGET_POINTS = 200
 
+# Réserve sanctuarisée pour councils d'apprentissage (mode dégradé)
+BUDGET_RESERVE_POINTS = 20
+
+# Routines 0-LLM qui continuent même quand le budget est épuisé
+POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP"}
+
 def _load_resource_costs() -> dict:
     """Charge les coûts par routine depuis config/resource_costs.json."""
     costs_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -30,7 +36,20 @@ def _load_resource_costs() -> dict:
     except (FileNotFoundError, json.JSONDecodeError, KeyError):
         return {}
 
+def _load_resource_costs_degraded() -> dict:
+    """Charge les coûts dégradés depuis config/resource_costs.json."""
+    costs_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "config", "resource_costs.json")
+    try:
+        with open(costs_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {k: v["cost_degraded"] for k, v in data.items()
+                if isinstance(v, dict) and "cost_degraded" in v}
+    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        return {}
+
 RESOURCE_COSTS = _load_resource_costs()
+RESOURCE_COSTS_DEGRADED = _load_resource_costs_degraded()
 
 # Veille YouTube IA — rotation quand la dropzone est vide
 # Veille silencieuse — rotation de sujets (évite les doublons)
@@ -342,11 +361,19 @@ class AutonomyEngine:
         # Transients pour feedback council/grimoire
         self._current_council_subject: str = ""
         self._last_grimoire_slug: str = ""
+        # Flag council dégradé (mode reserve budget)
+        self._council_degraded: bool = False
 
         bus.subscribe("USER_COMMAND", self.reset_timer)
 
-    def _check_daily_budget(self) -> bool:
-        """Vérifie et reset le compteur quotidien. Retourne True si budget disponible."""
+    def _check_daily_budget(self) -> str:
+        """Vérifie et reset le compteur quotidien.
+
+        Retourne:
+            'full'      — budget normal, toutes routines disponibles
+            'reserve'   — budget entamé, seules routines ≤4pt + council dégradé
+            'exhausted' — budget épuisé, seules routines gratuites (0-LLM)
+        """
         today = date.today()
         if today != self.last_reset_day:
             self.daily_count = 0
@@ -364,11 +391,14 @@ class AutonomyEngine:
 
         if self.daily_count >= MAX_DAILY_ROUTINES:
             logger.warning(f"[AUTONOMY] Budget quotidien atteint ({MAX_DAILY_ROUTINES} routines). Pause jusqu'à demain.")
-            return False
+            return "exhausted"
         if self.daily_budget_used >= DAILY_BUDGET_POINTS:
             logger.warning(f"[AUTONOMY] Budget points épuisé ({self.daily_budget_used}/{DAILY_BUDGET_POINTS}). Pause jusqu'à demain.")
-            return False
-        return True
+            return "exhausted"
+        if self.daily_budget_used >= DAILY_BUDGET_POINTS - BUDGET_RESERVE_POINTS:
+            logger.info(f"[AUTONOMY] Budget en réserve ({self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt). Mode dégradé.")
+            return "reserve"
+        return "full"
 
     def reset_timer(self, event):
         self.last_user_interaction = time.time()
@@ -602,7 +632,7 @@ class AutonomyEngine:
             "idle_threshold": self.idle_threshold,
         }
 
-    async def _execute_scored_routine(self, health: dict):
+    async def _execute_scored_routine(self, health: dict, budget_status: str = "full"):
         """Scoring → dispatch → record → persist."""
         # Loop breaker : si un intent est force, bypass le scoring
         if self._forced_next_intent:
@@ -796,6 +826,15 @@ class AutonomyEngine:
             logger.warning("[AUTONOMY] Aucune routine disponible apres filtrage. Cycle avorte.")
             self._persist_state()
             return
+
+        # --- Filtrage reserve budget ---
+        if budget_status == "reserve":
+            scored = [(r, s) for r, s in scored
+                      if RESOURCE_COSTS.get(r["intent"], 2) <= 4 or r["intent"] == "COUNCIL_DEBATE"]
+            if not scored:
+                logger.info("[AUTONOMY] Reserve budget: aucune routine éligible, fallback post-budget.")
+                await self._execute_post_budget_routine()
+                return
 
         selected, score = scored[0]
         agent = selected["agent"]
@@ -1130,8 +1169,11 @@ class AutonomyEngine:
 
         self.daily_count += 1
         self.total_routines_executed += 1
-        # Décompter le coût en points de budget
+        # Décompter le coût en points de budget (override dégradé si applicable)
         routine_cost = RESOURCE_COSTS.get(intent, 2)
+        if intent == "COUNCIL_DEBATE" and getattr(self, "_council_degraded", False):
+            routine_cost = RESOURCE_COSTS_DEGRADED.get(intent, routine_cost)
+            self._council_degraded = False
         self.daily_budget_used += routine_cost
         logger.info(f"[AUTONOMY] Routine {self.daily_count}/{MAX_DAILY_ROUTINES} du jour (coût: {routine_cost}pt, budget: {self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt)")
 
@@ -1424,7 +1466,10 @@ class AutonomyEngine:
             return {"status": "error", "result": str(e)}
 
     async def _execute_council_debate(self) -> dict:
-        """Lance un débat autonome Council : Recherche web → Débat éclairé."""
+        """Lance un débat autonome Council : Recherche web → Débat éclairé.
+        En mode dégradé (budget reserve), réduit à 2 participants, 3 tours, sans pré-recherche."""
+        # Détection mode dégradé
+        degraded = self.daily_budget_used >= (DAILY_BUDGET_POINTS - BUDGET_RESERVE_POINTS)
         # --- Guard : skip si trop de specs Council en attente ---
         try:
             from core.evolution_catalog import EvolutionCatalog
@@ -1481,6 +1526,12 @@ class AutonomyEngine:
 
         # Stocker la clé du sujet pour la déduplication future
         self._current_council_subject = topic.get("subject_key", "")
+
+        # Mode dégradé : 2 participants, pas de pré-recherche
+        if degraded:
+            topic["participants"] = topic["participants"][:2]
+            topic["needs_research"] = False
+            print(f"   ⚡ COUNCIL MODE DÉGRADÉ: {topic['participants']} (budget reserve)")
 
         # Phase 1 : Recherche web si le sujet le demande
         research_context = ""
@@ -1551,10 +1602,14 @@ class AutonomyEngine:
             pass
 
         print(f"   🗣️ COUNCIL DEBATE: {topic['participants']} — {topic['mission'][:80]}")
+        council_max_rounds = 3 if degraded else 5
         result = await orchestrator.dispatch_council(
             participants=topic["participants"],
             mission=f"[DÉBAT AUTONOME] {mission}",
+            max_rounds=council_max_rounds,
         )
+        # Flag pour override du coût dans le tracking post-exécution
+        self._council_degraded = degraded
         result["participants"] = topic["participants"]
         # Injecter "result" pour le scoring qualité (Council retourne final_summary, pas result)
         if "result" not in result:
@@ -1638,6 +1693,33 @@ class AutonomyEngine:
             f.write(entry)
 
         logger.info(f"[COUNCIL] Journal council_journal.md mis à jour : {mission[:50]}")
+
+    async def _execute_post_budget_routine(self):
+        """Exécute une routine gratuite (0-LLM) quand le budget est épuisé."""
+        free_intents = list(POST_BUDGET_INTENTS)
+        random.shuffle(free_intents)
+        for intent in free_intents:
+            # Cooldown : pas 2x le même dans les 5 derniers
+            recent = [h["intent"] for h in self.routine_history[-5:]]
+            if intent in recent:
+                continue
+            # Dispatch
+            response = None
+            if intent == "AUDIT_STRUCTURE":
+                response = await self._execute_audit_structure()
+            elif intent == "MEMORY_CLEANUP":
+                response = await self._execute_memory_cleanup()
+            if response is None:
+                continue
+            # Tracking (coût 0 — budget intact)
+            quality = self._score_result_quality(response, intent)
+            status = "success" if response and response.get("status") == "success" else "error"
+            self._record_routine("_system", intent, status, quality_score=quality)
+            # daily_count et daily_budget_used ne sont PAS incrémentés
+            print(f"   ♻️ POST-BUDGET: [{intent}] (gratuit, budget intact)")
+            return
+        # Toutes les routines gratuites en cooldown
+        logger.info("[AUTONOMY] Post-budget: toutes routines gratuites en cooldown.")
 
     async def _execute_memory_cleanup(self) -> dict:
         """Nettoie la mémoire RAG : purge les anciennes ET les mauvaise qualité.
@@ -2037,7 +2119,22 @@ class AutonomyEngine:
             if orchestrator.kill_switch_active or self.is_processing:
                 continue
 
-            if not self._check_daily_budget():
+            budget_status = self._check_daily_budget()
+            if budget_status == "exhausted":
+                # Seules les routines gratuites (0-LLM) tournent
+                if not self.is_processing:
+                    idle_time = time.time() - self.last_user_interaction
+                    if idle_time > self.idle_threshold:
+                        self.is_processing = True
+                        try:
+                            await self._execute_post_budget_routine()
+                        except Exception as e:
+                            logger.warning(f"[AUTONOMY] Erreur routine post-budget: {e}")
+                        finally:
+                            self._persist_state()
+                            await asyncio.sleep(30)
+                            self.is_processing = False
+                            self.last_user_interaction = time.time()
                 continue
 
             idle_time = time.time() - self.last_user_interaction
@@ -2094,7 +2191,7 @@ class AutonomyEngine:
 
                 self.is_processing = True  # ON VERROUILLE
                 try:
-                    await self._execute_scored_routine(health)
+                    await self._execute_scored_routine(health, budget_status)
                 except Exception as e:
                     logger.warning(f"[AUTONOMY] Erreur Routine: {e}")
                     self.error_streak += 1

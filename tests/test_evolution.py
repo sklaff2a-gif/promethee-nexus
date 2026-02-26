@@ -1092,8 +1092,10 @@ class TestCouncilSpecCuration:
         engine = AutonomyEngine.__new__(AutonomyEngine)
         engine.error_streak = 0
         engine.daily_count = 0
+        engine.daily_budget_used = 0
         engine.routine_history = []
         engine._current_council_subject = ""
+        engine._council_degraded = False
 
         cat = EvolutionCatalog()
         old_time = (datetime.now() - timedelta(hours=72)).isoformat()

@@ -8,7 +8,8 @@
   },
   "COUNCIL_DEBATE": {
     "cost": 12,
-    "description": "3-5 tours x 3 participants = 9-15 appels LLM + recherche pré-débat optionnelle"
+    "cost_degraded": 4,
+    "description": "Normal: 3-5 tours x 3 participants. Dégradé: 3 tours x 2 participants."
   },
   "REFACTOR_RANDOM": {
     "cost": 4,
