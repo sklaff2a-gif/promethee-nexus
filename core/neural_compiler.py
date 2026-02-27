@@ -300,6 +300,9 @@ class NeuralCompiler:
         self._obs_since_save: int = 0
         self._last_compile_time: float = 0.0
 
+        # Tracking des intercepts récents : agent_name → (rule_id, timestamp)
+        self._last_intercepts: Dict[str, Tuple[str, float]] = {}
+
         # Métriques globales
         self._total_observations: int = 0
         self._total_intercepts: int = 0
@@ -317,6 +320,7 @@ class NeuralCompiler:
         self._subscribed = False
         self._obs_since_save = 0
         self._last_compile_time = 0.0
+        self._last_intercepts = {}
         self._total_observations = 0
         self._total_intercepts = 0
         self._total_llm_calls = 0
@@ -471,6 +475,7 @@ class NeuralCompiler:
             return
         self._subscribed = True
         bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
+        bus.subscribe("MISSION_FINISHED", self._on_mission_finished)
 
     async def _on_routine_complete(self, data: dict):
         """Feedback sur les observations récentes basé sur la qualité de la routine."""
@@ -479,7 +484,6 @@ class NeuralCompiler:
             if quality < 0:
                 return
             agent = data.get("agent", "")
-            intent = data.get("intent", "")
             # Mettre à jour les observations récentes (< 5 min) sans quality
             cutoff = time.time() - 300
             updated = 0
@@ -491,8 +495,51 @@ class NeuralCompiler:
                     updated += 1
             if updated > 0:
                 logger.debug(f"COMPILER: {updated} observations mises à jour (quality={quality:.2f})")
+
+            # Feedback sur les intercepts récents pour cette agent
+            self._feedback_recent_intercept(agent, quality)
+
+            # Auto-compilation toutes les 50 observations
+            if self._total_observations > 0 and self._total_observations % 50 == 0:
+                created = self.compile_rules()
+                if created > 0:
+                    logger.info(f"COMPILER: Auto-compile déclenché, {created} règles créées.")
         except Exception as e:
             logger.debug(f"COMPILER: Erreur on_routine_complete: {e}")
+
+    async def _on_mission_finished(self, data: dict):
+        """Feedback sur les observations de missions utilisateur."""
+        try:
+            agent = data.get("agent", "")
+            status = data.get("status", "")
+            # Qualité heuristique : mission réussie = 0.7, erreur = 0.2
+            quality = 0.7 if status == "success" else 0.2
+            cutoff = time.time() - 300
+            updated = 0
+            for obs in reversed(self._observations):
+                if obs.timestamp < cutoff:
+                    break
+                if obs.quality < 0 and obs.fingerprint.agent_name == agent:
+                    obs.quality = quality
+                    updated += 1
+            if updated > 0:
+                logger.debug(f"COMPILER: {updated} observations (mission) mises à jour (quality={quality:.2f})")
+
+            # Feedback sur les intercepts récents pour cet agent
+            self._feedback_recent_intercept(agent, quality)
+        except Exception as e:
+            logger.debug(f"COMPILER: Erreur on_mission_finished: {e}")
+
+    def _feedback_recent_intercept(self, agent: str, quality: float):
+        """Met à jour la règle si cet agent a eu un intercept récent (< 5 min)."""
+        intercept = self._last_intercepts.get(agent)
+        if intercept is None:
+            return
+        rule_id, ts = intercept
+        if time.time() - ts > 300:
+            return  # Trop ancien
+        self.record_feedback(rule_id, quality)
+        del self._last_intercepts[agent]
 
     # ================================================================
     # FINGERPRINT
@@ -589,6 +636,9 @@ class NeuralCompiler:
         best_rule.intercept_count += 1
         best_rule.last_used = time.time()
         self._total_intercepts += 1
+
+        # Tracker cet intercept pour feedback ultérieur
+        self._last_intercepts[agent_name] = (best_rule.rule_id, time.time())
 
         try:
             import asyncio

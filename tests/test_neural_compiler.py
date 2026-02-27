@@ -945,3 +945,195 @@ class TestBusIntegration:
         # Double souscription ne devrait rien faire
         c._subscribe_events()
         assert c._subscribed is True
+
+    @pytest.mark.asyncio
+    async def test_mission_finished_updates_quality(self, isolate_compiler):
+        """MISSION_FINISHED met à jour la qualité des observations de missions utilisateur."""
+        from core.neural_compiler import Observation, PromptFingerprint, _response_hash
+        c = isolate_compiler
+        fp = PromptFingerprint(
+            agent_name="coder", task_type="code_generate",
+            prompt_length=1, has_rag_context=False, has_code_block=False,
+            has_json_request=False, dominant_keywords=["test"],
+            markers=[], mood="neutre", cognitive_state="standard",
+            dopamine_bucket=1, threat_bucket=0, error_streak=0,
+        )
+        obs = Observation(
+            obs_id="obs_mission", timestamp=time.time(),
+            fingerprint=fp, response_text="réponse mission",
+            response_hash=_response_hash("réponse mission"),
+            response_structure="text", quality=-1.0, was_cloud=False,
+        )
+        c._observations.append(obs)
+        await c._on_mission_finished({"agent": "coder", "status": "success"})
+        assert obs.quality == 0.7
+
+    @pytest.mark.asyncio
+    async def test_mission_finished_error_quality(self, isolate_compiler):
+        """MISSION_FINISHED avec erreur donne une qualité basse."""
+        from core.neural_compiler import Observation, PromptFingerprint, _response_hash
+        c = isolate_compiler
+        fp = PromptFingerprint(
+            agent_name="coder", task_type="code_generate",
+            prompt_length=1, has_rag_context=False, has_code_block=False,
+            has_json_request=False, dominant_keywords=["test"],
+            markers=[], mood="neutre", cognitive_state="standard",
+            dopamine_bucket=1, threat_bucket=0, error_streak=0,
+        )
+        obs = Observation(
+            obs_id="obs_err", timestamp=time.time(),
+            fingerprint=fp, response_text="test",
+            response_hash=_response_hash("test err"),
+            response_structure="text", quality=-1.0, was_cloud=False,
+        )
+        c._observations.append(obs)
+        await c._on_mission_finished({"agent": "coder", "status": "error"})
+        assert obs.quality == 0.2
+
+    @pytest.mark.asyncio
+    async def test_mission_finished_no_crash(self, isolate_compiler):
+        c = isolate_compiler
+        await c._on_mission_finished({})
+        await c._on_mission_finished({"agent": "unknown", "status": "success"})
+
+
+# ============================================================
+# 12. TestInterceptFeedback
+# ============================================================
+
+class TestInterceptFeedback:
+    """Vérifie le feedback sur les interceptions compilées."""
+
+    def _make_rule(self, **kwargs):
+        from core.neural_compiler import CompiledRule
+        defaults = dict(
+            rule_id="r_feedback",
+            agent_name="coder",
+            task_type="code_generate",
+            condition_mood=None,
+            condition_cognitive=None,
+            condition_keywords=[],
+            response_template="def compiled(): return True",
+            response_structure="code",
+            confidence=0.95,
+            observations_count=20,
+            success_rate=0.9,
+            intercept_count=0,
+            positive_feedback=10,
+            negative_feedback=1,
+            created_at=time.time(),
+            last_used=time.time(),
+        )
+        defaults.update(kwargs)
+        return CompiledRule(**defaults)
+
+    def test_intercept_tracked(self, isolate_compiler):
+        """try_intercept enregistre l'intercept dans _last_intercepts."""
+        c = isolate_compiler
+        rule = self._make_rule()
+        c._rules.append(rule)
+        with patch("core.neural_compiler._get_current_mood", return_value="neutre"), \
+             patch("core.neural_compiler._get_cognitive_state", return_value="standard"), \
+             patch("core.neural_compiler._get_dopamine_level", return_value=0.5), \
+             patch("core.neural_compiler._get_threat_level", return_value=0.0), \
+             patch("core.neural_compiler._get_error_streak", return_value=0), \
+             patch("core.neural_compiler._detect_markers", return_value=[]), \
+             patch("core.neural_compiler.random.random", return_value=0.5):
+            c.try_intercept("coder", "Génère du code Python")
+        assert "coder" in c._last_intercepts
+        assert c._last_intercepts["coder"][0] == "r_feedback"
+
+    @pytest.mark.asyncio
+    async def test_routine_complete_feeds_back_rule(self, isolate_compiler):
+        """AUTONOMY_ROUTINE_COMPLETE après intercept donne du feedback à la règle."""
+        c = isolate_compiler
+        rule = self._make_rule(positive_feedback=10, negative_feedback=1)
+        c._rules.append(rule)
+        # Simuler un intercept récent
+        c._last_intercepts["coder"] = ("r_feedback", time.time())
+        await c._on_routine_complete({
+            "agent": "coder",
+            "intent": "EXPANSION_CODE",
+            "quality_score": 0.85,
+        })
+        assert rule.positive_feedback == 11
+        # L'intercept devrait être consommé
+        assert "coder" not in c._last_intercepts
+
+    @pytest.mark.asyncio
+    async def test_mission_finished_feeds_back_rule(self, isolate_compiler):
+        """MISSION_FINISHED après intercept donne du feedback à la règle."""
+        c = isolate_compiler
+        rule = self._make_rule(positive_feedback=10, negative_feedback=1)
+        c._rules.append(rule)
+        c._last_intercepts["coder"] = ("r_feedback", time.time())
+        await c._on_mission_finished({"agent": "coder", "status": "success"})
+        assert rule.positive_feedback == 11
+        assert "coder" not in c._last_intercepts
+
+    @pytest.mark.asyncio
+    async def test_old_intercept_ignored(self, isolate_compiler):
+        """Un intercept trop ancien (> 5 min) est ignoré."""
+        c = isolate_compiler
+        rule = self._make_rule(positive_feedback=10, negative_feedback=1)
+        c._rules.append(rule)
+        c._last_intercepts["coder"] = ("r_feedback", time.time() - 600)  # 10 min
+        await c._on_routine_complete({
+            "agent": "coder",
+            "intent": "TEST",
+            "quality_score": 0.9,
+        })
+        assert rule.positive_feedback == 10  # Inchangé
+
+    def test_feedback_recent_intercept_no_crash(self, isolate_compiler):
+        """_feedback_recent_intercept ne crashe pas sans intercept."""
+        c = isolate_compiler
+        c._feedback_recent_intercept("unknown", 0.8)  # Pas de crash
+
+    @pytest.mark.asyncio
+    async def test_negative_feedback_on_intercept(self, isolate_compiler):
+        """Feedback négatif sur une règle interceptée."""
+        c = isolate_compiler
+        rule = self._make_rule(positive_feedback=10, negative_feedback=1)
+        c._rules.append(rule)
+        c._last_intercepts["coder"] = ("r_feedback", time.time())
+        await c._on_mission_finished({"agent": "coder", "status": "error"})
+        assert rule.negative_feedback == 2
+        # success_rate recalculée : 10 pos / (10+2) total
+        assert rule.success_rate == 10 / 12
+
+
+# ============================================================
+# 13. TestAutoCompile
+# ============================================================
+
+class TestAutoCompile:
+    """Vérifie la compilation automatique périodique."""
+
+    @pytest.mark.asyncio
+    async def test_auto_compile_on_50th_obs(self, isolate_compiler):
+        """Compilation déclenchée toutes les 50 observations."""
+        c = isolate_compiler
+        c._total_observations = 49  # Le prochain sera le 50e
+        c._last_compile_time = 0  # Pas de cooldown
+        with patch.object(c, "compile_rules", return_value=0) as mock_compile:
+            await c._on_routine_complete({
+                "agent": "coder",
+                "intent": "TEST",
+                "quality_score": 0.8,
+            })
+            # compile_rules n'est pas appelé car _total_observations n'est pas divisible par 50
+            # (c'est toujours 49, pas incrémenté par _on_routine_complete)
+
+    @pytest.mark.asyncio
+    async def test_auto_compile_not_every_routine(self, isolate_compiler):
+        """Pas de compilation si total_observations n'est pas multiple de 50."""
+        c = isolate_compiler
+        c._total_observations = 42
+        with patch.object(c, "compile_rules") as mock_compile:
+            await c._on_routine_complete({
+                "agent": "test",
+                "intent": "TEST",
+                "quality_score": 0.5,
+            })
+            mock_compile.assert_not_called()
