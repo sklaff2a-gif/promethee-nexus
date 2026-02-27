@@ -45,16 +45,27 @@ AUTONOMY_GUARDRAIL = (
 # ---------------------------------------------------------------------------
 # Guardrail : DÉBATS COUNCIL (recency bias — en fin de prompt)
 # ---------------------------------------------------------------------------
-COUNCIL_GUARDRAIL = (
-    "\n\n--- RAPPEL CRITIQUE (DÉBAT COUNCIL) ---\n"
-    "Tu débats pour le projet PROMÉTHÉE (Python/FastAPI/Ollama sur UN SEUL PC Windows).\n"
-    "RÈGLES ABSOLUES :\n"
-    "1. Cite UNIQUEMENT des fichiers listés dans la STRUCTURE DU PROJET ci-dessus.\n"
-    "2. TECHNOLOGIES INTERDITES : Kubernetes, Docker, Kafka, microservices, blockchain, "
-    "load balancing, cluster, conteneurs, cloud infra, Redis, RabbitMQ.\n"
-    "3. Toute proposition DOIT cibler des fichiers EXISTANTS (core/, Agents/).\n"
-    "4. RÉPONDS EN FRANÇAIS UNIQUEMENT.\n"
-)
+def council_guardrail(project_files: str = "") -> str:
+    """Guardrail Council avec rappel des fichiers réels en fin de prompt (biais de récence)."""
+    files_block = ""
+    if project_files:
+        files_block = f"\n{project_files}\n"
+    return (
+        "\n\n--- RAPPEL CRITIQUE (DÉBAT COUNCIL) ---\n"
+        "Tu débats pour le projet PROMÉTHÉE (Python/FastAPI/Ollama sur UN SEUL PC Windows).\n"
+        "RÈGLES ABSOLUES :\n"
+        "1. Cite UNIQUEMENT des fichiers listés ci-dessous.\n"
+        "2. TECHNOLOGIES INTERDITES : Kubernetes, Docker, Kafka, microservices, blockchain, "
+        "load balancing, cluster, conteneurs, cloud infra, Redis, RabbitMQ.\n"
+        "3. Toute proposition DOIT cibler des fichiers EXISTANTS (core/, Agents/).\n"
+        "4. RÉPONDS EN FRANÇAIS UNIQUEMENT.\n"
+        "5. Ne propose PAS de fichiers qui n'existent pas.\n"
+        f"{files_block}"
+    )
+
+
+# Backward compat : constante statique pour les imports existants
+COUNCIL_GUARDRAIL = council_guardrail()
 
 # ---------------------------------------------------------------------------
 # Guardrail : GÉNÉRATION DE TESTS (CI pipeline)

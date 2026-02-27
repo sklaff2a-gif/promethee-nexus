@@ -951,7 +951,7 @@ class TestResonanceCycle:
                 await isolate_callosum._resonance_cycle()
         mock_pub.assert_called_once()
         args = mock_pub.call_args
-        assert args[0][0] == "CALLOSUM_STATE"
+        assert args[0][0] == "CORPUS_CALLOSUM_STATE"
 
     @pytest.mark.asyncio
     async def test_cycle_buffer_limit(self, isolate_callosum):

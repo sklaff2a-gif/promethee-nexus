@@ -40,7 +40,7 @@ _COUNCIL_PROJECT_CONTEXT = (
 
 
 from core.prompt_templates import get_project_structure as _get_project_structure
-from core.prompt_templates import COUNCIL_GUARDRAIL
+from core.prompt_templates import council_guardrail as _council_guardrail
 
 
 # --- Scoring des arguments du Council ---
@@ -533,7 +533,7 @@ class Council:
             f"{round_instructions}\n"
             f"{president_block}"
             f"{intuition_block}"
-            f"{COUNCIL_GUARDRAIL}"
+            f"{_council_guardrail(project_files)}"
         )
 
     def _build_president_prompt(self, round_num: int) -> str:

@@ -63,6 +63,13 @@ CRISIS_BOOST_INTENTS = {
 }
 EXPLORATION_BOOST_INTENTS = {
     "research", "curiosity", "explore", "discover", "council",
+    "veille", "grimoire", "dropzone",
+}
+CREATIVE_BOOST_INTENTS = {
+    "evolution", "create", "code", "experiment", "soliloque",
+}
+RECOVERY_BOOST_INTENTS = {
+    "memory", "cleanup", "consolidation", "health_check", "backup",
 }
 
 
@@ -799,7 +806,7 @@ class CorpusCallosum:
 
     async def _publish_state(self):
         """Publie l'etat sur le bus."""
-        await bus.publish("CALLOSUM_STATE", {
+        await bus.publish("CORPUS_CALLOSUM_STATE", {
             "cognitive_state": self.cognitive_state,
             "global_coherence": self.global_coherence,
             "last_pattern": self._last_pattern.pattern_type if self._last_pattern else None,
@@ -831,7 +838,7 @@ class CorpusCallosum:
                 bonus = -1.0  # Pas d'exploration en crise
 
         elif self.cognitive_state == "creative_surge":
-            if any(kw in intent_lower for kw in ("evolution", "create", "code", "experiment")):
+            if any(kw in intent_lower for kw in CREATIVE_BOOST_INTENTS):
                 bonus = 1.2
             elif any(kw in intent_lower for kw in CRISIS_BOOST_INTENTS):
                 bonus = -0.5
@@ -843,7 +850,7 @@ class CorpusCallosum:
                 bonus = -0.5
 
         elif self.cognitive_state == "recovery":
-            if any(kw in intent_lower for kw in ("health_check", "backup", "soliloque")):
+            if any(kw in intent_lower for kw in RECOVERY_BOOST_INTENTS):
                 bonus = 0.8
             elif any(kw in intent_lower for kw in ("evolution", "council")):
                 bonus = -0.5

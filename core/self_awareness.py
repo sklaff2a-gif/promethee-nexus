@@ -81,6 +81,9 @@ class SelfAwarenessEngine:
         # Compteurs routines autonomes
         self._routine_count = 0
         self._routine_success = 0
+        # Cache meta_reflect (TTL 60s)
+        self._meta_reflect_cache: Optional[dict] = None
+        self._meta_reflect_ts: float = 0.0
         # Lacunes de connaissances détectées
         self._knowledge_gaps: List[Dict[str, Any]] = []
         # Santé mémoire vectorielle (mise à jour via bus)
@@ -114,6 +117,8 @@ class SelfAwarenessEngine:
         self._memory_status = "unknown"
         self._memory_warnings = []
         self._personality_events = []
+        self._meta_reflect_cache = None
+        self._meta_reflect_ts = 0.0
 
     @classmethod
     def reset_singleton(cls):
@@ -598,7 +603,7 @@ class SelfAwarenessEngine:
         """Analyse l'historique des routines et les snapshots pour retourner
         un dict {intent: float} d'ajustements de scoring adaptatifs.
 
-        10 règles cumulatives :
+        15 règles cumulatives :
         1. Routine bruyante : intent >50% low_quality sur ses 10 dernières → -3.0
         2. Councils stériles : <30% consensus sur les 5 derniers COUNCIL_DEBATE → -4.0
         3. Evolution bloquée : 0 success sur 15 derniers EXPANSION_CODE → -2.0 EXP, +1.0 GRIMOIRE
@@ -817,9 +822,18 @@ class SelfAwarenessEngine:
     # --- Méta-réflexion ---
 
     def meta_reflect(self) -> dict:
-        """Analyse les 10 derniers snapshots pour détecter des tendances. Zero LLM."""
+        """Analyse les 10 derniers snapshots pour détecter des tendances. Zero LLM.
+        Cache avec TTL 60s pour éviter les recalculs répétés dans un même cycle."""
+        import time as _time
+        now = _time.time()
+        if self._meta_reflect_cache is not None and (now - self._meta_reflect_ts) < 60.0:
+            return self._meta_reflect_cache
+
         if len(self._snapshots) < 5:
-            return {"insight": None, "success_trend": 0, "volatile_traits": [], "snapshot_count": len(self._snapshots)}
+            result = {"insight": None, "success_trend": 0, "volatile_traits": [], "snapshot_count": len(self._snapshots)}
+            self._meta_reflect_cache = result
+            self._meta_reflect_ts = now
+            return result
 
         recent = self._snapshots[-10:]
 
@@ -851,12 +865,15 @@ class SelfAwarenessEngine:
             vt = ", ".join(f"{t}(std={s:.1f})" for t, s in volatile_traits)
             insight_parts.append(f"traits instables: {vt}")
 
-        return {
+        result = {
             "insight": " | ".join(insight_parts) if insight_parts else None,
             "success_trend": trend,
             "volatile_traits": volatile_traits,
             "snapshot_count": len(recent),
         }
+        self._meta_reflect_cache = result
+        self._meta_reflect_ts = now
+        return result
 
     def compute_strategic_mode(self) -> str:
         """Détermine le mode stratégique global. Zero LLM."""
@@ -971,6 +988,8 @@ class SelfAwarenessEngine:
             self._ci_pass = data.get("ci_pass", 0)
             self._ci_fail = data.get("ci_fail", 0)
             self._council_aborted = data.get("council_aborted", 0)
+            self._routine_count = data.get("routine_count", 0)
+            self._routine_success = data.get("routine_success", 0)
             self._knowledge_gaps = data.get("knowledge_gaps", [])
             self._personality_events = data.get("personality_events", [])
         except (FileNotFoundError, json.JSONDecodeError):
@@ -988,6 +1007,8 @@ class SelfAwarenessEngine:
             "ci_pass": self._ci_pass,
             "ci_fail": self._ci_fail,
             "council_aborted": self._council_aborted,
+            "routine_count": self._routine_count,
+            "routine_success": self._routine_success,
             "knowledge_gaps": self._knowledge_gaps,
             "personality_events": self._personality_events,
         }

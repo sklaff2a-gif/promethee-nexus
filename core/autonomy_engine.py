@@ -767,16 +767,6 @@ class AutonomyEngine:
         except Exception:
             pass
 
-        # --- Bonus somatique (intuitions viscérales du coeur) ---
-        try:
-            from core.cardiac_engine import heart
-            for i, (routine, s) in enumerate(scored):
-                somatic = heart.get_somatic_signal(routine["intent"])
-                if somatic != 0.0:
-                    scored[i] = (routine, s + somatic)
-        except Exception:
-            pass
-
         # --- Bonus préfrontal (focus exécutif) ---
         try:
             from core.prefrontal import prefrontal
@@ -827,11 +817,18 @@ class AutonomyEngine:
         # un intent associé à des échecs passés reçoit un malus viscéral
         try:
             from core.cardiac_engine import heart
+            somatic_effects = []
             for i, (routine, s) in enumerate(scored):
                 somatic_signal = heart.get_somatic_signal(routine["intent"])
                 if somatic_signal != 0.0:
                     scored[i] = (routine, s + somatic_signal)
+                    somatic_effects.append(f"{routine['intent']}({somatic_signal:+.2f})")
             scored.sort(key=lambda x: x[1], reverse=True)
+            if somatic_effects:
+                print(f"   💓 SOMATIQUE: {', '.join(somatic_effects[:5])}")
+            affect = heart.get_affect_summary()
+            if affect:
+                print(f"   🫀 AFFECT: {affect}")
         except Exception:
             pass
 
@@ -978,14 +975,6 @@ class AutonomyEngine:
             try:
                 from core.self_awareness import awareness
                 purpose_ctx = awareness.get_purpose_context()
-            except Exception:
-                pass
-            # Enrichir avec le narratif interieur (pulsions)
-            try:
-                from core.desire_engine import desires
-                narrative = desires.get_dominant_narrative()
-                if narrative:
-                    purpose_ctx += f"\n[DESIRS] {narrative}"
             except Exception:
                 pass
             # Contexte délibératif (objectifs préfrontaux)
@@ -1251,6 +1240,19 @@ class AutonomyEngine:
 
         print(f"   ✨ AUTONOMY [FORCED]: [{intent}] -> [{agent.upper()}] (cout={routine_cost}pt)")
 
+        # Notification préfrontale pre-routine
+        try:
+            from core.prefrontal import prefrontal
+            prefrontal.on_routine_start(intent)
+        except Exception:
+            pass
+        # Voix intérieure : routine commence → désactiver DMN
+        try:
+            from core.inner_voice import voice as inner_voice
+            inner_voice.set_idle(False)
+        except Exception:
+            pass
+
         # Reutiliser la logique standard de dispatch
         if intent == "COUNCIL_DEBATE":
             response = await self._execute_council_debate()
@@ -1315,6 +1317,8 @@ class AutonomyEngine:
             "quality_score": quality,
             "result": result_preview,
         })
+
+        self._persist_state()
 
     def _should_veto(self, intent: str, agent: str) -> str:
         """Veto proactif basé sur les signatures d'échec apprises. Retourne la raison ou ''."""
