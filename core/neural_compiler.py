@@ -38,6 +38,23 @@ RULE_DISABLE_THRESHOLD = 0.5
 AB_TEST_PROBABILITY = 0.10       # 10% vérification parallèle LLM
 AUTOSAVE_INTERVAL = 10
 COMPILE_COOLDOWN = 300           # 5 min entre compilations
+RULE_MAX_AGE_DAYS = 5            # Règles périmées après 5 jours sans revalidation
+
+# --- Agents core (persistants) vs Grimoire (éphémères) ---
+# Seuls les agents core accumulent assez d'observations pour compiler des règles.
+# Les agents Grimoire (éphémères, LRU rotation) polluent le FIFO sans jamais atteindre
+# MIN_OBSERVATIONS_FOR_RULE. On les exclut de l'enregistrement.
+
+_CORE_AGENTS = frozenset({
+    "strategist", "coder", "architect", "factory", "formatter",
+    "researcher", "writer", "security", "infra", "evolution",
+})
+
+# Agents Grimoire qui n'appellent JAMAIS generate_content (0 LLM, déterministes purs).
+# Listés pour documentation — pas besoin de les filtrer (ils ne produisent pas d'observations).
+_DETERMINISTIC_GRIMOIRE = frozenset({
+    "hallucination_doctor", "loop_breaker",
+})
 
 # --- Stopwords FR/EN (~60 mots) ---
 
@@ -576,6 +593,11 @@ class NeuralCompiler:
         """Capture un appel LLM avec contexte et résultat."""
         self._total_llm_calls += 1
 
+        # Filtrer les agents éphémères (Grimoire) : ils ne compilent jamais
+        # et polluent le FIFO en prenant la place des agents core.
+        if agent_name not in _CORE_AGENTS:
+            return
+
         fp = self.extract_fingerprint(agent_name, prompt)
         r_hash = _response_hash(response)
 
@@ -622,6 +644,13 @@ class NeuralCompiler:
 
         if best_rule is None or best_score < INTERCEPT_CONFIDENCE_THRESHOLD:
             return None
+
+        # Staleness : règle trop ancienne sans A/B revalidation → fallback LLM
+        rule_age_days = (time.time() - best_rule.created_at) / 86400
+        if rule_age_days > RULE_MAX_AGE_DAYS and best_rule.last_used > 0:
+            days_since_used = (time.time() - best_rule.last_used) / 86400
+            if days_since_used > RULE_MAX_AGE_DAYS:
+                return None  # Règle périmée, forcer un A/B test via LLM
 
         # A/B Test : 10% du temps, on laisse passer au LLM pour vérifier
         if random.random() < AB_TEST_PROBABILITY:

@@ -1137,3 +1137,139 @@ class TestAutoCompile:
                 "quality_score": 0.5,
             })
             mock_compile.assert_not_called()
+
+
+# ============================================================
+# 14. TestGrimoireFiltering
+# ============================================================
+
+class TestGrimoireFiltering:
+    """Vérifie que les agents éphémères (Grimoire) sont exclus du FIFO."""
+
+    def test_core_agent_recorded(self, isolate_compiler):
+        """Les agents core sont bien enregistrés."""
+        c = isolate_compiler
+        with patch("core.neural_compiler._get_current_mood", return_value="neutre"), \
+             patch("core.neural_compiler._get_cognitive_state", return_value="standard"), \
+             patch("core.neural_compiler._get_dopamine_level", return_value=0.5), \
+             patch("core.neural_compiler._get_threat_level", return_value=0.0), \
+             patch("core.neural_compiler._get_error_streak", return_value=0), \
+             patch("core.neural_compiler._detect_markers", return_value=[]):
+            c.record_observation("coder", "test prompt", "test response", 0.8, False)
+        assert len(c._observations) == 1
+
+    def test_grimoire_agent_filtered(self, isolate_compiler):
+        """Les agents Grimoire sont filtrés — pas d'observation enregistrée."""
+        c = isolate_compiler
+        with patch("core.neural_compiler._get_current_mood", return_value="neutre"), \
+             patch("core.neural_compiler._get_cognitive_state", return_value="standard"), \
+             patch("core.neural_compiler._get_dopamine_level", return_value=0.5), \
+             patch("core.neural_compiler._get_threat_level", return_value=0.0), \
+             patch("core.neural_compiler._get_error_streak", return_value=0), \
+             patch("core.neural_compiler._detect_markers", return_value=[]):
+            c.record_observation("math_wizard", "résous x²", "x = 42", 0.8, False)
+            c.record_observation("dr_debug", "traceback", "fix: ...", 0.8, False)
+            c.record_observation("translator", "traduis", "hello", 0.8, False)
+        assert len(c._observations) == 0
+
+    def test_grimoire_still_counted_as_llm_call(self, isolate_compiler):
+        """Les appels Grimoire comptent dans total_llm_calls (métrique globale)."""
+        c = isolate_compiler
+        c.record_observation("math_wizard", "x", "y", 0.8, False)
+        assert c._total_llm_calls == 1
+        assert len(c._observations) == 0
+
+    def test_all_10_core_agents_accepted(self, isolate_compiler):
+        """Les 10 agents core sont tous acceptés."""
+        from core.neural_compiler import _CORE_AGENTS
+        c = isolate_compiler
+        assert len(_CORE_AGENTS) == 10
+        for agent in _CORE_AGENTS:
+            with patch("core.neural_compiler._get_current_mood", return_value="neutre"), \
+                 patch("core.neural_compiler._get_cognitive_state", return_value="standard"), \
+                 patch("core.neural_compiler._get_dopamine_level", return_value=0.5), \
+                 patch("core.neural_compiler._get_threat_level", return_value=0.0), \
+                 patch("core.neural_compiler._get_error_streak", return_value=0), \
+                 patch("core.neural_compiler._detect_markers", return_value=[]):
+                c.record_observation(agent, f"prompt {agent}", f"réponse unique de {agent}", 0.5, False)
+        assert len(c._observations) == 10
+
+
+# ============================================================
+# 15. TestStaleness
+# ============================================================
+
+class TestStaleness:
+    """Vérifie la détection de règles périmées."""
+
+    def _make_rule(self, **kwargs):
+        from core.neural_compiler import CompiledRule
+        defaults = dict(
+            rule_id="r_stale",
+            agent_name="coder",
+            task_type="code_generate",
+            condition_mood=None,
+            condition_cognitive=None,
+            condition_keywords=[],
+            response_template="def old(): pass",
+            response_structure="code",
+            confidence=0.95,
+            observations_count=20,
+            success_rate=0.9,
+            intercept_count=5,
+            positive_feedback=15,
+            negative_feedback=1,
+            created_at=time.time(),
+            last_used=time.time(),
+        )
+        defaults.update(kwargs)
+        return CompiledRule(**defaults)
+
+    def test_fresh_rule_intercepted(self, isolate_compiler):
+        """Une règle récente fonctionne normalement."""
+        c = isolate_compiler
+        rule = self._make_rule(created_at=time.time())
+        c._rules.append(rule)
+        with patch("core.neural_compiler._get_current_mood", return_value="neutre"), \
+             patch("core.neural_compiler._get_cognitive_state", return_value="standard"), \
+             patch("core.neural_compiler._get_dopamine_level", return_value=0.5), \
+             patch("core.neural_compiler._get_threat_level", return_value=0.0), \
+             patch("core.neural_compiler._get_error_streak", return_value=0), \
+             patch("core.neural_compiler._detect_markers", return_value=[]), \
+             patch("core.neural_compiler.random.random", return_value=0.5):
+            result = c.try_intercept("coder", "Génère du code Python")
+        assert result is not None
+
+    def test_stale_rule_rejected(self, isolate_compiler):
+        """Une règle vieille de > RULE_MAX_AGE_DAYS et non utilisée récemment est rejetée."""
+        from core import neural_compiler as mod
+        c = isolate_compiler
+        old_time = time.time() - (mod.RULE_MAX_AGE_DAYS + 1) * 86400
+        rule = self._make_rule(created_at=old_time, last_used=old_time)
+        c._rules.append(rule)
+        with patch("core.neural_compiler._get_current_mood", return_value="neutre"), \
+             patch("core.neural_compiler._get_cognitive_state", return_value="standard"), \
+             patch("core.neural_compiler._get_dopamine_level", return_value=0.5), \
+             patch("core.neural_compiler._get_threat_level", return_value=0.0), \
+             patch("core.neural_compiler._get_error_streak", return_value=0), \
+             patch("core.neural_compiler._detect_markers", return_value=[]), \
+             patch("core.neural_compiler.random.random", return_value=0.5):
+            result = c.try_intercept("coder", "Génère du code Python")
+        assert result is None  # Périmée
+
+    def test_old_rule_recently_used_accepted(self, isolate_compiler):
+        """Une vieille règle mais utilisée récemment reste valide."""
+        from core import neural_compiler as mod
+        c = isolate_compiler
+        old_time = time.time() - (mod.RULE_MAX_AGE_DAYS + 1) * 86400
+        rule = self._make_rule(created_at=old_time, last_used=time.time())
+        c._rules.append(rule)
+        with patch("core.neural_compiler._get_current_mood", return_value="neutre"), \
+             patch("core.neural_compiler._get_cognitive_state", return_value="standard"), \
+             patch("core.neural_compiler._get_dopamine_level", return_value=0.5), \
+             patch("core.neural_compiler._get_threat_level", return_value=0.0), \
+             patch("core.neural_compiler._get_error_streak", return_value=0), \
+             patch("core.neural_compiler._detect_markers", return_value=[]), \
+             patch("core.neural_compiler.random.random", return_value=0.5):
+            result = c.try_intercept("coder", "Génère du code Python")
+        assert result is not None  # Récemment utilisée = encore valide
