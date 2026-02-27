@@ -35,7 +35,7 @@ STATE_FILE = os.path.join(
 
 # Types de noeuds valides
 VALID_NODE_TYPES = frozenset({
-    "memory", "desire", "trait", "event", "objective", "eureka", "meta"
+    "memory", "desire", "trait", "event", "objective", "eureka", "meta", "affect"
 })
 
 # Types de synapses valides
@@ -663,6 +663,7 @@ class SynapticNetwork:
             bus.subscribe("PREFRONTAL_GOAL_CREATED", self._on_goal_created)
             bus.subscribe("PREFRONTAL_GOAL_COMPLETE", self._on_goal_complete)
             bus.subscribe("PREFRONTAL_GOAL_ABANDONED", self._on_goal_abandoned)
+            bus.subscribe("CARDIAC_EMOTION_CHANGE", self._on_cardiac_emotion_change)
         except Exception as e:
             logger.warning(f"SYNAPSE: Impossible de souscrire aux evenements: {e}")
 
@@ -1081,6 +1082,62 @@ class SynapticNetwork:
                                         context=f"mission:{mission[:80]}")
         except Exception as e:
             logger.warning(f"SYNAPSE: Erreur _on_mission_finished: {e}")
+
+    async def _on_cardiac_emotion_change(self, event: dict):
+        """Transition emotionnelle cardiaque -> synapse emotionnelle.
+        Cree un noeud affect pour l'emotion et le lie a la cause et a la pulsion dominante."""
+        try:
+            emotion = event.get("emotion", "")
+            intensity = event.get("intensity", 0.0)
+            cause = event.get("cause", "")
+
+            if not emotion or intensity < 0.6:
+                return
+
+            # Noeud pour l'emotion courante
+            emotion_nid = self.ensure_node(
+                f"emotion:{emotion}", "affect", intensity, ["cardiac"]
+            )
+            if not emotion_nid:
+                return
+
+            # Lier a la cause (intent ou stimulus)
+            if cause:
+                cause_nid = _make_node_id(cause)
+                if cause_nid in self.nodes:
+                    key = _synapse_key(emotion_nid, cause_nid)
+                    if key not in self.synapses:
+                        self.synapses[key] = _make_synapse(
+                            emotion_nid, cause_nid, intensity * 0.5,
+                            "emotional", f"affect:{emotion}<-{cause}"
+                        )
+                    else:
+                        self.synapses[key]["weight"] = min(
+                            1.0, self.synapses[key]["weight"] + 0.05
+                        )
+
+            # Lier a la pulsion dominante
+            try:
+                from core.desire_engine import desires
+                top_drives = sorted(
+                    desires.drives.values(),
+                    key=lambda d: d.deprivation, reverse=True
+                )
+                if top_drives:
+                    dominant = top_drives[0].name
+                    drive_nid = _make_node_id(f"pulsion:{dominant.lower()}")
+                    if drive_nid in self.nodes:
+                        key = _synapse_key(emotion_nid, drive_nid)
+                        if key not in self.synapses:
+                            self.synapses[key] = _make_synapse(
+                                emotion_nid, drive_nid, 0.3,
+                                "emotional", f"affect:{emotion}->drive:{dominant}"
+                            )
+            except Exception:
+                pass
+
+        except Exception as e:
+            logger.warning(f"SYNAPSE: Erreur _on_cardiac_emotion_change: {e}")
 
     def _extract_and_ensure(self, text: str, node_type: str = "memory",
                             functional_systems: Optional[List[str]] = None,

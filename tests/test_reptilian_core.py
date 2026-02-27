@@ -738,3 +738,68 @@ class TestBudgetOnlyReflexes:
             # Deuxième appel immédiat → cooldown SHED empêche le re-log
             await rept._trigger_reflexes(threats)
             assert mock_logger.info.call_count == 1  # Toujours 1
+
+
+# ============================================================
+# 12. SHED graduée selon la cause
+# ============================================================
+
+class TestShedGraduated:
+
+    def test_shed_budget_allows_cost_4(self, rept):
+        """Budget SHED → max_cost=4 (permet GRIMOIRE/REFACTOR)."""
+        now = time.time()
+        rept._activate_shed(now, cause="budget")
+        active, max_cost = rept.should_shed()
+        assert active is True
+        assert max_cost == 4
+
+    def test_shed_error_strict_cost_2(self, rept):
+        """Error SHED → max_cost=2 (strict)."""
+        now = time.time()
+        rept._activate_shed(now, cause="error_streak")
+        active, max_cost = rept.should_shed()
+        assert active is True
+        assert max_cost == 2
+
+    def test_shed_default_no_cause_cost_2(self, rept):
+        """SHED sans cause → max_cost=2 (défaut strict)."""
+        now = time.time()
+        rept._activate_shed(now)
+        active, max_cost = rept.should_shed()
+        assert active is True
+        assert max_cost == 2
+
+    def test_shed_grimoire_allowed_budget(self, rept):
+        """GRIMOIRE (coût 3) passe en SHED budget (max_cost=4)."""
+        now = time.time()
+        rept._activate_shed(now, cause="budget")
+        active, max_cost = rept.should_shed()
+        assert active and max_cost >= 3  # GRIMOIRE coût 3 passe
+
+    def test_shed_expansion_blocked_always(self, rept):
+        """EXPANSION (coût 5) bloqué dans tous les cas de SHED."""
+        now = time.time()
+        # Budget SHED (max=4)
+        rept._activate_shed(now, cause="budget")
+        _, max_cost_budget = rept.should_shed()
+        assert max_cost_budget < 5
+        # Error SHED (max=2)
+        rept._activate_shed(now, cause="error_streak")
+        _, max_cost_error = rept.should_shed()
+        assert max_cost_error < 5
+
+    @pytest.mark.asyncio
+    async def test_shed_cause_propagated_from_trigger(self, rept):
+        """La cause de la menace est transmise à _activate_shed via _trigger_reflexes."""
+        rept.threat_level = 5.5
+        threats = {"budget": 5.0}
+        # Budget + autre menace pour éviter le short-circuit budget_only
+        threats["error_streak"] = 3.0
+        with patch.object(rept, "_publish_alert", new_callable=AsyncMock), \
+             patch.dict("sys.modules", {"core.cardiac_engine": MagicMock()}):
+            await rept._trigger_reflexes(threats)
+        active, max_cost = rept.should_shed()
+        assert active
+        # La cause principale est "budget" (5.0 > 3.0)
+        assert max_cost == 4

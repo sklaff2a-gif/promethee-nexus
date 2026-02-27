@@ -20,6 +20,7 @@ from core.hippocampus import (
     HIPPOCAMPUS_STATE_FILE,
     BASE_SALIENCE,
     SALIENCE_THRESHOLD,
+    STRONG_EMOTIONS,
     MAX_EPISODES,
     MAX_ARCS,
     MAX_ARCS_MARKED,
@@ -807,3 +808,74 @@ class TestGenerateSummary:
         assert "AUDIT" in s
         assert "hallucination" in s
         assert "5" in s
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TestSalienceV2 — Bonus dopamine, transition, emotions elargies
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestSalienceV2:
+    """Tests des bonus de saillance V2 (dopamine, transition, emotions elargies)."""
+
+    def test_frustration_is_strong_emotion(self, reset_hippocampus):
+        """frustration est dans STRONG_EMOTIONS et donne +0.1."""
+        assert "frustration" in STRONG_EMOTIONS
+        h = _make_hippocampus()
+        h._known_intents.add("TEST")
+        affect_calm = _mock_affect(cardiac_emotion="serenite")
+        affect_frust = _mock_affect(cardiac_emotion="frustration")
+        s_calm = h._compute_salience("veto", "TEST", affect_calm)
+        s_frust = h._compute_salience("veto", "TEST", affect_frust)
+        assert s_frust == pytest.approx(s_calm + 0.1, abs=0.01)
+
+    def test_determination_and_enthousiasme_strong(self, reset_hippocampus):
+        """determination et enthousiasme sont dans STRONG_EMOTIONS."""
+        assert "determination" in STRONG_EMOTIONS
+        assert "enthousiasme" in STRONG_EMOTIONS
+
+    def test_dopamine_surge_bonus(self, reset_hippocampus):
+        """dopamine > 0.7 donne +0.1 de saillance."""
+        h = _make_hippocampus()
+        h._known_intents.add("TEST")
+        affect_low = _mock_affect(dopamine_level=0.5)
+        affect_high = _mock_affect(dopamine_level=0.85)
+        s_low = h._compute_salience("veto", "TEST", affect_low)
+        s_high = h._compute_salience("veto", "TEST", affect_high)
+        assert s_high == pytest.approx(s_low + 0.1, abs=0.01)
+
+    def test_transition_bonus(self, reset_hippocampus):
+        """Transition emotionnelle (prev_emotion + emotion_cause) donne +0.1."""
+        h = _make_hippocampus()
+        h._known_intents.add("TEST")
+        affect_no_trans = _mock_affect()
+        affect_trans = _mock_affect(prev_emotion="frustration", emotion_cause="success")
+        s_no = h._compute_salience("veto", "TEST", affect_no_trans)
+        s_trans = h._compute_salience("veto", "TEST", affect_trans)
+        assert s_trans == pytest.approx(s_no + 0.1, abs=0.01)
+
+    def test_salience_can_reach_075(self, reset_hippocampus):
+        """Combinaison realiste (frustration + dopamine + transition) atteint 0.75+."""
+        h = _make_hippocampus()
+        h._known_intents.add("TEST")
+        # veto base=0.4 + frustration=0.1 + dopamine=0.1 + transition=0.1 = 0.7
+        affect = _mock_affect(
+            cardiac_emotion="frustration",
+            dopamine_level=0.85,
+            prev_emotion="serenite",
+            emotion_cause="failure",
+        )
+        s = h._compute_salience("veto", "TEST", affect)
+        assert s >= 0.7
+
+    def test_salience_still_capped_at_one(self, reset_hippocampus):
+        """Meme avec tous les bonus, la saillance reste capped a 1.0."""
+        h = _make_hippocampus()
+        # Tous les bonus actifs : first intent, strong emotion, high streak, dopamine, transition
+        affect = _mock_affect(
+            cardiac_emotion="rage",
+            dopamine_level=0.9,
+            prev_emotion="serenite",
+            emotion_cause="eureka",
+        )
+        s = h._compute_salience("council_forced", "BRAND_NEW_V2", affect, error_streak=10)
+        assert s <= 1.0

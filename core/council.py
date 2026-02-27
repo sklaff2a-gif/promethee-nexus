@@ -194,12 +194,14 @@ class Council:
     """
 
     def __init__(self, agents: Dict[str, Any], participants: List[str],
-                 mission: str, max_rounds: int = 5, enable_student: bool = True):
+                 mission: str, max_rounds: int = 5, enable_student: bool = True,
+                 enable_advocate: bool = True):
         self.agents = agents
         self.participants = participants
         self.mission = mission
         self.max_rounds = max_rounds
         self.enable_student = enable_student
+        self.enable_advocate = enable_advocate
         self.council_id = str(uuid.uuid4())[:8]
         self.transcript: List[Dict[str, Any]] = []
 
@@ -326,6 +328,79 @@ class Council:
         text = "QUESTION: " + " | ".join(parts)
         return text[:300]
 
+    def _build_advocate_contribution(self, round_num: int) -> str:
+        """Avocat du Diable — critique deterministe du round precedent (0 LLM).
+        Detecte : fichiers hallucines, paraphrase/echo, angles morts (tests, rollback, effets secondaires).
+        Retourne un texte prefixe OBJECTION: (max 400 chars) ou '' si rien a signaler."""
+        prev_round = round_num - 1
+        prev_entries = [
+            e for e in self.transcript
+            if e["round"] == prev_round
+            and not e.get("is_student") and not e.get("is_advocate")
+        ]
+        if not prev_entries:
+            return ""
+
+        objections = []
+
+        # 1. Validation fichiers : extraire les chemins et verifier l'existence
+        hallucinated = []
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for entry in prev_entries:
+            files_cited = _FILE_PATTERN.findall(entry.get("content", ""))
+            for fpath in files_cited:
+                # Nettoyer le chemin (retirer ponctuation trailing)
+                clean = fpath.rstrip(".,;:)\"'")
+                full = os.path.join(project_root, clean)
+                if not os.path.exists(full):
+                    hallucinated.append(clean)
+        if hallucinated:
+            unique_halluc = list(dict.fromkeys(hallucinated))[:3]
+            objections.append(
+                f"FICHIERS INEXISTANTS: {', '.join(unique_halluc)}"
+            )
+
+        # 2. Detection de paraphrase/echo : 2+ agents avec les memes mots-cles
+        if len(prev_entries) >= 2:
+            agent_keywords = {}
+            for entry in prev_entries:
+                content_lower = entry.get("content", "").lower()
+                keywords = set(_ACTION_VERBS.findall(content_lower))
+                files = set(f.rstrip(".,;:)\"'") for f in _FILE_PATTERN.findall(content_lower))
+                agent_keywords[entry["agent"]] = keywords | files
+
+            # Chercher des paires avec >= 3 mots-cles communs
+            agents_list = list(agent_keywords.keys())
+            for i in range(len(agents_list)):
+                for j in range(i + 1, len(agents_list)):
+                    common = agent_keywords[agents_list[i]] & agent_keywords[agents_list[j]]
+                    if len(common) >= 3:
+                        objections.append(
+                            f"ECHO: {agents_list[i]} et {agents_list[j]} "
+                            f"repetent les memes termes ({', '.join(list(common)[:3])})"
+                        )
+                        break
+                if len(objections) >= 2:
+                    break
+
+        # 3. Angles morts : verifier si les propositions mentionnent tests, rollback, effets secondaires
+        all_content = " ".join(e.get("content", "") for e in prev_entries).lower()
+        missing = []
+        if "test" not in all_content and "pytest" not in all_content:
+            missing.append("tests")
+        if "rollback" not in all_content and "revert" not in all_content and "backup" not in all_content:
+            missing.append("rollback")
+        if "effet" not in all_content and "impact" not in all_content and "risque" not in all_content:
+            missing.append("effets secondaires")
+        if missing:
+            objections.append(f"ANGLES MORTS: personne n'a mentionne {', '.join(missing)}")
+
+        if not objections:
+            return ""
+
+        text = "OBJECTION: " + " | ".join(objections)
+        return text[:400]
+
     def _format_transcript(self) -> str:
         """Formate le transcript pour l'injecter dans le prompt des agents.
         Inclut le score de pertinence de chaque argument."""
@@ -336,6 +411,10 @@ class Council:
             if entry.get("is_student"):
                 lines.append(
                     f"[Tour {entry['round']}] PROMETHEE-ETUDIANT :\n{entry['content']}"
+                )
+            elif entry.get("is_advocate"):
+                lines.append(
+                    f"[Tour {entry['round']}] AVOCAT DU DIABLE :\n{entry['content']}"
                 )
             else:
                 score = entry.get("score", 0)
@@ -426,6 +505,18 @@ class Council:
                 f"- Propose des actions concretes liees a ses objectifs.\n\n"
             )
 
+        # Bloc avocat du diable : si l'avocat a parle ce round, instruire l'agent de defendre
+        advocate_block = ""
+        advocate_entries = [e for e in self.transcript if e.get("is_advocate") and e["round"] == current_round]
+        if advocate_entries:
+            advocate_text = advocate_entries[-1]["content"]
+            advocate_block = (
+                f"\nAVOCAT DU DIABLE (critique constructive) :\n"
+                f'"{advocate_text}"\n\n'
+                f"DEFENDS ta proposition face a ces objections. "
+                f"Cite des fichiers REELS et explique les risques.\n\n"
+            )
+
         return (
             f"Tu participes à un CONSEIL multi-agents.\n"
             f"LANGUE OBLIGATOIRE : Réponds UNIQUEMENT en français. Pas d'anglais.\n"
@@ -437,6 +528,7 @@ class Council:
             f"TON RÔLE : {agent_name.upper()}\n"
             f"{personality_line}\n"
             f"{student_block}"
+            f"{advocate_block}"
             f"HISTORIQUE DU DÉBAT :\n{history}\n\n"
             f"{round_instructions}\n"
             f"{president_block}"
@@ -446,8 +538,8 @@ class Council:
 
     def _build_president_prompt(self, round_num: int) -> str:
         """Construit le prompt court pour le président (architect) évaluateur."""
-        # Contributions du tour courant (tronquées, sans l'étudiant)
-        round_entries = [e for e in self.transcript if e["round"] == round_num and not e.get("is_student")]
+        # Contributions du tour courant (tronquées, sans l'étudiant ni l'avocat)
+        round_entries = [e for e in self.transcript if e["round"] == round_num and not e.get("is_student") and not e.get("is_advocate")]
         contributions = "\n".join(
             f"- {e['agent'].upper()} : {e['content'][:300]}"
             for e in round_entries
@@ -605,6 +697,29 @@ class Council:
                 if round_num >= MIN_ROUNDS_BEFORE_CONSENSUS and _is_consensus(content):
                     round_consensus_count += 1
 
+            # --- Avocat du Diable (round 2+) ---
+            if self.enable_advocate and round_num >= 2:
+                advocate_text = self._build_advocate_contribution(round_num)
+                if advocate_text:
+                    entry = {
+                        "agent": "advocat",
+                        "round": round_num,
+                        "content": advocate_text,
+                        "score": 0.0,
+                        "confidence": 0.0,
+                        "breakdown": {},
+                        "timestamp": time.time(),
+                        "is_advocate": True,
+                    }
+                    self.transcript.append(entry)
+                    await bus.publish("COUNCIL_TURN", {
+                        "council_id": self.council_id,
+                        "agent": "advocat",
+                        "round": round_num,
+                        "content": advocate_text,
+                        "is_advocate": True,
+                    })
+
             # --- Évaluation présidentielle ---
             verdict = await self._evaluate_round(round_num)
             if verdict["verdict"] == "ABORT":
@@ -629,7 +744,7 @@ class Council:
             status = "consensus"
         else:
             status = "max_rounds"
-        last_contributions = [e for e in self.transcript if e["round"] == rounds_used and not e.get("is_student")]
+        last_contributions = [e for e in self.transcript if e["round"] == rounds_used and not e.get("is_student") and not e.get("is_advocate")]
         final_summary = "\n".join(
             f"[{e['agent'].upper()}] {e['content'][:200]}" for e in last_contributions
         )
@@ -652,10 +767,10 @@ class Council:
             "timestamp": str(time.time())
         })
 
-        # Métriques de scoring agrégées
-        all_scores = [e.get("score", 0) for e in self.transcript if e.get("score") is not None and not e.get("is_student")]
+        # Métriques de scoring agrégées (exclure student et advocate)
+        all_scores = [e.get("score", 0) for e in self.transcript if e.get("score") is not None and not e.get("is_student") and not e.get("is_advocate")]
         avg_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
-        agent_entries = [e for e in self.transcript if not e.get("is_student")]
+        agent_entries = [e for e in self.transcript if not e.get("is_student") and not e.get("is_advocate")]
         best_entry = max(agent_entries, key=lambda e: e.get("score", 0)) if agent_entries else {}
 
         result = {

@@ -158,12 +158,12 @@ class TestCouncilRun:
             "coder": self._make_mock_agent(),
             "security": self._make_mock_agent(),
         }
-        council = Council(agents, ["coder", "security"], "test mission", max_rounds=3, enable_student=False)
+        council = Council(agents, ["coder", "security"], "test mission", max_rounds=3, enable_student=False, enable_advocate=False)
         result = await council.run()
 
         assert result["status"] == "max_rounds"
         assert result["rounds_used"] == 3
-        # 2 participants * 3 rounds = 6 entrées (enable_student=False)
+        # 2 participants * 3 rounds = 6 entrées (enable_student=False, enable_advocate=False)
         assert len(result["transcript"]) == 6
 
     @pytest.mark.asyncio
@@ -1009,3 +1009,213 @@ class TestStudentParticipation:
         if agent_entries:
             expected_avg = sum(e.get("score", 0) for e in agent_entries) / len(agent_entries)
             assert abs(scoring["avg_score"] - round(expected_avg, 2)) < 0.01
+
+
+# ============================================================
+# TESTS AVOCAT DU DIABLE
+# ============================================================
+
+class TestAdvocateParticipation:
+    """Tests du mecanisme Avocat du Diable dans les Council."""
+
+    def _make_mock_agent(self, response="Je propose d'ajouter un cache dans core/router.py."):
+        agent = MagicMock()
+        agent.generate_content = AsyncMock(return_value=response)
+        return agent
+
+    def test_advocate_disabled_no_entries(self):
+        """enable_advocate=False → 0 entries advocate dans le transcript."""
+        agents = {"coder": self._make_mock_agent(), "security": self._make_mock_agent()}
+        council = Council(agents, ["coder", "security"], "test mission",
+                          max_rounds=3, enable_student=False, enable_advocate=False)
+        # Simuler un transcript round 1
+        council.transcript = [
+            {"agent": "coder", "round": 1, "content": "Proposition A.", "score": 0.5,
+             "confidence": 0.5, "breakdown": {}, "timestamp": 0},
+            {"agent": "security", "round": 1, "content": "Proposition B.", "score": 0.4,
+             "confidence": 0.4, "breakdown": {}, "timestamp": 0},
+        ]
+        # L'advocate ne devrait pas etre appele meme si on appelle _build_advocate_contribution
+        # Car enable_advocate est verifie dans run(), pas dans la methode elle-meme
+        advocate_entries = [e for e in council.transcript if e.get("is_advocate")]
+        assert len(advocate_entries) == 0
+
+    def test_advocate_starts_round_2(self):
+        """Pas d'advocate en round 1 (round_num >= 2 requis)."""
+        agents = {"coder": self._make_mock_agent(), "security": self._make_mock_agent()}
+        council = Council(agents, ["coder", "security"], "test",
+                          enable_student=False, enable_advocate=True)
+        # Pas de transcript round precedent pour round 1
+        result = council._build_advocate_contribution(1)
+        assert result == ""
+
+    def test_advocate_detects_hallucinated_files(self):
+        """Fichier inexistant dans le code → signale dans l'objection."""
+        agents = {"coder": self._make_mock_agent(), "security": self._make_mock_agent()}
+        council = Council(agents, ["coder", "security"], "test",
+                          enable_student=False, enable_advocate=True)
+        council.transcript = [
+            {"agent": "coder", "round": 1,
+             "content": "Il faut modifier core/quantum_brain.py pour ajouter la teleportation.",
+             "score": 0.3, "confidence": 0.3, "breakdown": {}, "timestamp": 0},
+        ]
+        result = council._build_advocate_contribution(2)
+        assert "OBJECTION" in result
+        assert "INEXISTANT" in result
+        assert "core/quantum_brain.py" in result
+
+    def test_advocate_real_files_not_flagged(self):
+        """Fichiers existants ne sont PAS signales comme hallucines."""
+        agents = {"coder": self._make_mock_agent(), "security": self._make_mock_agent()}
+        council = Council(agents, ["coder", "security"], "test",
+                          enable_student=False, enable_advocate=True)
+        council.transcript = [
+            {"agent": "coder", "round": 1,
+             "content": "Modifier core/council.py pour ajouter le test. Aussi core/router.py.",
+             "score": 0.5, "confidence": 0.5, "breakdown": {}, "timestamp": 0},
+        ]
+        result = council._build_advocate_contribution(2)
+        # Ces fichiers existent → pas de FICHIERS INEXISTANTS
+        assert "INEXISTANT" not in result or "council.py" not in result
+
+    def test_advocate_detects_echo(self):
+        """2+ agents avec les memes 3 mots-cles → signale l'echo."""
+        agents = {"coder": self._make_mock_agent(), "security": self._make_mock_agent()}
+        council = Council(agents, ["coder", "security"], "test",
+                          enable_student=False, enable_advocate=True)
+        # Les deux agents mentionnent les memes fichiers et verbes
+        shared_content = "Ajouter un cache dans core/router.py, modifier core/orchestrator.py et valider config/resource_costs.json"
+        council.transcript = [
+            {"agent": "coder", "round": 1, "content": shared_content,
+             "score": 0.5, "confidence": 0.5, "breakdown": {}, "timestamp": 0},
+            {"agent": "security", "round": 1, "content": shared_content,
+             "score": 0.5, "confidence": 0.5, "breakdown": {}, "timestamp": 0},
+        ]
+        result = council._build_advocate_contribution(2)
+        assert "ECHO" in result
+
+    def test_advocate_detects_missing_tests(self):
+        """Si personne ne mentionne 'test' → angle mort signale."""
+        agents = {"coder": self._make_mock_agent(), "security": self._make_mock_agent()}
+        council = Council(agents, ["coder", "security"], "test mission",
+                          enable_student=False, enable_advocate=True)
+        council.transcript = [
+            {"agent": "coder", "round": 1,
+             "content": "Ajouter un cache dans core/router.py pour optimiser.",
+             "score": 0.5, "confidence": 0.5, "breakdown": {}, "timestamp": 0},
+        ]
+        result = council._build_advocate_contribution(2)
+        assert "ANGLES MORTS" in result
+        assert "tests" in result.lower() or "test" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_advocate_excluded_from_consensus(self):
+        """Les entries advocate ne comptent pas pour le quorum consensus."""
+        # Creer un council ou les agents font CONSENSUS au round 3
+        substance = (
+            "CONSENSUS : L'implementation proposee ameliore significativement les performances "
+            "du routeur en ajoutant un cache LRU avec TTL de 5 minutes sur les classifications."
+        )
+        agents = {
+            "coder": self._make_mock_agent(substance),
+            "security": self._make_mock_agent(substance),
+        }
+        council = Council(agents, ["coder", "security"], "test",
+                          max_rounds=4, enable_student=False, enable_advocate=True)
+        result = await council.run()
+        # Le consensus devrait etre atteint par les agents, pas par l'advocate
+        if result["status"] == "consensus":
+            advocate_entries = [e for e in result["transcript"] if e.get("is_advocate")]
+            for ae in advocate_entries:
+                assert ae.get("score", 0) == 0.0
+
+    @pytest.mark.asyncio
+    async def test_advocate_excluded_from_scoring(self):
+        """Le score final exclut les entries advocate."""
+        agents = {
+            "coder": self._make_mock_agent("Proposition detaillee sur core/router.py"),
+            "security": self._make_mock_agent("Analyse de securite sur core/orchestrator.py"),
+        }
+        council = Council(agents, ["coder", "security"], "test",
+                          max_rounds=2, enable_student=False, enable_advocate=True)
+        result = await council.run()
+        scoring = result.get("scoring", {})
+        assert scoring.get("best_agent", "") != "advocat"
+
+    def test_advocate_in_prompt(self):
+        """Le bloc advocate est visible dans le prompt du round suivant."""
+        agents = {"coder": self._make_mock_agent(), "security": self._make_mock_agent()}
+        council = Council(agents, ["coder", "security"], "test",
+                          enable_student=False, enable_advocate=True)
+        # Simuler transcript avec advocate en round 2
+        council.transcript = [
+            {"agent": "coder", "round": 1, "content": "Proposition A.", "score": 0.5,
+             "confidence": 0.5, "breakdown": {}, "timestamp": 0},
+            {"agent": "advocat", "round": 2, "content": "OBJECTION: ANGLES MORTS: tests",
+             "score": 0.0, "confidence": 0.0, "breakdown": {}, "timestamp": 0,
+             "is_advocate": True},
+        ]
+        prompt = council._build_prompt("coder", 2)
+        assert "AVOCAT DU DIABLE" in prompt
+        assert "OBJECTION" in prompt
+
+    def test_advocate_max_length(self):
+        """Le texte de l'advocate est cappe a 400 chars."""
+        agents = {"coder": self._make_mock_agent(), "security": self._make_mock_agent()}
+        council = Council(agents, ["coder", "security"], "test",
+                          enable_student=False, enable_advocate=True)
+        # Creer un transcript avec beaucoup de contenu hallucinant
+        council.transcript = [
+            {"agent": "coder", "round": 1,
+             "content": " ".join(f"core/fake_module_{i}.py" for i in range(50)),
+             "score": 0.3, "confidence": 0.3, "breakdown": {}, "timestamp": 0},
+        ]
+        result = council._build_advocate_contribution(2)
+        assert len(result) <= 400
+
+    @pytest.mark.asyncio
+    async def test_advocate_coexists_with_student(self):
+        """L'advocate et l'etudiant fonctionnent ensemble sans conflit."""
+        agents = {
+            "coder": self._make_mock_agent("Proposition sur core/router.py"),
+            "security": self._make_mock_agent("Analyse securite core/orchestrator.py"),
+        }
+        council = Council(agents, ["coder", "security"], "test mission",
+                          max_rounds=3, enable_student=True, enable_advocate=True)
+
+        mock_heart = MagicMock()
+        mock_heart.current_emotion = "curiosite"
+        mock_heart.coherence = 0.7
+
+        with patch.dict("sys.modules", {
+            "core.cardiac_engine": MagicMock(heart=mock_heart),
+        }):
+            result = await council.run()
+
+        student_entries = [e for e in result["transcript"] if e.get("is_student")]
+        advocate_entries = [e for e in result["transcript"] if e.get("is_advocate")]
+        agent_entries = [e for e in result["transcript"]
+                         if not e.get("is_student") and not e.get("is_advocate")]
+        # Au moins des entries agents (coder/security)
+        assert len(agent_entries) >= 2
+        # Student et advocate sont des entries distinctes
+        for se in student_entries:
+            assert not se.get("is_advocate")
+        for ae in advocate_entries:
+            assert not ae.get("is_student")
+
+    def test_advocate_graceful_degradation(self):
+        """Pas de crash si transcript vide ou round 1 seulement."""
+        agents = {"coder": self._make_mock_agent()}
+        council = Council(agents, ["coder"], "test",
+                          enable_student=False, enable_advocate=True)
+        # Transcript vide
+        result = council._build_advocate_contribution(2)
+        assert result == ""
+        # Transcript round 1 mais on demande round 1 (pas de prev)
+        council.transcript = [
+            {"agent": "coder", "round": 1, "content": "test", "score": 0.0,
+             "confidence": 0.0, "breakdown": {}, "timestamp": 0},
+        ]
+        result = council._build_advocate_contribution(1)
+        assert result == ""

@@ -247,6 +247,21 @@ class CardiacEngine:
         except RuntimeError:
             pass  # Pas de boucle asyncio active (tests synchrones)
 
+    def _try_publish_emotion_change(self, emotion: str, intensity: float, cause: str):
+        """Publie CARDIAC_EMOTION_CHANGE si une boucle asyncio est active."""
+        try:
+            loop = asyncio.get_running_loop()
+            from core.event_bus.bus import bus
+            loop.create_task(bus.publish("CARDIAC_EMOTION_CHANGE", {
+                "emotion": emotion,
+                "intensity": round(intensity, 2),
+                "cause": cause,
+                "prev_emotion": self._prev_emotion,
+                "timestamp": time.time(),
+            }))
+        except RuntimeError:
+            pass  # Pas de boucle asyncio active (tests synchrones)
+
     # ============================================================
     # Phase 1 : Réactions émotionnelles
     # ============================================================
@@ -293,6 +308,8 @@ class CardiacEngine:
                 self._emotion_since = time.time()
                 self._emotion_cause = stimulus
                 self._transition_count += 1
+                # Publier la transition émotionnelle pour le réseau synaptique
+                self._try_publish_emotion_change(emotion, intensity, stimulus)
             self.current_emotion = emotion
             self.emotion_intensity = min(1.0, intensity)
 

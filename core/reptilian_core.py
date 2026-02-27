@@ -369,7 +369,9 @@ class ReptilianCore:
 
         # SHED — threat >= 5 (limiter aux routines légères)
         elif self.threat_level >= 5.0 and self._can_trigger("SHED", now):
-            self._activate_shed(now)
+            # Déterminer la cause principale pour graduer la sévérité
+            shed_cause = max(threats, key=threats.get) if threats else ""
+            self._activate_shed(now, cause=shed_cause)
             self._condition_threat_from_current(threats, "SHED")
             await self._publish_alert("SHED", threats)
 
@@ -409,12 +411,17 @@ class ReptilianCore:
         logger.warning(f"REPTILIEN: FREEZE activé (menace={self.threat_level:.1f})")
 
     # --- SHED ---
-    def _activate_shed(self, now: float):
-        """Limiter aux routines légères (coût <= 2)."""
+    def _activate_shed(self, now: float, cause: str = ""):
+        """Limiter aux routines légères. max_cost graduée selon la cause.
+        Budget → max_cost=4 (permet GRIMOIRE/REFACTOR).
+        Erreurs/hallucinations → max_cost=2 (strict)."""
         self._shed_until = now + 120  # 2 minutes de shed
-        self._shed_max_cost = 2
+        if cause == "budget":
+            self._shed_max_cost = 4
+        else:
+            self._shed_max_cost = 2
         self._record_reflex("SHED")
-        logger.warning(f"REPTILIEN: SHED activé (menace={self.threat_level:.1f}, max_cost={self._shed_max_cost})")
+        logger.warning(f"REPTILIEN: SHED activé (menace={self.threat_level:.1f}, max_cost={self._shed_max_cost}, cause={cause or 'unknown'})")
 
     # --- FLINCH ---
     def _activate_flinch(self, threats: Dict[str, float]):

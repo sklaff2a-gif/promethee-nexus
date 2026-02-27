@@ -54,7 +54,11 @@ BASE_SALIENCE: Dict[str, float] = {
 }
 
 # Emotions considerees "fortes" pour le bonus de saillance
-STRONG_EMOTIONS = {"rage", "panique", "extase", "desespoir", "euphorie", "terreur"}
+# V2: ajout frustration/determination/enthousiasme (emotions courantes mais intenses)
+STRONG_EMOTIONS = {
+    "rage", "panique", "extase", "desespoir", "euphorie", "terreur",
+    "frustration", "determination", "enthousiasme",
+}
 
 
 # ─── Dataclasses ─────────────────────────────────────────────────────────────
@@ -208,6 +212,10 @@ class Hippocampus:
             from core.cardiac_engine import heart
             affect["cardiac_emotion"] = heart.current_emotion
             affect["cardiac_bpm"] = heart.bpm
+            # Transition emotionnelle (pour bonus saillance)
+            if heart._prev_emotion and heart._prev_emotion != heart.current_emotion:
+                affect["prev_emotion"] = heart._prev_emotion
+                affect["emotion_cause"] = heart._emotion_cause
         except Exception:
             pass
 
@@ -272,6 +280,15 @@ class Hippocampus:
         # Bonus succes apres streak >= 3 : +0.2
         if event_type == "routine_success" and error_streak >= 3:
             bonus += 0.2
+
+        # Bonus dopamine surge : +0.1 si dopamine > 0.7
+        dopamine = affect.get("dopamine_level", 0.5)
+        if dopamine > 0.7:
+            bonus += 0.1
+
+        # Bonus transition emotionnelle : +0.1 si changement d'emotion
+        if affect.get("emotion_cause") and affect.get("prev_emotion"):
+            bonus += 0.1
 
         return min(base + bonus, 1.0)
 

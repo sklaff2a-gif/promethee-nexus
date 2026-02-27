@@ -1308,3 +1308,123 @@ class TestOrganIntegration:
         # desire_intensity mis a jour
         assert network.nodes[cur_nid]["affect"]["desire_intensity"] == 42.0
         assert network.nodes[mai_nid]["affect"]["desire_intensity"] == 88.0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TestEmotionalSynapses — Synapses emotionnelles runtime via CARDIAC_EMOTION_CHANGE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestEmotionalSynapses:
+    """Tests du handler _on_cardiac_emotion_change."""
+
+    @pytest.mark.asyncio
+    async def test_emotion_change_creates_emotional_synapse(self, network):
+        """Transition emotionnelle forte cree une synapse 'emotional'."""
+        # Pre-creer un noeud cause dans le reseau
+        cause_concept = "failure"
+        network.ensure_node(cause_concept, "event", 0.5)
+
+        await network._on_cardiac_emotion_change({
+            "emotion": "frustration",
+            "intensity": 0.8,
+            "cause": cause_concept,
+        })
+        # Verifier que le noeud emotion a ete cree
+        emotion_nid = _make_node_id("emotion:frustration")
+        assert emotion_nid in network.nodes
+        assert network.nodes[emotion_nid]["node_type"] == "affect"
+
+        # Verifier la synapse emotionnelle
+        cause_nid = _make_node_id(cause_concept)
+        key = _synapse_key(emotion_nid, cause_nid)
+        assert key in network.synapses
+        assert network.synapses[key]["synapse_type"] == "emotional"
+
+    @pytest.mark.asyncio
+    async def test_low_intensity_ignored(self, network):
+        """Intensite < 0.6 ne cree pas de synapse."""
+        network.ensure_node("test_cause", "event", 0.5)
+
+        await network._on_cardiac_emotion_change({
+            "emotion": "serenite",
+            "intensity": 0.3,
+            "cause": "test_cause",
+        })
+        emotion_nid = _make_node_id("emotion:serenite")
+        assert emotion_nid not in network.nodes
+
+    @pytest.mark.asyncio
+    async def test_emotion_linked_to_cause(self, network):
+        """Le noeud emotion est lie a la cause par synapse emotionnelle."""
+        cause = "success"
+        network.ensure_node(cause, "event", 0.5)
+
+        await network._on_cardiac_emotion_change({
+            "emotion": "enthousiasme",
+            "intensity": 0.9,
+            "cause": cause,
+        })
+
+        emotion_nid = _make_node_id("emotion:enthousiasme")
+        cause_nid = _make_node_id(cause)
+        key = _synapse_key(emotion_nid, cause_nid)
+        assert key in network.synapses
+        syn = network.synapses[key]
+        assert syn["synapse_type"] == "emotional"
+        assert syn["weight"] == pytest.approx(0.9 * 0.5, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_emotion_linked_to_drive(self, network):
+        """Si pulsion dominante existe dans le reseau, synapse emotionnelle creee."""
+        # Pre-creer le noeud pulsion
+        drive_nid = network.ensure_node("pulsion:curiosite", "desire", 0.5)
+        assert drive_nid
+
+        mock_drive = MagicMock()
+        mock_drive.name = "CURIOSITE"
+        mock_drive.deprivation = 80.0
+        mock_desires = MagicMock()
+        mock_desires.drives = {"CURIOSITE": mock_drive}
+
+        with patch.dict("sys.modules", {
+            "core.desire_engine": MagicMock(desires=mock_desires),
+        }):
+            await network._on_cardiac_emotion_change({
+                "emotion": "enthousiasme",
+                "intensity": 0.7,
+                "cause": "",
+            })
+
+        emotion_nid = _make_node_id("emotion:enthousiasme")
+        key = _synapse_key(emotion_nid, drive_nid)
+        assert key in network.synapses
+        assert network.synapses[key]["synapse_type"] == "emotional"
+
+    @pytest.mark.asyncio
+    async def test_repeated_emotion_strengthens(self, network):
+        """Meme emotion repetee renforce le poids de la synapse."""
+        cause = "failure"
+        network.ensure_node(cause, "event", 0.5)
+
+        await network._on_cardiac_emotion_change({
+            "emotion": "frustration", "intensity": 0.7, "cause": cause,
+        })
+        emotion_nid = _make_node_id("emotion:frustration")
+        cause_nid = _make_node_id(cause)
+        key = _synapse_key(emotion_nid, cause_nid)
+        w1 = network.synapses[key]["weight"]
+
+        # Deuxieme fois -> renforcement +0.05
+        await network._on_cardiac_emotion_change({
+            "emotion": "frustration", "intensity": 0.7, "cause": cause,
+        })
+        w2 = network.synapses[key]["weight"]
+        assert w2 == pytest.approx(w1 + 0.05, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_no_crash_on_empty_event(self, network):
+        """Pas de crash si event vide ou incomplet."""
+        await network._on_cardiac_emotion_change({})
+        await network._on_cardiac_emotion_change({"emotion": "", "intensity": 0.8})
+        await network._on_cardiac_emotion_change({"emotion": "rage"})
+        # Pas d'exception = OK
