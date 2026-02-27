@@ -313,6 +313,12 @@ async def lifespan(app: FastAPI):
     hippocampus.init()
     print(f"   🧠 HIPPOCAMPE: Mémoire épisodique active ({len(hippocampus._episodes)} épisodes, {len(hippocampus._arcs)} arcs).")
 
+    # --- NEURAL COMPILER (Knowledge Distillation) ---
+    from core.neural_compiler import compiler as neural_compiler
+    neural_compiler.init()
+    print(f"   🧬 COMPILER: {len(neural_compiler._rules)} règles compilées, "
+          f"{len(neural_compiler._observations)} observations.")
+
     # --- IMPACT ANALYZER (Dépendances & Santé) ---
     from core.impact_analyzer import analyzer as impact_analyzer
     impact_analyzer.init()
@@ -570,6 +576,12 @@ async def hippocampus_status():
     """Retourne l'etat de la memoire episodique (hippocampe)."""
     from core.hippocampus import hippocampus
     return hippocampus.get_stats()
+
+@app.get("/api/compiler/status")
+async def compiler_status():
+    """Retourne l'état du Neural Compiler (distillation LLM)."""
+    from core.neural_compiler import compiler
+    return compiler.get_stats()
 
 @app.get("/api/soliloque/status")
 async def soliloque_status():

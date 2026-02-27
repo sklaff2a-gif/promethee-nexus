@@ -46,5 +46,9 @@
   "SOLILOQUE_INTERNE": {
     "cost": 2,
     "description": "Dialogue introspectif multi-tours avec compagnon intérieur (local only)"
+  },
+  "NEURAL_COMPILE": {
+    "cost": 0,
+    "description": "Compile observations LLM en règles déterministes, 0 appel LLM"
   }
 }

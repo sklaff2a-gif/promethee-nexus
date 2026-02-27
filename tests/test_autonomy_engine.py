@@ -1873,15 +1873,17 @@ class TestBudgetPostEpuisement:
 
     @pytest.mark.asyncio
     async def test_post_budget_executes_free_routine(self):
-        """En exhausted, AUDIT_STRUCTURE ou MEMORY_CLEANUP s'exécutent."""
+        """En exhausted, AUDIT_STRUCTURE, MEMORY_CLEANUP ou NEURAL_COMPILE s'exécutent."""
         self.engine.routine_history = []  # Pas de cooldown
         with patch.object(self.engine, "_execute_audit_structure", new_callable=AsyncMock,
                          return_value={"status": "success", "result": "audit ok"}) as mock_audit, \
              patch.object(self.engine, "_execute_memory_cleanup", new_callable=AsyncMock,
-                         return_value={"status": "success", "result": "cleanup ok"}) as mock_cleanup:
+                         return_value={"status": "success", "result": "cleanup ok"}) as mock_cleanup, \
+             patch.object(self.engine, "_execute_neural_compile", new_callable=AsyncMock,
+                         return_value={"status": "success", "result": "compile ok"}) as mock_compile:
             await self.engine._execute_post_budget_routine()
-            # Au moins une des deux doit avoir été appelée
-            assert mock_audit.called or mock_cleanup.called
+            # Au moins une des trois doit avoir été appelée
+            assert mock_audit.called or mock_cleanup.called or mock_compile.called
 
     @pytest.mark.asyncio
     async def test_post_budget_no_cost(self):
@@ -1891,6 +1893,8 @@ class TestBudgetPostEpuisement:
         initial_budget = self.engine.daily_budget_used
         initial_count = self.engine.daily_count
         with patch.object(self.engine, "_execute_audit_structure", new_callable=AsyncMock,
+                         return_value={"status": "success", "result": "ok"}), \
+             patch.object(self.engine, "_execute_neural_compile", new_callable=AsyncMock,
                          return_value={"status": "success", "result": "ok"}):
             await self.engine._execute_post_budget_routine()
         assert self.engine.daily_budget_used == initial_budget

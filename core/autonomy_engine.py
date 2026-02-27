@@ -23,7 +23,7 @@ DAILY_BUDGET_POINTS = 200
 BUDGET_RESERVE_POINTS = 20
 
 # Routines 0-LLM qui continuent même quand le budget est épuisé
-POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP"}
+POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
 
 def _load_resource_costs() -> dict:
     """Charge les coûts par routine depuis config/resource_costs.json."""
@@ -1755,6 +1755,8 @@ class AutonomyEngine:
                 response = await self._execute_audit_structure()
             elif intent == "MEMORY_CLEANUP":
                 response = await self._execute_memory_cleanup()
+            elif intent == "NEURAL_COMPILE":
+                response = await self._execute_neural_compile()
             if response is None:
                 continue
             # Tracking (coût 0 — budget intact)
@@ -1766,6 +1768,21 @@ class AutonomyEngine:
             return
         # Toutes les routines gratuites en cooldown
         logger.info("[AUTONOMY] Post-budget: toutes routines gratuites en cooldown.")
+
+    async def _execute_neural_compile(self) -> dict:
+        """Compile les observations LLM en règles déterministes. 0 LLM."""
+        try:
+            from core.neural_compiler import compiler
+            created = compiler.compile_rules()
+            stats = compiler.get_stats()
+            return {
+                "status": "success",
+                "result": (f"Neural compile: {created} règles créées/MAJ. "
+                           f"Total: {stats['rules_count']} règles, "
+                           f"{stats['intercept_rate']:.0%} interceptions.")
+            }
+        except Exception as e:
+            return {"status": "error", "result": f"Neural compile error: {e}"}
 
     async def _execute_memory_cleanup(self) -> dict:
         """Nettoie la mémoire RAG : purge les anciennes ET les mauvaise qualité.

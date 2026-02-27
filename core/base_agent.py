@@ -425,7 +425,25 @@ class BaseAgent:
             logger.warning(f"[{self.name}] Échec évaluation complexité (fallback local) : {e}")
             return False
 
+    def _record_for_compiler(self, prompt: str, response: str, was_cloud: bool):
+        """Enregistre un appel LLM dans le Neural Compiler pour distillation."""
+        try:
+            from core.neural_compiler import compiler
+            compiler.record_observation(self.name, prompt, response, -1.0, was_cloud)
+        except Exception:
+            pass
+
     async def generate_content(self, prompt: str) -> str:
+        # ===== NEURAL COMPILER: Tentative réponse compilée =====
+        try:
+            from core.neural_compiler import compiler
+            compiled = compiler.try_intercept(self.name, prompt)
+            if compiled is not None:
+                self.log_thought("⚡ COMPILED: Réponse compilée (0 LLM)", type="info")
+                return self._sanitize_response(self._strip_cot(compiled), self.name)
+        except Exception:
+            pass  # Fallback transparent — ne jamais bloquer le flux
+
         # Etape 1 : RAG (Toujours utile)
         context_memory = ""
         mem1 = self.recall(prompt, collection="collective_wisdom")
@@ -544,7 +562,9 @@ class BaseAgent:
                             # Si succès Cloud sur tâche complexe, on apprend
                             if len(cloud_response) > 50:
                                 self.remember(f"Q: {prompt}\nA: {cloud_response}", metadata={"source": used_model, "trigger": "cloud_escalation"})
-                            return self._sanitize_response(self._strip_cot(cloud_response), self.name)
+                            final = self._sanitize_response(self._strip_cot(cloud_response), self.name)
+                            self._record_for_compiler(prompt, final, was_cloud=True)
+                            return final
                     except Exception as e:
                         # Détecter les erreurs 429 (quota exceeded)
                         err_str = str(e)
@@ -568,7 +588,9 @@ class BaseAgent:
 
         # Exécution Locale (avec streaming temps réel)
         result = await self._call_ollama_stream(full_prompt, local_model)
-        return self._sanitize_response(self._strip_cot(result), self.name)
+        final = self._sanitize_response(self._strip_cot(result), self.name)
+        self._record_for_compiler(prompt, final, was_cloud=False)
+        return final
 
     @classmethod
     def _activate_cloud_cooldown(cls):
