@@ -501,20 +501,38 @@ class NeuralCompiler:
             if quality < 0:
                 return
             agent = data.get("agent", "")
+            participants = data.get("participants", [])
+
+            # Construire le set d'agents à matcher.
+            # Les routines autonomes utilisent des pseudo-agents (_council, _memory_cleanup, etc.)
+            # mais les observations sont enregistrées avec le vrai nom de l'agent
+            # qui a appelé generate_content (strategist, architect, security, etc.).
+            match_agents = set()
+            if agent.startswith("_"):
+                # Routine système : matcher TOUS les agents core récents
+                match_agents = set(_CORE_AGENTS)
+            else:
+                match_agents.add(agent)
+            # Ajouter les participants du council
+            for p in participants:
+                if isinstance(p, str):
+                    match_agents.add(p)
+
             # Mettre à jour les observations récentes (< 5 min) sans quality
             cutoff = time.time() - 300
             updated = 0
             for obs in reversed(self._observations):
                 if obs.timestamp < cutoff:
                     break
-                if obs.quality < 0 and obs.fingerprint.agent_name == agent:
+                if obs.quality < 0 and obs.fingerprint.agent_name in match_agents:
                     obs.quality = quality
                     updated += 1
             if updated > 0:
                 logger.debug(f"COMPILER: {updated} observations mises à jour (quality={quality:.2f})")
 
-            # Feedback sur les intercepts récents pour cette agent
-            self._feedback_recent_intercept(agent, quality)
+            # Feedback sur les intercepts récents pour ces agents
+            for a in match_agents:
+                self._feedback_recent_intercept(a, quality)
 
             # Auto-compilation toutes les 50 observations
             if self._total_observations > 0 and self._total_observations % 50 == 0:

@@ -1273,3 +1273,167 @@ class TestStaleness:
              patch("core.neural_compiler.random.random", return_value=0.5):
             result = c.try_intercept("coder", "Génère du code Python")
         assert result is not None  # Récemment utilisée = encore valide
+
+
+# ============================================================
+# 16. TestPseudoAgentFeedback
+# ============================================================
+
+class TestPseudoAgentFeedback:
+    """Vérifie que les pseudo-agents (_council, _memory_cleanup, etc.)
+    propagent correctement le feedback aux observations des vrais agents."""
+
+    def _make_obs(self, agent_name, age_seconds=0):
+        from core.neural_compiler import Observation, PromptFingerprint, _response_hash
+        fp = PromptFingerprint(
+            agent_name=agent_name, task_type="council_debate",
+            prompt_length=1, has_rag_context=False, has_code_block=False,
+            has_json_request=False, dominant_keywords=["test"],
+            markers=[], mood="neutre", cognitive_state="standard",
+            dopamine_bucket=1, threat_bucket=0, error_streak=0,
+        )
+        return Observation(
+            obs_id=f"obs_{agent_name}_{age_seconds}",
+            timestamp=time.time() - age_seconds,
+            fingerprint=fp, response_text=f"réponse {agent_name}",
+            response_hash=_response_hash(f"réponse {agent_name} {age_seconds}"),
+            response_structure="text", quality=-1.0, was_cloud=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_pseudo_agent_council_updates_all_core(self, isolate_compiler):
+        """_council met à jour les observations de TOUS les agents core récents."""
+        c = isolate_compiler
+        obs_strat = self._make_obs("strategist")
+        obs_arch = self._make_obs("architect")
+        obs_sec = self._make_obs("security")
+        c._observations.extend([obs_strat, obs_arch, obs_sec])
+
+        await c._on_routine_complete({
+            "agent": "_council",
+            "intent": "COUNCIL_DEBATE",
+            "quality_score": 0.85,
+        })
+        assert obs_strat.quality == 0.85
+        assert obs_arch.quality == 0.85
+        assert obs_sec.quality == 0.85
+
+    @pytest.mark.asyncio
+    async def test_pseudo_agent_memory_consolidation(self, isolate_compiler):
+        """_memory_consolidation met à jour les observations des agents core récents."""
+        c = isolate_compiler
+        obs = self._make_obs("coder")
+        c._observations.append(obs)
+
+        await c._on_routine_complete({
+            "agent": "_memory_consolidation",
+            "intent": "MEMORY_CONSOLIDATION",
+            "quality_score": 1.0,
+        })
+        assert obs.quality == 1.0
+
+    @pytest.mark.asyncio
+    async def test_pseudo_agent_does_not_update_old_obs(self, isolate_compiler):
+        """Les pseudo-agents n'affectent pas les observations > 5 min."""
+        c = isolate_compiler
+        obs = self._make_obs("strategist", age_seconds=600)
+        c._observations.append(obs)
+
+        await c._on_routine_complete({
+            "agent": "_council",
+            "intent": "COUNCIL_DEBATE",
+            "quality_score": 0.9,
+        })
+        assert obs.quality == -1.0  # Inchangé
+
+    @pytest.mark.asyncio
+    async def test_pseudo_agent_only_updates_unrated(self, isolate_compiler):
+        """Les pseudo-agents ne réécrivent pas une quality déjà attribuée."""
+        c = isolate_compiler
+        obs = self._make_obs("architect")
+        obs.quality = 0.6  # Déjà évaluée
+        c._observations.append(obs)
+
+        await c._on_routine_complete({
+            "agent": "_council",
+            "intent": "COUNCIL_DEBATE",
+            "quality_score": 0.95,
+        })
+        assert obs.quality == 0.6  # Pas écrasée
+
+    @pytest.mark.asyncio
+    async def test_real_agent_only_updates_own_obs(self, isolate_compiler):
+        """Un vrai agent (non pseudo) ne met à jour QUE ses observations."""
+        c = isolate_compiler
+        obs_coder = self._make_obs("coder")
+        obs_sec = self._make_obs("security")
+        c._observations.extend([obs_coder, obs_sec])
+
+        await c._on_routine_complete({
+            "agent": "coder",
+            "intent": "EXPANSION_CODE",
+            "quality_score": 0.7,
+        })
+        assert obs_coder.quality == 0.7
+        assert obs_sec.quality == -1.0  # Inchangé
+
+    @pytest.mark.asyncio
+    async def test_participants_added_to_match(self, isolate_compiler):
+        """Les participants du council sont ajoutés au matching."""
+        c = isolate_compiler
+        obs_strat = self._make_obs("strategist")
+        obs_arch = self._make_obs("architect")
+        obs_coder = self._make_obs("coder")  # Pas participant
+        c._observations.extend([obs_strat, obs_arch, obs_coder])
+
+        await c._on_routine_complete({
+            "agent": "unknown_routine",
+            "intent": "COUNCIL_DEBATE",
+            "quality_score": 0.8,
+            "participants": ["strategist", "architect"],
+        })
+        assert obs_strat.quality == 0.8
+        assert obs_arch.quality == 0.8
+        assert obs_coder.quality == -1.0  # Pas participant
+
+    @pytest.mark.asyncio
+    async def test_pseudo_agent_with_participants(self, isolate_compiler):
+        """_council avec participants : les deux sources de matching fonctionnent."""
+        c = isolate_compiler
+        # _council → tous les core agents
+        # + participants explicites
+        obs_writer = self._make_obs("writer")
+        c._observations.append(obs_writer)
+
+        await c._on_routine_complete({
+            "agent": "_council",
+            "intent": "COUNCIL_DEBATE",
+            "quality_score": 0.75,
+            "participants": ["strategist", "architect", "security"],
+        })
+        # writer est un core agent → matché par _council (startswith("_"))
+        assert obs_writer.quality == 0.75
+
+    @pytest.mark.asyncio
+    async def test_pseudo_agent_feeds_back_intercepts(self, isolate_compiler):
+        """Les pseudo-agents propagent le feedback aux intercepts des agents core."""
+        from core.neural_compiler import CompiledRule
+        c = isolate_compiler
+        rule = CompiledRule(
+            rule_id="r_test", agent_name="security", task_type="security_audit",
+            condition_mood=None, condition_cognitive=None, condition_keywords=[],
+            response_template="AUDIT OK", response_structure="text",
+            confidence=0.9, observations_count=15, success_rate=0.85,
+            intercept_count=3, positive_feedback=10, negative_feedback=1,
+            created_at=time.time(), last_used=time.time(),
+        )
+        c._rules.append(rule)
+        c._last_intercepts["security"] = ("r_test", time.time())
+
+        await c._on_routine_complete({
+            "agent": "_council",
+            "intent": "COUNCIL_DEBATE",
+            "quality_score": 0.9,
+        })
+        # _council → match tous les core agents → feedback security intercept
+        assert rule.positive_feedback == 11
