@@ -76,6 +76,67 @@ _ACTION_VERBS = re.compile(
 _CODE_BLOCK = re.compile(r'```(?:python)?\s*\n.+?\n```', re.DOTALL)
 
 
+# --- Cache des fichiers réels du projet (sanitizer) ---
+_REAL_FILES_CACHE = None
+
+
+def _get_real_files() -> set:
+    """Retourne l'ensemble des chemins relatifs des fichiers .py réels du projet (cached)."""
+    global _REAL_FILES_CACHE
+    if _REAL_FILES_CACHE is not None:
+        return _REAL_FILES_CACHE
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    result = set()
+    # Mêmes répertoires que get_project_structure()
+    for subdir in ["core", "Agents", "core/grimoire", "core/event_bus",
+                    "core/capabilities", "core/memory"]:
+        dir_path = os.path.join(project_root, subdir.replace("/", os.sep))
+        if os.path.isdir(dir_path):
+            for f in os.listdir(dir_path):
+                if f.endswith(".py"):
+                    result.add(f"{subdir}/{f}")
+    # Racine
+    for f in os.listdir(project_root):
+        if f.endswith(".py") and os.path.isfile(os.path.join(project_root, f)):
+            result.add(f)
+    # config/ et tests/
+    for subdir in ["config", "tests"]:
+        dir_path = os.path.join(project_root, subdir)
+        if os.path.isdir(dir_path):
+            for f in os.listdir(dir_path):
+                if f.endswith(".py"):
+                    result.add(f"{subdir}/{f}")
+    _REAL_FILES_CACHE = result
+    return _REAL_FILES_CACHE
+
+
+def _find_closest_file(path: str) -> str:
+    """Trouve le fichier réel le plus proche par basename.
+    1. Match exact → retourne tel quel
+    2. Même basename dans le projet → retourne (préfère même parent si ambiguïté)
+    3. Aucun match → retourne ''
+    """
+    real_files = _get_real_files()
+    if path in real_files:
+        return path
+    basename = os.path.basename(path.replace("\\", "/"))
+    if not basename:
+        return ""
+    # Chercher toutes les correspondances par basename
+    candidates = [f for f in real_files if f.endswith("/" + basename) or f == basename]
+    if not candidates:
+        return ""
+    if len(candidates) == 1:
+        return candidates[0]
+    # Préférer le même répertoire parent
+    parent = path.rsplit("/", 1)[0] if "/" in path else ""
+    for c in candidates:
+        c_parent = c.rsplit("/", 1)[0] if "/" in c else ""
+        if c_parent == parent:
+            return c
+    return candidates[0]
+
+
 def _score_argument(content: str) -> dict:
     """Score un argument de Council sur des critères objectifs.
     Retourne {"score": 0.0-1.0, "confidence": 0.0-1.0, "breakdown": {...}}."""
@@ -374,7 +435,7 @@ class Council:
             files_cited = _FILE_PATTERN.findall(entry.get("content", ""))
             hallucinated = []
             for fpath in files_cited:
-                clean = fpath.rstrip(".,;:)\"'")
+                clean = fpath.rstrip(".,;:)\"'`*")
                 full = os.path.join(project_root, clean)
                 if not os.path.exists(full):
                     hallucinated.append(clean)
@@ -442,8 +503,8 @@ class Council:
         for entry in prev_entries:
             files_cited = _FILE_PATTERN.findall(entry.get("content", ""))
             for fpath in files_cited:
-                # Nettoyer le chemin (retirer ponctuation trailing)
-                clean = fpath.rstrip(".,;:)\"'")
+                # Nettoyer le chemin (retirer ponctuation trailing + backtick/asterisque)
+                clean = fpath.rstrip(".,;:)\"'`*")
                 full = os.path.join(project_root, clean)
                 if not os.path.exists(full):
                     hallucinated.append(clean)
@@ -459,7 +520,7 @@ class Council:
             for entry in prev_entries:
                 content_lower = entry.get("content", "").lower()
                 keywords = set(_ACTION_VERBS.findall(content_lower))
-                files = set(f.rstrip(".,;:)\"'") for f in _FILE_PATTERN.findall(content_lower))
+                files = set(f.rstrip(".,;:)\"'`*") for f in _FILE_PATTERN.findall(content_lower))
                 agent_keywords[entry["agent"]] = keywords | files
 
             # Chercher des paires avec >= 3 mots-cles communs
@@ -493,6 +554,42 @@ class Council:
 
         text = "OBJECTION: " + " | ".join(objections)
         return text[:400]
+
+    def _sanitize_file_references(self, content: str) -> str:
+        """Post-traitement déterministe : corrige les chemins fichiers dans les réponses.
+        - Nettoie backticks/astérisques trailing
+        - Corrige les chemins avec mauvais répertoire (matching par basename)
+        - Marque [chemin→INEXISTANT] si aucun match
+        """
+        if not content:
+            return content
+        matches = _FILE_PATTERN.findall(content)
+        if not matches:
+            return content
+        # Dédupliquer en préservant l'ordre
+        seen = set()
+        unique_matches = []
+        for m in matches:
+            if m not in seen:
+                seen.add(m)
+                unique_matches.append(m)
+        real_files = _get_real_files()
+        for raw_match in unique_matches:
+            clean = raw_match.rstrip(".,;:)\"'`*")
+            if clean in real_files:
+                # Fichier réel — juste nettoyer le trailing si différent
+                if raw_match != clean:
+                    content = content.replace(raw_match, clean)
+                continue
+            # Chercher le plus proche par basename
+            closest = _find_closest_file(clean)
+            if closest:
+                logger.info(f"Council sanitizer: {clean} → {closest}")
+                content = content.replace(raw_match, closest)
+            else:
+                logger.info(f"Council sanitizer: {clean} → INEXISTANT")
+                content = content.replace(raw_match, f"[{clean}→INEXISTANT]")
+        return content
 
     def _format_transcript(self) -> str:
         """Formate le transcript pour l'injecter dans le prompt des agents.
@@ -773,6 +870,7 @@ class Council:
 
                 # Appel via generate_content (pas process_task)
                 content = await agent.generate_content(prompt)
+                content = self._sanitize_file_references(content)
 
                 # Scorer l'argument
                 arg_score = _score_argument(content)

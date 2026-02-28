@@ -6,7 +6,9 @@ from core.council import (
     MIN_ROUNDS_BEFORE_CONSENSUS, MIN_ROUNDS_BEFORE_PRESIDENT,
     PRESIDENT_AGENT_NAME, _COUNCIL_PROJECT_CONTEXT,
     _get_project_structure, _FILE_PATTERN,
+    _get_real_files, _find_closest_file,
 )
+import core.council as council_module
 from core.orchestrator import Orchestrator
 from core.event_bus.bus import bus
 
@@ -1481,3 +1483,149 @@ class TestProjectStructureReinforcement:
         council = Council(agents, ["coder", "security"], "test", enable_student=False)
         prompt = council._build_prompt("coder", 1)
         assert "HALLUCINATION" in prompt
+
+
+# ============================================================
+# TESTS SANITIZE FILE REFERENCES
+# ============================================================
+
+class TestSanitizeFileReferences:
+    """Tests du sanitizer déterministe des chemins fichiers dans les réponses Council."""
+
+    def _make_council(self, **kwargs):
+        agents = {"coder": MagicMock(), "security": MagicMock()}
+        defaults = dict(
+            agents=agents, participants=["coder", "security"],
+            mission="test sanitizer", enable_student=False, enable_advocate=False,
+        )
+        defaults.update(kwargs)
+        return Council(**defaults)
+
+    def test_clean_backtick_trailing(self):
+        """core/router.py` → core/router.py (backtick retiré)."""
+        council = self._make_council()
+        fake_files = {"core/router.py", "core/council.py"}
+        with patch.object(council_module, "_REAL_FILES_CACHE", fake_files):
+            result = council._sanitize_file_references("Modifier core/router.py` pour améliorer")
+        assert "core/router.py`" not in result
+        assert "core/router.py" in result
+        assert "INEXISTANT" not in result
+
+    def test_clean_double_star_trailing(self):
+        """core/router.py** → core/router.py (astérisques retirés)."""
+        council = self._make_council()
+        fake_files = {"core/router.py"}
+        with patch.object(council_module, "_REAL_FILES_CACHE", fake_files):
+            result = council._sanitize_file_references("Voir core/router.py** pour détails")
+        assert "core/router.py**" not in result
+        assert "core/router.py" in result
+
+    def test_correct_wrong_directory(self):
+        """Basename existe ailleurs → chemin corrigé."""
+        council = self._make_council()
+        fake_files = {"core/capabilities/performance_utils.py", "core/router.py"}
+        with patch.object(council_module, "_REAL_FILES_CACHE", fake_files):
+            result = council._sanitize_file_references(
+                "Il faut modifier core/performance_utils.py"
+            )
+        assert "core/capabilities/performance_utils.py" in result
+        assert "INEXISTANT" not in result
+
+    def test_real_file_unchanged(self):
+        """Un fichier réel existant ne doit pas être modifié."""
+        council = self._make_council()
+        fake_files = {"core/router.py", "core/council.py"}
+        with patch.object(council_module, "_REAL_FILES_CACHE", fake_files):
+            text = "Le fichier core/router.py est correct"
+            result = council._sanitize_file_references(text)
+        assert result == text
+
+    def test_truly_nonexistent_marked(self):
+        """Fichier sans match → [chemin→INEXISTANT]."""
+        council = self._make_council()
+        fake_files = {"core/router.py"}
+        with patch.object(council_module, "_REAL_FILES_CACHE", fake_files):
+            result = council._sanitize_file_references(
+                "Créer core/quantum_brain.py pour le moteur quantique"
+            )
+        assert "[core/quantum_brain.py→INEXISTANT]" in result
+
+    def test_multiple_replacements(self):
+        """Plusieurs fichiers corrigés dans un même texte."""
+        council = self._make_council()
+        fake_files = {"core/router.py", "Agents/coder_agent.py"}
+        with patch.object(council_module, "_REAL_FILES_CACHE", fake_files):
+            result = council._sanitize_file_references(
+                "Modifier core/router.py` et core/quantum.py et Agents/coder_agent.py**"
+            )
+        # router.py nettoyé
+        assert "core/router.py`" not in result
+        assert "core/router.py" in result
+        # coder_agent nettoyé
+        assert "Agents/coder_agent.py**" not in result
+        assert "Agents/coder_agent.py" in result
+        # quantum inexistant
+        assert "[core/quantum.py→INEXISTANT]" in result
+
+    def test_find_closest_by_basename(self):
+        """Matching par basename fonctionne."""
+        fake_files = {"core/capabilities/performance_utils.py", "core/router.py", "Agents/coder_agent.py"}
+        with patch.object(council_module, "_REAL_FILES_CACHE", fake_files):
+            assert _find_closest_file("core/performance_utils.py") == "core/capabilities/performance_utils.py"
+
+    def test_find_closest_no_match(self):
+        """Aucun match → retourne ''."""
+        fake_files = {"core/router.py", "core/council.py"}
+        with patch.object(council_module, "_REAL_FILES_CACHE", fake_files):
+            assert _find_closest_file("core/quantum_brain.py") == ""
+
+    def test_get_real_files_returns_set(self):
+        """_get_real_files() retourne un set non-vide contenant des fichiers connus."""
+        # Reset le cache pour forcer le scan
+        old_cache = council_module._REAL_FILES_CACHE
+        try:
+            council_module._REAL_FILES_CACHE = None
+            result = _get_real_files()
+            assert isinstance(result, set)
+            assert len(result) > 0
+            # Au minimum, council.py lui-même doit être présent
+            assert "core/council.py" in result
+        finally:
+            council_module._REAL_FILES_CACHE = old_cache
+
+    @pytest.mark.asyncio
+    async def test_sanitize_integrated_in_run(self):
+        """La réponse est nettoyée dans le transcript (intégration run)."""
+        mock_agent_a = MagicMock()
+        mock_agent_a.generate_content = AsyncMock(
+            return_value="Modifier core/router.py` et core/fake_xyz.py"
+        )
+        mock_agent_b = MagicMock()
+        mock_agent_b.generate_content = AsyncMock(
+            return_value="CONSENSUS — je suis d'accord, il faut modifier core/router.py pour la stabilité du routeur. " * 3
+        )
+        agents = {"coder": mock_agent_a, "security": mock_agent_b}
+        council = Council(agents, ["coder", "security"], "test intégration",
+                          max_rounds=3, enable_student=False, enable_advocate=False)
+        fake_files = {"core/router.py", "core/council.py"}
+        with patch.object(council_module, "_REAL_FILES_CACHE", fake_files):
+            result = await council.run()
+        # Vérifier que le backtick a été nettoyé dans le transcript
+        coder_entries = [e for e in result["transcript"] if e["agent"] == "coder"]
+        assert coder_entries
+        assert "core/router.py`" not in coder_entries[0]["content"]
+        assert "[core/fake_xyz.py→INEXISTANT]" in coder_entries[0]["content"]
+
+    def test_rstrip_backtick_in_advocate(self):
+        """L'avocat ne flagge plus les vrais fichiers avec backtick trailing."""
+        council = self._make_council(enable_advocate=True)
+        fake_files = {"core/router.py", "core/council.py"}
+        council.transcript = [
+            {"agent": "coder", "round": 1,
+             "content": "Modifier core/router.py` et core/council.py`",
+             "score": 0.5, "is_student": False, "is_advocate": False},
+        ]
+        with patch.object(council_module, "_REAL_FILES_CACHE", fake_files):
+            advocate_text = council._build_advocate_contribution(2)
+        # Les deux fichiers existent (après nettoyage backtick) → pas de FICHIERS INEXISTANTS
+        assert "FICHIERS INEXISTANTS" not in advocate_text
