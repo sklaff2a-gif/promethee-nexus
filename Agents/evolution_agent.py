@@ -651,15 +651,65 @@ class DivineEvolution(BaseAgent):
                 code_source = "cloud"
 
             if not generated_code or len(generated_code) < 50:
-                # Fallback : dispatch au Coder local
-                self.log_thought("⚠️ Cloud indisponible, tentative via Coder local...", type="warning")
-                coder_response = await orchestrator.dispatch_task("coder", {
-                    "mission": code_prompt,
-                    "context": f"EVOLUTION_PIPELINE\nSPEC_ID: {spec.id}"
-                })
-                generated_code = coder_response.get("result", "")
-                if generated_code and len(generated_code) >= 50:
-                    code_source = "local"
+                # Fallback : micro-patch SEARCH/REPLACE via Coder local
+                self.log_thought("⚠️ Cloud indisponible, tentative micro-patch via Coder local...", type="warning")
+                try:
+                    from core.patch_engine import parse_patch, apply_patch, MICRO_PATCH_PROMPT
+                    # Construire l'extrait source pertinent
+                    if method_ctx and method_ctx.get("method_source"):
+                        source_excerpt = (
+                            f"{method_ctx['imports']}\n\n"
+                            f"{method_ctx['class_signature']}\n"
+                            f"{method_ctx['method_source']}"
+                        )
+                    else:
+                        source_excerpt = source_code[:3000]
+                    patch_prompt = MICRO_PATCH_PROMPT.format(
+                        target_file=spec.target_file,
+                        spec_id=spec.id,
+                        spec_name=spec.name,
+                        spec_description=spec.description,
+                        code_template=spec.code_template,
+                        source_excerpt=source_excerpt,
+                        guardrail=CODE_GENERATION_GUARDRAIL,
+                    )
+                    if past_failures:
+                        patch_prompt += f"\n\nATTENTION — {past_failures}\nÉVITE de reproduire ces erreurs.\n"
+                    coder_response = await orchestrator.dispatch_task("coder", {
+                        "mission": patch_prompt,
+                        "context": f"EVOLUTION_PIPELINE\nMICRO_PATCH\nSPEC_ID: {spec.id}"
+                    })
+                    raw_patch = coder_response.get("result", "")
+                    if raw_patch and len(raw_patch) >= 20:
+                        hunks, parse_errors = parse_patch(raw_patch)
+                        if parse_errors:
+                            self.log_thought(f"⚠️ Patch parse warnings: {parse_errors}", type="warning")
+                        if hunks:
+                            patch_result = apply_patch(source_code, hunks)
+                            if patch_result.success:
+                                generated_code = patch_result.patched_source
+                                code_source = "local+patch"
+                                self.log_thought(
+                                    f"✅ Micro-patch appliqué: {patch_result.hunks_applied}/{patch_result.hunks_total} hunks",
+                                    type="info"
+                                )
+                            else:
+                                self.log_thought(
+                                    f"⚠️ Micro-patch échoué: {patch_result.error} "
+                                    f"({patch_result.hunks_applied}/{patch_result.hunks_total} hunks)",
+                                    type="warning"
+                                )
+                except Exception as patch_err:
+                    self.log_thought(f"⚠️ Erreur micro-patch: {patch_err}", type="warning")
+                # Fallback final : mode historique (fichier complet via Coder)
+                if not generated_code or len(generated_code) < 50:
+                    coder_response = await orchestrator.dispatch_task("coder", {
+                        "mission": code_prompt,
+                        "context": f"EVOLUTION_PIPELINE\nSPEC_ID: {spec.id}"
+                    })
+                    generated_code = coder_response.get("result", "")
+                    if generated_code and len(generated_code) >= 50:
+                        code_source = "local"
 
             # Si mode micro et code généré → réassembler dans le fichier complet
             if micro_mode and generated_code and len(generated_code) >= 50:
@@ -872,7 +922,10 @@ class DivineEvolution(BaseAgent):
 
         # --- PHASE 4d : ANTI-TRONCATURE ---
         # Le code généré doit faire au moins 60% du code source original
-        if source_code and len(source_code) > 500:
+        # Skip en mode patch : le code patché EST le source complet avec modifications ciblées
+        if code_source == "local+patch":
+            pass  # Skip — le patch a été appliqué sur le source original complet
+        elif source_code and len(source_code) > 500:
             ratio = len(generated_code) / len(source_code)
             if ratio < 0.60:
                 reason = (

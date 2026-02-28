@@ -586,9 +586,9 @@ class TestGeminiCodeGeneration:
             result = await evo.process_task({"mission": "[MODE VEILLE]"})
 
         assert result["status"] == "success"
-        # Le Coder local doit avoir été appelé en fallback
+        # Le Coder local doit avoir été appelé en fallback (micro-patch + historique)
         coder_calls = [c for c in mock_orch.dispatch_task.call_args_list if c[0][0] == "coder"]
-        assert len(coder_calls) == 1
+        assert len(coder_calls) >= 1
 
 
 # --- Tests fichiers protégés (Fix Evolution→Factory) ---
@@ -1510,3 +1510,208 @@ class TestFeedbackLoop:
         # Le prompt de retry doit contenir l'info d'erreur
         assert len(retry_prompts) >= 1
         assert "ERREUR DE SYNTAXE" in retry_prompts[0]
+
+
+class TestEvolutionPatchMode:
+    """Tests du mode micro-patch SEARCH/REPLACE dans le pipeline Evolution."""
+
+    @pytest.fixture(autouse=True)
+    def disable_protected_files_guard(self):
+        with patch("Agents.factory_agent._CRITICAL_FILES", set()):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_local_fallback_uses_patch_mode(self):
+        """Quand Cloud échoue, le contexte du dispatch contient MICRO_PATCH."""
+        evo = DivineEvolution()
+
+        source_code = (
+            "import os\nimport logging\n\n"
+            "class MyAgent:\n"
+            "    def process(self, data):\n"
+            "        return data\n"
+        )
+
+        # Patch qui sera retourné par le Coder
+        patch_response = (
+            "<<<< SEARCH\n"
+            "    def process(self, data):\n"
+            "        return data\n"
+            "====\n"
+            "    def process(self, data):\n"
+            "        if not data:\n"
+            "            return None\n"
+            "        return data\n"
+            ">>>> REPLACE"
+        )
+
+        dispatch_calls = []
+
+        async def mock_dispatch(agent, payload):
+            dispatch_calls.append((agent, payload))
+            if agent == "coder":
+                return {"status": "success", "result": patch_response}
+            return {"status": "success", "result": "VALIDÉ"}
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(side_effect=mock_dispatch)
+        mock_orch._contains_python_code = MagicMock(return_value=True)
+
+        mock_bus = MagicMock()
+        mock_bus.publish = AsyncMock()
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=source_code), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=None), \
+             patch("core.orchestrator.orchestrator", mock_orch), \
+             patch("core.event_bus.bus.bus", mock_bus):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # Le premier dispatch au coder doit contenir MICRO_PATCH dans le contexte
+        coder_calls = [(a, p) for a, p in dispatch_calls if a == "coder"]
+        assert len(coder_calls) >= 1
+        assert "MICRO_PATCH" in coder_calls[0][1].get("context", "")
+
+    @pytest.mark.asyncio
+    async def test_patch_mode_skips_phase4d(self):
+        """Phase 4d ne rejette pas en mode local+patch même si le source est long."""
+        evo = DivineEvolution()
+
+        # Source très long (>500 chars)
+        source_code = (
+            "import os\nimport logging\n\n"
+            "class BigModule:\n"
+            + "".join(f"    def method_{i}(self):\n        pass\n\n" for i in range(30))
+        )
+        assert len(source_code) > 500
+
+        # Patch qui modifie juste 2 lignes (code patché ≈ même taille que source)
+        patch_response = (
+            "<<<< SEARCH\n"
+            "    def method_0(self):\n"
+            "        pass\n"
+            "====\n"
+            "    def method_0(self):\n"
+            "        return 42\n"
+            ">>>> REPLACE"
+        )
+
+        async def mock_dispatch(agent, payload):
+            if agent == "coder":
+                return {"status": "success", "result": patch_response}
+            return {"status": "success", "result": "VALIDÉ"}
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(side_effect=mock_dispatch)
+        mock_orch._contains_python_code = MagicMock(return_value=True)
+
+        mock_bus = MagicMock()
+        mock_bus.publish = AsyncMock()
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=source_code), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=None), \
+             patch("core.orchestrator.orchestrator", mock_orch), \
+             patch("core.event_bus.bus.bus", mock_bus):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # Le résultat ne doit PAS mentionner anti-troncature
+        assert "Anti-troncature" not in result.get("result", "")
+        # L'architecte doit avoir été appelé (le code a passé toutes les phases)
+        architect_calls = [c for c in mock_orch.dispatch_task.call_args_list if c[0][0] == "architect"]
+        assert len(architect_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_patch_failure_falls_through(self):
+        """Si le patch échoue, le cycle échoue proprement (pas de crash)."""
+        evo = DivineEvolution()
+
+        source_code = "import os\n\ndef main():\n    pass\n"
+
+        # Patch invalide (SEARCH ne matche pas le source)
+        bad_patch = (
+            "<<<< SEARCH\n"
+            "def inexistant():\n"
+            "    pass\n"
+            "====\n"
+            "def inexistant():\n"
+            "    return 42\n"
+            ">>>> REPLACE"
+        )
+
+        call_count = [0]
+
+        async def mock_dispatch(agent, payload):
+            call_count[0] += 1
+            if agent == "coder":
+                ctx = payload.get("context", "")
+                if "MICRO_PATCH" in ctx:
+                    return {"status": "success", "result": bad_patch}
+                # Fallback historique : retourne aussi du code insuffisant
+                return {"status": "success", "result": "# too short"}
+            return {"status": "success", "result": "OK"}
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(side_effect=mock_dispatch)
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=source_code), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=None), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # Le cycle doit échouer proprement (warning, pas d'exception)
+        assert result["status"] == "warning"
+
+    @pytest.mark.asyncio
+    async def test_code_source_recorded(self):
+        """L'expérience enregistre code_source='local+patch' quand le patch réussit."""
+        evo = DivineEvolution()
+
+        source_code = (
+            "import os\nimport logging\n\n"
+            "class Agent:\n"
+            "    def run(self):\n"
+            "        pass\n"
+        )
+
+        patch_response = (
+            "<<<< SEARCH\n"
+            "    def run(self):\n"
+            "        pass\n"
+            "====\n"
+            "    def run(self):\n"
+            "        return True\n"
+            ">>>> REPLACE"
+        )
+
+        recorded_experiences = []
+        original_record = ExperienceRegistry.record
+
+        def capture_record(self_reg, exp):
+            recorded_experiences.append(exp)
+            return original_record(self_reg, exp)
+
+        async def mock_dispatch(agent, payload):
+            if agent == "coder":
+                return {"status": "success", "result": patch_response}
+            return {"status": "success", "result": "VALIDÉ"}
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(side_effect=mock_dispatch)
+        mock_orch._contains_python_code = MagicMock(return_value=True)
+
+        mock_bus = MagicMock()
+        mock_bus.publish = AsyncMock()
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=source_code), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=None), \
+             patch("core.orchestrator.orchestrator", mock_orch), \
+             patch("core.event_bus.bus.bus", mock_bus), \
+             patch.object(ExperienceRegistry, "record", capture_record):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # Au moins une expérience enregistrée avec code_source contenant "local+patch"
+        patch_exps = [e for e in recorded_experiences if "local+patch" in (e.code_source or "")]
+        assert len(patch_exps) >= 1
