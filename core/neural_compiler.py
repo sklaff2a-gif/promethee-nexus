@@ -32,7 +32,7 @@ MAX_OBSERVATIONS = 500           # FIFO
 MAX_RULES = 200
 OBSERVATION_TTL_DAYS = 7
 INTERCEPT_CONFIDENCE_THRESHOLD = 0.85  # Conservateur
-MIN_OBSERVATIONS_FOR_RULE = 10
+MIN_OBSERVATIONS_FOR_RULE = 5    # Abaissé de 10 : 253 obs réparties sur 8 agents
 MIN_SUCCESS_RATE = 0.7
 RULE_DISABLE_THRESHOLD = 0.5
 AB_TEST_PROBABILITY = 0.10       # 10% vérification parallèle LLM
@@ -837,7 +837,7 @@ class NeuralCompiler:
                     obs.fingerprint.dominant_keywords,
                     other.fingerprint.dominant_keywords
                 )
-                if overlap >= 0.6:
+                if overlap >= 0.5:  # Abaissé de 0.6 : clusters plus larges
                     cluster.append(other)
                     used.add(j)
             clusters.append(cluster)

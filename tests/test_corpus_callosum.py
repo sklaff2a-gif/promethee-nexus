@@ -446,9 +446,9 @@ class TestStagnation:
         stag = [p for p in patterns if p.pattern_type == "stagnation"]
         assert len(stag) == 1
 
-    def test_stagnation_not_detected_has_goal(self, isolate_callosum):
-        """Pas de stagnation si goal actif."""
-        snap = self._stagnation_snapshot(has_active_goal=True)
+    def test_stagnation_not_detected_has_goal_progressing(self, isolate_callosum):
+        """Pas de stagnation si goal actif ET qui progresse."""
+        snap = self._stagnation_snapshot(has_active_goal=True, goal_progress=0.5)
         patterns = isolate_callosum._detect_resonance_patterns(snap)
         stag = [p for p in patterns if p.pattern_type == "stagnation"]
         assert len(stag) == 0
@@ -583,8 +583,8 @@ class TestAntiSpam:
         assert isinstance(effects2, list)
 
     def test_max_effects_per_cycle(self, isolate_callosum):
-        """Max 3 effets par cycle de resonance."""
-        assert MAX_RESONANCE_EFFECTS_PER_CYCLE == 3
+        """Max 5 effets par cycle de resonance (relaxe depuis 3)."""
+        assert MAX_RESONANCE_EFFECTS_PER_CYCLE == 5
 
     def test_different_pattern_types_not_blocked(self, isolate_callosum):
         """Des patterns differents ne se bloquent pas mutuellement."""

@@ -30,7 +30,8 @@ NATURAL_RISE_PER_HOUR = 3.0
 # Tolerance biologique (habituation)
 TOLERANCE_HALF_LIFE = 8.0        # Apres 8 satisfactions, effet divise par 2
 TOLERANCE_MIN = 0.15             # Plancher : meme sature, 15% d'effet reste
-TOLERANCE_RECOVERY_PER_HOUR = 2.0  # L'accumulateur diminue de 2.0/h (repos)
+TOLERANCE_RECOVERY_PER_HOUR = 15.0  # L'accumulateur diminue de 15/h (demi-vie ~24h pour accumulation typique)
+TOLERANCE_MAX = 200.0            # Plafond de tolerance — au-delà, plus d'accumulation
 
 
 @dataclass
@@ -326,7 +327,7 @@ class DesireEngine:
             if delta < 0:  # Satisfaction → appliquer tolerance
                 tolerance = self._compute_tolerance(drive)
                 effective_delta = delta * tolerance
-                drive.tolerance_accumulator += abs(delta)
+                drive.tolerance_accumulator = min(TOLERANCE_MAX, drive.tolerance_accumulator + abs(delta))
                 drive.deprivation = max(0.0, min(100.0, drive.deprivation + effective_delta))
             else:  # Frustration → plein effet
                 drive.deprivation = max(0.0, min(100.0, drive.deprivation + delta))
@@ -345,10 +346,18 @@ class DesireEngine:
             sub_map = EVENT_IMPACT.get(event_type, {})
             intent = context.get("intent", "")
             if intent in sub_map:
-                return dict(sub_map[intent])
-            if "_default" in sub_map:
-                return dict(sub_map["_default"])
-            return {}
+                impacts = dict(sub_map[intent])
+            elif "_default" in sub_map:
+                impacts = dict(sub_map["_default"])
+            else:
+                impacts = {}
+            # Satisfaction secondaire : pulsions affamées (≥80) reçoivent un petit soulagement
+            # quand N'IMPORTE quelle routine réussit, même non-mappée directement
+            if event_type == "ROUTINE_SUCCESS" and impacts:
+                for drive in self.drives.values():
+                    if drive.name not in impacts and drive.deprivation >= 80:
+                        impacts[drive.name] = -2  # Soulagement indirect léger
+            return impacts
 
         # Evenements directs
         impacts = EVENT_IMPACT.get(event_type)

@@ -33,8 +33,8 @@ CALLOSUM_STATE_FILE = os.path.join(
 RESONANCE_INTERVAL = 60.0           # Boucle entre cardiac (30s) et reptilian (60s)
 MAX_STATE_BUFFER = 60               # ~1h de snapshots
 MAX_RESONANCE_LOG = 50              # Historique des patterns detectes
-MIN_RESONANCE_INTERVAL = 30.0       # Anti-spam par type de pattern
-MAX_RESONANCE_EFFECTS_PER_CYCLE = 3 # Effets max par cycle
+MIN_RESONANCE_INTERVAL = 120.0      # Anti-spam par type (doublé : un effet tous les 2 cycles)
+MAX_RESONANCE_EFFECTS_PER_CYCLE = 5 # Effets max par cycle (augmenté de 3 à 5)
 
 # Etats cognitifs possibles
 COGNITIVE_STATES = ("standard", "flow", "crisis", "creative_surge",
@@ -501,10 +501,14 @@ class CorpusCallosum:
             ))
 
         # --- STAGNATION ---
-        if (snap.dopamine_level < 0.35
-                and snap.dominant_deprivation >= 60
-                and not snap.has_active_goal
-                and snap.cardiac_coherence < 0.4):
+        # Détection assouplie : on stagne aussi quand les goals n'avancent pas
+        stagnation_check = (
+            snap.dopamine_level < 0.40
+            and snap.dominant_deprivation >= 60
+            and snap.cardiac_coherence < 0.5
+            and (not snap.has_active_goal or snap.goal_progress < 0.15)
+        )
+        if stagnation_check:
             confidence = min(1.0, (
                 (1.0 - snap.dopamine_level) * 0.3
                 + snap.dominant_deprivation / 100.0 * 0.3

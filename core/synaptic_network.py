@@ -1257,10 +1257,18 @@ class SynapticNetwork:
         report["pruned_synapses"] = len(to_prune)
 
         # 4. CONSOLIDATION DES FORTES
+        promoted = 0
         for syn in self.synapses.values():
             if syn["weight"] >= 0.5:
                 syn["weight"] = min(1.0, syn["weight"] * 1.05)
                 report["strengthened"] += 1
+            # 4b. PROMOTION : temporal fort → hebbian (apprentissage prouvé par l'usage)
+            if (syn["synapse_type"] == "temporal"
+                    and syn["weight"] >= 0.7
+                    and syn["formation_count"] >= 50):
+                syn["synapse_type"] = "hebbian"
+                promoted += 1
+        report["promoted_to_hebbian"] = promoted
 
         # 5. META-CONCEPTS (clustering)
         report["new_meta_concepts"] = self._create_meta_concepts()
@@ -1280,7 +1288,8 @@ class SynapticNetwork:
             f"+{report['dream_connections']} connexions, "
             f"-{report['pruned_synapses']} pruned, "
             f"+{report['new_meta_concepts']} meta, "
-            f"{report['strengthened']} renforcees"
+            f"{report['strengthened']} renforcees, "
+            f"{report.get('promoted_to_hebbian', 0)} promues hebbian"
         )
         return report
 

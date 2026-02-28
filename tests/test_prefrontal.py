@@ -164,6 +164,7 @@ class TestGoals:
     def test_goal_abandonment_cost_excessive(self):
         pf = _make_prefrontal()
         goal = _make_goal(cost_spent=20, cost_estimated=10, progress=0.1)
+        goal.created_at = time.time() - 3600  # 1h ago — passé la grâce
         pf.goals.append(goal)
         abandoned = pf._check_goal_abandonment(goal)
         assert abandoned
@@ -176,6 +177,7 @@ class TestGoals:
             GoalStep(intent="A", description="1", status="failed"),
             GoalStep(intent="B", description="2", status="failed"),
         ])
+        goal.created_at = time.time() - 3600  # 1h ago — passé la grâce
         goal.last_advanced = time.time() - 7200  # 2h ago
         pf.goals.append(goal)
         # La priorité va s'effondrer avec stagnation + failures
@@ -613,6 +615,7 @@ class TestDeliberation:
     def test_deliberate_prunes_abandoned(self):
         pf = _make_prefrontal()
         goal = _make_goal(cost_spent=20, cost_estimated=10, progress=0.1)
+        goal.created_at = time.time() - 3600  # Passé la grâce
         pf.goals.append(goal)
         pf._deliberate()
         assert goal.status == "abandoned"

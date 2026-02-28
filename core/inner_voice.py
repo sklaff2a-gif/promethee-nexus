@@ -802,9 +802,10 @@ class InnerVoice:
         """Pas de répétition récente — veto dur sur doublons."""
         if not self.stream:
             return 1.0
-        recent = self.stream[-5:]
+        recent = self.stream[-10:]  # Fenêtre élargie de 5 à 10
 
         if entry.draft:
+            draft_words = set(entry.draft.lower().split())
             for t in recent:
                 # Exactement identique → veto dur (score 0)
                 if t.content == entry.draft:
@@ -814,10 +815,17 @@ class InnerVoice:
                         and len(t.content) > 10 and len(entry.draft) > 10
                         and t.content[:20] == entry.draft[:20]):
                     return 0.0
+                # Similarité sémantique : même source + >70% mots en commun
+                if t.source == entry.source and len(draft_words) >= 3:
+                    other_words = set(t.content.lower().split())
+                    if other_words and draft_words:
+                        overlap = len(draft_words & other_words) / max(len(draft_words), len(other_words))
+                        if overlap >= 0.7:
+                            return 0.0
 
-        # Saturation de source : >= 3 sur les 5 dernières → pénalité forte
+        # Saturation de source : >= 3 sur les 10 dernières → pénalité forte
         recent_sources = [t.source for t in recent]
-        if recent_sources.count(entry.source) >= 3:
+        if recent_sources.count(entry.source) >= 4:
             return 0.15
         return 1.0
 

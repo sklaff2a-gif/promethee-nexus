@@ -554,13 +554,31 @@ class Hippocampus:
             unmarked = unmarked[-remaining_slots:] if remaining_slots > 0 else []
             self._arcs = sorted(marked + unmarked, key=lambda a: a.timestamp)
 
+    # Categories d'intents pour detection cross-intent de struggles
+    _INTENT_CATEGORIES = {
+        "code": {"EXPANSION_CODE", "REFACTOR_RANDOM"},
+        "knowledge": {"VEILLE_SILENCIEUSE", "DROPZONE_SCAN", "MEMORY_CONSOLIDATION"},
+        "governance": {"COUNCIL_DEBATE", "SECURITY_AUDIT"},
+        "maintenance": {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"},
+    }
+
     def _detect_struggle(self, episodes: List[Episode]):
-        """Detecte >= 3 echecs consecutifs sur le meme intent (fenetre 2h)."""
-        # Grouper par intent
+        """Detecte >= 3 echecs consecutifs sur le meme intent OU catégorie (fenetre 2h)."""
+        # Grouper par intent exact
         by_intent: Dict[str, List[Episode]] = {}
         for ep in episodes:
             if ep.event_type in ("routine_failure", "routine_success") and ep.intent:
                 by_intent.setdefault(ep.intent, []).append(ep)
+
+        # Grouper aussi par catégorie (cross-intent)
+        for cat_name, intents in self._INTENT_CATEGORIES.items():
+            cat_key = f"_cat_{cat_name}"
+            cat_eps = []
+            for ep in episodes:
+                if ep.event_type in ("routine_failure", "routine_success") and ep.intent in intents:
+                    cat_eps.append(ep)
+            if len(cat_eps) >= 3 and cat_key not in by_intent:
+                by_intent[cat_key] = cat_eps
 
         for intent, eps in by_intent.items():
             eps_sorted = sorted(eps, key=lambda e: e.timestamp)
@@ -603,10 +621,11 @@ class Hippocampus:
                 )
 
             avg_salience = sum(e.salience for e in arc_eps) / len(arc_eps)
+            display_name = intent.replace("_cat_", "catégorie ") if intent.startswith("_cat_") else intent
             arc = NarrativeArc(
                 id=str(uuid.uuid4())[:8],
                 arc_type="struggle",
-                title=f"Lutte sur {intent}",
+                title=f"Lutte sur {display_name}",
                 narrative=narrative,
                 episode_ids=[e.id for e in arc_eps],
                 emotional_arc=emotional_arc_str,

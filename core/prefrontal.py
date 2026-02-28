@@ -71,6 +71,10 @@ STRATEGY_CONFIDENCE_DECAY = 0.25
 # Charge cognitive
 COGNITIVE_LOAD_THRESHOLD = 5         # Dégradation au-delà
 
+# Anti-churn : protège les goals contre abandon prématuré
+GOAL_GRACE_PERIOD = 600              # 10 min minimum avant abandon possible
+GOAL_CREATION_COOLDOWN = 300         # 5 min entre créations pour le même drive
+
 
 # ─── Structures de données ────────────────────────────────────────────
 
@@ -494,6 +498,12 @@ class PrefrontalCortex:
     def _check_goal_abandonment(self, goal: Goal) -> bool:
         """Vérifie si un goal doit être abandonné."""
         now = time.time()
+
+        # Période de grâce : pas d'abandon avant GOAL_GRACE_PERIOD
+        age = now - goal.created_at
+        if age < GOAL_GRACE_PERIOD:
+            return False
+
         reasons = []
 
         # Coût excessif
@@ -1034,6 +1044,7 @@ class PrefrontalCortex:
         # Pulsion frustrée → goal
         try:
             from core.desire_engine import desires
+            now_gen = time.time()
             for name, drive in desires.drives.items():
                 if drive.deprivation >= 40 and active_count < MAX_GOALS:
                     # Vérifier qu'on n'a pas déjà un goal pour cette pulsion
@@ -1042,6 +1053,15 @@ class PrefrontalCortex:
                         for g in self.goals
                     )
                     if already:
+                        continue
+                    # Cooldown : pas de nouveau goal si un goal pour ce drive a été
+                    # créé ou abandonné récemment
+                    recent_for_drive = any(
+                        name.lower() in g.title.lower()
+                        and now_gen - g.created_at < GOAL_CREATION_COOLDOWN
+                        for g in self.goals
+                    )
+                    if recent_for_drive:
                         continue
 
                     routines = _DRIVE_ROUTINE_MAP.get(name, ["VEILLE_SILENCIEUSE"])
