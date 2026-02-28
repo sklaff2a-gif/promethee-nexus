@@ -60,6 +60,7 @@ def council_guardrail(project_files: str = "") -> str:
         "3. Toute proposition DOIT cibler des fichiers EXISTANTS (core/, Agents/).\n"
         "4. RÉPONDS EN FRANÇAIS UNIQUEMENT.\n"
         "5. Ne propose PAS de fichiers qui n'existent pas.\n"
+        "6. Si tu cites un fichier absent de la liste, ta réponse sera REJETÉE.\n"
         f"{files_block}"
     )
 

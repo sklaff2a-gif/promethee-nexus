@@ -2,10 +2,10 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from core.council import (
     Council, parse_council_mission, _is_consensus, _strip_markdown_prefix,
-    _score_argument, _parse_president_verdict,
+    _score_argument, _parse_president_verdict, _extract_keywords,
     MIN_ROUNDS_BEFORE_CONSENSUS, MIN_ROUNDS_BEFORE_PRESIDENT,
     PRESIDENT_AGENT_NAME, _COUNCIL_PROJECT_CONTEXT,
-    _get_project_structure,
+    _get_project_structure, _FILE_PATTERN,
 )
 from core.orchestrator import Orchestrator
 from core.event_bus.bus import bus
@@ -1219,3 +1219,265 @@ class TestAdvocateParticipation:
         ]
         result = council._build_advocate_contribution(1)
         assert result == ""
+
+
+# ============================================================
+# TESTS EXTRACTION MOTS-CLÉS
+# ============================================================
+
+class TestExtractKeywords:
+
+    def test_basic_extraction(self):
+        text = "Améliorer le routeur pour optimiser les performances du système"
+        kw = _extract_keywords(text, top_n=5)
+        assert "routeur" in kw or "améliorer" in kw
+        assert len(kw) <= 5
+
+    def test_stopwords_excluded(self):
+        text = "pour dans avec comment cette notre mais donc"
+        kw = _extract_keywords(text, top_n=5)
+        assert len(kw) == 0
+
+    def test_short_words_excluded(self):
+        text = "le la un des les par sur"
+        kw = _extract_keywords(text, top_n=5)
+        assert len(kw) == 0
+
+    def test_frequency_ordering(self):
+        text = "routeur routeur routeur agent agent performance"
+        kw = _extract_keywords(text, top_n=2)
+        assert "routeur" in kw
+
+
+# ============================================================
+# TESTS ÉTUDIANT RECADREUR
+# ============================================================
+
+class TestStudentRecadrage:
+    """Tests du recadrage actif de Prométhée-étudiant."""
+
+    def _make_council(self, **kwargs):
+        agents = {"coder": MagicMock(), "security": MagicMock()}
+        defaults = dict(
+            agents=agents,
+            participants=["coder", "security"],
+            mission="Stabiliser le routeur et améliorer la résilience du système",
+            max_rounds=5,
+            enable_student=True,
+            enable_advocate=False,
+        )
+        defaults.update(kwargs)
+        return Council(**defaults)
+
+    def test_recadrage_detects_hallucinated_files(self):
+        """Agent cite >= 2 fichiers inexistants → RECADRAGE mentionne le fichier."""
+        council = self._make_council()
+        council.transcript = [
+            {"agent": "coder", "round": 1,
+             "content": "Il faut modifier core/quantum_brain.py et core/ci_pipeline.py et core/teleport.py",
+             "score": 0.3, "is_student": False, "is_advocate": False},
+        ]
+        result = council._build_student_recadrage(2)
+        assert result.startswith("RECADRAGE:")
+        assert "CODER" in result
+        assert "inexistants" in result
+
+    def test_recadrage_detects_offtopic_agent(self):
+        """Agent parle d'autre chose que la mission → flaggé hors-sujet."""
+        council = self._make_council(
+            mission="Stabiliser le routeur et améliorer la résilience du système"
+        )
+        council.transcript = [
+            {"agent": "security", "round": 1,
+             "content": "Je propose d'ajouter un chatbot Discord avec des emojis et du machine learning",
+             "score": 0.2, "is_student": False, "is_advocate": False},
+        ]
+        result = council._build_student_recadrage(2)
+        assert result.startswith("RECADRAGE:")
+        assert "SECURITY" in result
+        assert "hors-sujet" in result
+
+    def test_recadrage_detects_repetition(self):
+        """Agent dit la même chose qu'au round N-2 → flaggé en boucle."""
+        council = self._make_council()
+        repeated_content = (
+            "Il faut modifier le routeur pour améliorer la performance "
+            "et stabiliser le système de classification avec un cache"
+        )
+        council.transcript = [
+            {"agent": "coder", "round": 1,
+             "content": repeated_content,
+             "score": 0.5, "is_student": False, "is_advocate": False},
+            {"agent": "security", "round": 1,
+             "content": "Analyse de securite du routeur", "score": 0.3,
+             "is_student": False, "is_advocate": False},
+            {"agent": "coder", "round": 2,
+             "content": repeated_content,
+             "score": 0.5, "is_student": False, "is_advocate": False},
+            {"agent": "security", "round": 2,
+             "content": "Nouvelle analyse securite", "score": 0.3,
+             "is_student": False, "is_advocate": False},
+        ]
+        result = council._build_student_recadrage(3)
+        assert result.startswith("RECADRAGE:")
+        assert "CODER" in result
+        assert "repete" in result
+
+    def test_recadrage_names_offending_agent(self):
+        """Le nom de l'agent fautif est dans le texte."""
+        council = self._make_council()
+        council.transcript = [
+            {"agent": "security", "round": 1,
+             "content": "Il faut modifier core/quantum_brain.py et core/teleport.py et core/warp.py",
+             "score": 0.2, "is_student": False, "is_advocate": False},
+        ]
+        result = council._build_student_recadrage(2)
+        assert "SECURITY" in result
+
+    def test_recadrage_caps_400_chars(self):
+        """Résultat <= 400 chars."""
+        council = self._make_council()
+        # Beaucoup de fichiers hallucinés pour générer un long recadrage
+        fake_files = " ".join(f"core/fake_{i}.py" for i in range(30))
+        council.transcript = [
+            {"agent": "coder", "round": 1,
+             "content": fake_files,
+             "score": 0.1, "is_student": False, "is_advocate": False},
+            {"agent": "security", "round": 1,
+             "content": fake_files,
+             "score": 0.1, "is_student": False, "is_advocate": False},
+        ]
+        result = council._build_student_recadrage(2)
+        assert len(result) <= 400
+
+    def test_recadrage_prefix(self):
+        """Commence par 'RECADRAGE:'."""
+        council = self._make_council()
+        council.transcript = [
+            {"agent": "coder", "round": 1,
+             "content": "Modifier core/quantum_brain.py et core/teleport.py pour la téléportation",
+             "score": 0.2, "is_student": False, "is_advocate": False},
+        ]
+        result = council._build_student_recadrage(2)
+        if result:
+            assert result.startswith("RECADRAGE:")
+
+    def test_no_recadrage_when_all_good(self):
+        """Aucun problème → retourne '' (fallback vers followup)."""
+        council = self._make_council(
+            mission="Stabiliser le routeur et améliorer la résilience du système"
+        )
+        council.transcript = [
+            {"agent": "coder", "round": 1,
+             "content": "Je propose de stabiliser le routeur en améliorant la résilience du système via core/router.py",
+             "score": 0.5, "is_student": False, "is_advocate": False},
+            {"agent": "security", "round": 1,
+             "content": "Bonne idée de stabiliser le routeur, la résilience du système est importante avec core/router.py",
+             "score": 0.4, "is_student": False, "is_advocate": False},
+        ]
+        result = council._build_student_recadrage(2)
+        assert result == ""
+
+    def test_recadrage_skips_student_and_advocate(self):
+        """N'analyse pas les entries étudiant/avocat."""
+        council = self._make_council()
+        council.transcript = [
+            {"agent": "promethee", "round": 1,
+             "content": "QUESTION: core/quantum_brain.py core/teleport.py",
+             "score": 0.0, "is_student": True},
+            {"agent": "advocat", "round": 1,
+             "content": "OBJECTION: core/fake1.py core/fake2.py inexistants",
+             "score": 0.0, "is_advocate": True},
+            {"agent": "coder", "round": 1,
+             "content": "Je propose de stabiliser le routeur avec core/router.py pour la résilience",
+             "score": 0.5, "is_student": False, "is_advocate": False},
+        ]
+        result = council._build_student_recadrage(2)
+        # L'étudiant et l'avocat citent des faux fichiers mais ne doivent pas être flaggés
+        if result:
+            assert "PROMETHEE" not in result.upper()
+            assert "ADVOCAT" not in result.upper()
+
+    def test_prompt_contains_moderateur_block(self):
+        """Si RECADRAGE, le prompt agent contient 'MODERATEUR'."""
+        council = self._make_council()
+        council.transcript.append({
+            "agent": "promethee", "round": 2,
+            "content": "RECADRAGE: CODER cite 2 fichiers inexistants",
+            "score": 0.0, "confidence": 0.0, "breakdown": {},
+            "timestamp": 0.0, "is_student": True,
+        })
+        prompt = council._build_prompt("coder", 2)
+        assert "MODERATEUR" in prompt
+        assert "PROBLEMES" in prompt
+
+    def test_prompt_contains_professeur_block(self):
+        """Si QUESTION (pas RECADRAGE), le prompt contient 'PROFESSEUR' (backward compat)."""
+        council = self._make_council()
+        council.transcript.append({
+            "agent": "promethee", "round": 1,
+            "content": "QUESTION: Comment optimiser le routeur?",
+            "score": 0.0, "confidence": 0.0, "breakdown": {},
+            "timestamp": 0.0, "is_student": True,
+        })
+        prompt = council._build_prompt("coder", 1)
+        assert "PROFESSEUR" in prompt
+        assert "MODERATEUR" not in prompt
+
+    def test_recadrage_with_real_project_structure(self):
+        """os.path.exists() fonctionne pour détecter les fichiers réels vs hallucines."""
+        council = self._make_council()
+        # core/council.py existe, core/quantum_brain.py non
+        council.transcript = [
+            {"agent": "coder", "round": 1,
+             "content": "Modifier core/council.py et core/quantum_brain.py et core/teleport.py",
+             "score": 0.3, "is_student": False, "is_advocate": False},
+        ]
+        result = council._build_student_recadrage(2)
+        # 2 fichiers inexistants → recadrage
+        assert result.startswith("RECADRAGE:")
+        assert "quantum_brain" in result or "teleport" in result
+        # Le fichier réel (council.py) ne doit PAS être dans les hallucinations
+        assert "council.py" not in result
+
+    def test_recadrage_multiple_agents_multiple_issues(self):
+        """2 agents fautifs avec issues différentes."""
+        council = self._make_council(
+            mission="Stabiliser le routeur et améliorer la résilience du système"
+        )
+        council.transcript = [
+            {"agent": "coder", "round": 1,
+             "content": "Il faut modifier core/quantum_brain.py et core/teleport.py pour la téléportation",
+             "score": 0.2, "is_student": False, "is_advocate": False},
+            {"agent": "security", "round": 1,
+             "content": "Je propose d'ajouter un chatbot Discord avec des emojis et du machine learning",
+             "score": 0.2, "is_student": False, "is_advocate": False},
+        ]
+        result = council._build_student_recadrage(2)
+        assert result.startswith("RECADRAGE:")
+        # Les deux agents doivent être cités
+        assert "CODER" in result
+        assert "SECURITY" in result
+
+
+# ============================================================
+# TESTS STRUCTURE PROJET RENFORCÉE
+# ============================================================
+
+class TestProjectStructureReinforcement:
+    """Tests du renforcement visuel de la structure projet dans les prompts."""
+
+    def test_prompt_contains_fichiers_autorises_block(self):
+        """Le prompt contient 'FICHIERS AUTORISÉS' avec bordures === ."""
+        agents = {"coder": MagicMock(), "security": MagicMock()}
+        council = Council(agents, ["coder", "security"], "test", enable_student=False)
+        prompt = council._build_prompt("coder", 1)
+        assert "FICHIERS AUTORISÉS" in prompt
+        assert "=" * 60 in prompt
+
+    def test_prompt_contains_hallucination_warning(self):
+        """Le prompt contient le mot 'HALLUCINATION'."""
+        agents = {"coder": MagicMock(), "security": MagicMock()}
+        council = Council(agents, ["coder", "security"], "test", enable_student=False)
+        prompt = council._build_prompt("coder", 1)
+        assert "HALLUCINATION" in prompt

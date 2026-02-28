@@ -43,6 +43,28 @@ from core.prompt_templates import get_project_structure as _get_project_structur
 from core.prompt_templates import council_guardrail as _council_guardrail
 
 
+# --- Extraction mots-clés (utilitaire recadrage étudiant) ---
+_STOPWORDS_FR = frozenset({
+    "pour", "dans", "avec", "comment", "quand", "quel", "quelle",
+    "quels", "quelles", "cette", "notre", "nous", "vous", "sont",
+    "être", "avoir", "faire", "plus", "moins", "très", "tout",
+    "tous", "etre", "entre", "aussi", "comme", "mais", "donc",
+    "alors", "peut", "doit", "faut", "sans", "vers", "chez",
+    "sous", "avant", "après", "apres", "depuis", "encore",
+    "autre", "autres", "même", "meme", "quoi", "dont", "ceux",
+})
+
+
+def _extract_keywords(text: str, top_n: int = 8) -> set:
+    """Extrait les mots-clés significatifs d'un texte (déterministe)."""
+    words = re.findall(r'[a-zA-Zéèêàùûôîïëç]{4,}', text.lower())
+    freq = {}
+    for w in words:
+        if w not in _STOPWORDS_FR:
+            freq[w] = freq.get(w, 0) + 1
+    return set(sorted(freq, key=freq.get, reverse=True)[:top_n])
+
+
 # --- Scoring des arguments du Council ---
 # Critères objectifs pour pondérer la force d'un argument
 _FILE_PATTERN = re.compile(r'(?:core/|Agents/|config[./]|tests/|main\.py)\S+')
@@ -208,8 +230,11 @@ class Council:
     def _build_student_contribution(self, round_num: int) -> str:
         """Construit la contribution de Prométhée-étudiant (déterministe, 0 LLM).
         Round 1 : ouverture (émotion + goals + desires + question).
-        Round 2+ : relance via _build_student_followup."""
+        Round 2+ : recadrage si problèmes détectés, sinon relance classique."""
         if round_num > 1:
+            recadrage = self._build_student_recadrage(round_num)
+            if recadrage:
+                return recadrage
             return self._build_student_followup(round_num)
 
         parts = []
@@ -327,6 +352,74 @@ class Council:
 
         text = "QUESTION: " + " | ".join(parts)
         return text[:300]
+
+    def _build_student_recadrage(self, round_num: int) -> str:
+        """Recadrage actif de l'étudiant aux rounds 2+ (déterministe, 0 LLM).
+        Détecte : fichiers hallucines, hors-sujet, répétition.
+        Retourne un texte préfixé RECADRAGE: (max 400 chars) ou '' si rien à signaler."""
+        prev_round = round_num - 1
+        prev_entries = [
+            e for e in self.transcript
+            if e["round"] == prev_round
+            and not e.get("is_student") and not e.get("is_advocate")
+        ]
+        if not prev_entries:
+            return ""
+
+        issues = []
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        # A. Fichiers hallucines
+        for entry in prev_entries:
+            files_cited = _FILE_PATTERN.findall(entry.get("content", ""))
+            hallucinated = []
+            for fpath in files_cited:
+                clean = fpath.rstrip(".,;:)\"'")
+                full = os.path.join(project_root, clean)
+                if not os.path.exists(full):
+                    hallucinated.append(clean)
+            if len(hallucinated) >= 2:
+                unique_h = list(dict.fromkeys(hallucinated))[:3]
+                issues.append(
+                    f"{entry['agent'].upper()} cite {len(hallucinated)} fichiers "
+                    f"inexistants ({', '.join(unique_h)})"
+                )
+
+        # B. Hors-sujet (mission drift)
+        mission_kw = _extract_keywords(self.mission, top_n=5)
+        if mission_kw:
+            for entry in prev_entries:
+                content_kw = _extract_keywords(entry.get("content", ""), top_n=15)
+                overlap = mission_kw & content_kw
+                if len(overlap) < max(1, len(mission_kw) * 0.2):
+                    issues.append(
+                        f"{entry['agent'].upper()} est hors-sujet"
+                    )
+
+        # C. Répétition (agent dit la même chose qu'au round N-2)
+        if prev_round >= 2:
+            prev_prev_entries = {
+                e["agent"]: e for e in self.transcript
+                if e["round"] == prev_round - 1
+                and not e.get("is_student") and not e.get("is_advocate")
+            }
+            for entry in prev_entries:
+                prev_prev = prev_prev_entries.get(entry["agent"])
+                if prev_prev:
+                    kw_now = _extract_keywords(entry.get("content", ""), top_n=10)
+                    kw_prev = _extract_keywords(prev_prev.get("content", ""), top_n=10)
+                    if kw_now and kw_prev:
+                        overlap_ratio = len(kw_now & kw_prev) / max(len(kw_now), 1)
+                        if overlap_ratio > 0.8:
+                            issues.append(
+                                f"{entry['agent'].upper()} repete le meme contenu"
+                            )
+
+        if not issues:
+            return ""
+
+        text = "RECADRAGE: " + " | ".join(issues)
+        return text[:400]
 
     def _build_advocate_contribution(self, round_num: int) -> str:
         """Avocat du Diable — critique deterministe du round precedent (0 LLM).
@@ -497,13 +590,23 @@ class Council:
         student_entries = [e for e in self.transcript if e.get("is_student") and e["round"] == current_round]
         if student_entries:
             student_text = student_entries[-1]["content"]
-            student_block = (
-                f"\nPROMETHEE-ETUDIANT (le systeme lui-meme) DEMANDE :\n"
-                f'"{student_text}"\n\n'
-                f"Tu es son PROFESSEUR. Reponds a ses preoccupations reelles.\n"
-                f"- Adresse DIRECTEMENT les questions de l'etudiant.\n"
-                f"- Propose des actions concretes liees a ses objectifs.\n\n"
-            )
+            if student_text.startswith("RECADRAGE:"):
+                student_block = (
+                    f"\nPROMETHEE-ETUDIANT (MODERATEUR) :\n"
+                    f'"{student_text}"\n\n'
+                    f"⚠️ Le systeme a detecte des PROBLEMES dans ta contribution precedente.\n"
+                    f"- Si tu es cite : CORRIGE les problemes signales.\n"
+                    f"- Cite UNIQUEMENT des fichiers de la liste FICHIERS AUTORISES.\n"
+                    f"- Reste sur le SUJET du debat.\n\n"
+                )
+            else:
+                student_block = (
+                    f"\nPROMETHEE-ETUDIANT (le systeme lui-meme) DEMANDE :\n"
+                    f'"{student_text}"\n\n'
+                    f"Tu es son PROFESSEUR. Reponds a ses preoccupations reelles.\n"
+                    f"- Adresse DIRECTEMENT les questions de l'etudiant.\n"
+                    f"- Propose des actions concretes liees a ses objectifs.\n\n"
+                )
 
         # Bloc avocat du diable : si l'avocat a parle ce round, instruire l'agent de defendre
         advocate_block = ""
@@ -520,8 +623,12 @@ class Council:
         return (
             f"Tu participes à un CONSEIL multi-agents.\n"
             f"LANGUE OBLIGATOIRE : Réponds UNIQUEMENT en français. Pas d'anglais.\n"
-            f"{_COUNCIL_PROJECT_CONTEXT}\n"
-            f"{project_files}\n\n"
+            f"{_COUNCIL_PROJECT_CONTEXT}\n\n"
+            f"{'='*60}\n"
+            f"FICHIERS AUTORISÉS (SEULS fichiers que tu peux citer) :\n"
+            f"{project_files}\n"
+            f"⚠️ Tout fichier NON listé ci-dessus est une HALLUCINATION.\n"
+            f"{'='*60}\n\n"
             f"MISSION : {self.mission}\n"
             f"PARTICIPANTS : {', '.join(p.upper() for p in self.participants)}\n"
             f"TOUR : {current_round}/{self.max_rounds}\n"
