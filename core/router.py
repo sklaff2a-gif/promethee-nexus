@@ -141,43 +141,52 @@ class RouterAgent:
 
     @staticmethod
     async def _semantic_reflection(mission: str) -> str:
-        """Demande à un petit modèle local de classer l'intention."""
+        """Demande au modèle routeur léger (4B) de classer l'intention."""
         try:
-            # On utilise un petit modèle rapide pour le routing
             from config import Config
-            model = getattr(Config, "DEFAULT_LOCAL_MODEL", "gemma3:12b")
+            model = getattr(Config, "ROUTER_MODEL", "qwen3:4b")
 
             # Ajout des agents Grimoire dans la liste
             grimoire_slugs = RouterAgent._get_grimoire_slugs()
             all_agents = ["coder", "researcher", "strategist", "writer", "architect", "infra", "security", "evolution", "factory", "formatter"] + grimoire_slugs
 
-            # Prompt mis à jour avec la liste exacte des agents actifs + Grimoire
             prompt = (
-                f"Tu es le Routeur du système Nexus. Classifie cette mission vers l'agent le plus approprié.\n"
-                f"AGENTS DISPONIBLES : {all_agents}\n"
-                f"MISSION : \"{mission}\"\n"
-                f"RÈGLE : Réponds UNIQUEMENT par le nom de l'agent en minuscule. Rien d'autre."
+                f"Classifie cette mission vers l'agent le plus approprié.\n"
+                f"AGENTS : {', '.join(all_agents)}\n"
+                f"MISSION : \"{mission[:200]}\"\n"
+                f"Réponds UNIQUEMENT par le nom de l'agent. UN SEUL MOT."
             )
 
             payload = {
                 "model": model,
                 "prompt": prompt,
                 "stream": False,
-                "options": {"temperature": 0.1} # Très déterministe
+                "options": {
+                    "temperature": 0.0,
+                    "num_predict": 800,
+                    "num_ctx": 2048,
+                }
             }
 
             url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
             async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=payload, timeout=10)
+                response = await client.post(url, json=payload, timeout=15)
 
             if response.status_code == 200:
-                choice = response.json().get("response", "").strip().lower()
-                # Nettoyage au cas où le LLM soit bavard
-                valid_agents = all_agents
-                for agent in valid_agents:
+                data = response.json()
+                # Priorité 1 : réponse directe (après le thinking)
+                choice = data.get("response", "").strip().lower()
+                # Priorité 2 : si vide, chercher dans le thinking (modèle a manqué de tokens)
+                if not choice:
+                    choice = data.get("thinking", "").strip().lower()
+                # Extraire le dernier agent mentionné (conclusion du raisonnement)
+                last_match = None
+                for agent in all_agents:
                     if agent in choice:
-                        logger.info(f"💡 ROUTER: Décision IA -> {agent.upper()}")
-                        return agent
+                        last_match = agent
+                if last_match:
+                    logger.info(f"💡 ROUTER: {model} -> {last_match.upper()}")
+                    return last_match
 
             logger.warning("⚠️ ROUTER: Echec réflexion IA, repli sur STRATEGIST.")
             return "strategist"

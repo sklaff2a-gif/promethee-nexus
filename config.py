@@ -53,6 +53,7 @@ class Config:
     # Configuration Locale (Ollama)
     OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
     DEFAULT_LOCAL_MODEL = "promethee-general"  # Modèle local par défaut (guardrails bakés)
+    ROUTER_MODEL = "qwen3:4b"  # Modèle léger dédié au routage sémantique (N2)
     AGENT_SPECIFIC_LOCAL_MODELS = {
         "coder": "promethee-coder",
         "factory": "qwen3:8b",           # Exécuteur simple, pas de LLM critique
