@@ -27,6 +27,14 @@ PRUNING_THRESHOLD = 0.08
 MIN_CONCEPT_LENGTH = 3            # Rejeter les concepts trop courts (bruit)
 RESONANCE_CYCLES = 4
 STDP_MULTIPLIER = 1.5             # STDP 1.5x plus fort que Hebb classique
+STDP_BUFFER_SIZE = 15             # Taille du buffer STDP (était 50, réduit pour limiter le bruit)
+
+# Noeuds système exclus du STDP — ces noeuds sont activés à chaque cycle
+# par les organes internes et créent du bruit auto-référentiel massif.
+_STDP_EXCLUDED_PREFIXES = frozenset({
+    "dmn", "synaptic", "desire", "reptilian", "cardiac",
+    "reflex:", "trait:", "pulsion:",
+})
 
 STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -410,7 +418,16 @@ class SynapticNetwork:
     # --- Buffer temporel STDP ---
 
     def _record_activation(self, node_id: str):
-        """Enregistre une activation pour le buffer STDP."""
+        """Enregistre une activation pour le buffer STDP.
+        Les noeuds système (organes internes) sont exclus pour éviter
+        le bruit auto-référentiel massif (dmn=6800+ activations)."""
+        # Filtrer les noeuds système du STDP
+        node = self.nodes.get(node_id)
+        if node:
+            concept = node.get("concept", "")
+            if any(concept.startswith(p) for p in _STDP_EXCLUDED_PREFIXES):
+                return
+
         now = time.time()
 
         # Renforcer les paires causales avec les activations precedentes
@@ -423,8 +440,8 @@ class SynapticNetwork:
 
         self._activation_buffer.append((node_id, now))
         # Limiter le buffer
-        if len(self._activation_buffer) > 50:
-            self._activation_buffer = self._activation_buffer[-50:]
+        if len(self._activation_buffer) > STDP_BUFFER_SIZE:
+            self._activation_buffer = self._activation_buffer[-STDP_BUFFER_SIZE:]
 
     # --- Resonance emotionnelle ---
 
