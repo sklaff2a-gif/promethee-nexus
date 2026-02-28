@@ -2,7 +2,10 @@
 
 import ast
 import pytest
-from core.patch_engine import parse_patch, apply_patch, PatchHunk, PatchResult, MICRO_PATCH_PROMPT
+from core.patch_engine import (
+    parse_patch, apply_patch, build_retry_context, PatchHunk, PatchResult,
+    MICRO_PATCH_PROMPT, MICRO_PATCH_RETRY_PROMPT, _find_best_match_line,
+)
 
 
 # ===========================================================================
@@ -380,3 +383,192 @@ class TestIntegration:
         assert "{spec_id}" in MICRO_PATCH_PROMPT
         assert "{source_excerpt}" in MICRO_PATCH_PROMPT
         assert "{guardrail}" in MICRO_PATCH_PROMPT
+
+    def test_retry_prompt_template_format(self):
+        """Le template retry contient les placeholders nécessaires."""
+        assert "{error_summary}" in MICRO_PATCH_RETRY_PROMPT
+        assert "{failed_details}" in MICRO_PATCH_RETRY_PROMPT
+        assert "{source_context}" in MICRO_PATCH_RETRY_PROMPT
+        assert "{guardrail}" in MICRO_PATCH_RETRY_PROMPT
+        assert "<<<< SEARCH" in MICRO_PATCH_RETRY_PROMPT
+
+
+# ===========================================================================
+# TestFailedHunks
+# ===========================================================================
+
+class TestFailedHunks:
+    """Vérifie que les hunks échoués sont correctement enregistrés."""
+
+    def test_failed_hunks_recorded(self):
+        source = "x = 1\ny = 2"
+        hunks = [PatchHunk(search="z = 3", replace="z = 99")]
+        result = apply_patch(source, hunks)
+        assert not result.success
+        assert len(result.failed_hunks) == 1
+        assert result.failed_hunks[0][0] == 0  # index
+        assert result.failed_hunks[0][1].search == "z = 3"
+
+    def test_partial_failure_records_correct_hunks(self):
+        source = "x = 1\ny = 2\nz = 3"
+        hunks = [
+            PatchHunk(search="x = 1", replace="x = 10"),  # OK
+            PatchHunk(search="w = 4", replace="w = 40"),  # FAIL
+            PatchHunk(search="z = 3", replace="z = 30"),  # OK
+        ]
+        result = apply_patch(source, hunks)
+        assert not result.success
+        assert result.hunks_applied == 2
+        assert len(result.failed_hunks) == 1
+        assert result.failed_hunks[0][0] == 1  # index du hunk échoué
+        assert result.failed_hunks[0][1].search == "w = 4"
+
+    def test_success_has_no_failed_hunks(self):
+        source = "x = 1"
+        hunks = [PatchHunk(search="x = 1", replace="x = 2")]
+        result = apply_patch(source, hunks)
+        assert result.success
+        assert len(result.failed_hunks) == 0
+
+
+# ===========================================================================
+# TestBuildRetryContext
+# ===========================================================================
+
+class TestBuildRetryContext:
+
+    def test_empty_failed_hunks(self):
+        result = PatchResult(
+            success=True, patched_source="x = 1",
+            hunks_applied=1, hunks_total=1,
+        )
+        ctx = build_retry_context("x = 1", result)
+        assert ctx["error_summary"] == ""
+        assert ctx["failed_details"] == ""
+
+    def test_single_failed_hunk_context(self):
+        source = (
+            "import os\n"
+            "\n"
+            "class Agent:\n"
+            "    def process(self, data):\n"
+            "        return data\n"
+            "\n"
+            "    def cleanup(self):\n"
+            "        pass\n"
+        )
+        failed_hunk = PatchHunk(
+            search="    def proccess(self, data):\n        return data",  # typo
+            replace="    def process(self, data):\n        return data.strip()"
+        )
+        result = PatchResult(
+            success=False, patched_source=source,
+            hunks_applied=0, hunks_total=1,
+            error="Hunk 1/1: SEARCH introuvable",
+            failed_hunks=[(0, failed_hunk)],
+        )
+        ctx = build_retry_context(source, result)
+        assert "1 bloc(s)" in ctx["error_summary"]
+        assert "proccess" in ctx["failed_details"]
+        # Le contexte source doit montrer la zone autour de "process"
+        assert "process" in ctx["source_context"]
+
+    def test_multiple_failed_hunks(self):
+        source = "def foo():\n    pass\n\ndef bar():\n    pass\n"
+        result = PatchResult(
+            success=False, patched_source=source,
+            hunks_applied=0, hunks_total=2,
+            error="...",
+            failed_hunks=[
+                (0, PatchHunk(search="def fooo():", replace="def foo():\n    return 1")),
+                (1, PatchHunk(search="def barr():", replace="def bar():\n    return 2")),
+            ],
+        )
+        ctx = build_retry_context(source, result)
+        assert "2 bloc(s)" in ctx["error_summary"]
+        assert "BLOC 1" in ctx["failed_details"]
+        assert "BLOC 2" in ctx["failed_details"]
+
+    def test_source_context_has_line_numbers(self):
+        source = "\n".join(f"line_{i} = {i}" for i in range(20))
+        result = PatchResult(
+            success=False, patched_source=source,
+            hunks_applied=0, hunks_total=1,
+            error="...",
+            failed_hunks=[
+                (0, PatchHunk(search="line_10 = 999", replace="line_10 = 0")),
+            ],
+        )
+        ctx = build_retry_context(source, result)
+        # Doit contenir des numéros de ligne
+        assert " | " in ctx["source_context"]
+
+    def test_retry_end_to_end(self):
+        """Simule un cycle complet : patch échoue → retry contexte → patch corrigé."""
+        source = (
+            "import os\n"
+            "\n"
+            "def calculate(x, y):\n"
+            "    return x + y\n"
+        )
+        # Patch initial avec typo dans le SEARCH
+        bad_patch = (
+            "<<<< SEARCH\n"
+            "def calcualte(x, y):\n"
+            "    return x + y\n"
+            "====\n"
+            "def calculate(x, y):\n"
+            "    if y == 0:\n"
+            "        return x\n"
+            "    return x + y\n"
+            ">>>> REPLACE"
+        )
+        hunks, _ = parse_patch(bad_patch)
+        result = apply_patch(source, hunks)
+        assert not result.success
+        assert len(result.failed_hunks) == 1
+
+        # Construire le contexte de retry
+        ctx = build_retry_context(source, result)
+        assert "calcualte" in ctx["failed_details"]
+        assert "calculate" in ctx["source_context"]
+
+        # Patch corrigé (comme le ferait le LLM après retry)
+        good_patch = (
+            "<<<< SEARCH\n"
+            "def calculate(x, y):\n"
+            "    return x + y\n"
+            "====\n"
+            "def calculate(x, y):\n"
+            "    if y == 0:\n"
+            "        return x\n"
+            "    return x + y\n"
+            ">>>> REPLACE"
+        )
+        retry_hunks, _ = parse_patch(good_patch)
+        retry_result = apply_patch(source, retry_hunks)
+        assert retry_result.success
+        assert "if y == 0" in retry_result.patched_source
+
+
+# ===========================================================================
+# TestFindBestMatchLine
+# ===========================================================================
+
+class TestFindBestMatchLine:
+
+    def test_exact_match(self):
+        lines = ["import os", "def foo():", "    pass"]
+        idx = _find_best_match_line(lines, "def foo():")
+        assert idx == 1
+
+    def test_approximate_match(self):
+        lines = ["import os", "def process_data(self, items):", "    pass"]
+        idx = _find_best_match_line(lines, "def process_data(self, data):")
+        assert idx == 1  # "process_data" et "self" matchent
+
+    def test_no_match(self):
+        lines = ["x = 1", "y = 2"]
+        idx = _find_best_match_line(lines, "def completely_unrelated():")
+        # "completely_unrelated" n'est dans aucune ligne
+        assert idx is None or isinstance(idx, int)

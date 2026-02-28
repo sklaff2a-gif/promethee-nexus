@@ -42,6 +42,11 @@ class PatchResult:
     hunks_applied: int
     hunks_total: int
     error: str = ""
+    failed_hunks: list = None  # Liste de (index, PatchHunk) des hunks échoués
+
+    def __post_init__(self):
+        if self.failed_hunks is None:
+            self.failed_hunks = []
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +146,7 @@ def apply_patch(source: str, hunks: list[PatchHunk]) -> PatchResult:
     applied = 0
     total = len(hunks)
     errors = []
+    failed = []
 
     for idx, hunk in enumerate(hunks):
         # Tentative 1 : matching exact
@@ -164,13 +170,14 @@ def apply_patch(source: str, hunks: list[PatchHunk]) -> PatchResult:
                 continue
 
         errors.append(f"Hunk {idx+1}/{total}: SEARCH introuvable")
+        failed.append((idx, hunk))
 
     success = applied == total
     error_msg = "; ".join(errors) if errors else ""
     return PatchResult(
         success=success, patched_source=current,
         hunks_applied=applied, hunks_total=total,
-        error=error_msg
+        error=error_msg, failed_hunks=failed
     )
 
 
@@ -245,3 +252,121 @@ MICRO_PATCH_PROMPT = (
     "Donne UNIQUEMENT les blocs SEARCH/REPLACE, RIEN d'autre."
     "{guardrail}"
 )
+
+MICRO_PATCH_RETRY_PROMPT = (
+    "Ton patch précédent a ÉCHOUÉ. {error_summary}\n\n"
+    "{failed_details}\n\n"
+    "CODE SOURCE RÉEL (extrait autour de la zone) :\n{source_context}\n\n"
+    "INSTRUCTIONS DE CORRECTION :\n"
+    "- Corrige tes blocs SEARCH pour qu'ils correspondent EXACTEMENT au code source ci-dessus\n"
+    "- Copie les lignes du source caractère par caractère (indentation, espaces, ponctuation)\n"
+    "- Conserve le même REPLACE (la modification souhaitée)\n"
+    "- Retourne UNIQUEMENT les blocs SEARCH/REPLACE corrigés\n\n"
+    "FORMAT :\n\n"
+    "<<<< SEARCH\n"
+    "lignes exactes copiées du source\n"
+    "====\n"
+    "lignes de remplacement\n"
+    ">>>> REPLACE\n\n"
+    "Donne UNIQUEMENT les blocs corrigés, RIEN d'autre."
+    "{guardrail}"
+)
+
+
+def build_retry_context(source: str, patch_result: PatchResult) -> dict:
+    """Construit le contexte d'erreur pour un retry de micro-patch.
+
+    Retourne un dict avec :
+    - error_summary: résumé court de l'erreur
+    - failed_details: détails de chaque hunk échoué
+    - source_context: extrait du source autour des zones probables
+    """
+    if not patch_result.failed_hunks:
+        return {"error_summary": "", "failed_details": "", "source_context": ""}
+
+    error_summary = (
+        f"{len(patch_result.failed_hunks)} bloc(s) SEARCH introuvable(s) "
+        f"sur {patch_result.hunks_total} — le texte SEARCH ne correspond pas au code source réel."
+    )
+
+    # Détails de chaque hunk échoué
+    details_parts = []
+    for idx, hunk in patch_result.failed_hunks:
+        first_line = hunk.search.split("\n")[0].strip()
+        details_parts.append(
+            f"BLOC {idx+1} ÉCHOUÉ — ta ligne SEARCH commençait par : \"{first_line}\"\n"
+            f"Ce texte n'existe PAS dans le fichier source."
+        )
+    failed_details = "\n".join(details_parts)
+
+    # Extraire le contexte source autour des zones probables
+    source_context = _find_nearby_context(source, patch_result.failed_hunks)
+
+    return {
+        "error_summary": error_summary,
+        "failed_details": failed_details,
+        "source_context": source_context,
+    }
+
+
+def _find_nearby_context(source: str, failed_hunks: list, context_lines: int = 5) -> str:
+    """Trouve les zones du source les plus proches des hunks échoués.
+
+    Utilise la première ligne du SEARCH pour trouver une correspondance
+    approximative (mots-clés) et retourne le contexte autour.
+    """
+    source_lines = source.split("\n")
+    shown_ranges = []
+
+    for _, hunk in failed_hunks:
+        search_first = hunk.search.split("\n")[0].strip()
+        # Chercher la ligne la plus similaire par mots-clés
+        best_idx = _find_best_match_line(source_lines, search_first)
+        if best_idx is not None:
+            start = max(0, best_idx - context_lines)
+            end = min(len(source_lines), best_idx + context_lines + 1)
+            shown_ranges.append((start, end))
+
+    if not shown_ranges:
+        # Aucune correspondance trouvée — montrer les 30 premières lignes
+        return "\n".join(source_lines[:30])
+
+    # Fusionner les ranges qui se chevauchent
+    shown_ranges.sort()
+    merged = [shown_ranges[0]]
+    for start, end in shown_ranges[1:]:
+        prev_start, prev_end = merged[-1]
+        if start <= prev_end + 2:
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+
+    # Construire le contexte avec numéros de ligne
+    parts = []
+    for start, end in merged:
+        for i in range(start, end):
+            parts.append(f"{i+1:4d} | {source_lines[i]}")
+        parts.append("     ...")
+    if parts and parts[-1] == "     ...":
+        parts.pop()
+
+    return "\n".join(parts)
+
+
+def _find_best_match_line(source_lines: list[str], search_line: str) -> int | None:
+    """Trouve la ligne du source la plus similaire à search_line par mots-clés."""
+    # Extraire les mots significatifs (identifiants, pas les mots-clés Python)
+    search_words = set(re.findall(r'[a-zA-Z_]\w{2,}', search_line))
+    if not search_words:
+        return None
+
+    best_idx = None
+    best_score = 0
+    for i, line in enumerate(source_lines):
+        line_words = set(re.findall(r'[a-zA-Z_]\w{2,}', line))
+        overlap = len(search_words & line_words)
+        if overlap > best_score:
+            best_score = overlap
+            best_idx = i
+
+    return best_idx if best_score > 0 else None

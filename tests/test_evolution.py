@@ -1715,3 +1715,174 @@ class TestEvolutionPatchMode:
         # Au moins une expérience enregistrée avec code_source contenant "local+patch"
         patch_exps = [e for e in recorded_experiences if "local+patch" in (e.code_source or "")]
         assert len(patch_exps) >= 1
+
+    @pytest.mark.asyncio
+    async def test_patch_retry_on_failure(self):
+        """Quand le premier patch échoue, un retry avec contexte d'erreur est tenté."""
+        evo = DivineEvolution()
+
+        source_code = (
+            "import os\nimport logging\n\n"
+            "class Agent:\n"
+            "    def process(self, data):\n"
+            "        return data\n"
+        )
+
+        # Premier patch avec typo dans SEARCH
+        bad_patch = (
+            "<<<< SEARCH\n"
+            "    def proccess(self, data):\n"
+            "        return data\n"
+            "====\n"
+            "    def process(self, data):\n"
+            "        return data.strip()\n"
+            ">>>> REPLACE"
+        )
+        # Patch corrigé en retry
+        good_patch = (
+            "<<<< SEARCH\n"
+            "    def process(self, data):\n"
+            "        return data\n"
+            "====\n"
+            "    def process(self, data):\n"
+            "        return data.strip()\n"
+            ">>>> REPLACE"
+        )
+
+        dispatch_calls = []
+
+        async def mock_dispatch(agent, payload):
+            dispatch_calls.append((agent, payload))
+            if agent == "coder":
+                ctx = payload.get("context", "")
+                if "RETRY" in ctx:
+                    return {"status": "success", "result": good_patch}
+                if "MICRO_PATCH" in ctx:
+                    return {"status": "success", "result": bad_patch}
+            return {"status": "success", "result": "VALIDÉ"}
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(side_effect=mock_dispatch)
+        mock_orch._contains_python_code = MagicMock(return_value=True)
+
+        mock_bus = MagicMock()
+        mock_bus.publish = AsyncMock()
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=source_code), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=None), \
+             patch("core.orchestrator.orchestrator", mock_orch), \
+             patch("core.event_bus.bus.bus", mock_bus):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # Le retry doit avoir été appelé avec RETRY dans le contexte
+        retry_calls = [(a, p) for a, p in dispatch_calls
+                       if a == "coder" and "RETRY" in p.get("context", "")]
+        assert len(retry_calls) == 1
+        # Le résultat ne doit PAS mentionner d'échec
+        assert "Anti-troncature" not in result.get("result", "")
+
+    @pytest.mark.asyncio
+    async def test_patch_retry_failure_falls_through(self):
+        """Si le retry échoue aussi, on tombe sur le fallback historique."""
+        evo = DivineEvolution()
+
+        source_code = "import os\n\ndef main():\n    pass\n"
+
+        # Les deux patchs échouent (SEARCH introuvable)
+        bad_patch = (
+            "<<<< SEARCH\n"
+            "def inexistant():\n"
+            "    pass\n"
+            "====\n"
+            "def inexistant():\n"
+            "    return 42\n"
+            ">>>> REPLACE"
+        )
+
+        async def mock_dispatch(agent, payload):
+            if agent == "coder":
+                ctx = payload.get("context", "")
+                if "MICRO_PATCH" in ctx:
+                    return {"status": "success", "result": bad_patch}
+                # Fallback historique retourne aussi du code insuffisant
+                return {"status": "success", "result": "# trop court"}
+            return {"status": "success", "result": "OK"}
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(side_effect=mock_dispatch)
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=source_code), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=None), \
+             patch("core.orchestrator.orchestrator", mock_orch):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # Le cycle doit échouer proprement
+        assert result["status"] == "warning"
+
+    @pytest.mark.asyncio
+    async def test_patch_retry_code_source_recorded(self):
+        """L'expérience enregistre code_source='local+patch+retry' après retry réussi."""
+        evo = DivineEvolution()
+
+        source_code = (
+            "import os\nimport logging\n\n"
+            "class Agent:\n"
+            "    def run(self):\n"
+            "        pass\n"
+        )
+
+        bad_patch = (
+            "<<<< SEARCH\n"
+            "    def runn(self):\n"
+            "        pass\n"
+            "====\n"
+            "    def run(self):\n"
+            "        return True\n"
+            ">>>> REPLACE"
+        )
+        good_patch = (
+            "<<<< SEARCH\n"
+            "    def run(self):\n"
+            "        pass\n"
+            "====\n"
+            "    def run(self):\n"
+            "        return True\n"
+            ">>>> REPLACE"
+        )
+
+        recorded_experiences = []
+        original_record = ExperienceRegistry.record
+
+        def capture_record(self_reg, exp):
+            recorded_experiences.append(exp)
+            return original_record(self_reg, exp)
+
+        async def mock_dispatch(agent, payload):
+            if agent == "coder":
+                ctx = payload.get("context", "")
+                if "RETRY" in ctx:
+                    return {"status": "success", "result": good_patch}
+                if "MICRO_PATCH" in ctx:
+                    return {"status": "success", "result": bad_patch}
+            return {"status": "success", "result": "VALIDÉ"}
+
+        mock_orch = MagicMock()
+        mock_orch.dispatch_task = AsyncMock(side_effect=mock_dispatch)
+        mock_orch._contains_python_code = MagicMock(return_value=True)
+
+        mock_bus = MagicMock()
+        mock_bus.publish = AsyncMock()
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
+             patch.object(evo, "_read_target_file", return_value=source_code), \
+             patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=None), \
+             patch("core.orchestrator.orchestrator", mock_orch), \
+             patch("core.event_bus.bus.bus", mock_bus), \
+             patch.object(ExperienceRegistry, "record", capture_record):
+            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+
+        # L'expérience doit contenir "local+patch+retry"
+        retry_exps = [e for e in recorded_experiences if "retry" in (e.code_source or "")]
+        assert len(retry_exps) >= 1

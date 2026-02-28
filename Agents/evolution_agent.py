@@ -654,7 +654,10 @@ class DivineEvolution(BaseAgent):
                 # Fallback : micro-patch SEARCH/REPLACE via Coder local
                 self.log_thought("⚠️ Cloud indisponible, tentative micro-patch via Coder local...", type="warning")
                 try:
-                    from core.patch_engine import parse_patch, apply_patch, MICRO_PATCH_PROMPT
+                    from core.patch_engine import (
+                        parse_patch, apply_patch, build_retry_context,
+                        MICRO_PATCH_PROMPT, MICRO_PATCH_RETRY_PROMPT,
+                    )
                     # Construire l'extrait source pertinent
                     if method_ctx and method_ctx.get("method_source"):
                         source_excerpt = (
@@ -675,6 +678,8 @@ class DivineEvolution(BaseAgent):
                     )
                     if past_failures:
                         patch_prompt += f"\n\nATTENTION — {past_failures}\nÉVITE de reproduire ces erreurs.\n"
+
+                    # Tentative 1 : micro-patch
                     coder_response = await orchestrator.dispatch_task("coder", {
                         "mission": patch_prompt,
                         "context": f"EVOLUTION_PIPELINE\nMICRO_PATCH\nSPEC_ID: {spec.id}"
@@ -693,12 +698,41 @@ class DivineEvolution(BaseAgent):
                                     f"✅ Micro-patch appliqué: {patch_result.hunks_applied}/{patch_result.hunks_total} hunks",
                                     type="info"
                                 )
-                            else:
+                            elif patch_result.failed_hunks:
+                                # Retry avec contexte d'erreur
                                 self.log_thought(
-                                    f"⚠️ Micro-patch échoué: {patch_result.error} "
-                                    f"({patch_result.hunks_applied}/{patch_result.hunks_total} hunks)",
+                                    f"🔄 Micro-patch échoué ({patch_result.error}), retry avec contexte...",
                                     type="warning"
                                 )
+                                retry_ctx = build_retry_context(source_code, patch_result)
+                                retry_prompt = MICRO_PATCH_RETRY_PROMPT.format(
+                                    error_summary=retry_ctx["error_summary"],
+                                    failed_details=retry_ctx["failed_details"],
+                                    source_context=retry_ctx["source_context"],
+                                    guardrail=CODE_GENERATION_GUARDRAIL,
+                                )
+                                retry_response = await orchestrator.dispatch_task("coder", {
+                                    "mission": retry_prompt,
+                                    "context": f"EVOLUTION_PIPELINE\nMICRO_PATCH\nRETRY\nSPEC_ID: {spec.id}"
+                                })
+                                raw_retry = retry_response.get("result", "")
+                                if raw_retry and len(raw_retry) >= 20:
+                                    retry_hunks, _ = parse_patch(raw_retry)
+                                    if retry_hunks:
+                                        retry_result = apply_patch(source_code, retry_hunks)
+                                        if retry_result.success:
+                                            generated_code = retry_result.patched_source
+                                            code_source = "local+patch+retry"
+                                            self.log_thought(
+                                                f"✅ Micro-patch retry réussi: "
+                                                f"{retry_result.hunks_applied}/{retry_result.hunks_total} hunks",
+                                                type="info"
+                                            )
+                                        else:
+                                            self.log_thought(
+                                                f"⚠️ Micro-patch retry échoué: {retry_result.error}",
+                                                type="warning"
+                                            )
                 except Exception as patch_err:
                     self.log_thought(f"⚠️ Erreur micro-patch: {patch_err}", type="warning")
                 # Fallback final : mode historique (fichier complet via Coder)
@@ -923,7 +957,7 @@ class DivineEvolution(BaseAgent):
         # --- PHASE 4d : ANTI-TRONCATURE ---
         # Le code généré doit faire au moins 60% du code source original
         # Skip en mode patch : le code patché EST le source complet avec modifications ciblées
-        if code_source == "local+patch":
+        if code_source and code_source.startswith("local+patch"):
             pass  # Skip — le patch a été appliqué sur le source original complet
         elif source_code and len(source_code) > 500:
             ratio = len(generated_code) / len(source_code)
