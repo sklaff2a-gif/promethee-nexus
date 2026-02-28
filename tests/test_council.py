@@ -1629,3 +1629,16 @@ class TestSanitizeFileReferences:
             advocate_text = council._build_advocate_contribution(2)
         # Les deux fichiers existent (après nettoyage backtick) → pas de FICHIERS INEXISTANTS
         assert "FICHIERS INEXISTANTS" not in advocate_text
+
+    def test_no_cascade_on_inexistant_marker(self):
+        """Un marqueur [chemin→INEXISTANT] ne doit pas être re-traité au round suivant."""
+        council = self._make_council()
+        fake_files = {"core/router.py"}
+        text = "Voir [core/event_bus/→INEXISTANT] et core/router.py pour details"
+        with patch.object(council_module, "_REAL_FILES_CACHE", fake_files):
+            result = council._sanitize_file_references(text)
+        # Le marqueur existant ne doit pas être modifié
+        assert "[core/event_bus/→INEXISTANT]" in result
+        assert "→INEXISTANT]→INEXISTANT]" not in result
+        # Le fichier réel reste intact
+        assert "core/router.py" in result

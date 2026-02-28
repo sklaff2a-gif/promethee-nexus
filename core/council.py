@@ -575,6 +575,9 @@ class Council:
                 unique_matches.append(m)
         real_files = _get_real_files()
         for raw_match in unique_matches:
+            # Ignorer les matches déjà marqués INEXISTANT (éviter cascade)
+            if "→INEXISTANT]" in raw_match or "→INEXISTANT" in raw_match:
+                continue
             clean = raw_match.rstrip(".,;:)\"'`*")
             if clean in real_files:
                 # Fichier réel — juste nettoyer le trailing si différent
