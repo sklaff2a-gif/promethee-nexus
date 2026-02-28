@@ -50,5 +50,9 @@
   "NEURAL_COMPILE": {
     "cost": 0,
     "description": "Compile observations LLM en règles déterministes, 0 appel LLM"
+  },
+  "CIRCADIAN_MAINTENANCE": {
+    "cost": 0,
+    "description": "Maintenance sommeil profond, 0 LLM"
   }
 }

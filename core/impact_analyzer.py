@@ -80,18 +80,7 @@ _ROADMAP = [
             "core.dopamine_system", "core.inner_voice",
         ],
     },
-    {
-        "id": "planned.corpus_callosum",
-        "display": "corpus_callosum",
-        "phase": 4,
-        "phase_name": "SENTIR",
-        "description": "Corps calleux — synchronisation inter-hemispheres, "
-                       "coherence entre modules cognitifs et emotionnels, bus intelligent",
-        "connects_to": [
-            "core.prefrontal", "core.reptilian_core", "core.cardiac_engine",
-            "core.inner_voice", "core.event_bus.bus",
-        ],
-    },
+    # corpus_callosum : IMPLEMENTE (core/corpus_callosum.py)
     {
         "id": "planned.thalamus",
         "display": "thalamus",
@@ -105,18 +94,7 @@ _ROADMAP = [
         ],
     },
     # --- PHASE 5 : SOUVENIR ---
-    {
-        "id": "planned.hippocampus",
-        "display": "hippocampus",
-        "phase": 5,
-        "phase_name": "SOUVENIR",
-        "description": "Memoire episodique — replay temporel des sequences vecues, "
-                       "consolidation nocturne, souvenirs autobiographiques",
-        "connects_to": [
-            "core.synaptic_network", "core.prefrontal", "core.inner_voice",
-            "core.self_awareness", "core.autonomy_engine",
-        ],
-    },
+    # hippocampus : IMPLEMENTE (core/hippocampus.py)
     {
         "id": "planned.episodic_buffer",
         "display": "episodic_buffer",
@@ -130,15 +108,16 @@ _ROADMAP = [
         ],
     },
     {
-        "id": "planned.chronos",
-        "display": "chronos",
+        "id": "core.circadian_rhythm",
+        "display": "circadian_rhythm",
         "phase": 5,
         "phase_name": "SOUVENIR",
-        "description": "Conscience temporelle — perception du temps, detection de rythmes "
-                       "et cycles, anticipation des patterns recurrents",
+        "description": "Cycle circadien — 4 phases (eveil/crepuscule/sommeil/aube), "
+                       "consolidation nocturne multi-organes, grimoire harvest",
         "connects_to": [
-            "core.cardiac_engine", "core.prefrontal", "core.autonomy_engine",
-            "core.inner_voice",
+            "core.autonomy_engine", "core.cardiac_engine", "core.reptilian_core",
+            "core.corpus_callosum", "core.synaptic_network", "core.hippocampus",
+            "core.neural_compiler", "core.evolution_catalog",
         ],
     },
     # --- PHASE 6 : COMPRENDRE ---

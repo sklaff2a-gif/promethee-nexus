@@ -408,6 +408,13 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Cycle circadien
+        try:
+            from core.circadian_rhythm import circadian
+            snapshot["circadian_phase"] = circadian.get_phase()
+        except Exception:
+            snapshot["circadian_phase"] = "eveil"
+
         self._snapshots.append(snapshot)
         if len(self._snapshots) > MAX_SNAPSHOTS:
             self._snapshots = self._snapshots[-MAX_SNAPSHOTS:]

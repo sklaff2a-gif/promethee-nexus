@@ -329,6 +329,11 @@ async def lifespan(app: FastAPI):
     soliloque.init()
     print(f"   🪞 SOLILOQUE: Compagnon intérieur actif ({soliloque.session_count} sessions).")
 
+    # --- CYCLE CIRCADIEN ---
+    from core.circadian_rhythm import circadian
+    circadian.init()
+    print(f"   🌙 CIRCADIEN: phase={circadian.phase}, cycles={circadian._total_sleep_cycles}.")
+
     # --- COEUR (Moteur Cardiaque) ---
     from core.cardiac_engine import heart
     heart.init()
@@ -576,6 +581,12 @@ async def hippocampus_status():
     """Retourne l'etat de la memoire episodique (hippocampe)."""
     from core.hippocampus import hippocampus
     return hippocampus.get_stats()
+
+@app.get("/api/circadian/status")
+async def circadian_status():
+    """Retourne l'état du cycle circadien."""
+    from core.circadian_rhythm import circadian
+    return circadian.get_stats()
 
 @app.get("/api/compiler/status")
 async def compiler_status():

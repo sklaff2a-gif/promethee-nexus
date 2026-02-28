@@ -846,6 +846,22 @@ class AutonomyEngine:
                 await self._execute_post_budget_routine()
                 return
 
+        # --- Filtrage circadien ---
+        try:
+            from core.circadian_rhythm import circadian
+            filtered_scored = []
+            for r, s in scored:
+                cost = RESOURCE_COSTS.get(r["intent"], 2)
+                allowed, deny_reason = circadian.should_allow_routine(r["intent"], cost)
+                if allowed:
+                    filtered_scored.append((r, s))
+                else:
+                    logger.info(f"[CIRCADIEN] Routine bloquée: {r['intent']} — {deny_reason}")
+            if filtered_scored:
+                scored = filtered_scored
+        except Exception:
+            pass
+
         selected, score = scored[0]
         agent = selected["agent"]
         intent = selected["intent"]
@@ -2177,14 +2193,47 @@ class AutonomyEngine:
                 if self.error_streak >= 5:
                     self.error_streak -= 1
 
+            # Modulation circadienne du sleep
+            try:
+                from core.circadian_rhythm import circadian
+                sleep_time = int(sleep_time * circadian.get_sleep_multiplier())
+            except Exception:
+                pass
+
             await asyncio.sleep(sleep_time)
 
             if orchestrator.kill_switch_active or self.is_processing:
                 continue
 
             budget_status = self._check_daily_budget()
+
+            # --- CIRCADIEN : évaluer transition de phase ---
+            try:
+                from core.circadian_rhythm import circadian
+                new_phase = circadian._evaluate_transition(budget_status, self.last_health_check)
+                if new_phase:
+                    await circadian._transition_to(new_phase, f"budget={budget_status}")
+                current_phase = circadian.get_phase()
+            except Exception:
+                current_phase = "eveil"
+
             if budget_status == "exhausted":
-                # Seules les routines gratuites (0-LLM) tournent
+                if current_phase == "sommeil_profond":
+                    # Sommeil profond : exécuter les tâches de maintenance
+                    self.is_processing = True
+                    try:
+                        from core.circadian_rhythm import circadian as _circ
+                        result = await _circ.execute_next_sleep_task()
+                        if result is None:
+                            await _circ._transition_to("aube", "maintenance terminée")
+                    except Exception as e:
+                        logger.warning(f"[AUTONOMY] Erreur maintenance circadienne: {e}")
+                    finally:
+                        self._persist_state()
+                        await asyncio.sleep(30)
+                        self.is_processing = False
+                    continue
+                # Crépuscule/Aube : routines post-budget existantes
                 if not self.is_processing:
                     idle_time = time.time() - self.last_user_interaction
                     if idle_time > self.idle_threshold:

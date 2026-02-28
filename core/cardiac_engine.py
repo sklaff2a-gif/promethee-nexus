@@ -86,6 +86,8 @@ _STIMULUS_MAP: Dict[str, Dict[str, Any]] = {
     "creation":     {"emotion": "enthousiasme", "bpm_delta": +20,  "ans_shift": +0.05, "intensity": 0.8},
     "threat":       {"emotion": "alerte",       "bpm_delta": +40,  "ans_shift": +0.30, "intensity": 0.9},
     "adrenaline":   {"emotion": "determination","bpm_delta": +30,  "ans_shift": +0.25, "intensity": 0.85},
+    "sleep_deep":   {"emotion": "serenite",    "bpm_delta": -20,  "ans_shift": -0.30, "intensity": 0.15},
+    "dawn":         {"emotion": "curiosite",   "bpm_delta": +5,   "ans_shift": +0.05, "intensity": 0.4},
 }
 
 # ============================================================
@@ -446,6 +448,13 @@ class CardiacEngine:
         # Bradycardie profonde (repos réparateur) → laisser dormir
         if self.bpm < 50:
             base = int(base * 0.85)  # Déjà calme, pas besoin de plus
+
+        # Modulation circadienne
+        try:
+            from core.circadian_rhythm import circadian
+            base = int(base * circadian.get_sleep_multiplier())
+        except Exception:
+            pass
 
         return max(300, min(1800, base))
 

@@ -317,9 +317,16 @@ class ReptilianCore:
         # --- Inactivité prolongée ---
         # Ne PAS compter l'idle pendant FREEZE/SHED (c'est le système qui bloque,
         # sinon cercle vicieux : FREEZE→pas de routine→idle monte→menace reste→FREEZE)
+        # Ne PAS compter l'idle pendant le sommeil circadien (repos volontaire)
         freeze_active = time.time() < self._freeze_until
         shed_active = time.time() < self._shed_until
-        if now - self._last_activity > THRESHOLDS["idle_too_long"] and not freeze_active and not shed_active:
+        is_sleeping = False
+        try:
+            from core.circadian_rhythm import circadian
+            is_sleeping = circadian.get_phase() in ("sommeil_profond", "crepuscule")
+        except Exception:
+            pass
+        if now - self._last_activity > THRESHOLDS["idle_too_long"] and not freeze_active and not shed_active and not is_sleeping:
             threats["idle"] = 2.0
 
         self._last_threats = threats
