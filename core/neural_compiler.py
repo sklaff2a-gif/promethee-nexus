@@ -38,6 +38,7 @@ RULE_DISABLE_THRESHOLD = 0.5
 AB_TEST_PROBABILITY = 0.10       # 10% vérification parallèle LLM
 AUTOSAVE_INTERVAL = 10
 COMPILE_COOLDOWN = 300           # 5 min entre compilations
+FEEDBACK_WINDOW = 600            # 10 min fenêtre feedback (councils longs)
 RULE_MAX_AGE_DAYS = 5            # Règles périmées après 5 jours sans revalidation
 
 # --- Agents core (persistants) vs Grimoire (éphémères) ---
@@ -518,8 +519,10 @@ class NeuralCompiler:
                 if isinstance(p, str):
                     match_agents.add(p)
 
-            # Mettre à jour les observations récentes (< 5 min) sans quality
-            cutoff = time.time() - 300
+            # Mettre à jour les observations récentes sans quality
+            # Fenêtre de 10 min (FEEDBACK_WINDOW) car les councils longs
+            # peuvent dépasser 5 min entre le premier round et ROUTINE_COMPLETE.
+            cutoff = time.time() - FEEDBACK_WINDOW
             updated = 0
             for obs in reversed(self._observations):
                 if obs.timestamp < cutoff:
@@ -528,7 +531,8 @@ class NeuralCompiler:
                     obs.quality = quality
                     updated += 1
             if updated > 0:
-                logger.debug(f"COMPILER: {updated} observations mises à jour (quality={quality:.2f})")
+                logger.info(f"COMPILER: {updated} obs quality={quality:.2f} ({agent}/{data.get('intent', '?')})")
+                self._save()  # Persister immédiatement les quality mises à jour
 
             # Feedback sur les intercepts récents pour ces agents
             for a in match_agents:
@@ -540,7 +544,7 @@ class NeuralCompiler:
                 if created > 0:
                     logger.info(f"COMPILER: Auto-compile déclenché, {created} règles créées.")
         except Exception as e:
-            logger.debug(f"COMPILER: Erreur on_routine_complete: {e}")
+            logger.warning(f"COMPILER: Erreur on_routine_complete: {e}")
 
     async def _on_mission_finished(self, data: dict):
         """Feedback sur les observations de missions utilisateur."""
@@ -549,7 +553,7 @@ class NeuralCompiler:
             status = data.get("status", "")
             # Qualité heuristique : mission réussie = 0.7, erreur = 0.2
             quality = 0.7 if status == "success" else 0.2
-            cutoff = time.time() - 300
+            cutoff = time.time() - FEEDBACK_WINDOW
             updated = 0
             for obs in reversed(self._observations):
                 if obs.timestamp < cutoff:
@@ -558,12 +562,13 @@ class NeuralCompiler:
                     obs.quality = quality
                     updated += 1
             if updated > 0:
-                logger.debug(f"COMPILER: {updated} observations (mission) mises à jour (quality={quality:.2f})")
+                logger.info(f"COMPILER: {updated} obs mission quality={quality:.2f} ({agent})")
+                self._save()
 
             # Feedback sur les intercepts récents pour cet agent
             self._feedback_recent_intercept(agent, quality)
         except Exception as e:
-            logger.debug(f"COMPILER: Erreur on_mission_finished: {e}")
+            logger.warning(f"COMPILER: Erreur on_mission_finished: {e}")
 
     def _feedback_recent_intercept(self, agent: str, quality: float):
         """Met à jour la règle si cet agent a eu un intercept récent (< 5 min)."""

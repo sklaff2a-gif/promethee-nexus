@@ -916,7 +916,7 @@ class TestBusIntegration:
             dopamine_bucket=1, threat_bucket=0, error_streak=0,
         )
         obs = Observation(
-            obs_id="old_obs", timestamp=time.time() - 600,  # > 5 min
+            obs_id="old_obs", timestamp=time.time() - 700,  # > FEEDBACK_WINDOW (600s)
             fingerprint=fp, response_text="test",
             response_hash=_response_hash("test old"),
             response_structure="text", quality=-1.0, was_cloud=False,
@@ -1336,7 +1336,7 @@ class TestPseudoAgentFeedback:
     async def test_pseudo_agent_does_not_update_old_obs(self, isolate_compiler):
         """Les pseudo-agents n'affectent pas les observations > 5 min."""
         c = isolate_compiler
-        obs = self._make_obs("strategist", age_seconds=600)
+        obs = self._make_obs("strategist", age_seconds=700)
         c._observations.append(obs)
 
         await c._on_routine_complete({
@@ -1345,6 +1345,21 @@ class TestPseudoAgentFeedback:
             "quality_score": 0.9,
         })
         assert obs.quality == -1.0  # Inchangé
+
+    @pytest.mark.asyncio
+    async def test_feedback_window_captures_long_council(self, isolate_compiler):
+        """La fenêtre FEEDBACK_WINDOW (10 min) capture les observations de councils longs."""
+        c = isolate_compiler
+        # Observation de 8 min = dans la fenêtre de 10 min
+        obs = self._make_obs("strategist", age_seconds=480)
+        c._observations.append(obs)
+
+        await c._on_routine_complete({
+            "agent": "_council",
+            "intent": "COUNCIL_DEBATE",
+            "quality_score": 0.85,
+        })
+        assert obs.quality == 0.85  # Capturée grâce à la fenêtre élargie
 
     @pytest.mark.asyncio
     async def test_pseudo_agent_only_updates_unrated(self, isolate_compiler):
@@ -1437,3 +1452,31 @@ class TestPseudoAgentFeedback:
         })
         # _council → match tous les core agents → feedback security intercept
         assert rule.positive_feedback == 11
+
+    @pytest.mark.asyncio
+    async def test_save_called_after_quality_update(self, isolate_compiler):
+        """_save() est appelé après mise à jour quality (persistance immédiate)."""
+        c = isolate_compiler
+        obs = self._make_obs("coder")
+        c._observations.append(obs)
+
+        with patch.object(c, "_save") as mock_save:
+            await c._on_routine_complete({
+                "agent": "coder",
+                "intent": "TEST",
+                "quality_score": 0.8,
+            })
+            mock_save.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_save_not_called_when_no_update(self, isolate_compiler):
+        """_save() n'est PAS appelé si aucune observation n'a été mise à jour."""
+        c = isolate_compiler
+        # Pas d'observations → rien à mettre à jour
+        with patch.object(c, "_save") as mock_save:
+            await c._on_routine_complete({
+                "agent": "coder",
+                "intent": "TEST",
+                "quality_score": 0.8,
+            })
+            mock_save.assert_not_called()
