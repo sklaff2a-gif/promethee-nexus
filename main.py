@@ -223,6 +223,7 @@ AGENTS_CONFIG = [
     ("writer", "DivineWriter", "writer_agent"),
     ("researcher", "DivineResearcher", "researcher_agent"),
     ("formatter", "DivineFormatter", "formatter_agent"), # <--- AJOUT VITAL : L'Agent Formatter
+    ("vision", "DivineVision", "vision_agent"),
 ]
 
 async def _on_smart_restart(data: dict):
@@ -323,6 +324,11 @@ async def lifespan(app: FastAPI):
     from core.impact_analyzer import analyzer as impact_analyzer
     impact_analyzer.init()
     print("   📊 IMPACT: Analyseur de dépendances actif.")
+
+    # --- ROADMAP ENGINE (Plan de Route Vivant) ---
+    from core.roadmap_engine import roadmap as roadmap_engine
+    roadmap_engine.init()
+    print(f"   🗺️ ROADMAP: {len(roadmap_engine.modules)} modules trackes.")
 
     # --- SOLILOQUE (Dialogue Introspectif) ---
     from core.soliloque import soliloque
@@ -593,6 +599,12 @@ async def compiler_status():
     """Retourne l'état du Neural Compiler (distillation LLM)."""
     from core.neural_compiler import compiler
     return compiler.get_stats()
+
+@app.get("/api/roadmap")
+async def roadmap_status():
+    """Retourne l'etat de la roadmap vivante (modules, phases, WIP)."""
+    from core.roadmap_engine import roadmap as roadmap_engine
+    return roadmap_engine.get_stats()
 
 @app.get("/api/soliloque/status")
 async def soliloque_status():

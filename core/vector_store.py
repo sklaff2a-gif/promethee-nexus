@@ -24,23 +24,30 @@ class ChromaMemoryManager:
         """Nettoie toutes les instances (pour les tests)."""
         cls._instances.clear()
 
-    def _init_persistent_client(self):
-        """Initialise PersistentClient avec recovery automatique si database corrompue."""
-        # Tentative 1 : ouverture normale
-        try:
-            client = chromadb.PersistentClient(path=self.db_path)
-            client.heartbeat()  # Vérifier que la connexion fonctionne
-            return client
-        except Exception as e1:
-            logger.warning(f"PersistentClient échoué ({e1}), tentative de recovery...")
+    def _init_persistent_client(self, force_reset=False):
+        """Initialise PersistentClient avec recovery automatique si database corrompue.
 
-        # Tentative 2 : backup complet + reset dossier (version incompatible)
+        Args:
+            force_reset: si True, skip la tentative 1 et passe directement au backup+reset.
+                         Utile quand heartbeat() passe mais les opérations (collections) échouent.
+        """
+        # Tentative 1 : ouverture normale (skip si force_reset)
+        if not force_reset:
+            try:
+                client = chromadb.PersistentClient(path=self.db_path)
+                client.heartbeat()  # Vérifier que la connexion fonctionne
+                return client
+            except Exception as e1:
+                logger.warning(f"PersistentClient échoué ({e1}), tentative de recovery...")
+
+        # Tentative 2 : backup complet + reset dossier (version incompatible ou tables corrompues)
         backup_dir = self.db_path + ".bak"
         try:
-            if os.path.exists(backup_dir):
-                shutil.rmtree(backup_dir, ignore_errors=True)
-            shutil.copytree(self.db_path, backup_dir)
-            shutil.rmtree(self.db_path)
+            if os.path.exists(self.db_path):
+                if os.path.exists(backup_dir):
+                    shutil.rmtree(backup_dir, ignore_errors=True)
+                shutil.copytree(self.db_path, backup_dir)
+                shutil.rmtree(self.db_path)
             os.makedirs(self.db_path, exist_ok=True)
             logger.info(f"Database incompatible sauvegardée → {backup_dir}, recréation...")
             client = chromadb.PersistentClient(path=self.db_path)
@@ -85,10 +92,20 @@ class ChromaMemoryManager:
         self._lock_loop_id = None
 
         # Collections de base (casiers de mémoire)
-        self.collections = {
-            "collective_wisdom": self.client.get_or_create_collection(name="collective_wisdom"),
-            "code_snippets": self.client.get_or_create_collection(name="code_snippets")
-        }
+        # Try/except : si le client passe heartbeat() mais échoue sur les collections
+        # (ex: acquire_write table manquante après crash), on force un reset complet.
+        try:
+            self.collections = {
+                "collective_wisdom": self.client.get_or_create_collection(name="collective_wisdom"),
+                "code_snippets": self.client.get_or_create_collection(name="code_snippets")
+            }
+        except Exception as e:
+            logger.warning(f"Collections échouées ({e}), force reset database...")
+            self.client = self._init_persistent_client(force_reset=True)
+            self.collections = {
+                "collective_wisdom": self.client.get_or_create_collection(name="collective_wisdom"),
+                "code_snippets": self.client.get_or_create_collection(name="code_snippets")
+            }
         print(f"🧠 [MÉMOIRE] ChromaDB chargé (projet={project_id}) : {list(self.collections.keys())}")
 
     def _get_lock(self) -> asyncio.Lock:

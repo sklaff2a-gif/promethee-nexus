@@ -66,7 +66,7 @@ _RE_BUS_SUBSCRIBE = re.compile(
 # Type "planned", apparaissent en gris fantôme sur le graphe.
 # Chaque entrée : id, display, phase, description, connects_to[]
 # ============================================================
-_ROADMAP = [
+_ROADMAP_FALLBACK = [
     # --- PHASE 4 : SENTIR ---
     {
         "id": "planned.amygdala",
@@ -220,6 +220,18 @@ _ROADMAP = [
         ],
     },
 ]
+
+
+def _get_roadmap_data() -> list:
+    """Recupere les modules roadmap depuis roadmap_engine, fallback sur _ROADMAP_FALLBACK."""
+    try:
+        from core.roadmap_engine import roadmap as roadmap_engine
+        modules = roadmap_engine.get_modules_for_graph()
+        if modules:
+            return modules
+    except Exception:
+        pass
+    return _ROADMAP_FALLBACK
 
 
 class ImpactAnalyzer:
@@ -623,14 +635,15 @@ class ImpactAnalyzer:
         # --- ROADMAP : nœuds planifiés (fantômes) ---
         existing_ids = set(m["id"] for m in nodes)
         planned_count = 0
-        for entry in _ROADMAP:
+        for entry in _get_roadmap_data():
             planned_count += 1
+            entry_status = entry.get("status", "planned")
             nodes.append({
                 "id": entry["id"],
                 "name": entry["display"],
                 "type": "planned",
                 "display": entry["display"],
-                "status": "planned",
+                "status": entry_status,
                 "error_count": 0,
                 "last_error": "",
                 "last_modified": 0.0,
@@ -653,7 +666,7 @@ class ImpactAnalyzer:
                         "type": "planned",
                     })
             # Liens planned → autres planned
-            for other in _ROADMAP:
+            for other in _get_roadmap_data():
                 if other["id"] == entry["id"]:
                     continue
                 if other["id"] in entry.get("connects_to", []):

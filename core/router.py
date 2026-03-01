@@ -55,7 +55,7 @@ class RouterAgent:
 
         # 1. Priorité Mots-clés (Nom de l'agent en début de phrase sans :)
         agents = ["factory", "coder", "researcher", "architect", "strategist",
-                  "writer", "infra", "security", "evolution", "formatter"]
+                  "writer", "infra", "security", "evolution", "formatter", "vision"]
 
         first_word = m_low.split(' ')[0].strip()
         if first_word in agents:
@@ -71,6 +71,7 @@ class RouterAgent:
         if any(x in m_low for x in ["secu", "faille", "attack", "protect"]): return "security"
         if any(x in m_low for x in ["rédige", "écris", "article", "tweet", "post", "seo"]): return "writer"
         if any(x in m_low for x in ["format", "clean", "nettoie", "indente", "syntaxe"]): return "formatter"
+        if any(x in m_low for x in ["roadmap", "vision", "module planif", "planification"]): return "vision"
         if any(x in m_low for x in ["conseil", "débat", "council", "débattre"]): return "conseil"
 
         # --- NIVEAU 2 : AUTO-RÉFLEXION (Appel LLM Local) ---

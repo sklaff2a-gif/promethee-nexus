@@ -48,6 +48,8 @@ ROUTINE_AFFINITY: Dict[str, Dict[str, float]] = {
     "SECURITY_AUDIT":     {"survie": 0.5, "respect": 0.3, "savoir": 0.2},
     "MEMORY_CLEANUP":     {"survie": 0.4, "respect": 0.4, "savoir": 0.2},
     "REFACTOR_RANDOM":    {"respect": 0.4, "creativite": 0.3, "savoir": 0.3},
+    "ROADMAP_RESEARCH":   {"curiosite": 0.5, "savoir": 0.3, "creativite": 0.2},
+    "ROADMAP_SPEC":       {"savoir": 0.4, "creativite": 0.3, "audace": 0.3},
 }
 
 # Decay quotidien : 2% de retour vers la baseline
@@ -460,6 +462,29 @@ class PsycheEngine:
                                 "subject_key": "desir"}
             except Exception:
                 pass
+
+        # Priorite 2.2 : roadmap — si un module est ready/specifying, debat cible sur son implementation
+        try:
+            from core.roadmap_engine import roadmap as roadmap_engine
+            for mod in roadmap_engine.modules.values():
+                if mod.get("status") in ("ready", "specifying"):
+                    mod_display = mod.get("display", mod["id"])
+                    mod_key = f"roadmap_{mod_display}"
+                    if mod_key not in recent[-5:]:
+                        return {
+                            "participants": ["strategist", "architect", "coder"],
+                            "mission": (
+                                f"Le module '{mod_display}' (Phase {mod.get('phase', '?')} "
+                                f"{mod.get('phase_name', '')}) est pret a etre implemente. "
+                                f"Description: {mod.get('description', '')}. "
+                                f"Comment l'integrer dans l'architecture existante ?"
+                            ),
+                            "needs_research": False,
+                            "research_query": None,
+                            "subject_key": mod_key,
+                        }
+        except Exception:
+            pass
 
         # Priorité 2 (par défaut) : débat alimenté par la recherche web (rotation)
         # Avancer l'index si le thème a déjà été débattu récemment

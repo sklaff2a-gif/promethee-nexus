@@ -196,6 +196,8 @@ CONTEXT_KEYWORDS = {
     "REFACTOR_RANDOM": ["refactoring", "simplifier", "lisibilité", "dette", "technique"],
     "MEMORY_CONSOLIDATION": ["consolidation", "synthèse", "résumé", "regrouper", "mémoire"],
     "SOLILOQUE_INTERNE": ["soliloque", "dialogue", "introspection", "connexion", "réflexion", "compagnon"],
+    "ROADMAP_RESEARCH": ["roadmap", "vision", "module", "planification", "recherche", "futur"],
+    "ROADMAP_SPEC": ["specification", "specs", "roadmap", "concevoir", "design", "architecture"],
 }
 
 
@@ -423,6 +425,8 @@ class AutonomyEngine:
             {"agent": "coder", "intent": "REFACTOR_RANDOM", "mission": "Choisis un fichier Python aléatoire du projet et propose un refactoring pour améliorer la lisibilité (noms de variables, simplification de logique)."},
             {"agent": "_memory_consolidation", "intent": "MEMORY_CONSOLIDATION", "mission": "Consolide les mémoires récentes en synthèses thématiques."},
             {"agent": "_soliloque", "intent": "SOLILOQUE_INTERNE", "mission": "Engage un dialogue introspectif avec le compagnon intérieur."},
+            {"agent": "vision", "intent": "ROADMAP_RESEARCH", "mission": "Recherche et analyse des sujets pour le prochain module de la roadmap."},
+            {"agent": "vision", "intent": "ROADMAP_SPEC", "mission": "Genere des specifications structurees pour un module en cours de recherche."},
         ]
 
     def _persist_state(self):
@@ -832,6 +836,17 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Bonus roadmap (Couche 12) ---
+        try:
+            from core.roadmap_engine import roadmap as roadmap_engine
+            for i, (routine, s) in enumerate(scored):
+                roadmap_bonus = roadmap_engine.compute_roadmap_bonus(routine["intent"])
+                if roadmap_bonus != 0.0:
+                    scored[i] = (routine, s + roadmap_bonus)
+            scored.sort(key=lambda x: x[1], reverse=True)
+        except Exception:
+            pass
+
         if not scored:
             logger.warning("[AUTONOMY] Aucune routine disponible apres filtrage. Cycle avorte.")
             self._persist_state()
@@ -1023,6 +1038,14 @@ class AutonomyEngine:
                 hippo_ctx = hippocampus.get_hippocampus_context()
                 if hippo_ctx:
                     purpose_ctx += f"\n{hippo_ctx}"
+            except Exception:
+                pass
+            # Roadmap vivante
+            try:
+                from core.roadmap_engine import roadmap as roadmap_engine
+                roadmap_ctx = roadmap_engine.get_roadmap_context()
+                if roadmap_ctx:
+                    purpose_ctx += f"\n{roadmap_ctx}"
             except Exception:
                 pass
             # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)

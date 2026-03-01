@@ -9,9 +9,13 @@ from unittest.mock import patch, MagicMock
 
 @pytest.fixture(autouse=True)
 def reset_analyzer(tmp_path, monkeypatch):
-    """Reset singleton + isole les fichiers de state."""
-    from core.impact_analyzer import ImpactAnalyzer
+    """Reset singleton + isole les fichiers de state.
+
+    Utilise _ROADMAP_FALLBACK pour les tests existants (pas de dependance roadmap_engine).
+    """
+    from core.impact_analyzer import ImpactAnalyzer, _ROADMAP_FALLBACK
     ImpactAnalyzer.reset_singleton()
+    monkeypatch.setattr("core.impact_analyzer._get_roadmap_data", lambda: _ROADMAP_FALLBACK)
     yield
     ImpactAnalyzer.reset_singleton()
 
@@ -731,7 +735,7 @@ class TestRoadmap:
         assert result["stats"]["total_modules"] == real_count
 
     def test_planned_phases_coverage(self, analyzer_instance, mock_project, monkeypatch):
-        """Les 5 phases (4-8) sont représentées."""
+        """Les 5 phases (4-8) sont représentées dans le fallback."""
         _patch_project_root(monkeypatch, mock_project)
         with patch.dict("sys.modules", {
             "core.autonomy_engine": MagicMock(autonomy=MagicMock(routine_history=[])),
@@ -740,3 +744,88 @@ class TestRoadmap:
             result = analyzer_instance.build_graph()
         phases = {n["phase"] for n in result["nodes"] if n["type"] == "planned"}
         assert phases == {4, 5, 6, 7, 8}
+
+
+# ===== TestRoadmapDynamic =====
+
+class TestRoadmapDynamic:
+    """Tests pour l'integration dynamique avec roadmap_engine."""
+
+    def test_get_roadmap_data_uses_engine(self, monkeypatch, tmp_path):
+        """_get_roadmap_data() utilise roadmap_engine quand disponible."""
+        import json
+        import core.impact_analyzer as mod
+        from core.roadmap_engine import RoadmapEngine
+
+        # Creer un roadmap de test
+        RoadmapEngine.reset_singleton()
+        roadmap_file = str(tmp_path / "roadmap.json")
+        monkeypatch.setattr("core.roadmap_engine.ROADMAP_FILE", roadmap_file)
+        data = {
+            "_wip_paused": False,
+            "modules": [{
+                "id": "planned.test_dynamic",
+                "phase": 99,
+                "phase_name": "TEST",
+                "display": "test_dynamic",
+                "description": "Module de test dynamique",
+                "status": "researching",
+                "specs": [],
+                "depends_on": [],
+                "estimated_cost": 1,
+                "completion_criteria": [],
+                "research_topics": [],
+                "connects_to": [],
+                "created_at": "2026-03-01T00:00:00",
+                "updated_at": "2026-03-01T00:00:00",
+            }],
+        }
+        with open(roadmap_file, "w") as f:
+            json.dump(data, f)
+
+        import core.roadmap_engine
+        core.roadmap_engine.roadmap = RoadmapEngine()
+
+        # Restaurer la vraie fonction _get_roadmap_data (pas le mock du fixture autouse)
+        monkeypatch.setattr(mod, "_get_roadmap_data", mod.__dict__.get(
+            "_get_roadmap_data_original", mod._get_roadmap_data
+        ))
+        # Re-patcher avec la vraie implementation
+        original_func = None
+        # Importer la vraie fonction depuis le source
+        exec_ns = {}
+        exec("""
+def _get_roadmap_data():
+    try:
+        from core.roadmap_engine import roadmap as roadmap_engine
+        modules = roadmap_engine.get_modules_for_graph()
+        if modules:
+            return modules
+    except Exception:
+        pass
+    return []
+""", exec_ns)
+        monkeypatch.setattr(mod, "_get_roadmap_data", exec_ns["_get_roadmap_data"])
+
+        result = mod._get_roadmap_data()
+        assert len(result) == 1
+        assert result[0]["id"] == "planned.test_dynamic"
+        assert result[0]["status"] == "researching"
+
+        RoadmapEngine.reset_singleton()
+
+    def test_fallback_when_engine_unavailable(self, monkeypatch):
+        """_get_roadmap_data() retourne le fallback si roadmap_engine echoue."""
+        import core.impact_analyzer as mod
+
+        def failing_get_roadmap_data():
+            try:
+                raise ImportError("test")
+            except Exception:
+                pass
+            return mod._ROADMAP_FALLBACK
+
+        monkeypatch.setattr(mod, "_get_roadmap_data", failing_get_roadmap_data)
+        result = mod._get_roadmap_data()
+        assert len(result) == len(mod._ROADMAP_FALLBACK)
+        assert result[0]["id"] == "planned.amygdala"

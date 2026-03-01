@@ -21,10 +21,13 @@ const ImpactView = (function() {
         planned: "ROADMAP",
     };
     const PHASE_COLORS = {
-        4: "#7986cb",  // CONNECTER — indigo clair
-        5: "#4dd0e1",  // COMPRENDRE — cyan
-        6: "#ba68c8",  // CRÉER — violet
-        7: "#ef5350",  // TRANSCENDER — rouge
+        4: "#7986cb",  // SENTIR — indigo clair
+        5: "#4dd0e1",  // SOUVENIR — cyan
+        6: "#ba68c8",  // COMPRENDRE — violet
+        7: "#ef5350",  // IMAGINER — rouge
+        8: "#66bb6a",  // DEVENIR — vert
+        9: "#ffa726",  // TRANSCENDER — orange
+        10: "#42a5f5", // CONNECTER — bleu
     };
     // Positions cibles Y par type (% de la hauteur) pour le clustering
     const TYPE_CLUSTER_Y = {
@@ -72,6 +75,16 @@ const ImpactView = (function() {
         return TYPE_COLORS[d.type] || "#888";
     }
     function isPlanned(d) { return d.type === "planned"; }
+    function plannedOpacity(d) {
+        // Opacite progressive selon le status du module roadmap
+        if (!isPlanned(d)) return 0.85;
+        var s = d.status || "planned";
+        if (s === "implemented" || s === "validated") return 1.0;
+        if (s === "in_progress") return 0.9;
+        if (s === "ready") return 0.7;
+        if (s === "researching" || s === "specifying") return 0.5;
+        return 0.3; // planned
+    }
 
     // --- INIT (lazy, uniquement à l'ouverture) ---
     function init() {
@@ -268,10 +281,10 @@ const ImpactView = (function() {
         nodeEls.append("circle")
             .attr("r", nodeRadius)
             .attr("fill", function(d) { return isPlanned(d) ? "transparent" : nodeColor(d); })
-            .attr("fill-opacity", function(d) { return isPlanned(d) ? 0 : 0.85; })
+            .attr("fill-opacity", function(d) { return isPlanned(d) ? (plannedOpacity(d) > 0.5 ? plannedOpacity(d) * 0.6 : 0) : 0.85; })
             .attr("stroke", nodeColor)
             .attr("stroke-width", function(d) { return isPlanned(d) ? 1.2 : 0.5; })
-            .attr("stroke-opacity", function(d) { return isPlanned(d) ? 0.6 : 0.3; })
+            .attr("stroke-opacity", function(d) { return isPlanned(d) ? Math.min(plannedOpacity(d) + 0.1, 0.8) : 0.3; })
             .attr("stroke-dasharray", function(d) { return isPlanned(d) ? "2,2" : null; });
 
         // Labels
@@ -288,7 +301,7 @@ const ImpactView = (function() {
             .attr("font-family", "'Courier New', monospace")
             .attr("font-style", function(d) { return isPlanned(d) ? "italic" : "normal"; })
             .attr("fill", nodeColor)
-            .attr("fill-opacity", function(d) { return isPlanned(d) ? 0.45 : 0.8; })
+            .attr("fill-opacity", function(d) { return isPlanned(d) ? Math.max(plannedOpacity(d), 0.35) : 0.8; })
             .attr("dx", function(d) { return nodeRadius(d) + 4; })
             .attr("dy", 3)
             .attr("paint-order", "stroke")
@@ -314,12 +327,12 @@ const ImpactView = (function() {
     function renderLegend(w, h) {
         var legend = g.append("g")
             .attr("class", "legend")
-            .attr("transform", "translate(20," + (h - 290) + ")");
+            .attr("transform", "translate(20," + (h - 345) + ")");
 
         // Fond
         legend.append("rect")
             .attr("x", -8).attr("y", -14)
-            .attr("width", 165).attr("height", 285)
+            .attr("width", 165).attr("height", 340)
             .attr("rx", 3)
             .attr("fill", "rgba(0,5,0,0.85)")
             .attr("stroke", "#003300").attr("stroke-width", 0.5);
@@ -397,10 +410,13 @@ const ImpactView = (function() {
 
         // Phases
         var phases = [
-            [4, "CONNECTER"],
-            [5, "COMPRENDRE"],
-            [6, "CR\u00c9ER"],
-            [7, "TRANSCENDER"],
+            [4, "SENTIR"],
+            [5, "SOUVENIR"],
+            [6, "COMPRENDRE"],
+            [7, "IMAGINER"],
+            [8, "DEVENIR"],
+            [9, "TRANSCENDER"],
+            [10, "CONNECTER"],
         ];
         phases.forEach(function(p, i) {
             var py = rmY + 16 + i * 17;
@@ -541,7 +557,8 @@ const ImpactView = (function() {
         if (isPlanned(d)) {
             // Tooltip spécial pour les nœuds planifiés
             var pc = PHASE_COLORS[d.phase] || "#555";
-            lines.push('<b style="color:' + pc + '">' + d.display + '</b> <span style="color:#666">(planifi\u00e9)</span>');
+            var statusLabel = (d.status || "planned").toUpperCase();
+            lines.push('<b style="color:' + pc + '">' + d.display + '</b> <span style="color:#666">(' + statusLabel + ')</span>');
             lines.push('<span style="color:' + pc + '">Phase ' + d.phase + ' \u2014 ' + (d.phase_name || '') + '</span>');
             if (d.description) {
                 lines.push('<span style="color:#aaa;font-style:italic">' + d.description + '</span>');

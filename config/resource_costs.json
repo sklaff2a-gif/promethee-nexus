@@ -54,5 +54,13 @@
   "CIRCADIAN_MAINTENANCE": {
     "cost": 0,
     "description": "Maintenance sommeil profond, 0 LLM"
+  },
+  "ROADMAP_RESEARCH": {
+    "cost": 3,
+    "description": "VisionAgent + Researcher: 1-2 sujets + synthese"
+  },
+  "ROADMAP_SPEC": {
+    "cost": 2,
+    "description": "VisionAgent genere specs via 1 appel LLM"
   }
 }
