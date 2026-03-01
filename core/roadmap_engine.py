@@ -36,11 +36,13 @@ WIP_RESUME_THRESHOLD = 20    # Reprend recherche si pending <= 20
 # Status consideres comme "pending" (pas encore en cours)
 PENDING_STATUSES = {"planned", "researching", "specifying", "ready"}
 
-# Bonus scoring
-BONUS_RESEARCH = 1.5
-BONUS_SPEC = 2.0
-BONUS_COUNCIL_ROADMAP = 1.0
-BONUS_CODE_WIP = 2.0
+# Bonus scoring — doivent etre competitifs avec les routines etablies (score moyen 4-8)
+# Les routines ROADMAP n'ont pas de bonus temporel (jamais executees) ni adaptatif,
+# donc le bonus Couche 12 doit compenser.
+BONUS_RESEARCH = 5.0
+BONUS_SPEC = 6.0
+BONUS_COUNCIL_ROADMAP = 2.0
+BONUS_CODE_WIP = 3.0
 MALUS_BLOCKED = -10.0
 
 

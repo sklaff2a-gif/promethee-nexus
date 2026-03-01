@@ -1406,6 +1406,15 @@ class AutonomyEngine:
             if self.last_health_check.get("verdict") == "NO_GO" and intent in ("EXPANSION_CODE", "GRIMOIRE_INVOKE"):
                 return f"veto: santé NO_GO, routine risquée {intent} reportée"
 
+        # 2b. ROADMAP STRATÉGIQUE — les intents roadmap bypass le veto préfrontal
+        # (les vetos reptilien/somatique/santé restent actifs)
+        try:
+            from core.roadmap_engine import roadmap as _rm
+            if _rm.compute_roadmap_bonus(intent) > 0:
+                return ""
+        except Exception:
+            pass
+
         # 3. INHIBITION PRÉFRONTALE — arbitrage cognitif
         try:
             from core.prefrontal import prefrontal

@@ -366,7 +366,7 @@ class TestComputeBonus:
 
         from core.roadmap_engine import RoadmapEngine
         engine = RoadmapEngine()
-        assert engine.compute_roadmap_bonus("ROADMAP_RESEARCH") == 1.5
+        assert engine.compute_roadmap_bonus("ROADMAP_RESEARCH") == 5.0
 
     def test_bonus_research_empty_queue(self, isolate_roadmap):
         """Pas de bonus recherche si aucun module a rechercher."""
@@ -384,7 +384,7 @@ class TestComputeBonus:
 
         from core.roadmap_engine import RoadmapEngine
         engine = RoadmapEngine()
-        assert engine.compute_roadmap_bonus("ROADMAP_SPEC") == 2.0
+        assert engine.compute_roadmap_bonus("ROADMAP_SPEC") == 6.0
 
     def test_bonus_council(self, isolate_roadmap):
         """Bonus council quand des modules sont ready."""
@@ -393,7 +393,7 @@ class TestComputeBonus:
 
         from core.roadmap_engine import RoadmapEngine
         engine = RoadmapEngine()
-        assert engine.compute_roadmap_bonus("COUNCIL_DEBATE") == 1.0
+        assert engine.compute_roadmap_bonus("COUNCIL_DEBATE") == 2.0
 
     def test_malus_wip_paused(self, isolate_roadmap):
         """En WIP pause, recherche et spec sont bloquees."""
@@ -404,7 +404,7 @@ class TestComputeBonus:
         engine = RoadmapEngine()
         assert engine.compute_roadmap_bonus("ROADMAP_RESEARCH") == -10.0
         assert engine.compute_roadmap_bonus("ROADMAP_SPEC") == -10.0
-        assert engine.compute_roadmap_bonus("EXPANSION_CODE") == 2.0
+        assert engine.compute_roadmap_bonus("EXPANSION_CODE") == 3.0
 
     def test_bonus_unrelated_intent(self, isolate_roadmap):
         """Un intent non lie a la roadmap retourne 0."""
