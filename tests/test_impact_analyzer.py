@@ -660,15 +660,13 @@ class TestRoadmap:
         }):
             result = analyzer_instance.build_graph()
         planned = [n for n in result["nodes"] if n["type"] == "planned"]
-        assert len(planned) == 12
+        assert len(planned) == 10
         ids = {n["id"] for n in planned}
-        assert "planned.agency" in ids
-        assert "planned.immune_system" in ids
+        assert "planned.thalamus" in ids
         assert "planned.amygdala" in ids
-        assert "planned.episodic_buffer" in ids
-        # hippocampus et corpus_callosum sont maintenant implémentes (plus planned)
-        assert "planned.hippocampus" not in ids
-        assert "planned.corpus_callosum" not in ids
+        assert "planned.brain_vm" in ids
+        assert "planned.deep_metacognition" in ids
+        assert "planned.simulation_framework" in ids
 
     def test_planned_node_fields(self, analyzer_instance, mock_project, monkeypatch):
         """Les nœuds planned ont les champs phase, phase_name, description."""
@@ -679,8 +677,8 @@ class TestRoadmap:
         }):
             result = analyzer_instance.build_graph()
         amygdala = next(n for n in result["nodes"] if n["id"] == "planned.amygdala")
-        assert amygdala["phase"] == 4
-        assert amygdala["phase_name"] == "SENTIR"
+        assert amygdala["phase"] == 2
+        assert amygdala["phase_name"] == "ORGANES MANQUANTS"
         assert "emotionnelle" in amygdala["description"].lower()
         assert amygdala["status"] == "planned"
         assert amygdala["connects_to_count"] > 0
@@ -719,7 +717,7 @@ class TestRoadmap:
             "core.reptilian_core": MagicMock(reptile=MagicMock(get_stats=lambda: {"threat_level": 0})),
         }):
             result = analyzer_instance.build_graph()
-        assert result["stats"]["planned_modules"] == 12
+        assert result["stats"]["planned_modules"] == 10
         assert result["stats"]["planned_links"] >= 0
 
     def test_total_modules_excludes_planned(self, analyzer_instance, mock_project, monkeypatch):
@@ -735,7 +733,7 @@ class TestRoadmap:
         assert result["stats"]["total_modules"] == real_count
 
     def test_planned_phases_coverage(self, analyzer_instance, mock_project, monkeypatch):
-        """Les 5 phases (4-8) sont représentées dans le fallback."""
+        """Les 7 etapes (1-7) sont representees dans le fallback."""
         _patch_project_root(monkeypatch, mock_project)
         with patch.dict("sys.modules", {
             "core.autonomy_engine": MagicMock(autonomy=MagicMock(routine_history=[])),
@@ -743,7 +741,7 @@ class TestRoadmap:
         }):
             result = analyzer_instance.build_graph()
         phases = {n["phase"] for n in result["nodes"] if n["type"] == "planned"}
-        assert phases == {4, 5, 6, 7, 8}
+        assert phases == {1, 2, 3, 4, 5, 6, 7}
 
 
 # ===== TestRoadmapDynamic =====
@@ -828,4 +826,4 @@ def _get_roadmap_data():
         monkeypatch.setattr(mod, "_get_roadmap_data", failing_get_roadmap_data)
         result = mod._get_roadmap_data()
         assert len(result) == len(mod._ROADMAP_FALLBACK)
-        assert result[0]["id"] == "planned.amygdala"
+        assert result[0]["id"] == "implemented.roadmap_engine"

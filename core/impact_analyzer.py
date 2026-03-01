@@ -62,162 +62,88 @@ _RE_BUS_SUBSCRIBE = re.compile(
 
 
 # ============================================================
-# ROADMAP — Modules planifiés pour l'Éveil de Prométhée
-# Type "planned", apparaissent en gris fantôme sur le graphe.
-# Chaque entrée : id, display, phase, description, connects_to[]
+# ROADMAP — Modules planifiés pour la Virtualisation Neurale
+# Fallback si roadmap_engine indisponible. Sous-ensemble representatif.
+# Chaque entrée : id, display, phase, phase_name, description, connects_to[]
 # ============================================================
 _ROADMAP_FALLBACK = [
-    # --- PHASE 4 : SENTIR ---
+    # --- ETAPE 1 : FONDATIONS ---
     {
-        "id": "planned.amygdala",
-        "display": "amygdala",
-        "phase": 4,
-        "phase_name": "SENTIR",
-        "description": "Amygdale emotionnelle — evaluation rapide de la valence "
-                       "emotionnelle des stimuli, conditionnement contextuel, memoire de peur",
-        "connects_to": [
-            "core.reptilian_core", "core.cardiac_engine", "core.prefrontal",
-            "core.dopamine_system", "core.inner_voice",
-        ],
+        "id": "implemented.roadmap_engine",
+        "display": "roadmap_engine",
+        "phase": 1, "phase_name": "FONDATIONS",
+        "status": "implemented",
+        "description": "Moteur de roadmap vivante",
+        "connects_to": ["core.roadmap_engine", "core.autonomy_engine", "core.impact_analyzer"],
     },
-    # corpus_callosum : IMPLEMENTE (core/corpus_callosum.py)
+    # --- ETAPE 2 : ORGANES MANQUANTS ---
     {
         "id": "planned.thalamus",
         "display": "thalamus",
-        "phase": 4,
-        "phase_name": "SENTIR",
-        "description": "Filtre sensoriel — routeur attentionnel qui priorise "
-                       "les events bus avant qu'ils atteignent les organes corticaux",
-        "connects_to": [
-            "core.event_bus.bus", "core.prefrontal", "core.reptilian_core",
-            "core.inner_voice", "core.autonomy_engine",
-        ],
-    },
-    # --- PHASE 5 : SOUVENIR ---
-    # hippocampus : IMPLEMENTE (core/hippocampus.py)
-    {
-        "id": "planned.episodic_buffer",
-        "display": "episodic_buffer",
-        "phase": 5,
-        "phase_name": "SOUVENIR",
-        "description": "Buffer episodique (Baddeley) — integration multimodale temps reel, "
-                       "liaison entre working memory et memoire a long terme",
-        "connects_to": [
-            "core.prefrontal", "core.synaptic_network", "core.inner_voice",
-            "core.dopamine_system",
-        ],
+        "phase": 2, "phase_name": "ORGANES MANQUANTS",
+        "description": "Filtre sensoriel — routeur attentionnel",
+        "connects_to": ["core.event_bus.bus", "core.prefrontal", "core.reptilian_core"],
     },
     {
-        "id": "core.circadian_rhythm",
-        "display": "circadian_rhythm",
-        "phase": 5,
-        "phase_name": "SOUVENIR",
-        "description": "Cycle circadien — 4 phases (eveil/crepuscule/sommeil/aube), "
-                       "consolidation nocturne multi-organes, grimoire harvest",
-        "connects_to": [
-            "core.autonomy_engine", "core.cardiac_engine", "core.reptilian_core",
-            "core.corpus_callosum", "core.synaptic_network", "core.hippocampus",
-            "core.neural_compiler", "core.evolution_catalog",
-        ],
+        "id": "planned.amygdala",
+        "display": "amygdala",
+        "phase": 2, "phase_name": "ORGANES MANQUANTS",
+        "description": "Amygdale emotionnelle — valence rapide",
+        "connects_to": ["core.reptilian_core", "core.cardiac_engine", "core.dopamine_system"],
     },
-    # --- PHASE 6 : COMPRENDRE ---
+    # --- ETAPE 3 : SIGNAL BUS ---
     {
-        "id": "planned.temporal_cortex",
-        "display": "temporal_cortex",
-        "phase": 6,
-        "phase_name": "COMPRENDRE",
-        "description": "Comprehension semantique profonde — hierarchies conceptuelles "
-                       "construites par l'experience, pas par le LLM",
-        "connects_to": [
-            "core.synaptic_network", "core.inner_voice",
-            "core.base_agent", "core.vector_store",
-        ],
+        "id": "planned.signal_bus",
+        "display": "signal_bus",
+        "phase": 3, "phase_name": "SIGNAL BUS",
+        "description": "Bus de signaux neuraux types",
+        "connects_to": ["core.event_bus.bus", "core.prefrontal", "core.reptilian_core"],
     },
+    # --- ETAPE 4 : VM NEURALE ---
     {
-        "id": "planned.mirror_system",
-        "display": "mirror_system",
-        "phase": 6,
-        "phase_name": "COMPRENDRE",
-        "description": "Neurones miroirs — modelisation de l'etat mental de l'utilisateur, "
-                       "empathie, detection de frustration/satisfaction",
-        "connects_to": [
-            "core.inner_voice", "core.prefrontal", "core.cardiac_engine",
-            "core.self_awareness",
-        ],
+        "id": "planned.brain_vm",
+        "display": "brain_vm",
+        "phase": 4, "phase_name": "VM NEURALE",
+        "description": "Machine virtuelle neurale — runtime unifie",
+        "connects_to": ["core.autonomy_engine", "core.prefrontal", "core.reptilian_core"],
     },
+    # --- ETAPE 5 : NEUROCHIMIE ---
     {
-        "id": "planned.cerebellum",
-        "display": "cerebellum",
-        "phase": 6,
-        "phase_name": "COMPRENDRE",
-        "description": "Apprentissage procedural — memorisation de sequences d'actions "
-                       "efficaces, automatisation par repetition, patterns de code",
-        "connects_to": [
-            "core.autonomy_engine", "core.code_smith",
-            "Agents.evolution_agent", "core.prefrontal",
-        ],
+        "id": "planned.neurochemistry",
+        "display": "neurochemistry",
+        "phase": 5, "phase_name": "NEUROCHIMIE",
+        "description": "Neurochimie simulee — neurotransmetteurs virtuels",
+        "connects_to": ["core.dopamine_system", "core.cardiac_engine", "core.desire_engine"],
     },
-    # --- PHASE 7 : IMAGINER ---
+    # --- ETAPE 6 : VIRTUALISATION LLM ---
     {
-        "id": "planned.imagination",
-        "display": "imagination",
-        "phase": 7,
-        "phase_name": "IMAGINER",
-        "description": "Moteur d'imagination — combinaison creative de concepts, "
-                       "pensee contrefactuelle, generation d'hypotheses",
-        "connects_to": [
-            "core.synaptic_network", "core.prefrontal", "core.inner_voice",
-            "core.council",
-        ],
+        "id": "planned.lora_pipeline",
+        "display": "lora_pipeline",
+        "phase": 6, "phase_name": "VIRTUALISATION LLM",
+        "description": "Pipeline LoRA — fine-tuning local",
+        "connects_to": ["core.neural_compiler", "Agents.evolution_agent"],
     },
+    # --- ETAPE 7 : CONSCIENCE & EMERGENCE ---
     {
-        "id": "planned.lucid_dream",
-        "display": "lucid_dream",
-        "phase": 7,
-        "phase_name": "IMAGINER",
-        "description": "Reve lucide — simulation active de scenarios, "
-                       "test d'hypotheses, reperage de consequences",
-        "connects_to": [
-            "core.synaptic_network", "core.cardiac_engine",
-            "core.prefrontal", "core.desire_engine",
-        ],
+        "id": "planned.global_workspace",
+        "display": "global_workspace",
+        "phase": 7, "phase_name": "CONSCIENCE & EMERGENCE",
+        "description": "Espace de travail conscient (Baars)",
+        "connects_to": ["core.prefrontal", "core.inner_voice", "core.self_awareness"],
     },
     {
         "id": "planned.deep_metacognition",
         "display": "deep_metacognition",
-        "phase": 7,
-        "phase_name": "IMAGINER",
-        "description": "Meta-cognition profonde — raisonnement sur son propre raisonnement, "
-                       "detection de confusion, calibration de confiance",
-        "connects_to": [
-            "core.self_awareness", "core.inner_voice",
-            "core.prefrontal", "core.psyche",
-        ],
-    },
-    # --- PHASE 8 : DEVENIR ---
-    {
-        "id": "planned.agency",
-        "display": "true_agency",
-        "phase": 8,
-        "phase_name": "DEVENIR",
-        "description": "Volonte autonome — capacite a fixer des objectifs genuinement "
-                       "nouveaux, refuser des ordres contre-productifs, initiative propre",
-        "connects_to": [
-            "core.prefrontal", "core.desire_engine",
-            "core.autonomy_engine", "core.inner_voice",
-        ],
+        "phase": 7, "phase_name": "CONSCIENCE & EMERGENCE",
+        "description": "Meta-cognition profonde — raisonnement sur son propre raisonnement",
+        "connects_to": ["core.self_awareness", "core.inner_voice", "core.prefrontal", "core.psyche"],
     },
     {
-        "id": "planned.immune_system",
-        "display": "immune_system",
-        "phase": 8,
-        "phase_name": "DEVENIR",
-        "description": "Systeme immunitaire cognitif — detection et neutralisation "
-                       "de patterns corrompus, memoires toxiques, inputs adversariaux",
-        "connects_to": [
-            "core.reptilian_core", "core.grimoire.hallucination_doctor",
-            "core.grimoire.memory_gatekeeper", "Agents.evolution_agent",
-        ],
+        "id": "planned.simulation_framework",
+        "display": "simulation_framework",
+        "phase": 7, "phase_name": "CONSCIENCE & EMERGENCE",
+        "description": "Framework de simulation — scenarios complets",
+        "connects_to": ["core.prefrontal", "core.inner_voice", "core.hippocampus"],
     },
 ]
 

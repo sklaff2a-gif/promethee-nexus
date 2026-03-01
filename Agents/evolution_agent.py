@@ -1065,6 +1065,55 @@ class DivineEvolution(BaseAgent):
             except Exception as e:
                 self.log_thought(f"⚠️ Phase 5b : erreur code_reviewer: {e}", type="warning")
 
+        # --- PHASE 6 : TEST SANDBOX ---
+        if deploy_status == "success":
+            try:
+                from core.sandbox_engine import sandbox as sandbox_engine
+                self.log_thought(f"🧪 Phase 6 : Test sandbox [{spec.id}]...", type="info")
+
+                if not sandbox_engine.is_fresh():
+                    sandbox_engine.create_or_refresh()
+
+                applied = sandbox_engine.apply_change(spec.target_file, generated_code)
+                if applied:
+                    result = await sandbox_engine.run_tests(target_file=spec.target_file)
+                    if result.success:
+                        self.log_thought(
+                            f"✅ Phase 6 OK [{spec.id}] ({result.tests_passed} passed, "
+                            f"{result.duration_seconds:.1f}s)",
+                            type="info",
+                        )
+                        try:
+                            from core.event_bus.bus import bus
+                            await bus.publish("SANDBOX_TEST_PASS", {
+                                "spec_id": spec.id,
+                                "tests_passed": result.tests_passed,
+                                "duration": result.duration_seconds,
+                            })
+                        except Exception:
+                            pass
+                    else:
+                        deploy_status = "sandbox_test_fail"
+                        sandbox_engine.discard(spec.target_file)
+                        self.log_thought(
+                            f"⚠️ Phase 6 ECHEC [{spec.id}] ({result.tests_failed} failed, "
+                            f"{result.tests_errors} errors)",
+                            type="warning",
+                        )
+                        try:
+                            from core.event_bus.bus import bus
+                            await bus.publish("SANDBOX_TEST_FAIL", {
+                                "spec_id": spec.id,
+                                "tests_failed": result.tests_failed,
+                                "output": result.output[:500],
+                            })
+                        except Exception:
+                            pass
+            except ImportError:
+                pass  # sandbox indisponible → skip gracieusement
+            except Exception:
+                pass  # erreur sandbox → ne pas bloquer le pipeline
+
         if deploy_status == "success":
             catalog.mark_pending_deploy(spec.id)
             self.log_thought(f"✅ [{spec.id}] {spec.name} soumis au pipeline Formatter→Factory (pending_deploy).", type="info")

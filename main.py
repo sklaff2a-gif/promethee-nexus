@@ -325,6 +325,11 @@ async def lifespan(app: FastAPI):
     impact_analyzer.init()
     print("   📊 IMPACT: Analyseur de dépendances actif.")
 
+    # --- SANDBOX ENGINE (Tests securises) ---
+    from core.sandbox_engine import sandbox as sandbox_engine
+    sandbox_engine.init()
+    print("   🧪 SANDBOX: Moteur de test securise actif.")
+
     # --- ROADMAP ENGINE (Plan de Route Vivant) ---
     from core.roadmap_engine import roadmap as roadmap_engine
     roadmap_engine.init()
@@ -605,6 +610,12 @@ async def roadmap_status():
     """Retourne l'etat de la roadmap vivante (modules, phases, WIP)."""
     from core.roadmap_engine import roadmap as roadmap_engine
     return roadmap_engine.get_stats()
+
+@app.get("/api/sandbox/status")
+async def sandbox_status():
+    """Retourne les statistiques du moteur de test sandbox."""
+    from core.sandbox_engine import sandbox as sandbox_engine
+    return sandbox_engine.get_stats()
 
 @app.get("/api/soliloque/status")
 async def soliloque_status():

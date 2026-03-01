@@ -289,11 +289,15 @@ class TestPipelineIntegration:
         mock_bus = MagicMock()
         mock_bus.publish = AsyncMock()
 
+        mock_sandbox = MagicMock()
+        mock_sandbox.is_fresh.return_value = True
+
         with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
              patch.object(evo, "_read_target_file", return_value="# existing code\npass"), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=valid_code), \
              patch("core.orchestrator.orchestrator", mock_orch), \
-             patch("core.event_bus.bus.bus", mock_bus):
+             patch("core.event_bus.bus.bus", mock_bus), \
+             patch.dict("sys.modules", {"core.sandbox_engine": MagicMock(sandbox=mock_sandbox)}):
             await evo.process_task({"mission": "[MODE VEILLE]"})
 
         deployed = [e for e in registry._experiences if e["outcome"] == "deployed"]

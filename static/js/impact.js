@@ -21,13 +21,13 @@ const ImpactView = (function() {
         planned: "ROADMAP",
     };
     const PHASE_COLORS = {
-        4: "#7986cb",  // SENTIR — indigo clair
-        5: "#4dd0e1",  // SOUVENIR — cyan
-        6: "#ba68c8",  // COMPRENDRE — violet
-        7: "#ef5350",  // IMAGINER — rouge
-        8: "#66bb6a",  // DEVENIR — vert
-        9: "#ffa726",  // TRANSCENDER — orange
-        10: "#42a5f5", // CONNECTER — bleu
+        1: "#66bb6a",  // FONDATIONS — vert
+        2: "#7986cb",  // ORGANES MANQUANTS — indigo
+        3: "#4dd0e1",  // SIGNAL BUS — cyan
+        4: "#ba68c8",  // VM NEURALE — violet
+        5: "#ffa726",  // NEUROCHIMIE — orange
+        6: "#ef5350",  // VIRTUALISATION LLM — rouge
+        7: "#42a5f5",  // CONSCIENCE & EMERGENCE — bleu
     };
     // Positions cibles Y par type (% de la hauteur) pour le clustering
     const TYPE_CLUSTER_Y = {
@@ -400,7 +400,7 @@ const ImpactView = (function() {
         legend.append("text").attr("x", 0).attr("y", rmY)
             .attr("font-size", "8px").attr("font-family", "'Courier New', monospace")
             .attr("fill", "#888").attr("font-weight", "bold")
-            .text("ROADMAP \u2014 \u00c9veil")
+            .text("ROADMAP \u2014 Virtualisation Neurale")
             .style("cursor", "pointer")
             .on("click", function(e) {
                 e.stopPropagation();
@@ -410,13 +410,13 @@ const ImpactView = (function() {
 
         // Phases
         var phases = [
-            [4, "SENTIR"],
-            [5, "SOUVENIR"],
-            [6, "COMPRENDRE"],
-            [7, "IMAGINER"],
-            [8, "DEVENIR"],
-            [9, "TRANSCENDER"],
-            [10, "CONNECTER"],
+            [1, "FONDATIONS"],
+            [2, "ORGANES MANQUANTS"],
+            [3, "SIGNAL BUS"],
+            [4, "VM NEURALE"],
+            [5, "NEUROCHIMIE"],
+            [6, "VIRTUALISATION LLM"],
+            [7, "CONSCIENCE & EMERGENCE"],
         ];
         phases.forEach(function(p, i) {
             var py = rmY + 16 + i * 17;
