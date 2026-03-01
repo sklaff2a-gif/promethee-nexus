@@ -106,17 +106,16 @@ class TestRPE:
         # Avec novelty 1.5 : effective = 0.6 * 1.5 = 0.9, predicted = 0.5 → RPE = 0.4
         assert rpe_novel > 0.3
 
-    def test_habituation_low_variance(self, isolate_dopamine):
-        """Resultats constants → habituation forte → RPE attenue."""
+    def test_habituation_not_in_rpe(self, isolate_dopamine):
+        """Habituation ne modifie PAS le RPE (fix: divergence expected_reward)."""
         d = isolate_dopamine
         from core.dopamine_system import RewardMemory
         mem = RewardMemory(expected_reward=0.5)
         mem.reward_history = [0.5] * 10  # Variance = 0
         d.memories["boring"] = mem
         rpe = d.compute_rpe("boring", 0.6)
-        # Habituation factor ≈ MIN_HABITUATION_FACTOR (0.3)
-        # effective = 0.6 * 1.0 * 0.3 = 0.18 < predicted (0.5)
-        assert rpe < 0.1  # RPE tres attenue
+        # Sans habituation: effective = 0.6, predicted = 0.5, RPE = 0.1
+        assert rpe == pytest.approx(0.1, abs=0.05)
 
     def test_habituation_high_variance(self, isolate_dopamine):
         """Resultats varies → pas d'habituation."""
@@ -613,3 +612,120 @@ class TestUtilities:
         d.dopamine_level = 0.1
         narrative_low = d.get_narrative()
         assert narrative_high != narrative_low
+
+
+# ============================================================
+# 10. TestHabituationSeparation — Fix divergence expected_reward
+# ============================================================
+
+class TestHabituationSeparation:
+    """Verifie que l'habituation module la dopamine mais PAS le TD-learning."""
+
+    def test_convergence_consistent_success(self, isolate_dopamine):
+        """12 succes constants → expected_reward converge vers ~0.9, pas vers 0."""
+        d = isolate_dopamine
+        from core.dopamine_system import RewardMemory
+        mem = RewardMemory(expected_reward=0.5)
+        d.memories["CONSISTENT"] = mem
+
+        for _ in range(12):
+            rpe = d.compute_rpe("CONSISTENT", 1.0)
+            d._update_value("CONSISTENT", 1.0, rpe)
+
+        # Avec le fix, expected_reward converge vers ~0.94
+        # Sans le fix (bug), il divergeait vers 0.088
+        assert d.memories["CONSISTENT"].expected_reward > 0.85
+
+    def test_habituation_still_dampens_dopamine(self, isolate_dopamine):
+        """L'habituation modere le changement de dopamine (pas le learning)."""
+        d = isolate_dopamine
+        from core.dopamine_system import RewardMemory, MIN_HABITUATION_FACTOR
+
+        # Intent avec historique constant (variance=0 → habituation forte)
+        mem_boring = RewardMemory(expected_reward=0.5)
+        mem_boring.reward_history = [1.0] * 10
+        d.memories["boring"] = mem_boring
+
+        habituation = d._compute_habituation_factor(mem_boring)
+        assert habituation == pytest.approx(MIN_HABITUATION_FACTOR, abs=0.01)
+
+        # RPE n'est PAS attenue
+        rpe = d.compute_rpe("boring", 1.0)
+        # effective=1.0, predicted~0.5+context → RPE positif et significatif
+        assert rpe > 0.0
+
+        # Mais la dopamine EST moderee par habituation
+        old_level = d.dopamine_level
+        d._update_dopamine_level(rpe * habituation)
+        change_habituated = d.dopamine_level - old_level
+
+        d.dopamine_level = old_level  # Reset
+        d._update_dopamine_level(rpe)
+        change_full = d.dopamine_level - old_level
+
+        # Le changement habituee est plus petit
+        assert change_habituated < change_full
+
+    @pytest.mark.asyncio
+    async def test_on_routine_applies_habituation_to_dopamine(self, isolate_dopamine):
+        """_on_routine_complete applique l'habituation au changement de dopamine."""
+        d = isolate_dopamine
+        from core.dopamine_system import RewardMemory
+
+        # Intent sans historique (novelty → grosse montee)
+        old_novel = d.dopamine_level
+        await d._on_routine_complete({
+            "intent": "NOVEL_INTENT",
+            "quality_score": 1.0,
+            "status": "success",
+        })
+        rise_novel = d.dopamine_level - old_novel
+
+        # Meme intent, beaucoup de repetitions (habituation forte)
+        d.memories["HABITUATED"] = RewardMemory(expected_reward=0.8)
+        d.memories["HABITUATED"].reward_history = [0.8] * 10
+
+        d.dopamine_level = old_novel  # Reset au meme point de depart
+        await d._on_routine_complete({
+            "intent": "HABITUATED",
+            "quality_score": 1.0,
+            "status": "success",
+        })
+        rise_habituated = d.dopamine_level - old_novel
+
+        # La montee de dopamine est plus faible pour l'intent habituee
+        assert rise_habituated < rise_novel
+
+    def test_motivation_positive_after_consistent_success(self, isolate_dopamine):
+        """Apres des succes constants, le motivation_bonus est positif (pas negatif)."""
+        d = isolate_dopamine
+        from core.dopamine_system import RewardMemory
+
+        mem = RewardMemory(expected_reward=0.5)
+        d.memories["GOOD_INTENT"] = mem
+
+        # 12 succes
+        for _ in range(12):
+            rpe = d.compute_rpe("GOOD_INTENT", 1.0)
+            d._update_value("GOOD_INTENT", 1.0, rpe)
+
+        bonus = d.compute_motivation_bonus("GOOD_INTENT")
+        # expected_reward > 0.85 → v_centered > 0.35 → bonus > 1.0
+        assert bonus > 1.0
+
+    def test_no_divergence_for_mixed_success(self, isolate_dopamine):
+        """Meme avec des echecs, expected_reward reste raisonnable."""
+        d = isolate_dopamine
+        from core.dopamine_system import RewardMemory
+        mem = RewardMemory(expected_reward=0.5)
+        d.memories["MIXED"] = mem
+
+        results = [1.0, 0.3, 1.0, 0.3, 1.0, 1.0, 0.3, 1.0, 0.3, 1.0, 1.0, 0.3]
+        for r in results:
+            rpe = d.compute_rpe("MIXED", r)
+            d._update_value("MIXED", r, rpe)
+
+        ev = d.memories["MIXED"].expected_reward
+        actual_avg = sum(results) / len(results)
+        # expected_reward devrait etre proche de la moyenne reelle (0.725)
+        assert 0.4 < ev < 1.0

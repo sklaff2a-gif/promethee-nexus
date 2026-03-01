@@ -220,7 +220,10 @@ class DopamineSystem:
     def compute_rpe(self, intent: str, actual_quality: float) -> float:
         """Calcule le Reward Prediction Error pour un intent donne.
 
-        RPE = (actual × novelty × habituation) - predicted_contextual
+        RPE = (actual × novelty) - predicted_contextual
+        L'habituation n'affecte PAS le RPE d'apprentissage (sinon expected_reward
+        diverge vers 0 pour les routines a variance nulle). Elle est appliquee
+        separement sur le changement de dopamine dans _on_routine_complete().
         Clamp [-1, +1].
         """
         memory = self.memories.get(intent)
@@ -229,13 +232,11 @@ class DopamineSystem:
             # Premier contact avec cet intent → novelty
             predicted = BASELINE_DOPAMINE
             novelty = NOVELTY_BONUS
-            habituation = 1.0
         else:
             predicted = self._get_contextual_prediction(memory)
             novelty = 1.0
-            habituation = self._compute_habituation_factor(memory)
 
-        effective_actual = actual_quality * novelty * habituation
+        effective_actual = actual_quality * novelty
         rpe = effective_actual - predicted
         return max(-1.0, min(1.0, rpe))
 
@@ -440,12 +441,16 @@ class DopamineSystem:
         else:
             actual = quality * 0.7
 
-        # RPE
+        # RPE (sans habituation — pour TD-learning)
         rpe = self.compute_rpe(intent, actual)
 
-        # Apprentissage
+        # Apprentissage (RPE pur)
         self._update_value(intent, actual, rpe)
-        self._update_dopamine_level(rpe)
+
+        # Dopamine level (RPE modere par habituation)
+        memory = self.memories.get(intent)
+        habituation = self._compute_habituation_factor(memory) if memory else 1.0
+        self._update_dopamine_level(rpe * habituation)
         self._recent_intents.append(intent)
 
         # Publish events si RPE significatif

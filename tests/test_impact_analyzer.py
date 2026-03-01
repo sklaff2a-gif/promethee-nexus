@@ -656,14 +656,15 @@ class TestRoadmap:
         }):
             result = analyzer_instance.build_graph()
         planned = [n for n in result["nodes"] if n["type"] == "planned"]
-        assert len(planned) == 14
+        assert len(planned) == 12
         ids = {n["id"] for n in planned}
-        assert "planned.hippocampus" in ids
         assert "planned.agency" in ids
         assert "planned.immune_system" in ids
         assert "planned.amygdala" in ids
-        assert "planned.corpus_callosum" in ids
         assert "planned.episodic_buffer" in ids
+        # hippocampus et corpus_callosum sont maintenant implémentes (plus planned)
+        assert "planned.hippocampus" not in ids
+        assert "planned.corpus_callosum" not in ids
 
     def test_planned_node_fields(self, analyzer_instance, mock_project, monkeypatch):
         """Les nœuds planned ont les champs phase, phase_name, description."""
@@ -673,12 +674,12 @@ class TestRoadmap:
             "core.reptilian_core": MagicMock(reptile=MagicMock(get_stats=lambda: {"threat_level": 0})),
         }):
             result = analyzer_instance.build_graph()
-        hippo = next(n for n in result["nodes"] if n["id"] == "planned.hippocampus")
-        assert hippo["phase"] == 5
-        assert hippo["phase_name"] == "SOUVENIR"
-        assert "episodique" in hippo["description"].lower()
-        assert hippo["status"] == "planned"
-        assert hippo["connects_to_count"] > 0
+        amygdala = next(n for n in result["nodes"] if n["id"] == "planned.amygdala")
+        assert amygdala["phase"] == 4
+        assert amygdala["phase_name"] == "SENTIR"
+        assert "emotionnelle" in amygdala["description"].lower()
+        assert amygdala["status"] == "planned"
+        assert amygdala["connects_to_count"] > 0
 
     def test_planned_links_to_existing(self, analyzer_instance, mock_project, monkeypatch):
         """Les liens planned ne ciblent que des modules existants."""
@@ -714,7 +715,7 @@ class TestRoadmap:
             "core.reptilian_core": MagicMock(reptile=MagicMock(get_stats=lambda: {"threat_level": 0})),
         }):
             result = analyzer_instance.build_graph()
-        assert result["stats"]["planned_modules"] == 14
+        assert result["stats"]["planned_modules"] == 12
         assert result["stats"]["planned_links"] >= 0
 
     def test_total_modules_excludes_planned(self, analyzer_instance, mock_project, monkeypatch):
