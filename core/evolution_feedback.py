@@ -56,6 +56,7 @@ class EvolutionFeedbackLoop:
             bus.subscribe("EVOLUTION_DEPLOYED", self._on_evolution_deployed)
             bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
             bus.subscribe("ARTIFACT_CREATED", self._on_artifact_created)
+            bus.subscribe("ARTIFACT_FAILED", self._on_artifact_failed)
             self._subscribed = True
             logger.info("FEEDBACK: Boucle de feedback Evolution active.")
         except Exception as e:
@@ -158,6 +159,24 @@ class EvolutionFeedbackLoop:
                 logger.info(f"FEEDBACK: [{spec_id}] confirmé deployed via ARTIFACT_CREATED.")
         except Exception as e:
             logger.warning(f"FEEDBACK: Erreur confirmation deploy {spec_id}: {e}")
+
+    async def _on_artifact_failed(self, event: dict):
+        """Quand la Factory rejette un fichier (ex: anti-troncature), libère le pending_deploy."""
+        data = event.get("data", event)
+        spec_id = data.get("spec_id")
+        reason = data.get("reason", "unknown")
+        if not spec_id:
+            return
+        try:
+            from core.evolution_catalog import catalog
+            spec = catalog.get_spec(spec_id)
+            if spec and spec.status == "pending_deploy":
+                catalog.mark_failed(spec_id, f"Factory rejection: {reason}")
+                logger.warning(
+                    f"FEEDBACK: [{spec_id}] marqué failed via ARTIFACT_FAILED ({reason})."
+                )
+        except Exception as e:
+            logger.warning(f"FEEDBACK: Erreur traitement ARTIFACT_FAILED {spec_id}: {e}")
 
     # --- Évaluation ---
 

@@ -259,6 +259,19 @@ class DivineFactory(BaseAgent):
                             f"[FACTORY] 🛡️ ANTI-TRONCATURE: {target_path} rejeté "
                             f"({new_size}B vs {existing_size}B existant = {ratio_pct}% < {int(TRUNCATION_MIN_RATIO*100)}%)"
                         )
+                        # Notifier l'échec pour libérer le pending_deploy
+                        try:
+                            from core.event_bus.bus import bus
+                            import asyncio as _asyncio
+                            loop = _asyncio.get_running_loop()
+                            loop.create_task(bus.publish("ARTIFACT_FAILED", {
+                                "filepath": target_path,
+                                "spec_id": task_payload.get("evolution_spec_id", ""),
+                                "reason": "anti_troncature",
+                                "detail": f"{new_size}B vs {existing_size}B ({ratio_pct}%)",
+                            }))
+                        except Exception:
+                            pass
                         return {
                             "status": "error",
                             "result": (

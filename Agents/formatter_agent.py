@@ -114,6 +114,35 @@ class DivineFormatter(BaseAgent):
         context = task_payload.get("context", "")
         full_text = f"{mission}\n{context}"
 
+        # --- BYPASS EVOLUTION PIPELINE ---
+        # Le code Evolution a déjà été validé (AST, aliens, structural, Architect).
+        # Pas besoin de le passer par le LLM local qui le tronque à 2000 chars.
+        evo_spec_id = task_payload.get("evolution_spec_id")
+        if evo_spec_id:
+            self.log_thought(f"🔀 Pipeline Evolution [{evo_spec_id}] — bypass LLM, extraction déterministe.", type="info")
+            det_file, det_code = self._extract_from_context(full_text)
+            if det_file and det_code:
+                # Validation syntaxe minimale
+                if det_file.endswith(".py"):
+                    try:
+                        ast.parse(det_code)
+                    except SyntaxError as e:
+                        self.log_thought(f"❌ Evolution bypass : syntaxe invalide ({e.msg} ligne {e.lineno}).", type="error")
+                        return {"status": "error", "result": f"SYNTAXE_INVALIDE — code Evolution invalide."}
+                response = self._rebuild_formatted_response(det_file, det_code)
+                try:
+                    from core.orchestrator import orchestrator
+                    factory_payload = {"mission": "Exécute ce code propre.", "context": response}
+                    factory_payload["evolution_spec_id"] = evo_spec_id
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(orchestrator.dispatch_task("factory", factory_payload))
+                    self.log_thought(f"✅ Evolution bypass OK [{evo_spec_id}] → Factory ({len(det_code)} chars).", type="success")
+                    return {"status": "success", "result": "EVOLUTION_BYPASS_SENT_TO_FACTORY"}
+                except Exception as e:
+                    return {"status": "error", "result": f"ERREUR RELAIS EVOLUTION: {e}"}
+            else:
+                self.log_thought(f"⚠️ Evolution bypass échoué (fichier={det_file is not None}, code={det_code is not None}). Fallback LLM.", type="warning")
+
         # Guard : pas de code exploitable → skip immédiat
         if not self._has_formattable_code(full_text):
             self.log_thought("ℹ️ Aucun code exploitable détecté — formatage ignoré.", type="info")

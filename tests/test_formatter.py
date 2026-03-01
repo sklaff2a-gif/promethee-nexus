@@ -140,6 +140,126 @@ class TestRebuildFormattedResponse:
         assert "print('hello')" in result
 
 
+class TestEvolutionBypass:
+    """Tests du bypass LLM pour le pipeline Evolution."""
+
+    def setup_method(self):
+        with patch("core.base_agent.ChromaMemoryManager", None):
+            self.f = DivineFormatter()
+
+    @pytest.mark.asyncio
+    async def test_evolution_bypass_dispatches_to_factory(self):
+        """Code Evolution avec spec_id → bypass LLM, dispatch direct à Factory."""
+        valid_code = "import os\ndef hello():\n    return 42\n"
+        context = f"FICHIER: core/test_module.py\n```python\n{valid_code}\n```"
+
+        with patch.object(self.f, "log_thought"), \
+             patch("core.orchestrator.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock()
+            payload = {
+                "mission": "Déploie ce code.",
+                "context": context,
+                "evolution_spec_id": "PERF-001",
+            }
+            result = await self.f.process_task(payload)
+
+        assert result["status"] == "success"
+        assert "EVOLUTION_BYPASS" in result["result"]
+
+    @pytest.mark.asyncio
+    async def test_evolution_bypass_preserves_full_code(self):
+        """Le bypass ne tronque PAS le code (contrairement à full_text[:2000])."""
+        # Créer un code > 2000 chars
+        big_code = "import os\nimport logging\n\n" + "def func_0():\n    return 0\n" * 200
+        assert len(big_code) > 2000
+        context = f"FICHIER: core/big_module.py\n```python\n{big_code}\n```"
+
+        with patch.object(self.f, "log_thought"), \
+             patch("core.orchestrator.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock()
+            result = await self.f.process_task({
+                "mission": "", "context": context,
+                "evolution_spec_id": "OBS-004",
+            })
+
+        assert result["status"] == "success"
+        # dispatch_task appelé via create_task → vérifier les args du mock
+        mock_orch.dispatch_task.assert_called_once()
+        call_args = mock_orch.dispatch_task.call_args
+        factory_payload = call_args[0][1]  # 2e arg positionnel
+        assert len(factory_payload.get("context", "")) > 2000
+
+    @pytest.mark.asyncio
+    async def test_evolution_bypass_rejects_broken_syntax(self):
+        """Si le code Evolution a une syntaxe cassée, rejet immédiat."""
+        broken_code = "def hello(\n    return 42\n"  # parenthèse non fermée
+        context = f"FICHIER: core/broken.py\n```python\n{broken_code}\n```"
+
+        with patch.object(self.f, "log_thought"):
+            result = await self.f.process_task({
+                "mission": "", "context": context,
+                "evolution_spec_id": "PERF-002",
+            })
+
+        assert result["status"] == "error"
+        assert "SYNTAXE_INVALIDE" in result["result"]
+
+    @pytest.mark.asyncio
+    async def test_evolution_bypass_propagates_spec_id(self):
+        """Le spec_id est propagé au payload Factory."""
+        valid_code = "import os\ndef hello():\n    return 42\n"
+        context = f"FICHIER: core/test.py\n```python\n{valid_code}\n```"
+
+        with patch.object(self.f, "log_thought"), \
+             patch("core.orchestrator.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock()
+            await self.f.process_task({
+                "mission": "", "context": context,
+                "evolution_spec_id": "PERF-003",
+            })
+
+        mock_orch.dispatch_task.assert_called_once()
+        factory_payload = mock_orch.dispatch_task.call_args[0][1]
+        assert factory_payload.get("evolution_spec_id") == "PERF-003"
+
+    @pytest.mark.asyncio
+    async def test_evolution_bypass_fallback_to_llm_if_no_code(self):
+        """Si extraction échoue, fallback vers le parcours LLM normal."""
+        # Pas de bloc de code ni de FICHIER:
+        context = "Voici une explication sans code ni fichier."
+
+        with patch.object(self.f, "log_thought"):
+            result = await self.f.process_task({
+                "mission": "", "context": context,
+                "evolution_spec_id": "PERF-004",
+            })
+
+        # Le bypass échoue → tombe dans le parcours normal → _has_formattable_code = False → NO_CODE
+        assert result["status"] == "success"
+        assert "NO_CODE_TO_FORMAT" in result["result"]
+
+    @pytest.mark.asyncio
+    async def test_no_spec_id_uses_llm_path(self):
+        """Sans evolution_spec_id, le parcours LLM classique est utilisé."""
+        valid_code = "import os\ndef hello():\n    return 42\n"
+        context = f"FICHIER: core/test.py\n```python\n{valid_code}\n```"
+
+        good_response = f"FICHIER: core/test.py\nCODE:\n```python\n{valid_code}\n```"
+
+        with patch.object(self.f, "log_thought"), \
+             patch.object(self.f, "generate_content", new=AsyncMock(return_value=good_response)), \
+             patch("core.orchestrator.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock()
+            result = await self.f.process_task({
+                "mission": "Nettoie ce code.",
+                "context": context,
+                # Pas de evolution_spec_id
+            })
+
+        assert result["status"] == "success"
+        assert "CODE_CLEAN_SENT_TO_FACTORY" in result["result"]
+
+
 class TestSyntaxValidation:
     """Tests de la validation ast.parse() avant dispatch Factory (Fix run 2026-02-18)."""
 

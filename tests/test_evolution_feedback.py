@@ -685,3 +685,112 @@ class TestOnArtifactCreated:
             })
 
         mock_catalog.mark_deployed.assert_not_called()
+
+
+class TestOnArtifactFailed:
+    """Tests de _on_artifact_failed (Fix pending_deploy timeout 2026-03-01)."""
+
+    @pytest.mark.asyncio
+    async def test_artifact_failed_marks_spec_as_failed(self):
+        """ARTIFACT_FAILED avec spec_id en pending_deploy → mark_failed."""
+        EvolutionFeedbackLoop.reset_singleton()
+        fb = EvolutionFeedbackLoop()
+
+        mock_catalog = MagicMock()
+        mock_spec = MagicMock()
+        mock_spec.status = "pending_deploy"
+        mock_catalog.get_spec.return_value = mock_spec
+
+        with patch.dict("sys.modules", {
+            "core.evolution_catalog": MagicMock(catalog=mock_catalog),
+        }):
+            await fb._on_artifact_failed({
+                "data": {
+                    "spec_id": "PERF-001",
+                    "filepath": "core/test.py",
+                    "reason": "anti_troncature",
+                }
+            })
+
+        mock_catalog.mark_failed.assert_called_once_with(
+            "PERF-001", "Factory rejection: anti_troncature"
+        )
+
+    @pytest.mark.asyncio
+    async def test_artifact_failed_without_spec_id_is_ignored(self):
+        """ARTIFACT_FAILED sans spec_id → rien ne se passe."""
+        EvolutionFeedbackLoop.reset_singleton()
+        fb = EvolutionFeedbackLoop()
+
+        mock_catalog = MagicMock()
+
+        with patch.dict("sys.modules", {
+            "core.evolution_catalog": MagicMock(catalog=mock_catalog),
+        }):
+            await fb._on_artifact_failed({
+                "data": {"filepath": "core/test.py", "reason": "anti_troncature"}
+            })
+
+        mock_catalog.mark_failed.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_artifact_failed_spec_not_pending_deploy_is_ignored(self):
+        """ARTIFACT_FAILED avec spec_id mais pas en pending_deploy → pas de mark_failed."""
+        EvolutionFeedbackLoop.reset_singleton()
+        fb = EvolutionFeedbackLoop()
+
+        mock_catalog = MagicMock()
+        mock_spec = MagicMock()
+        mock_spec.status = "deployed"
+        mock_catalog.get_spec.return_value = mock_spec
+
+        with patch.dict("sys.modules", {
+            "core.evolution_catalog": MagicMock(catalog=mock_catalog),
+        }):
+            await fb._on_artifact_failed({
+                "data": {"spec_id": "PERF-001", "reason": "anti_troncature"}
+            })
+
+        mock_catalog.mark_failed.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_artifact_failed_flat_event_format(self):
+        """Supporte le format plat sans wrapper 'data'."""
+        EvolutionFeedbackLoop.reset_singleton()
+        fb = EvolutionFeedbackLoop()
+
+        mock_catalog = MagicMock()
+        mock_spec = MagicMock()
+        mock_spec.status = "pending_deploy"
+        mock_catalog.get_spec.return_value = mock_spec
+
+        with patch.dict("sys.modules", {
+            "core.evolution_catalog": MagicMock(catalog=mock_catalog),
+        }):
+            await fb._on_artifact_failed({
+                "spec_id": "RES-002",
+                "reason": "anti_troncature",
+            })
+
+        mock_catalog.mark_failed.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_artifact_failed_unknown_reason(self):
+        """ARTIFACT_FAILED avec reason manquante → utilise 'unknown'."""
+        EvolutionFeedbackLoop.reset_singleton()
+        fb = EvolutionFeedbackLoop()
+
+        mock_catalog = MagicMock()
+        mock_spec = MagicMock()
+        mock_spec.status = "pending_deploy"
+        mock_catalog.get_spec.return_value = mock_spec
+
+        with patch.dict("sys.modules", {
+            "core.evolution_catalog": MagicMock(catalog=mock_catalog),
+        }):
+            await fb._on_artifact_failed({
+                "data": {"spec_id": "PERF-003"}
+            })
+
+        call_args = mock_catalog.mark_failed.call_args[0]
+        assert "unknown" in call_args[1]
