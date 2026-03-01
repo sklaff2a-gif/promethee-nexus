@@ -330,6 +330,12 @@ async def lifespan(app: FastAPI):
     sandbox_engine.init()
     print("   🧪 SANDBOX: Moteur de test securise actif.")
 
+    # --- SUBSTRAT CELLULAIRE (Computation Emergente) ---
+    from core.neural_tissue import tissue as neural_tissue
+    neural_tissue.init()
+    neural_tissue.start_loop()
+    print(f"   🧬 TISSUE: {len(neural_tissue.cells)} cellules, gen {max((c.generation for c in neural_tissue.cells), default=0)}.")
+
     # --- ROADMAP ENGINE (Plan de Route Vivant) ---
     from core.roadmap_engine import roadmap as roadmap_engine
     roadmap_engine.init()
@@ -616,6 +622,12 @@ async def sandbox_status():
     """Retourne les statistiques du moteur de test sandbox."""
     from core.sandbox_engine import sandbox as sandbox_engine
     return sandbox_engine.get_stats()
+
+@app.get("/api/tissue/status")
+async def tissue_status():
+    """Retourne les statistiques du substrat cellulaire neuronal."""
+    from core.neural_tissue import tissue as neural_tissue
+    return neural_tissue.get_stats()
 
 @app.get("/api/soliloque/status")
 async def soliloque_status():

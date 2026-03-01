@@ -275,6 +275,22 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
+      "id": "in_progress.neural_tissue",
+      "phase": 4,
+      "phase_name": "VM NEURALE",
+      "display": "neural_tissue",
+      "description": "Substrat cellulaire neuronal — cellules a genome cognitif (ACGTIR), selection naturelle, patterns emergents, 0 LLM",
+      "status": "in_progress",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 4,
+      "completion_criteria": [],
+      "research_topics": ["cellular automata genetic algorithms emergent computation neural substrate virtual cell"],
+      "connects_to": ["core.neural_tissue", "core.synaptic_network", "core.dopamine_system", "core.cardiac_engine"],
+      "created_at": "2026-03-01T00:00:00",
+      "updated_at": "2026-03-01T00:00:00"
+    },
+    {
       "id": "planned.neurochemistry",
       "phase": 5,
       "phase_name": "NEUROCHIMIE",
