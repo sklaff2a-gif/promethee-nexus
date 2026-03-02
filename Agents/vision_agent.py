@@ -32,11 +32,12 @@ class DivineVision(BaseAgent):
 
         self.log_thought(f"Analyse mission: {mission[:60]}...", type="thought")
 
-        # Dispatch selon le contexte/intent
-        if "ROADMAP_RESEARCH" in context or "ROADMAP_RESEARCH" in mission:
+        # Dispatch selon le contexte/intent (check context, mission ET intent)
+        intent = task_payload.get("intent", "")
+        if "ROADMAP_RESEARCH" in context or "ROADMAP_RESEARCH" in mission or intent == "ROADMAP_RESEARCH":
             return await self._handle_research(task_payload)
 
-        if "ROADMAP_SPEC" in context or "ROADMAP_SPEC" in mission:
+        if "ROADMAP_SPEC" in context or "ROADMAP_SPEC" in mission or intent == "ROADMAP_SPEC":
             return await self._handle_spec(task_payload)
 
         return await self._handle_general(task_payload)

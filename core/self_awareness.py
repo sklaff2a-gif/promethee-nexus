@@ -717,10 +717,13 @@ class SelfAwarenessEngine:
 
         # --- Règle 10 : Diversité Evolution ---
         # Si EXPANSION_CODE n'a pas été exécuté récemment, forcer une rotation
+        # Seulement en mode standard/exploration — pas en survie/consolidation
+        strategic_mode = self.compute_strategic_mode()
         last_10_all = routine_history[-10:]
         expansion_in_last_10 = sum(1 for h in last_10_all if h.get("intent") == "EXPANSION_CODE")
         if expansion_in_last_10 == 0 and len(routine_history) >= 10:
-            _add("EXPANSION_CODE", 2.0)
+            if strategic_mode not in ("survie", "consolidation"):
+                _add("EXPANSION_CODE", 2.0)
 
         # --- Règle 11 : Ponts créatifs non explorés (spreading activation) ---
         try:
@@ -732,7 +735,7 @@ class SelfAwarenessEngine:
             pass
 
         # --- Règle 12 : Mode stratégique global ---
-        strategic_mode = self.compute_strategic_mode()
+        # strategic_mode déjà calculé dans Règle 10
         if strategic_mode == "survie":
             _add("AUDIT_STRUCTURE", 3.0)
             _add("EXPANSION_CODE", -5.0)

@@ -140,7 +140,7 @@ class DopamineSystem:
         self._recent_intents: deque = deque(maxlen=10)
 
         self._load()
-        self._subscribe_events()
+        # Note: _subscribe_events() appelé dans init() depuis main.py, pas dans __init__
 
     def reset(self):
         """Reset l'etat (pour tests)."""

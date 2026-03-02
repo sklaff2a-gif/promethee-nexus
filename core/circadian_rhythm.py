@@ -386,8 +386,8 @@ class CircadianRhythm:
 
         # FREEZE reptilien : suspend toutes les transitions
         try:
-            from core.reptilian_core import reptilian
-            if reptilian.should_freeze():
+            from core.reptilian_core import reptile
+            if reptile.should_freeze():
                 return None
         except Exception:
             pass
@@ -418,8 +418,8 @@ class CircadianRhythm:
 
         # Threat level élevé
         try:
-            from core.reptilian_core import reptilian
-            if reptilian.threat_level >= THREAT_PRESSURE_THRESHOLD:
+            from core.reptilian_core import reptile
+            if reptile.threat_level >= THREAT_PRESSURE_THRESHOLD:
                 return PHASE_CREPUSCULE
         except Exception:
             pass
@@ -586,7 +586,7 @@ async def _task_hippocampus_consolidation(circ: CircadianRhythm) -> str:
     before = len(hippocampus._episodes)
     hippocampus._episodes = [
         ep for ep in hippocampus._episodes
-        if now - ep.when < max_age
+        if now - ep.timestamp < max_age
     ]
     purged = before - len(hippocampus._episodes)
     if purged > 0:

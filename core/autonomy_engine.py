@@ -198,6 +198,7 @@ CONTEXT_KEYWORDS = {
     "SOLILOQUE_INTERNE": ["soliloque", "dialogue", "introspection", "connexion", "réflexion", "compagnon"],
     "ROADMAP_RESEARCH": ["roadmap", "vision", "module", "planification", "recherche", "futur"],
     "ROADMAP_SPEC": ["specification", "specs", "roadmap", "concevoir", "design", "architecture"],
+    "COUNCIL_DEBATE": ["council", "debate", "consensus", "decision", "délibération"],
 }
 
 
@@ -518,7 +519,7 @@ class AutonomyEngine:
             return "technical"
 
         # Routines sans LLM : un résultat court est normal, pas de l'ignorance
-        no_llm_intents = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP"}
+        no_llm_intents = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
         if intent in no_llm_intents:
             return "technical"
 
@@ -801,7 +802,6 @@ class AutonomyEngine:
                 dopa_bonus = dopamine.compute_motivation_bonus(routine["intent"])
                 if dopa_bonus != 0.0:
                     scored[i] = (routine, s + dopa_bonus)
-            scored.sort(key=lambda x: x[1], reverse=True)
         except Exception:
             pass
 
@@ -812,7 +812,6 @@ class AutonomyEngine:
                 resonance_bonus = callosum.compute_resonance_bonus(routine["intent"])
                 if resonance_bonus != 0.0:
                     scored[i] = (routine, s + resonance_bonus)
-            scored.sort(key=lambda x: x[1], reverse=True)
         except Exception:
             pass
 
@@ -1082,13 +1081,8 @@ class AutonomyEngine:
         # Score qualité post-routine
         quality_score = self._score_result_quality(response, intent)
 
-        # Feedback reptilien (apaisement si succès — pas de handler bus dupliqué)
-        try:
-            from core.reptilian_core import reptile
-            if quality_score >= 0.6:
-                reptile.on_routine_success(intent)
-        except Exception:
-            pass
+        # Feedback reptilien via le bus (AUTONOMY_ROUTINE_COMPLETE → reptile._on_routine_complete)
+        # Pas d'appel direct pour éviter le double-comptage.
 
         # Aperçu du résultat pour comparaison future
         result_preview = ""
@@ -1332,13 +1326,8 @@ class AutonomyEngine:
         self.daily_budget_used += routine_cost
         logger.info(f"[AUTONOMY] Routine FORCED {self.daily_count}/{MAX_DAILY_ROUTINES} (cout: {routine_cost}pt, budget: {self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt)")
 
-        # Feedback reptilien (apaisement si succès — pas de handler bus dupliqué)
-        try:
-            from core.reptilian_core import reptile
-            if quality >= 0.6:
-                reptile.on_routine_success(intent)
-        except Exception:
-            pass
+        # Feedback reptilien via le bus (AUTONOMY_ROUTINE_COMPLETE → reptile._on_routine_complete)
+        # Pas d'appel direct pour éviter le double-comptage.
 
         # Voix intérieure : routine terminée → réactiver DMN
         try:

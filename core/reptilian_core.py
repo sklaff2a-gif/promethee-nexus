@@ -531,6 +531,7 @@ class ReptilianCore:
             bus.subscribe("CI_PIPELINE_RESULT", self._on_ci_result)
             bus.subscribe("HALLUCINATION_DETECTED", self._on_hallucination)
             bus.subscribe("AUTONOMY_HEARTBEAT", self._on_autonomy_heartbeat)
+            bus.subscribe("OLLAMA_UNRESPONSIVE", self._on_ollama_event)
         except Exception as e:
             logger.warning(f"REPTILIEN: Échec souscription bus: {e}")
 
@@ -556,6 +557,13 @@ class ReptilianCore:
     async def _on_autonomy_heartbeat(self, event: dict):
         """Sync avec le heartbeat autonomy pour les données fraîches."""
         self._last_activity = time.time()
+
+    async def _on_ollama_event(self, event: dict):
+        """Circuit breaker Ollama ouvert → menace immédiate sans attendre le prochain cycle."""
+        timeouts = event.get("consecutive_timeouts", 0)
+        threat_boost = 8.0 if timeouts >= 3 else 5.0
+        self.threat_level = min(10.0, max(self.threat_level, threat_boost))
+        logger.warning(f"REPTILIEN: Ollama unresponsive (timeouts={timeouts}, threat→{self.threat_level:.1f})")
 
     def on_routine_success(self, intent: str = ""):
         """Apaisement après un succès — appelé par AutonomyEngine."""

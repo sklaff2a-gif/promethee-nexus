@@ -954,7 +954,7 @@ class SynapticNetwork:
             concept_nids = self._extract_and_ensure(result_text, "memory", ["autonomy"], max_c)
 
             # Liens Hebbiens entre intent et concepts
-            success = (status == "success" and quality >= 0.5)
+            success = (status == "success" and quality >= 0.6)
             for cnid in concept_nids:
                 self.hebbian_strengthen(intent_nid, cnid, success=success,
                                         context=f"routine:{intent}")

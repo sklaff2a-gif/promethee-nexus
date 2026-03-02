@@ -258,8 +258,8 @@ def _get_dopamine_level() -> float:
 def _get_threat_level() -> float:
     """Récupère le niveau de menace reptilien."""
     try:
-        from core.reptilian_core import reptilian
-        return reptilian.threat_level
+        from core.reptilian_core import reptile
+        return reptile.threat_level
     except Exception:
         return 0.0
 

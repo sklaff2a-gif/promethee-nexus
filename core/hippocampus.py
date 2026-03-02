@@ -248,8 +248,8 @@ class Hippocampus:
 
         # Reptilian
         try:
-            from core.reptilian_core import reptilian
-            affect["threat_level"] = reptilian.threat_level
+            from core.reptilian_core import reptile
+            affect["threat_level"] = reptile.threat_level
         except Exception:
             pass
 

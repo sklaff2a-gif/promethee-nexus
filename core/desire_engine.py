@@ -92,13 +92,13 @@ EVENT_IMPACT: Dict[str, Any] = {
 
 # --- Affinite pulsion -> routine (pour le scoring) ---
 DRIVE_ROUTINE_AFFINITY: Dict[str, Dict[str, float]] = {
-    "CURIOSITE":      {"VEILLE_SILENCIEUSE": 1.2, "DROPZONE_SCAN": 0.8, "COUNCIL_DEBATE": 0.3},
+    "CURIOSITE":      {"VEILLE_SILENCIEUSE": 1.2, "DROPZONE_SCAN": 0.8, "COUNCIL_DEBATE": 0.3, "ROADMAP_RESEARCH": 1.2},
     "MAITRISE":       {"EXPANSION_CODE": 0.8, "REFACTOR_RANDOM": 1.0, "AUDIT_STRUCTURE": 0.5},
     "STABILITE":      {"SECURITY_AUDIT": 1.2, "AUDIT_STRUCTURE": 1.0, "MEMORY_CLEANUP": 0.8},
     "CONNEXION":      {"COUNCIL_DEBATE": 1.5, "DROPZONE_SCAN": 0.5, "SOLILOQUE_INTERNE": 1.2},
-    "CROISSANCE":     {"EXPANSION_CODE": 1.2, "GRIMOIRE_INVOKE": 1.0, "VEILLE_SILENCIEUSE": 0.3},
+    "CROISSANCE":     {"EXPANSION_CODE": 1.2, "GRIMOIRE_INVOKE": 1.0, "VEILLE_SILENCIEUSE": 0.3, "ROADMAP_SPEC": 1.5},
     "CREATION":       {"EXPANSION_CODE": 1.5, "GRIMOIRE_INVOKE": 0.5, "REFACTOR_RANDOM": 0.3},
-    "COMPREHENSION":  {"VEILLE_SILENCIEUSE": 1.0, "COUNCIL_DEBATE": 0.8, "AUDIT_STRUCTURE": 0.5},
+    "COMPREHENSION":  {"VEILLE_SILENCIEUSE": 1.0, "COUNCIL_DEBATE": 0.8, "AUDIT_STRUCTURE": 0.5, "MEMORY_CONSOLIDATION": 1.5, "ROADMAP_RESEARCH": 1.0},
 }
 
 # --- Narratifs par pulsion et seuil ---
@@ -208,7 +208,7 @@ class DesireEngine:
     async def _on_routine_complete(self, event: dict):
         intent = event.get("intent", "")
         status = event.get("status", "")
-        quality = event.get("quality_score", 0.0)
+        quality = event.get("quality_score", 0.5)
         if status == "success" and quality >= 0.6:
             self.on_event("ROUTINE_SUCCESS", {"intent": intent, "quality": quality})
         else:

@@ -957,7 +957,10 @@ class DivineEvolution(BaseAgent):
         # --- PHASE 4d : ANTI-TRONCATURE ---
         # Le code généré doit faire au moins 60% du code source original
         # Skip en mode patch : le code patché EST le source complet avec modifications ciblées
-        if code_source and code_source.startswith("local+patch"):
+        # Skip en micro-mode : on compare méthode→méthode, le ratio n'a pas de sens vs fichier complet
+        if micro_mode:
+            pass  # Skip — le réassemblage a déjà reconstitué le fichier complet
+        elif code_source and code_source.startswith("local+patch"):
             pass  # Skip — le patch a été appliqué sur le source original complet
         elif source_code and len(source_code) > 500:
             ratio = len(generated_code) / len(source_code)

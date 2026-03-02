@@ -108,7 +108,7 @@ class TestPhaseTransitions:
         mock_reptilian = MagicMock()
         mock_reptilian.should_freeze.return_value = False
         mock_reptilian.threat_level = 6.0
-        with patch.dict("sys.modules", {"core.reptilian_core": MagicMock(reptilian=mock_reptilian)}):
+        with patch.dict("sys.modules", {"core.reptilian_core": MagicMock(reptile=mock_reptilian)}):
             result = isolate_circadian._evaluate_transition("full", _health())
         assert result == PHASE_CREPUSCULE
 
@@ -153,7 +153,7 @@ class TestPhaseTransitions:
         _force_phase(isolate_circadian, PHASE_EVEIL)
         mock_reptilian = MagicMock()
         mock_reptilian.should_freeze.return_value = True
-        with patch.dict("sys.modules", {"core.reptilian_core": MagicMock(reptilian=mock_reptilian)}):
+        with patch.dict("sys.modules", {"core.reptilian_core": MagicMock(reptile=mock_reptilian)}):
             result = isolate_circadian._evaluate_transition("exhausted", _health())
         assert result is None
 

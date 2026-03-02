@@ -565,14 +565,13 @@ class CardiacEngine:
             bus.subscribe("KNOWLEDGE_GAP_DETECTED", self._on_knowledge_gap)
             bus.subscribe("PSYCHE_UPDATE", self._on_psyche_update)
             bus.subscribe("INNER_VOICE_BROADCAST", self._on_inner_voice)
-            bus.subscribe("DOPAMINE_SURGE", self._on_dopamine_surge)
+            # DOPAMINE_SURGE: réaction via corpus_callosum Bridge #7 (évite double-comptage)
             bus.subscribe("DOPAMINE_DIP", self._on_dopamine_dip)
         except Exception as e:
             logger.warning(f"COEUR: Échec souscription bus: {e}")
 
-    async def _on_dopamine_surge(self, event: dict):
-        """Surge dopaminique → excitation (eureka)."""
-        self.react("eureka")
+    # _on_dopamine_surge retiré : le pont dopamine→cardiac passe par
+    # corpus_callosum Bridge #7 (heart.react("eureka")) pour éviter le double-comptage.
 
     async def _on_dopamine_dip(self, event: dict):
         """Creux dopaminique → deception (failure)."""
