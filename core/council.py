@@ -10,7 +10,8 @@ from core.event_bus.bus import bus
 logger = logging.getLogger("Council")
 
 # Marqueurs de consensus (détection en début de réponse)
-CONSENSUS_MARKERS = ("CONSENSUS", "CONSENUS", "APPROUVE", "APPROUVÉ", "ACCORD FINAL")
+# "CONSENSU" = troncation fréquente du LLM local 8B (47 occurrences observées sur 7 jours)
+CONSENSUS_MARKERS = ("CONSENSUS", "CONSENSU", "CONSENUS", "APPROUVE", "APPROUVÉ", "ACCORD FINAL")
 
 # Tour minimum avant d'autoriser le consensus (force au moins 2 tours de critique)
 MIN_ROUNDS_BEFORE_CONSENSUS = 3
