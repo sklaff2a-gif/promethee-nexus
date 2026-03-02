@@ -229,6 +229,8 @@ class PrefrontalCortex:
         bus.subscribe("CARDIAC_BEAT", self._on_cardiac_beat)
         bus.subscribe("HALLUCINATION_DETECTED", self._on_hallucination)
         bus.subscribe("INNER_VOICE_BROADCAST", self._on_inner_voice)
+        bus.subscribe("COUNCIL_PRESIDENT_VERDICT", self._on_president_verdict)
+        bus.subscribe("ROADMAP_MODULE_COMPLETED", self._on_roadmap_completed)
 
     async def _on_inner_voice(self, data: dict):
         """Intègre la pensée broadcast dans le narrative_log."""
@@ -378,6 +380,24 @@ class PrefrontalCortex:
             action_context="Post-hallucination audit",
             one_shot=True,
         )
+
+    async def _on_president_verdict(self, data: dict):
+        """Verdict president → narration."""
+        if not isinstance(data, dict):
+            return
+        verdict = data.get("verdict", "")
+        feedback = data.get("feedback", "")[:100]
+        self._narrate("observation", f"Verdict president: {verdict}. {feedback}")
+        self._recent_events.append("COUNCIL_PRESIDENT_VERDICT")
+
+    async def _on_roadmap_completed(self, data: dict):
+        """Module roadmap valide → narration capacite acquise."""
+        if not isinstance(data, dict):
+            return
+        display = data.get("display", data.get("module_id", ""))
+        phase = data.get("phase", "?")
+        self._narrate("decision", f"Module roadmap valide: {display} (phase {phase}). Capacite acquise.")
+        self._recent_events.append("ROADMAP_MODULE_COMPLETED")
 
     # ─── 1. GOALS (dlPFC) ────────────────────────────────────────────
 

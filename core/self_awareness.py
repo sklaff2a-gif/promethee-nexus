@@ -91,6 +91,11 @@ class SelfAwarenessEngine:
         self._memory_warnings: List[str] = []
         # Événements de personnalité (traits extrêmes détectés)
         self._personality_events: List[Dict[str, Any]] = []
+        # Données passives collectees via bus (organes)
+        self._last_dopamine_level: float = 0.5
+        self._voice_identity: str = ""
+        self._voice_precision: float = 0.5
+        self._active_goals_count: int = 0
         self._load()
 
     # --- Init & Reset ---
@@ -119,6 +124,10 @@ class SelfAwarenessEngine:
         self._personality_events = []
         self._meta_reflect_cache = None
         self._meta_reflect_ts = 0.0
+        self._last_dopamine_level = 0.5
+        self._voice_identity = ""
+        self._voice_precision = 0.5
+        self._active_goals_count = 0
 
     @classmethod
     def reset_singleton(cls):
@@ -140,6 +149,10 @@ class SelfAwarenessEngine:
         bus.subscribe("OBJECTIVE_COMPLETED", self._on_objective_completed)
         bus.subscribe("OBJECTIVE_FAILED", self._on_objective_failed)
         bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
+        bus.subscribe("DOPAMINE_STATE", self._on_dopamine_state)
+        bus.subscribe("INNER_VOICE_IDENTITY", self._on_inner_voice_identity)
+        bus.subscribe("INNER_VOICE_STATE", self._on_inner_voice_state)
+        bus.subscribe("PREFRONTAL_STATE", self._on_prefrontal_state)
 
     async def _on_agent_response(self, event: dict):
         self._mission_count += 1
@@ -180,6 +193,22 @@ class SelfAwarenessEngine:
         self._routine_count += 1
         if event.get("status") == "success":
             self._routine_success += 1
+
+    async def _on_dopamine_state(self, event: dict):
+        if isinstance(event, dict):
+            self._last_dopamine_level = event.get("level", 0.5)
+
+    async def _on_inner_voice_identity(self, event: dict):
+        if isinstance(event, dict):
+            self._voice_identity = event.get("core_identity", "")
+
+    async def _on_inner_voice_state(self, event: dict):
+        if isinstance(event, dict):
+            self._voice_precision = event.get("precision", 0.5)
+
+    async def _on_prefrontal_state(self, event: dict):
+        if isinstance(event, dict):
+            self._active_goals_count = event.get("goals_active", 0)
 
     async def _on_objective_completed(self, event: dict):
         """Un objectif atteint enrichit le snapshot."""

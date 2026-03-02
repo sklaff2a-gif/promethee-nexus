@@ -53,6 +53,8 @@ BASE_SALIENCE: Dict[str, float] = {
     "prediction_error": 0.4,
     "tissue_emergence": 0.5,
     "neural_compilation": 0.35,
+    "soliloque": 0.45,
+    "roadmap_start": 0.2,
 }
 
 # Emotions considerees "fortes" pour le bonus de saillance
@@ -196,6 +198,12 @@ class Hippocampus:
         bus.subscribe("INNER_VOICE_PREDICTION_RESOLVED", self._on_prediction_resolved)
         bus.subscribe("TISSUE_PATTERN_EMERGED", self._on_tissue_pattern)
         bus.subscribe("NEURAL_COMPILED", self._on_neural_compiled)
+        bus.subscribe("SOLILOQUE_COMPLETE", self._on_soliloque_complete)
+        bus.subscribe("ROADMAP_MODULE_COMPLETED", self._on_roadmap_completed)
+        bus.subscribe("ROADMAP_MODULE_STARTED", self._on_roadmap_started)
+        bus.subscribe("SANDBOX_TEST_PASS", self._on_sandbox_pass)
+        bus.subscribe("SANDBOX_TEST_FAIL", self._on_sandbox_fail)
+        bus.subscribe("COUNCIL_PRESIDENT_VERDICT", self._on_president_verdict)
 
     # ─── Capture affective ───────────────────────────────────────────────
 
@@ -394,6 +402,10 @@ class Hippocampus:
             return f"Transition cognitive : {intent}."
         elif event_type == "prediction_error":
             return f"Erreur de prediction sur {intent}."
+        elif event_type == "soliloque":
+            return f"Soliloque sur {intent}."
+        elif event_type == "roadmap_start":
+            return f"Debut module roadmap: {intent}."
         return f"Evenement {event_type} ({intent})."
 
     # ─── Methodes publiques d'enregistrement ─────────────────────────────
@@ -555,6 +567,77 @@ class Hippocampus:
                 intent="NEURAL_COMPILE",
                 detail=f"{created} nouvelle(s) regle(s), {total} au total",
             )
+
+    def _on_soliloque_complete(self, data):
+        """Handler SOLILOQUE_COMPLETE — fin d'un soliloque interne."""
+        if not isinstance(data, dict):
+            return
+        theme = data.get("theme", "")
+        insight = data.get("insight", "")[:100]
+        e_before = data.get("emotion_before", "")
+        e_after = data.get("emotion_after", "")
+        self._encode_episode(
+            event_type="soliloque",
+            intent=f"SOLILOQUE_{theme.upper()}" if theme else "SOLILOQUE",
+            detail=f"insight={insight} | {e_before}->{e_after}",
+        )
+
+    def _on_roadmap_completed(self, data):
+        """Handler ROADMAP_MODULE_COMPLETED — module roadmap valide."""
+        if not isinstance(data, dict):
+            return
+        self._encode_episode(
+            event_type="goal_complete",
+            intent=data.get("module_id", ""),
+            detail=f"phase={data.get('phase', '?')} | {data.get('display', '')}",
+        )
+
+    def _on_roadmap_started(self, data):
+        """Handler ROADMAP_MODULE_STARTED — debut module roadmap."""
+        if not isinstance(data, dict):
+            return
+        self._encode_episode(
+            event_type="roadmap_start",
+            intent=data.get("module_id", ""),
+            detail=f"phase={data.get('phase', '?')}",
+        )
+
+    def _on_sandbox_pass(self, data):
+        """Handler SANDBOX_TEST_PASS — test sandbox reussi."""
+        if not isinstance(data, dict):
+            return
+        self._encode_episode(
+            event_type="routine_success",
+            intent="EVOLUTION_PIPELINE",
+            agent="evolution",
+            quality_score=1.0,
+            detail=f"spec={data.get('spec_id', '')} | {data.get('tests_passed', 0)} tests",
+        )
+
+    def _on_sandbox_fail(self, data):
+        """Handler SANDBOX_TEST_FAIL — test sandbox echoue."""
+        if not isinstance(data, dict):
+            return
+        self._encode_episode(
+            event_type="routine_failure",
+            intent="EVOLUTION_PIPELINE",
+            agent="evolution",
+            failure_type="sandbox_test_fail",
+            detail=f"spec={data.get('spec_id', '')} | {data.get('tests_failed', 0)} tests",
+        )
+
+    def _on_president_verdict(self, data):
+        """Handler COUNCIL_PRESIDENT_VERDICT — verdict hors-sujet."""
+        if not isinstance(data, dict):
+            return
+        if data.get("verdict", "") != "HORS_SUJET":
+            return
+        self._encode_episode(
+            event_type="routine_failure",
+            intent="COUNCIL_DEBATE",
+            failure_type="hors_sujet",
+            detail=f"council={data.get('council_id', '')} | {data.get('feedback', '')[:80]}",
+        )
 
     # ─── Consolidation en arcs narratifs ─────────────────────────────────
 

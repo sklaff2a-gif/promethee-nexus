@@ -567,6 +567,8 @@ class CardiacEngine:
             bus.subscribe("INNER_VOICE_BROADCAST", self._on_inner_voice)
             # DOPAMINE_SURGE: réaction via corpus_callosum Bridge #7 (évite double-comptage)
             bus.subscribe("DOPAMINE_DIP", self._on_dopamine_dip)
+            bus.subscribe("COMPILER_INTERCEPT", self._on_compiler_intercept)
+            bus.subscribe("SOLILOQUE_COMPLETE", self._on_soliloque_complete)
         except Exception as e:
             logger.warning(f"COEUR: Échec souscription bus: {e}")
 
@@ -628,6 +630,18 @@ class CardiacEngine:
     async def _on_knowledge_gap(self, event: dict):
         """Lacune détectée → curiosité (envie d'apprendre)."""
         self.react("learning")
+
+    async def _on_compiler_intercept(self, event: dict):
+        """Interception regle compilee → fluidite automatique."""
+        self.react("routine_done")
+
+    async def _on_soliloque_complete(self, event: dict):
+        """Fin soliloque → resonance emotionnelle."""
+        e_after = event.get("emotion_after", "") if isinstance(event, dict) else ""
+        if e_after in ("curiosite", "serenite", "enthousiasme"):
+            self.react("learning")
+        else:
+            self.react("council")
 
     async def _on_psyche_update(self, event: dict):
         """Mise à jour PSYCHE → ajustement subtil.

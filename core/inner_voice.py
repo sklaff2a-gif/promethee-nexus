@@ -233,6 +233,8 @@ class InnerVoice:
             bus.subscribe("EUREKA_BRIDGE", self._on_eureka)
             bus.subscribe("KNOWLEDGE_GAP_DETECTED", self._on_knowledge_gap)
             bus.subscribe("HALLUCINATION_DETECTED", self._on_hallucination)
+            bus.subscribe("SOLILOQUE_START", self._on_soliloque_start)
+            bus.subscribe("SOLILOQUE_COMPLETE", self._on_soliloque_complete)
         except Exception as e:
             logger.warning(f"INNER_VOICE: subscribe failed: {e}")
 
@@ -284,6 +286,15 @@ class InnerVoice:
 
     async def _on_hallucination(self, event: dict):
         pass  # Enrichit prédictions
+
+    async def _on_soliloque_start(self, event: dict):
+        """Debut soliloque → suspension DMN."""
+        self._is_idle = False
+
+    async def _on_soliloque_complete(self, event: dict):
+        """Fin soliloque → DMN en retrospection."""
+        self._is_idle = True
+        self._idle_since = time.time()
 
     # ─── Le Cycle de Pensée ───────────────────────────────────────────────
 

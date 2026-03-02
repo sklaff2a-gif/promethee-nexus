@@ -210,6 +210,9 @@ class DopamineSystem:
             bus.subscribe("EUREKA_BRIDGE", self._on_eureka_bridge)
             bus.subscribe("ARTIFACT_CREATED", self._on_artifact_created)
             bus.subscribe("HALLUCINATION_DETECTED", self._on_hallucination)
+            bus.subscribe("SANDBOX_TEST_PASS", self._on_sandbox_pass)
+            bus.subscribe("SANDBOX_TEST_FAIL", self._on_sandbox_fail)
+            bus.subscribe("ROADMAP_MODULE_COMPLETED", self._on_roadmap_completed)
         except Exception as e:
             logger.warning(f"DOPAMINE: Echec souscription bus: {e}")
 
@@ -516,6 +519,18 @@ class DopamineSystem:
         """Hallucination detectee → dip (-0.15)."""
         self.dopamine_level = max(MIN_DOPAMINE, self.dopamine_level - 0.15)
         logger.info(f"DOPAMINE: Hallucination dip → {self.dopamine_level:.2f}")
+
+    async def _on_sandbox_pass(self, event: dict):
+        """Sandbox test OK → surge auto-amelioration."""
+        self.dopamine_level = min(MAX_DOPAMINE, self.dopamine_level + 0.15)
+
+    async def _on_sandbox_fail(self, event: dict):
+        """Sandbox test KO → dip esperance decue."""
+        self.dopamine_level = max(MIN_DOPAMINE, self.dopamine_level - 0.12)
+
+    async def _on_roadmap_completed(self, event: dict):
+        """Module roadmap valide → surge croissance."""
+        self.dopamine_level = min(MAX_DOPAMINE, self.dopamine_level + 0.1)
 
 
 # --- Singleton ---
