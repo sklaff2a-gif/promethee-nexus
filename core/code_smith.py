@@ -642,7 +642,7 @@ def _res_003(spec, source):
 
 @_register("RES-005")
 def _res_005(spec, source):
-    """Heartbeat Ollama — constante + méthode async pour publier OLLAMA_DOWN."""
+    """Heartbeat Ollama — constante + méthode async pour publier OLLAMA_UNRESPONSIVE."""
     return [
         TransformAction(
             type=TransformType.ADD_MODULE_CONSTANT,
@@ -652,7 +652,7 @@ def _res_005(spec, source):
             type=TransformType.ADD_MODULE_FUNCTION,
             code=textwrap.dedent('''\
                 async def _check_ollama_heartbeat():
-                    """Vérifie si Ollama répond. Publie OLLAMA_DOWN si non."""
+                    """Vérifie si Ollama répond. Publie OLLAMA_UNRESPONSIVE si non."""
                     import httpx
                     try:
                         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -662,7 +662,7 @@ def _res_005(spec, source):
                         try:
                             from core.event_bus.bus import bus
                             from datetime import datetime
-                            await bus.publish("OLLAMA_DOWN", {
+                            await bus.publish("OLLAMA_UNRESPONSIVE", {
                                 "timestamp": datetime.now().isoformat(),
                                 "message": "Ollama ne répond pas au health check"
                             })

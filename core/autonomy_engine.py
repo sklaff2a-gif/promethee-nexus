@@ -575,6 +575,7 @@ class AutonomyEngine:
                     "en mémoire (remember) pour que les agents puissent les utiliser à l'avenir."
                 ),
                 "force_local": True,
+                "intent": "APPRENTISSAGE_CIBLE",
             })
             self._learning_history[topic] = datetime.now().isoformat()
             self._learning_done_this_cycle = True
@@ -988,6 +989,7 @@ class AutonomyEngine:
                     "autonome comme Prométhée. Sauvegarde les trouvailles en mémoire."
                 ),
                 "force_local": True,
+                "intent": "YOUTUBE_VEILLE",
             })
             # Enregistrer la veille YouTube dans le journal stratégique
             try:
@@ -1061,6 +1063,7 @@ class AutonomyEngine:
                 "mission": mission_text,
                 "context": "\n".join(context_parts),
                 "force_local": True,
+                "intent": intent,
             })
 
         # --- Guard : routines "skipped" (council saturé, etc.) — pas de budget consommé ---
@@ -1179,7 +1182,8 @@ class AutonomyEngine:
                     "context": json.dumps({
                         "history": self.routine_history[-10:],
                         "error_streak": self.error_streak,
-                    }, default=str)
+                    }, default=str),
+                    "intent": "LOOP_BREAKER_HELP",
                 })
                 if loop_response and isinstance(loop_response, dict):
                     loop_action = loop_response.get("action", "skip")
@@ -1312,6 +1316,7 @@ class AutonomyEngine:
                 "mission": f"[MODE VEILLE] {routine['mission']}",
                 "context": f"PROTOCOLE_AUTONOMIE\n{AUTONOMY_GUARDRAIL}",
                 "force_local": True,
+                "intent": intent,
             })
 
         quality = self._score_result_quality(response, intent)
@@ -1364,7 +1369,7 @@ class AutonomyEngine:
                 return f"veto-reptilien: {flinch}"
             shed, max_cost = reptile.should_shed()
             if shed:
-                cost = RESOURCE_COSTS.get(intent, 3)
+                cost = RESOURCE_COSTS.get(intent, 2)
                 if cost > max_cost:
                     return f"veto-reptilien: SHED actif, coût {cost} > max {max_cost}"
         except Exception:
@@ -1545,6 +1550,7 @@ class AutonomyEngine:
                 "mission": mission,
                 "context": f"PROTOCOLE_AUTONOMIE_GRIMOIRE\n{AUTONOMY_GUARDRAIL}",
                 "force_local": True,
+                "intent": "GRIMOIRE_INVOKE",
             })
             return response or {"status": "error", "result": "Pas de réponse du Grimoire."}
 
@@ -1629,6 +1635,7 @@ class AutonomyEngine:
                     "mission": f"VEILLE TECHNO: {topic['research_query']}",
                     "context": "COUNCIL_RESEARCH — Résume les découvertes clés en 5-10 lignes pour alimenter un débat.",
                     "force_local": True,
+                    "intent": "VEILLE_TECHNO",
                 })
                 if res and res.get("status") == "success":
                     research_context = str(res.get("result", ""))[:2000]
@@ -1913,6 +1920,7 @@ class AutonomyEngine:
                     f"FICHIER: {filename}\n"
                     f"CODE À AUDITER (ne génère pas de nouveau code, analyse celui-ci) :\n{code}"
                 ),
+                "intent": "SECURITY_AUDIT",
                 "force_local": True,
             })
 
@@ -2049,6 +2057,7 @@ class AutonomyEngine:
                 ),
                 "context": f"PROTOCOLE_AUTONOMIE\nFICHIER: {filename}\nCODE:\n{code}",
                 "force_local": True,
+                "intent": intent,
             })
             return response or {"status": "error", "result": "Pas de réponse."}
         except Exception as e:

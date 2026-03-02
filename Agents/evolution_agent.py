@@ -1020,7 +1020,8 @@ class DivineEvolution(BaseAgent):
                 f"Analyse UNIQUEMENT les lignes ajoutées (+) ou modifiées.\n"
                 f"S'il est sûr, valide-le pour déploiement (Envoi Formatter)."
             ),
-            "context": generated_code
+            "context": generated_code,
+            "is_pipeline": True,
         })
 
         deploy_status = architect_response.get("status", "unknown")
@@ -1064,7 +1065,8 @@ class DivineEvolution(BaseAgent):
                             f"Rapport: {reviewer_report}\n"
                             f"Merci de ré-examiner et valider pour déploiement."
                         ),
-                        "context": generated_code
+                        "context": generated_code,
+                        "is_pipeline": True,
                     })
                     deploy_status = architect_response2.get("status", "unknown")
                     if deploy_status == "success":
@@ -1287,7 +1289,8 @@ class DivineEvolution(BaseAgent):
 
         architect_response = await orchestrator.dispatch_task("architect", {
             "mission": "Analyse ce nouveau module R&D. S'il est sûr, valide-le pour déploiement (Envoi Formatter).",
-            "context": generated_code
+            "context": generated_code,
+            "is_pipeline": True,
         })
 
         return {

@@ -127,7 +127,7 @@ FORMAT DE RÉPONSE :
         {prompt_prefix}
 
         --- PROPOSITION ---
-        {full_content[:2000]}
+        {full_content[:6000]}
 
         --- JURISPRUDENCE ---
         {jurisprudence if jurisprudence else "R.A.S"}
@@ -193,10 +193,14 @@ FORMAT DE RÉPONSE :
                 if spec_id_match:
                     formatter_payload["evolution_spec_id"] = spec_id_match.group(1)
 
-                loop = asyncio.get_running_loop()
-                loop.create_task(orchestrator.dispatch_task("formatter", formatter_payload))
-
-                return {"status": "success", "result": "ROUTAGE_FORMATTER_OK", "details": trigger_msg}
+                formatter_result = await orchestrator.dispatch_task("formatter", formatter_payload)
+                fmt_status = formatter_result.get("status", "error") if isinstance(formatter_result, dict) else "error"
+                fmt_detail = formatter_result.get("result", "INCONNU") if isinstance(formatter_result, dict) else str(formatter_result)
+                if fmt_status == "success":
+                    return {"status": "success", "result": f"FORMATÉ_OK ({fmt_detail})", "details": trigger_msg}
+                else:
+                    self.log_thought(f"⚠️ Formatter échoué : {fmt_detail}", type="warning")
+                    return {"status": "warning", "result": f"FORMATÉ_ECHEC ({fmt_detail})", "details": trigger_msg}
 
             except Exception as e:
                 self.log_thought(f"⚠️ Erreur Technique Relais : {e}", type="error")

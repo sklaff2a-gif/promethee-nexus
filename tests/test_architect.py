@@ -219,29 +219,24 @@ class TestAntiSterileLoop:
 
     @pytest.mark.asyncio
     async def test_validation_with_code_dispatches_formatter(self):
-        """VALIDÉ + code Python → ROUTAGE_FORMATTER_OK."""
+        """VALIDÉ + code Python → FORMATÉ_OK (await Formatter)."""
         architect = DivineArchitect()
         code_context = "import os\nfrom typing import Dict\ndef process():\n    return True"
 
         async def _gen_valide(_prompt):
             return "VALIDÉ — Code propre"
 
-        def _close_coro(coro):
-            coro.close()
-            return MagicMock()
-
         with patch.object(architect, "generate_content", _gen_valide), \
              patch.object(architect, "recall", return_value=""), \
              patch.object(architect, "log_thought"), \
-             patch("core.orchestrator.orchestrator") as mock_orch, \
-             patch("asyncio.get_running_loop") as mock_loop:
-            mock_loop.return_value.create_task = _close_coro
-            mock_orch.dispatch_task = AsyncMock()
+             patch("core.orchestrator.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "CODE_CLEAN_SENT_TO_FACTORY"})
             result = await architect.process_task({
                 "mission": "Valide ce code.",
                 "context": code_context
             })
-        assert result["result"] == "ROUTAGE_FORMATTER_OK"
+        assert result["result"].startswith("FORMATÉ_OK")
+        mock_orch.dispatch_task.assert_awaited_once()
 
 
 # ═══════════════════════════════════════════════════════════
@@ -295,23 +290,16 @@ class TestAutonomousOverrideGuard:
         """ADMIN_OVERRIDE sans marqueur autonome → override fonctionne."""
         architect = DivineArchitect()
 
-        def _close_coro(coro):
-            """Ferme proprement la coroutine pour eviter le warning 'never awaited'."""
-            coro.close()
-            return MagicMock()
-
         with patch.object(architect, "generate_content", self._gen_refused_inconnu), \
              patch.object(architect, "recall", return_value=""), \
              patch.object(architect, "log_thought"), \
-             patch("core.orchestrator.orchestrator") as mock_orch, \
-             patch("asyncio.get_running_loop") as mock_loop:
-            mock_loop.return_value.create_task = _close_coro
-            mock_orch.dispatch_task = AsyncMock()
+             patch("core.orchestrator.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "CODE_CLEAN"})
             result = await architect.process_task({
                 "mission": "ADMIN_OVERRIDE: Deploy ce code maintenant.",
                 "context": "import os\nfrom foo import bar\ndef run(): pass"
             })
-        # Override user + code Python → ROUTAGE_FORMATTER_OK
+        # Override user + code Python → FORMATÉ_OK (await Formatter)
         assert result["status"] == "success"
 
     def test_autonomous_markers_list(self):

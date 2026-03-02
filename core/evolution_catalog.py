@@ -397,7 +397,7 @@ async def _safe_call(self, callback, event: dict):
     specs["RES-005"] = ImprovementSpec(
         id="RES-005",
         name="Heartbeat Ollama",
-        description="Publie un event OLLAMA_DOWN sur le bus si Ollama ne répond pas au health check.",
+        description="Publie un event OLLAMA_UNRESPONSIVE sur le bus si Ollama ne répond pas au health check.",
         category="resilience",
         target_file="core/autonomy_engine.py",
         target_method="SystemHealthCheck.run",
@@ -405,12 +405,12 @@ async def _safe_call(self, callback, event: dict):
         code_template="""
 # Dans SystemHealthCheck.run(), après le check Ollama :
 if not ollama_alive:
-    await bus.publish("OLLAMA_DOWN", {
+    await bus.publish("OLLAMA_UNRESPONSIVE", {
         "timestamp": datetime.now().isoformat(),
         "message": "Ollama ne répond pas au health check"
     })
 """,
-        validation="Mock Ollama comme down, exécuter le health check, vérifier que l'event OLLAMA_DOWN est publié.",
+        validation="Mock Ollama comme down, exécuter le health check, vérifier que l'event OLLAMA_UNRESPONSIVE est publié.",
         tags=["resilience", "ollama", "heartbeat", "monitoring"],
         combinable_with=["RES-002"],
     )

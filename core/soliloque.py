@@ -505,8 +505,8 @@ class SoliloqueEngine:
     def _get_strategic_mode(self) -> str:
         """Retourne le mode stratégique courant."""
         try:
-            from core.autonomy_engine import autonomy
-            return getattr(autonomy, "strategic_mode", "standard")
+            from core.self_awareness import awareness
+            return awareness.compute_strategic_mode()
         except Exception:
             return "standard"
 

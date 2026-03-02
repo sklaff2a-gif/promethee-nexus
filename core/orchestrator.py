@@ -135,7 +135,8 @@ class Orchestrator:
             # EVOLUTION_PIPELINE : l'agent Evolution gère Coder→Architect lui-même
             task_context = str(task_payload.get("context", ""))
             is_internal_pipeline = (
-                task_context.startswith("DROPZONE_ANALYSIS")
+                task_payload.get("is_pipeline", False)
+                or task_context.startswith("DROPZONE_ANALYSIS")
                 or task_context.startswith("EVOLUTION_PIPELINE")
             )
 

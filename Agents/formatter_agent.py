@@ -153,7 +153,7 @@ class DivineFormatter(BaseAgent):
         # Prompt Standard
         prompt = (
             f"Tu es un compilateur strict. Analyse ce texte brut :\n"
-            f"--- DÉBUT ---\n{full_text[:2000]}...\n--- FIN ---\n"
+            f"--- DÉBUT ---\n{full_text[:6000]}...\n--- FIN ---\n"
             f"TA MISSION :\n"
             f"1. Trouve le nom du fichier cible (ex: core/test.py).\n"
             f"   ATTENTION: Ne confonds pas le code (ex: shutil.copy) avec le nom du fichier !\n"
