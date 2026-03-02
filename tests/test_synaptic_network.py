@@ -23,6 +23,7 @@ from core.synaptic_network import (
     MIN_CONCEPT_LENGTH,
     MAX_NODES,
     MAX_SYNAPSES,
+    MAX_PRUNE_RATIO,
     STATE_FILE,
 )
 
@@ -1428,3 +1429,89 @@ class TestEmotionalSynapses:
         await network._on_cardiac_emotion_change({"emotion": "", "intensity": 0.8})
         await network._on_cardiac_emotion_change({"emotion": "rage"})
         # Pas d'exception = OK
+
+
+class TestPruningCap:
+    """Tests du cap de pruning à MAX_PRUNE_RATIO par dream."""
+
+    def test_pruning_cap_limits_deletions(self, network):
+        """Le pruning ne supprime pas plus de MAX_PRUNE_RATIO du réseau."""
+        # Créer 200 synapses avec des poids faibles (seront sous le seuil après decay)
+        for i in range(200):
+            concept_a = f"concept_a_{i}"
+            concept_b = f"concept_b_{i}"
+            nid_a = _make_node_id(concept_a)
+            nid_b = _make_node_id(concept_b)
+            network.nodes[nid_a] = _make_node(concept_a, "memory", 0.5)
+            network.nodes[nid_b] = _make_node(concept_b, "memory", 0.5)
+            key = _synapse_key(nid_a, nid_b)
+            network.synapses[key] = _make_synapse(nid_a, nid_b, 0.09, "temporal", "test")
+
+        # Simuler 2 jours sans dream → decay = 0.04, toutes sous le seuil
+        network._last_dream_time = time.time() - 2 * 86400
+
+        with patch.object(network, "_auto_save"):
+            report = network.dream_consolidation()
+
+        pruned = report["pruned_synapses"]
+        # Le cap s'applique sur le réseau APRÈS dream connections (step 2)
+        total_at_prune = len(network.synapses) + pruned
+        max_allowed = max(10, int(total_at_prune * MAX_PRUNE_RATIO))
+        assert pruned <= max_allowed, f"Pruned {pruned} > max {max_allowed}"
+        assert report.get("pruning_capped") is True
+
+    def test_pruning_cap_saves_strongest(self, network):
+        """Les synapses sauvées sont celles avec le poids le plus élevé."""
+        # 50 synapses à 0.09, 50 à 0.05
+        for i in range(50):
+            concept_a = f"strong_concept_{i}"
+            concept_b = f"target_strong_{i}"
+            nid_a = _make_node_id(concept_a)
+            nid_b = _make_node_id(concept_b)
+            network.nodes[nid_a] = _make_node(concept_a, "memory", 0.5)
+            network.nodes[nid_b] = _make_node(concept_b, "memory", 0.5)
+            key = _synapse_key(nid_a, nid_b)
+            network.synapses[key] = _make_synapse(nid_a, nid_b, 0.09, "temporal", "test")
+
+        for i in range(50):
+            concept_a = f"weak_concept_{i}"
+            concept_b = f"target_weak_{i}"
+            nid_a = _make_node_id(concept_a)
+            nid_b = _make_node_id(concept_b)
+            network.nodes[nid_a] = _make_node(concept_a, "memory", 0.5)
+            network.nodes[nid_b] = _make_node(concept_b, "memory", 0.5)
+            key = _synapse_key(nid_a, nid_b)
+            network.synapses[key] = _make_synapse(nid_a, nid_b, 0.05, "temporal", "test")
+
+        network._last_dream_time = time.time() - 2 * 86400
+
+        with patch.object(network, "_auto_save"):
+            report = network.dream_consolidation()
+
+        # Les synapses sauvées doivent avoir weight == PRUNING_THRESHOLD
+        saved_count = sum(
+            1 for s in network.synapses.values()
+            if abs(s["weight"] - PRUNING_THRESHOLD) < 0.001
+        )
+        assert saved_count > 0, "Des synapses auraient dû être sauvées au seuil"
+
+    def test_pruning_no_cap_when_few(self, network):
+        """Pas de cap si peu de synapses à pruner (nœuds faible énergie → pas de dream connections)."""
+        for i in range(5):
+            concept_a = f"few_concept_a_{i}"
+            concept_b = f"few_concept_b_{i}"
+            nid_a = _make_node_id(concept_a)
+            nid_b = _make_node_id(concept_b)
+            # Énergie 0.05 → energy_combined < 0.15 → pas de dream connections
+            network.nodes[nid_a] = _make_node(concept_a, "memory", 0.05)
+            network.nodes[nid_b] = _make_node(concept_b, "memory", 0.05)
+            key = _synapse_key(nid_a, nid_b)
+            network.synapses[key] = _make_synapse(nid_a, nid_b, 0.05, "temporal", "test")
+
+        network._last_dream_time = time.time() - 2 * 86400
+
+        with patch.object(network, "_auto_save"):
+            report = network.dream_consolidation()
+
+        assert report.get("pruning_capped") is not True
+        assert report["pruned_synapses"] == 5

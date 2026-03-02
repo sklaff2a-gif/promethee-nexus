@@ -998,11 +998,23 @@ class DivineEvolution(BaseAgent):
         # --- PHASE 5 : DÉPLOIEMENT SÉCURISÉ (Architecte) ---
         self.log_thought(f"🛡️ Phase 5 : Soumission [{spec.id}] à l'Architecte...", type="info")
 
+        # Calcul du diff pour que l'Architecte voie uniquement les changements
+        import difflib as _difflib
+        _diff_lines = list(_difflib.unified_diff(
+            source_code.splitlines(keepends=True),
+            generated_code.splitlines(keepends=True),
+            fromfile="original", tofile="modifié", n=2
+        ))
+        diff_summary = "".join(_diff_lines[:50]) if _diff_lines else "(aucune différence)"
+
         architect_response = await orchestrator.dispatch_task("architect", {
             "mission": (
                 f"Analyse cette amélioration R&D [{spec.id}] {spec.name}.\n"
                 f"Fichier cible: {spec.target_file}\n"
                 f"EVOLUTION_SPEC_ID: {spec.id}\n"
+                f"DIFF DES MODIFICATIONS :\n{diff_summary}\n\n"
+                f"IMPORTANT: Le code hors-diff existait DÉJÀ dans le fichier original.\n"
+                f"Analyse UNIQUEMENT les lignes ajoutées (+) ou modifiées.\n"
                 f"S'il est sûr, valide-le pour déploiement (Envoi Formatter)."
             ),
             "context": generated_code

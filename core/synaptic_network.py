@@ -24,6 +24,7 @@ SPIKE_TIMING_WINDOW = 300.0       # 5 min pour causalite temporelle
 HOMEOSTATIC_TARGET = 0.3
 SYNAPSE_DECAY_PER_DAY = 0.02
 PRUNING_THRESHOLD = 0.08
+MAX_PRUNE_RATIO = 0.05            # Max 5% du réseau purgé par dream
 MIN_CONCEPT_LENGTH = 3            # Rejeter les concepts trop courts (bruit)
 RESONANCE_CYCLES = 4
 STDP_MULTIPLIER = 1.5             # STDP 1.5x plus fort que Hebb classique
@@ -1251,6 +1252,18 @@ class SynapticNetwork:
             syn["weight"] = max(0.0, syn["weight"] - decay)
             if syn["weight"] < PRUNING_THRESHOLD:
                 to_prune.append(key)
+
+        # Cap : maximum MAX_PRUNE_RATIO du réseau purgé par dream
+        max_prune = max(10, int(len(self.synapses) * MAX_PRUNE_RATIO))
+        if len(to_prune) > max_prune:
+            to_prune_scored = [(k, self.synapses[k]["weight"]) for k in to_prune]
+            to_prune_scored.sort(key=lambda x: x[1])  # Plus faibles en premier
+            saved = to_prune_scored[max_prune:]
+            to_prune = [k for k, _ in to_prune_scored[:max_prune]]
+            # Restaurer les sauvés juste au seuil (seconde chance)
+            for k, _ in saved:
+                self.synapses[k]["weight"] = PRUNING_THRESHOLD
+            report["pruning_capped"] = True
 
         for key in to_prune:
             del self.synapses[key]

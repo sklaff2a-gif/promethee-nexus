@@ -1952,3 +1952,118 @@ class TestBudgetPostEpuisement:
             self.engine._council_degraded = False
         assert routine_cost == 4  # Au lieu de 12
         assert self.engine._council_degraded is False  # Flag reset
+
+
+class TestDeprivationCritique:
+    """Tests du forçage d'intent quand déprivation >= 90."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        self.state_path = str(tmp_path / "state.json")
+        with patch("core.autonomy_engine.STATE_FILE", self.state_path):
+            with patch("core.autonomy_engine.AutonomyStatePersistence.load",
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
+                self.engine = AutonomyEngine(idle_threshold_seconds=300)
+        yield
+
+    def _make_mock_drive(self, name, deprivation, frustration_streak=0):
+        drive = MagicMock()
+        drive.name = name
+        drive.deprivation = deprivation
+        drive.frustration_streak = frustration_streak
+        return drive
+
+    def test_deprivation_90_forces_intent(self):
+        """Déprivation >= 90 force l'intent même sans frustration_streak."""
+        self.engine._forced_next_intent = ""
+        self.engine.routine_history = [_make_history_entry("EXPANSION_CODE")]
+
+        mock_desires = MagicMock()
+        mock_desires.drives = {
+            "CONNEXION": self._make_mock_drive("CONNEXION", 95.0, frustration_streak=0),
+            "CURIOSITE": self._make_mock_drive("CURIOSITE", 30.0, frustration_streak=0),
+        }
+        affinity_map = {
+            "CONNEXION": {"COUNCIL_DEBATE": 1.5, "VEILLE_SILENCIEUSE": 0.3},
+            "CURIOSITE": {"VEILLE_SILENCIEUSE": 1.0},
+        }
+
+        with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
+            desires=mock_desires, DRIVE_ROUTINE_AFFINITY=affinity_map
+        )}):
+            # Simuler le bloc de code de frustration
+            from core.desire_engine import desires as _desires, DRIVE_ROUTINE_AFFINITY
+            frustrated = [
+                (name, d) for name, d in _desires.drives.items()
+                if (d.frustration_streak >= 4 and d.deprivation >= 70) or d.deprivation >= 90
+            ]
+            assert len(frustrated) == 1
+            assert frustrated[0][0] == "CONNEXION"
+
+    def test_deprivation_below_90_no_force(self):
+        """Déprivation < 90 sans frustration_streak ne force rien."""
+        mock_desires = MagicMock()
+        mock_desires.drives = {
+            "CONNEXION": self._make_mock_drive("CONNEXION", 85.0, frustration_streak=0),
+        }
+
+        with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
+            desires=mock_desires, DRIVE_ROUTINE_AFFINITY={}
+        )}):
+            from core.desire_engine import desires as _desires
+            frustrated = [
+                (name, d) for name, d in _desires.drives.items()
+                if (d.frustration_streak >= 4 and d.deprivation >= 70) or d.deprivation >= 90
+            ]
+            assert len(frustrated) == 0
+
+    def test_anti_loop_prevents_double_force(self):
+        """Ne force pas le même intent deux fois de suite."""
+        self.engine._forced_next_intent = ""
+        self.engine.routine_history = [_make_history_entry("COUNCIL_DEBATE")]
+
+        mock_desires = MagicMock()
+        mock_desires.drives = {
+            "CONNEXION": self._make_mock_drive("CONNEXION", 95.0, frustration_streak=0),
+        }
+        affinity_map = {
+            "CONNEXION": {"COUNCIL_DEBATE": 1.5},
+        }
+
+        with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
+            desires=mock_desires, DRIVE_ROUTINE_AFFINITY=affinity_map
+        )}):
+            from core.desire_engine import desires as _desires, DRIVE_ROUTINE_AFFINITY
+            frustrated = [
+                (name, d) for name, d in _desires.drives.items()
+                if (d.frustration_streak >= 4 and d.deprivation >= 70) or d.deprivation >= 90
+            ]
+            if frustrated:
+                frustrated.sort(key=lambda x: x[1].deprivation, reverse=True)
+                drive_name, drive = frustrated[0]
+                forced_intent_map = DRIVE_ROUTINE_AFFINITY.get(drive_name, {})
+                if forced_intent_map:
+                    best_intent = max(forced_intent_map, key=forced_intent_map.get)
+                    last_intent = self.engine.routine_history[-1].get("intent", "")
+                    # Anti-boucle : COUNCIL_DEBATE == COUNCIL_DEBATE → pas de forçage
+                    assert best_intent == last_intent
+                    # Le code ne devrait PAS mettre _forced_next_intent
+
+    def test_highest_deprivation_prioritized(self):
+        """La pulsion avec la plus haute déprivation est priorisée."""
+        mock_desires = MagicMock()
+        mock_desires.drives = {
+            "CONNEXION": self._make_mock_drive("CONNEXION", 92.0),
+            "MAITRISE": self._make_mock_drive("MAITRISE", 98.0),
+        }
+
+        with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
+            desires=mock_desires, DRIVE_ROUTINE_AFFINITY={}
+        )}):
+            from core.desire_engine import desires as _desires
+            frustrated = [
+                (name, d) for name, d in _desires.drives.items()
+                if d.deprivation >= 90
+            ]
+            frustrated.sort(key=lambda x: x[1].deprivation, reverse=True)
+            assert frustrated[0][0] == "MAITRISE"

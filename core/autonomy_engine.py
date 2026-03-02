@@ -1161,15 +1161,19 @@ class AutonomyEngine:
                 from core.desire_engine import desires as _desires, DRIVE_ROUTINE_AFFINITY
                 frustrated = [
                     (name, d) for name, d in _desires.drives.items()
-                    if d.frustration_streak >= 4 and d.deprivation >= 70
+                    if (d.frustration_streak >= 4 and d.deprivation >= 70) or d.deprivation >= 90
                 ]
                 if frustrated:
+                    frustrated.sort(key=lambda x: x[1].deprivation, reverse=True)
                     drive_name, drive = frustrated[0]
                     forced_intent_map = DRIVE_ROUTINE_AFFINITY.get(drive_name, {})
                     if forced_intent_map:
                         best_intent = max(forced_intent_map, key=forced_intent_map.get)
-                        self._forced_next_intent = best_intent
-                        logger.warning(f"[EVEIL] Pulsion {drive_name} frustrée x{drive.frustration_streak} (dep={drive.deprivation:.0f}) → force {best_intent}")
+                        # Anti-boucle : ne pas forcer le même intent deux fois de suite
+                        last_intent = self.routine_history[-1].get("intent", "") if self.routine_history else ""
+                        if best_intent != last_intent:
+                            self._forced_next_intent = best_intent
+                            logger.warning(f"[EVEIL] Pulsion {drive_name} critique (dep={drive.deprivation:.0f}) → force {best_intent}")
             except Exception:
                 pass
 
