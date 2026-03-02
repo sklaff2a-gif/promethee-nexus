@@ -51,6 +51,8 @@ BASE_SALIENCE: Dict[str, float] = {
     "reptilian_alert": 0.55,
     "cognitive_transition": 0.45,
     "prediction_error": 0.4,
+    "tissue_emergence": 0.5,
+    "neural_compilation": 0.35,
 }
 
 # Emotions considerees "fortes" pour le bonus de saillance
@@ -179,7 +181,7 @@ class Hippocampus:
         )
 
     def _subscribe_events(self):
-        """Souscriptions bus — 8 handlers."""
+        """Souscriptions bus — 10 handlers."""
         if self._subscribed:
             return
         self._subscribed = True
@@ -192,6 +194,8 @@ class Hippocampus:
         bus.subscribe("REPTILIAN_ALERT", self._on_reptilian_alert)
         bus.subscribe("CORPUS_CALLOSUM_STATE", self._on_cognitive_state)
         bus.subscribe("INNER_VOICE_PREDICTION_RESOLVED", self._on_prediction_resolved)
+        bus.subscribe("TISSUE_PATTERN_EMERGED", self._on_tissue_pattern)
+        bus.subscribe("NEURAL_COMPILED", self._on_neural_compiled)
 
     # ─── Capture affective ───────────────────────────────────────────────
 
@@ -526,6 +530,31 @@ class Hippocampus:
             intent=data.get("prediction", ""),
             detail=f"outcome={data.get('outcome', '')}",
         )
+
+    def _on_tissue_pattern(self, data):
+        """Handler TISSUE_PATTERN_EMERGED — pattern cellulaire emergent."""
+        if not isinstance(data, dict):
+            return
+        genome = data.get("genome", "?")
+        freq = data.get("frequency", 0)
+        self._encode_episode(
+            event_type="tissue_emergence",
+            intent="TISSUE_PATTERN",
+            detail=f"genome={genome}, freq={freq:.0%}" if isinstance(freq, (int, float)) else f"genome={genome}",
+        )
+
+    def _on_neural_compiled(self, data):
+        """Handler NEURAL_COMPILED — nouvelles regles distillees."""
+        if not isinstance(data, dict):
+            return
+        created = data.get("rules_created", 0)
+        total = data.get("rules_total", 0)
+        if created > 0:
+            self._encode_episode(
+                event_type="neural_compilation",
+                intent="NEURAL_COMPILE",
+                detail=f"{created} nouvelle(s) regle(s), {total} au total",
+            )
 
     # ─── Consolidation en arcs narratifs ─────────────────────────────────
 

@@ -280,7 +280,7 @@
       "phase_name": "VM NEURALE",
       "display": "neural_tissue",
       "description": "Substrat cellulaire neuronal — cellules a genome cognitif (ACGTIR), selection naturelle, patterns emergents, 0 LLM",
-      "status": "in_progress",
+      "status": "implemented",
       "specs": [],
       "depends_on": [],
       "estimated_cost": 4,

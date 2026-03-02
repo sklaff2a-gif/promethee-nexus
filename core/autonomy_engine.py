@@ -847,6 +847,16 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Bonus NeuralTissue (Couche 13) ---
+        try:
+            from core.neural_tissue import tissue
+            for i, (routine, s) in enumerate(scored):
+                tissue_bonus = tissue.compute_tissue_bonus(routine["intent"])
+                if tissue_bonus != 0.0:
+                    scored[i] = (routine, s + tissue_bonus)
+        except Exception:
+            pass
+
         if not scored:
             logger.warning("[AUTONOMY] Aucune routine disponible apres filtrage. Cycle avorte.")
             self._persist_state()

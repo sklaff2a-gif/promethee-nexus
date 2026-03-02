@@ -415,6 +415,32 @@ class SelfAwarenessEngine:
         except Exception:
             snapshot["circadian_phase"] = "eveil"
 
+        # Neural Tissue
+        try:
+            from core.neural_tissue import tissue
+            stats = tissue.get_stats()
+            snapshot["neural_tissue"] = {
+                "population": stats.get("population", 0),
+                "tick_count": stats.get("tick_count", 0),
+                "dominant_genome": stats.get("dominant_genome"),
+                "top_frequency": stats.get("top_frequency", 0),
+            }
+        except Exception:
+            pass
+
+        # Neural Compiler
+        try:
+            from core.neural_compiler import compiler
+            stats = compiler.get_stats()
+            snapshot["neural_compiler"] = {
+                "rules_count": stats.get("rules_count", 0),
+                "active_rules": stats.get("active_rules_count", 0),
+                "intercept_rate": stats.get("intercept_rate", 0),
+                "observations": stats.get("observations_count", 0),
+            }
+        except Exception:
+            pass
+
         self._snapshots.append(snapshot)
         if len(self._snapshots) > MAX_SNAPSHOTS:
             self._snapshots = self._snapshots[-MAX_SNAPSHOTS:]
