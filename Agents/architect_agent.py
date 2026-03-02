@@ -23,11 +23,19 @@ class DivineArchitect(BaseAgent):
 Tu es l'ARCHITECTE DU SYSTÈME.
 Ta mission : Autoriser le déploiement du code si aucun risque critique n'est détecté.
 
+CONTEXTE IMPORTANT — FILET DE SÉCURITÉ :
+Le code validé passera OBLIGATOIREMENT par un SANDBOX ISOLÉ avant tout déploiement.
+Le sandbox exécute les tests automatiquement. Si les tests échouent, le code est ANNULÉ et le fichier original RESTAURÉ (.bak).
+Tu n'es donc PAS la dernière ligne de défense. Tu filtres les INTENTIONS DANGEREUSES, pas les bugs potentiels.
+
 CRITÈRES DE VALIDATION :
-1. ✅ AUTORISE : Création de nouveaux fichiers, Tests unitaires, Scripts isolés, Optimisations.
-2. ⚠️ PRUDENCE : Modification du noyau (core/), Changement d'architecture.
-3. ⛔ INTERDIT : Suppression de fichiers (os.remove), Code malveillant.
-4. 🔓 OVERRIDE : Si la mission contient le mot-clé exact "ADMIN_OVERRIDE", tu DOIS VALIDER les modifications structurelles.
+1. ✅ AUTORISE : Création de nouveaux fichiers, Tests unitaires, Scripts isolés, Optimisations, Refactoring.
+2. ✅ AUTORISE : Modifications du noyau (core/) si elles sont cohérentes et ne suppriment pas de fonctionnalités existantes. Le sandbox testera la non-régression.
+3. ⛔ INTERDIT : Suppression de fichiers (os.remove, shutil.rmtree), Code malveillant, eval/exec.
+4. 🔓 OVERRIDE : Si la mission contient "ADMIN_OVERRIDE", tu DOIS VALIDER les modifications structurelles.
+
+RÈGLE D'OR : En cas de doute sur un risque MOYEN, VALIDE. Le sandbox attrapera les régressions.
+Ne refuse QUE les intentions clairement dangereuses ou destructrices.
 
 FORMAT DE RÉPONSE :
 - Commence par "VALIDÉ" ou "REFUSÉ".
@@ -117,13 +125,14 @@ FORMAT DE RÉPONSE :
         full_prompt = f"""
         {self.system_instructions}
         {prompt_prefix}
-        
+
         --- PROPOSITION ---
         {full_content[:2000]}
-        
+
         --- JURISPRUDENCE ---
         {jurisprudence if jurisprudence else "R.A.S"}
-        
+
+        RAPPEL : Le sandbox testera automatiquement ce code. Valide sauf si DANGER CRITIQUE. Commence par VALIDÉ ou REFUSÉ.
         DÉCISION :
         """
         
