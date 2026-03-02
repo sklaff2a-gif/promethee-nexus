@@ -149,11 +149,19 @@ FORMAT DE RÉPONSE :
         # 4. LOGIQUE D'ACTIVATION (Le Cœur du Système)
         # On valide si :
         # A) Le LLM est d'accord ET n'a pas refusé.
-        # B) OU SI le risque est FAIBLE (Safety Net) et que le LLM n'a pas hurlé "INTERDIT".
+        # B) OU SI le risque est FAIBLE (Safety Net) — le refus LLM sans justification
+        #    est ignoré (le LLM 8B dit souvent "REFUSÉ." par conservatisme).
+        #    Seul un refus avec raison critique (INTERDIT, DANGER, CRITICAL) bloque.
         # C) OU SI Override Admin détecté et risque non critique.
-        
+
+        # Un refus LOW n'est bloquant que si le LLM fournit une raison critique
+        low_risk_hard_block = False
+        if risk_level == "LOW" and llm_refused:
+            hard_block_keywords = ["INTERDIT", "DANGER", "CRITICAL", "MALVEILLANT", "SUPPRESSION"]
+            low_risk_hard_block = any(kw in cleaned_response for kw in hard_block_keywords)
+
         should_activate = (llm_approved and not llm_refused) or \
-                          (risk_level == "LOW" and not llm_refused) or \
+                          (risk_level == "LOW" and not low_risk_hard_block) or \
                           (is_override and risk_level != "CRITICAL")
 
         if should_activate:
