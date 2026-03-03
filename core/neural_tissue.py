@@ -227,6 +227,9 @@ class NeuralTissue:
             "creativity": 0.3,
         }
 
+        self._last_tick_ms: float = 0.0
+        self._zone_signals: Dict[str, Dict[str, float]] = {}
+
         self._load()
 
     @classmethod
@@ -302,6 +305,8 @@ class NeuralTissue:
 
     def _tick(self):
         """Un cycle complet : injecter signaux, exécuter cellules, sélection."""
+        _t0 = time.perf_counter()
+
         # 1. Injecter les signaux cognitifs
         self._inject_signals()
 
@@ -341,7 +346,13 @@ class NeuralTissue:
         # 8. Publier si pattern émergent significatif
         self._check_emergence()
 
+        # 9. Mettre à jour les signaux de zone
+        self._update_zone_signals()
+
         self.tick_count += 1
+        self._last_tick_ms = (time.perf_counter() - _t0) * 1000.0
+        if self._last_tick_ms > 500.0:
+            logger.warning(f"TISSUE: tick lent {self._last_tick_ms:.1f}ms ({len(self.cells)} cellules)")
 
     def _inject_signals(self):
         """Injecte les signaux cognitifs sur la grille selon l'état des organes."""
@@ -420,6 +431,54 @@ class NeuralTissue:
                     }))
                 except Exception:
                     pass
+
+    # --- Signaux de zone ---
+
+    def _update_zone_signals(self):
+        """Calcule 4 métriques par zone : activity, density, energy, diversity."""
+        signals = {}
+        for zone_name, (x1, y1, x2, y2) in SIGNAL_ZONES.items():
+            # Activity : moyenne des signaux grille dans la zone
+            total_signal = 0.0
+            area = (x2 - x1) * (y2 - y1)
+            for gy in range(y1, y2):
+                for gx in range(x1, x2):
+                    total_signal += self.grid[gy][gx]
+            activity = total_signal / max(area, 1)
+
+            # Cellules dans cette zone
+            zone_cells = [
+                c for c in self.cells
+                if c.alive and x1 <= c.x < x2 and y1 <= c.y < y2
+            ]
+            nb_cells = len(zone_cells)
+
+            # Density : cellules vivantes / surface zone
+            density = nb_cells / max(area, 1)
+
+            # Energy : énergie moyenne des cellules (0.0 si aucune)
+            energy = (
+                sum(c.energy for c in zone_cells) / nb_cells
+                if nb_cells > 0 else 0.0
+            )
+
+            # Diversity : génomes uniques / nb cellules (0.0 si aucune)
+            diversity = (
+                len(set(c.genome for c in zone_cells)) / nb_cells
+                if nb_cells > 0 else 0.0
+            )
+
+            signals[zone_name] = {
+                "activity": round(activity, 4),
+                "density": round(density, 4),
+                "energy": round(energy, 1),
+                "diversity": round(diversity, 4),
+            }
+        self._zone_signals = signals
+
+    def get_zone_signals(self) -> Dict[str, Dict[str, float]]:
+        """Retourne les signaux de zone (shallow copy)."""
+        return dict(self._zone_signals)
 
     # --- Handlers bus ---
 
@@ -520,6 +579,7 @@ class NeuralTissue:
             "genome_diversity": len(set(c.genome for c in alive)),
             "grid_size": GRID_SIZE,
             "cognitive_state": dict(self._cognitive_state),
+            "tick_ms": round(self._last_tick_ms, 2),
         }
 
     # --- Persistance ---
@@ -538,6 +598,7 @@ class NeuralTissue:
             "total_deaths": self.total_deaths,
             "dominant_patterns": self.dominant_patterns[:10],
             "cognitive_state": self._cognitive_state,
+            "zone_signals": self._zone_signals,
             "top_cells": [
                 {
                     "genome": c.genome, "x": c.x, "y": c.y,
@@ -568,6 +629,7 @@ class NeuralTissue:
             self.dominant_patterns = data.get("dominant_patterns", [])
             saved_state = data.get("cognitive_state", {})
             self._cognitive_state.update(saved_state)
+            self._zone_signals = data.get("zone_signals", {})
 
             top_cells = data.get("top_cells", [])
             if top_cells:

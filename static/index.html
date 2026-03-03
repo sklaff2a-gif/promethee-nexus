@@ -164,6 +164,7 @@
                 <div class="absolute top-0 left-0 right-0 bg-gray-900 text-gray-400 text-[9px] px-1 font-bold h-5 flex items-center justify-between">
                     <span>TÉLÉMÉTRIE</span>
                     <span class="flex items-center gap-2">
+                        <button onclick="TissueView.open()" class="text-[8px] border border-green-900 px-1 hover:bg-green-900 hover:text-black transition" style="color:#00ff41;border-color:#00441b">TISSUE</button>
                         <button onclick="ImpactView.open()" class="text-[8px] border border-green-900 px-1 hover:bg-green-900 hover:text-black transition" style="color:#00e5ff;border-color:#00e5ff44">IMPACT</button>
                         <span id="telem-threat" class="text-[8px]" style="color:#00ff41">THREAT 0.0</span>
                     </span>
@@ -216,6 +217,7 @@
         </div>
     </div>
 
+    <script src="/static/js/tissue.js?v=1.0"></script>
     <script src="/static/js/vision.js?v=1.1"></script>
     <script src="/static/js/impact.js?v=1.1"></script>
     <script src="/static/js/nexus.js?v=12.6"></script>

@@ -629,6 +629,23 @@ async def tissue_status():
     from core.neural_tissue import tissue as neural_tissue
     return neural_tissue.get_stats()
 
+@app.get("/api/tissue/grid")
+async def tissue_grid():
+    """Retourne la grille, les cellules vivantes et les signaux de zone."""
+    from core.neural_tissue import tissue as neural_tissue, SIGNAL_ZONES
+    alive = [c for c in neural_tissue.cells if c.alive]
+    return {
+        "grid": [list(row) for row in neural_tissue.grid],
+        "zone_signals": neural_tissue.get_zone_signals(),
+        "cells": [{"x": c.x, "y": c.y, "genome": c.genome,
+                    "energy": round(c.energy, 1), "age": c.age,
+                    "generation": c.generation} for c in alive],
+        "zones": {n: {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+                  for n, (x1, y1, x2, y2) in SIGNAL_ZONES.items()},
+        "tick_count": neural_tissue.tick_count,
+        "tick_ms": round(neural_tissue._last_tick_ms, 2),
+    }
+
 @app.get("/api/soliloque/status")
 async def soliloque_status():
     """Retourne l'état du moteur de soliloque."""

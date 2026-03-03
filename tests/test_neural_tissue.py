@@ -317,6 +317,126 @@ class TestTissueSignals:
             assert y2 <= GRID_SIZE, f"Zone {name} y2={y2}"
 
 
+class TestZoneSignals:
+
+    def test_get_zone_signals_returns_all_zones(self):
+        t = NeuralTissue()
+        t._seed_population()
+        t._tick()
+        signals = t.get_zone_signals()
+        assert len(signals) == len(SIGNAL_ZONES)
+        for zone_name in SIGNAL_ZONES:
+            assert zone_name in signals
+
+    def test_get_zone_signals_has_four_metrics(self):
+        t = NeuralTissue()
+        t._seed_population()
+        t._tick()
+        signals = t.get_zone_signals()
+        expected_keys = {"activity", "density", "energy", "diversity"}
+        for zone_name, metrics in signals.items():
+            assert set(metrics.keys()) == expected_keys, f"Zone {zone_name} manque des metriques"
+
+    def test_get_zone_signals_empty_before_tick(self):
+        t = NeuralTissue()
+        assert t.get_zone_signals() == {}
+
+    def test_zone_activity_reflects_injected_signal(self):
+        t = NeuralTissue()
+        t.cells = []
+        # Injecter un signal fort dans la zone emotion (0,0 -> 4,4)
+        for y in range(0, 4):
+            for x in range(0, 4):
+                t.grid[y][x] = 2.0
+        t._update_zone_signals()
+        signals = t.get_zone_signals()
+        assert signals["emotion"]["activity"] > 0
+
+    def test_zone_density_reflects_cells(self):
+        t = NeuralTissue()
+        # Zone emotion = (0,0,4,4) -> surface 16
+        # 4 cellules dans la zone -> density = 4/16 = 0.25
+        t.cells = [
+            NeuralCell(genome="CG", x=0, y=0),
+            NeuralCell(genome="CG", x=1, y=1),
+            NeuralCell(genome="CG", x=2, y=2),
+            NeuralCell(genome="CG", x=3, y=3),
+        ]
+        t._update_zone_signals()
+        signals = t.get_zone_signals()
+        assert signals["emotion"]["density"] == 0.25
+
+    def test_zone_energy_is_zero_without_cells(self):
+        t = NeuralTissue()
+        t.cells = []
+        t._update_zone_signals()
+        signals = t.get_zone_signals()
+        for zone_name in signals:
+            assert signals[zone_name]["energy"] == 0.0
+
+    def test_zone_diversity_all_different(self):
+        t = NeuralTissue()
+        # 4 cellules avec 4 genomes differents dans zone emotion
+        t.cells = [
+            NeuralCell(genome="AA", x=0, y=0),
+            NeuralCell(genome="CC", x=1, y=1),
+            NeuralCell(genome="GG", x=2, y=2),
+            NeuralCell(genome="TT", x=3, y=3),
+        ]
+        t._update_zone_signals()
+        signals = t.get_zone_signals()
+        assert signals["emotion"]["diversity"] == 1.0
+
+    def test_zone_diversity_uniform(self):
+        t = NeuralTissue()
+        # 3 cellules meme genome dans zone emotion -> diversity = 1/3
+        t.cells = [
+            NeuralCell(genome="AA", x=0, y=0),
+            NeuralCell(genome="AA", x=1, y=1),
+            NeuralCell(genome="AA", x=2, y=2),
+        ]
+        t._update_zone_signals()
+        signals = t.get_zone_signals()
+        assert abs(signals["emotion"]["diversity"] - 1/3) < 0.01
+
+    def test_last_tick_ms_set_after_tick(self):
+        t = NeuralTissue()
+        t._seed_population()
+        assert t._last_tick_ms == 0.0
+        t._tick()
+        assert t._last_tick_ms > 0
+
+    def test_get_stats_includes_tick_ms(self):
+        t = NeuralTissue()
+        t._seed_population()
+        t._tick()
+        stats = t.get_stats()
+        assert "tick_ms" in stats
+        assert isinstance(stats["tick_ms"], float)
+
+    def test_zone_signals_persisted_and_restored(self):
+        t = NeuralTissue()
+        t._seed_population()
+        t._tick()
+        assert t.get_zone_signals() != {}
+        t._save()
+
+        NeuralTissue.reset_singleton()
+        t2 = NeuralTissue()
+        restored = t2.get_zone_signals()
+        assert len(restored) == len(SIGNAL_ZONES)
+
+    def test_get_zone_signals_returns_copy(self):
+        t = NeuralTissue()
+        t._seed_population()
+        t._tick()
+        signals = t.get_zone_signals()
+        # Mutation du retour ne doit pas corrompre l'etat interne
+        signals["emotion"] = {"activity": 999}
+        internal = t.get_zone_signals()
+        assert internal["emotion"]["activity"] != 999
+
+
 class TestTissuePatterns:
 
     def test_dominant_patterns_detected(self):
