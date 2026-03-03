@@ -60,6 +60,26 @@ THRESHOLD_DIVERSITY_DROP = 3        # Génomes uniques < seuil
 THRESHOLD_CREATIVITY_SPIKE = 1.5    # Activité zone creativity > seuil
 PUBLISH_COOLDOWN_TICKS = 10         # Min 10 ticks (20s) entre publications
 
+# Mapping goal → zone(s) bonusée(s) (Sprint 6 - Pression sélective)
+# Mots-clés dans le titre du goal → zones qui reçoivent un bonus de nourriture
+GOAL_ZONE_MAP = {
+    "explor":     ["creativity", "desire"],
+    "créati":     ["creativity"],
+    "innov":      ["creativity", "cognition"],
+    "sécuri":     ["threat", "stability"],
+    "audit":      ["stability", "threat"],
+    "refactor":   ["stability", "cognition"],
+    "mémoire":    ["memory"],
+    "memory":     ["memory"],
+    "debug":      ["cognition", "threat"],
+    "evolut":     ["creativity", "dopamine"],
+    "apprend":    ["memory", "cognition"],
+    "learn":      ["memory", "cognition"],
+    "optimi":     ["cognition", "stability"],
+    "comprendr":  ["cognition", "memory"],
+}
+GOAL_FOOD_BONUS = 2  # Food supplémentaire par zone bonusée par goal actif
+
 # Zones de la grille où les signaux cognitifs sont injectés
 SIGNAL_ZONES = {
     "emotion":    (0,  0,  4,  4),
@@ -92,14 +112,20 @@ class NeuralCell:
     register: float = 0.0
     output_count: int = 0
 
-    def tick(self, grid, neighbors):
+    def tick(self, grid, neighbors, capture_reward=None, generate_reward=None,
+             mutation_rate=None):
         """Exécute un cycle du génome."""
         if self.energy <= 0 or not self.alive:
             self.alive = False
             return None
 
+        self._eff_mutation_rate = mutation_rate
         instruction = self.genome[self.pointer]
-        child = self._execute(instruction, grid, neighbors)
+        child = self._execute(
+            instruction, grid, neighbors,
+            capture_reward if capture_reward is not None else CAPTURE_REWARD,
+            generate_reward if generate_reward is not None else GENERATE_REWARD,
+        )
 
         self.energy -= MAINTENANCE_COST
         if self.energy <= 0:
@@ -109,7 +135,7 @@ class NeuralCell:
 
         return child
 
-    def _execute(self, instruction, grid, neighbors):
+    def _execute(self, instruction, grid, neighbors, eff_capture, eff_generate):
         """Exécute une instruction cognitive."""
         if instruction == 'A':
             # Activate — propager signal vers un voisin
@@ -123,7 +149,7 @@ class NeuralCell:
             signal = grid[self.y][self.x]
             if signal > 0.1:
                 self.register = signal
-                self.energy += CAPTURE_REWARD * min(signal, 2.0)
+                self.energy += eff_capture * min(signal, 2.0)
                 grid[self.y][self.x] *= 0.5
             else:
                 self.register = 0.0
@@ -132,7 +158,7 @@ class NeuralCell:
             # Generate — produire un pattern (récompensé si signal capté)
             if self.register > 0.1:
                 self.output_count += 1
-                self.energy += GENERATE_REWARD
+                self.energy += eff_generate
             self.energy -= ACTION_COST
 
         elif instruction == 'T':
@@ -159,7 +185,8 @@ class NeuralCell:
     def _replicate(self):
         """Division cellulaire avec mutation."""
         self.energy /= 2
-        child_genome = mutate(self.genome)
+        eff_rate = getattr(self, '_eff_mutation_rate', None)
+        child_genome = mutate(self.genome, mutation_rate=eff_rate)
         dx, dy = random.choice([(0, 1), (0, -1), (1, 0), (-1, 0)])
         cx = (self.x + dx) % GRID_SIZE
         cy = (self.y + dy) % GRID_SIZE
@@ -175,12 +202,13 @@ class NeuralCell:
 # Mutation
 # ─────────────────────────────────────────────
 
-def mutate(genome: str) -> str:
+def mutate(genome: str, mutation_rate: float = None) -> str:
     """Mutation d'un génome : substitution, insertion, délétion."""
+    rate = mutation_rate if mutation_rate is not None else MUTATION_RATE
     result = list(genome)
 
     for i in range(len(result)):
-        if random.random() < MUTATION_RATE:
+        if random.random() < rate:
             result[i] = random.choice(ALPHABET)
 
     if random.random() < INSERTION_RATE and len(result) < MAX_GENOME_LENGTH:
@@ -243,6 +271,10 @@ class NeuralTissue:
         self._event_cooldowns: Dict[str, int] = {}
         # Cooldowns pour publications de seuil
         self._publish_cooldowns: Dict[str, int] = {}
+        # Zones bonusées par les goals actifs (Sprint 6)
+        self._goal_bonus_zones: Dict[str, int] = {}  # zone_name → nb bonus food
+        # Phase circadienne courante (Sprint 6)
+        self._circadian_phase: str = "eveil"
 
         self._load()
 
@@ -318,6 +350,41 @@ class NeuralTissue:
             self.cells.append(NeuralCell(genome=genome, x=x, y=y))
         self.total_births += INITIAL_CELLS
 
+    def _dawn_repopulate(self):
+        """Aube après sommeil : injecter des cellules fraîches dans les zones désertées."""
+        if not self._zone_signals:
+            return
+        desert_zones = [
+            name for name, sig in self._zone_signals.items()
+            if sig.get("density", 0) < 0.05
+        ]
+        spawned = 0
+        for zone_name in desert_zones:
+            bounds = SIGNAL_ZONES.get(zone_name)
+            if not bounds:
+                continue
+            x1, y1, x2, y2 = bounds
+            for _ in range(3):  # 3 cellules fraîches par zone désertée
+                if len(self.cells) >= MAX_CELLS:
+                    break
+                genome_len = random.randint(3, 8)
+                genome = "".join(random.choice(ALPHABET) for _ in range(genome_len))
+                x = random.randint(x1, min(x2 - 1, GRID_SIZE - 1))
+                y = random.randint(y1, min(y2 - 1, GRID_SIZE - 1))
+                self.cells.append(NeuralCell(genome=genome, x=x, y=y))
+                spawned += 1
+        if spawned:
+            self.total_births += spawned
+            logger.info(f"TISSUE: Aube — {spawned} cellules fraîches dans {len(desert_zones)} zones désertées")
+
+    def _get_effective_mutation_rate(self) -> float:
+        """Taux de mutation modulé par la phase circadienne."""
+        if self._circadian_phase == "crepuscule":
+            return MUTATION_RATE * 2.0   # Exploration — mutation doublée
+        if self._circadian_phase == "sommeil_profond":
+            return MUTATION_RATE * 0.5   # Consolidation — mutation réduite
+        return MUTATION_RATE             # Éveil/aube — normal
+
     # --- Boucle principale ---
 
     async def _tick_loop(self):
@@ -341,13 +408,22 @@ class NeuralTissue:
         # 1. Injecter les signaux cognitifs
         self._inject_signals()
 
+        # 1b. Calculer les rewards effectifs modulés par la dopamine
+        dopamine = self._cognitive_state.get("dopamine_level", 0.5)
+        eff_capture = CAPTURE_REWARD * (0.5 + dopamine)   # 1.5 à 4.5
+        eff_generate = GENERATE_REWARD * (0.5 + dopamine)  # 1.0 à 3.0
+
+        # 1c. Taux de mutation modulé par le circadien
+        eff_mutation = self._get_effective_mutation_rate()
+
         # 2. Exécuter chaque cellule
         new_cells = []
         for cell in self.cells:
             if not cell.alive:
                 continue
             neighbors = self._get_neighbors(cell)
-            child = cell.tick(self.grid, neighbors)
+            child = cell.tick(self.grid, neighbors, eff_capture, eff_generate,
+                              eff_mutation)
             if child is not None:
                 new_cells.append(child)
                 self.total_births += 1
@@ -403,9 +479,15 @@ class NeuralTissue:
             "cognition":  state["cognition_level"],
         }
 
+        # Phase circadienne : en sommeil, pas d'injection (sélection par mérite)
+        if self._circadian_phase == "sommeil_profond":
+            return
+
         for zone_name, (x1, y1, x2, y2) in SIGNAL_ZONES.items():
             intensity = zone_intensities.get(zone_name, 0.3)
-            for _ in range(FOOD_SPAWN_PER_ZONE):
+            # Nombre de food spawns : base + bonus des goals actifs
+            food_count = FOOD_SPAWN_PER_ZONE + self._goal_bonus_zones.get(zone_name, 0)
+            for _ in range(food_count):
                 sx = random.randint(x1, min(x2 - 1, GRID_SIZE - 1))
                 sy = random.randint(y1, min(y2 - 1, GRID_SIZE - 1))
                 self.grid[sy][sx] += intensity * random.uniform(0.5, 1.5)
@@ -614,18 +696,27 @@ class NeuralTissue:
     async def _on_circadian_change(self, event):
         data = event.get("data", event)
         phase = data.get("phase", "eveil")
+        old_phase = self._circadian_phase
+        self._circadian_phase = phase
+
         if phase == "sommeil_profond":
             self._cognitive_state["stability"] = 0.9
         elif phase == "eveil":
             self._cognitive_state["stability"] = 0.5
+        elif phase == "aube" and old_phase == "sommeil_profond":
+            # Aube après sommeil → repeuplement des zones désertées
+            self._dawn_repopulate()
 
     # --- Handlers Sprint 2 — Grand Câblage ---
 
     async def _on_goal_created(self, event):
-        """Prefrontal crée un goal → enrichir la zone goals."""
+        """Prefrontal crée un goal → enrichir la zone goals + bonus zones."""
         self._cognitive_state["goal_count"] = min(
             self._cognitive_state["goal_count"] + 1, 10
         )
+        data = event.get("data", event)
+        title = data.get("title", "")
+        self._update_goal_bonus_zones(title, add=True)
 
     async def _on_goal_complete(self, event):
         """Goal atteint → récompense zone goals + stabilité."""
@@ -635,6 +726,9 @@ class NeuralTissue:
         self._cognitive_state["stability"] = min(
             self._cognitive_state["stability"] + 0.1, 1.0
         )
+        data = event.get("data", event)
+        title = data.get("title", "")
+        self._update_goal_bonus_zones(title, add=False)
 
     async def _on_goal_abandoned(self, event):
         """Goal abandonné → diminuer goals, baisser stabilité."""
@@ -644,6 +738,28 @@ class NeuralTissue:
         self._cognitive_state["stability"] = max(
             self._cognitive_state["stability"] - 0.05, 0.0
         )
+        data = event.get("data", event)
+        title = data.get("title", "")
+        self._update_goal_bonus_zones(title, add=False)
+
+    def _update_goal_bonus_zones(self, title: str, add: bool = True):
+        """Met à jour les zones bonusées en fonction du titre du goal."""
+        title_lower = title.lower()
+        matched_zones = set()
+        for keyword, zones in GOAL_ZONE_MAP.items():
+            if keyword in title_lower:
+                matched_zones.update(zones)
+        if not matched_zones:
+            matched_zones.add("goals")  # Fallback : zone goals par défaut
+        for zone in matched_zones:
+            if add:
+                self._goal_bonus_zones[zone] = (
+                    self._goal_bonus_zones.get(zone, 0) + GOAL_FOOD_BONUS
+                )
+            else:
+                self._goal_bonus_zones[zone] = max(
+                    self._goal_bonus_zones.get(zone, 0) - GOAL_FOOD_BONUS, 0
+                )
 
     async def _on_corpus_callosum(self, event):
         """État cognitif global → moduler stabilité et créativité."""

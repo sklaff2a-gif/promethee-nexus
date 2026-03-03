@@ -13,6 +13,8 @@ from core.neural_tissue import (
     ALPHABET, MAX_GENOME_LENGTH, MIN_GENOME_LENGTH,
     MAINTENANCE_COST, CAPTURE_REWARD, GENERATE_REWARD,
     EXTINCTION_THRESHOLD, SIGNAL_ZONES, MAX_CELLS,
+    MUTATION_RATE, GOAL_ZONE_MAP, GOAL_FOOD_BONUS,
+    FOOD_SPAWN_PER_ZONE,
 )
 
 _FAKE_STATE_FILE = os.path.join(tempfile.gettempdir(), "test_neural_tissue.json")
@@ -1087,3 +1089,217 @@ class TestCognitionZone:
 
     def test_nine_zones_total(self):
         assert len(SIGNAL_ZONES) == 9
+
+
+class TestDopamineModulation:
+    """Sprint 6.1 — CAPTURE_REWARD et GENERATE_REWARD modulés par la dopamine."""
+
+    def test_capture_reward_high_dopamine(self):
+        """Dopamine haute → reward augmenté."""
+        cell = NeuralCell(genome="C", x=3, y=3)
+        grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        grid[3][3] = 1.0
+        initial_energy = cell.energy
+        # Reward effectif = 3.0 * (0.5 + 1.0) = 4.5
+        cell.tick(grid, [], capture_reward=4.5)
+        gained = cell.energy - (initial_energy - MAINTENANCE_COST)
+        assert gained > 3.0  # Plus que le reward normal (3.0 * 1.0 = 3.0)
+
+    def test_capture_reward_low_dopamine(self):
+        """Dopamine basse → reward réduit."""
+        cell = NeuralCell(genome="C", x=3, y=3)
+        grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        grid[3][3] = 1.0
+        initial_energy = cell.energy
+        # Reward effectif = 3.0 * (0.5 + 0.0) = 1.5
+        cell.tick(grid, [], capture_reward=1.5)
+        gained = cell.energy - (initial_energy - MAINTENANCE_COST)
+        assert gained < 3.0  # Moins que le reward normal
+
+    def test_generate_reward_modulated(self):
+        """Generate reward modulé par la dopamine."""
+        cell = NeuralCell(genome="G", x=0, y=0, register=1.0)
+        grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        initial_energy = cell.energy
+        # Generate effectif = 2.0 * (0.5 + 1.0) = 3.0
+        cell.tick(grid, [], generate_reward=3.0)
+        assert cell.output_count == 1
+        gained = cell.energy - initial_energy + MAINTENANCE_COST + 0.5  # ACTION_COST
+        assert gained == pytest.approx(3.0, abs=0.1)
+
+    def test_tick_uses_dopamine_for_rewards(self):
+        """NeuralTissue._tick() calcule les rewards à partir de dopamine_level."""
+        t = NeuralTissue()
+        t._seed_population()
+        t._cognitive_state["dopamine_level"] = 1.0
+        # On vérifie juste que le tick ne crashe pas avec la modulation
+        t._tick()
+        assert t.tick_count == 1
+
+    def test_rewards_default_without_params(self):
+        """Sans paramètres, les rewards sont les constantes originales."""
+        cell = NeuralCell(genome="C", x=3, y=3)
+        grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        grid[3][3] = 1.0
+        initial_energy = cell.energy
+        cell.tick(grid, [])  # Pas de capture_reward explicite
+        # Reward normal = CAPTURE_REWARD * min(1.0, 2.0) = 3.0
+        gained = cell.energy - (initial_energy - MAINTENANCE_COST)
+        assert gained == pytest.approx(3.0, abs=0.1)
+
+
+class TestGoalZoneMapping:
+    """Sprint 6.2 — Goal-to-zone mapping et FOOD_SPAWN bonus."""
+
+    def test_goal_zone_map_exists(self):
+        assert isinstance(GOAL_ZONE_MAP, dict)
+        assert len(GOAL_ZONE_MAP) > 0
+
+    @pytest.mark.asyncio
+    async def test_goal_created_adds_bonus_zones(self):
+        t = NeuralTissue()
+        await t._on_goal_created({"data": {"title": "Explorer les nouvelles approches"}})
+        # "explor" → ["creativity", "desire"]
+        assert t._goal_bonus_zones.get("creativity", 0) == GOAL_FOOD_BONUS
+        assert t._goal_bonus_zones.get("desire", 0) == GOAL_FOOD_BONUS
+
+    @pytest.mark.asyncio
+    async def test_goal_complete_removes_bonus(self):
+        t = NeuralTissue()
+        await t._on_goal_created({"data": {"title": "Explorer les données"}})
+        assert t._goal_bonus_zones.get("creativity", 0) == GOAL_FOOD_BONUS
+        await t._on_goal_complete({"data": {"title": "Explorer les données"}})
+        assert t._goal_bonus_zones.get("creativity", 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_goal_abandoned_removes_bonus(self):
+        t = NeuralTissue()
+        await t._on_goal_created({"data": {"title": "Sécuriser le module"}})
+        assert t._goal_bonus_zones.get("threat", 0) == GOAL_FOOD_BONUS
+        await t._on_goal_abandoned({"data": {"title": "Sécuriser le module"}})
+        assert t._goal_bonus_zones.get("threat", 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_unknown_goal_defaults_to_goals_zone(self):
+        t = NeuralTissue()
+        await t._on_goal_created({"data": {"title": "Faire un truc inconnu"}})
+        assert t._goal_bonus_zones.get("goals", 0) == GOAL_FOOD_BONUS
+
+    @pytest.mark.asyncio
+    async def test_multiple_goals_stack_bonus(self):
+        t = NeuralTissue()
+        await t._on_goal_created({"data": {"title": "Explorer A"}})
+        await t._on_goal_created({"data": {"title": "Explorer B"}})
+        assert t._goal_bonus_zones.get("creativity", 0) == GOAL_FOOD_BONUS * 2
+
+    def test_inject_signals_uses_goal_bonus(self):
+        t = NeuralTissue()
+        t._cognitive_state["creativity"] = 1.0
+        # Injecter SANS bonus d'abord
+        random.seed(42)
+        t._inject_signals()
+        creativity_no_bonus = sum(
+            t.grid[y][x] for y in range(6, 10) for x in range(12, 16)
+        )
+        # Reset grille et injecter AVEC bonus
+        t.grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        t._goal_bonus_zones = {"creativity": 4}
+        random.seed(42)
+        t._inject_signals()
+        creativity_with_bonus = sum(
+            t.grid[y][x] for y in range(6, 10) for x in range(12, 16)
+        )
+        assert creativity_with_bonus > creativity_no_bonus
+
+
+class TestCircadianModulation:
+    """Sprint 6.3 — Modulation circadienne : mutation, food, saisons."""
+
+    def test_mutation_rate_normal_in_eveil(self):
+        t = NeuralTissue()
+        t._circadian_phase = "eveil"
+        assert t._get_effective_mutation_rate() == MUTATION_RATE
+
+    def test_mutation_rate_doubled_in_crepuscule(self):
+        t = NeuralTissue()
+        t._circadian_phase = "crepuscule"
+        assert t._get_effective_mutation_rate() == pytest.approx(MUTATION_RATE * 2.0)
+
+    def test_mutation_rate_halved_in_sommeil(self):
+        t = NeuralTissue()
+        t._circadian_phase = "sommeil_profond"
+        assert t._get_effective_mutation_rate() == pytest.approx(MUTATION_RATE * 0.5)
+
+    def test_no_injection_during_sommeil(self):
+        """En sommeil profond, _inject_signals() ne fait rien."""
+        t = NeuralTissue()
+        t._circadian_phase = "sommeil_profond"
+        t._cognitive_state["emotion_intensity"] = 1.0
+        t._inject_signals()
+        total = sum(t.grid[y][x] for y in range(GRID_SIZE) for x in range(GRID_SIZE))
+        assert total == 0.0
+
+    def test_injection_works_in_eveil(self):
+        """En éveil, _inject_signals() fonctionne normalement."""
+        t = NeuralTissue()
+        t._circadian_phase = "eveil"
+        t._cognitive_state["emotion_intensity"] = 1.0
+        random.seed(42)
+        t._inject_signals()
+        total = sum(t.grid[y][x] for y in range(GRID_SIZE) for x in range(GRID_SIZE))
+        assert total > 0.0
+
+    @pytest.mark.asyncio
+    async def test_circadian_change_stores_phase(self):
+        t = NeuralTissue()
+        await t._on_circadian_change({"data": {"phase": "crepuscule"}})
+        assert t._circadian_phase == "crepuscule"
+
+    @pytest.mark.asyncio
+    async def test_dawn_repopulate_after_sleep(self):
+        """Aube après sommeil → repeuplement des zones désertées."""
+        t = NeuralTissue()
+        t._circadian_phase = "sommeil_profond"
+        t.cells = [NeuralCell(genome="CG", x=0, y=0) for _ in range(5)]
+        # Calculer zone signals pour avoir des zones désertées
+        t._update_zone_signals()
+        initial_count = len(t.cells)
+        await t._on_circadian_change({"data": {"phase": "aube"}})
+        assert len(t.cells) > initial_count
+
+    @pytest.mark.asyncio
+    async def test_dawn_no_repopulate_if_not_from_sleep(self):
+        """Aube sans sommeil préalable → pas de repeuplement."""
+        t = NeuralTissue()
+        t._circadian_phase = "eveil"  # Pas de sommeil_profond
+        t.cells = [NeuralCell(genome="CG", x=0, y=0) for _ in range(5)]
+        t._update_zone_signals()
+        initial_count = len(t.cells)
+        await t._on_circadian_change({"data": {"phase": "aube"}})
+        assert len(t.cells) == initial_count
+
+    def test_mutate_with_custom_rate(self):
+        """mutate() accepte un mutation_rate personnalisé."""
+        random.seed(42)
+        # Taux 0 → pas de mutation
+        result = mutate("AAAA", mutation_rate=0.0)
+        assert result == "AAAA" or len(result) != len("AAAA")  # Seule insertion/deletion possible
+
+    def test_mutate_with_high_rate(self):
+        """Taux élevé → beaucoup de mutations."""
+        changed = False
+        for _ in range(10):
+            result = mutate("AAAA", mutation_rate=0.99)
+            if result != "AAAA":
+                changed = True
+                break
+        assert changed
+
+    def test_tick_uses_circadian_mutation_rate(self):
+        """_tick() utilise le taux circadien effectif."""
+        t = NeuralTissue()
+        t._circadian_phase = "crepuscule"
+        t._seed_population()
+        # Pas de crash
+        t._tick()
+        assert t.tick_count == 1
