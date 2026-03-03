@@ -15,7 +15,8 @@ from core.neural_tissue import (
     EXTINCTION_THRESHOLD, SIGNAL_ZONES, MAX_CELLS,
     MUTATION_RATE, GOAL_ZONE_MAP, GOAL_FOOD_BONUS,
     FOOD_SPAWN_PER_ZONE, MAX_GRID_SIGNAL,
-    THRESHOLD_ZONE_OVERLOAD,
+    THRESHOLD_ZONE_OVERLOAD, THRESHOLD_ZONE_DESERT,
+    THRESHOLD_THREAT_SUBSIDED,
 )
 
 _FAKE_STATE_FILE = os.path.join(tempfile.gettempdir(), "test_neural_tissue.json")
@@ -529,14 +530,16 @@ class TestTissueHandlers:
     @pytest.mark.asyncio
     async def test_cardiac_beat_updates_state(self):
         t = NeuralTissue()
+        # Blend: 0.5*0.7 + 0.9*0.3 = 0.62
         await t._on_cardiac_beat({"data": {"arousal": 0.9}})
-        assert t._cognitive_state["emotion_intensity"] == 0.9
+        assert t._cognitive_state["emotion_intensity"] == pytest.approx(0.62)
 
     @pytest.mark.asyncio
     async def test_reptilian_alert_updates_state(self):
         t = NeuralTissue()
+        # Blend: 0.0*0.7 + 7.0*0.3 = 2.1
         await t._on_reptilian_alert({"data": {"threat_level": 7.0}})
-        assert t._cognitive_state["threat_level"] == 7.0
+        assert t._cognitive_state["threat_level"] == pytest.approx(2.1)
 
     @pytest.mark.asyncio
     async def test_dopamine_surge_increases(self):
@@ -1412,3 +1415,423 @@ class TestFeedbackLoops:
         # Après 50 ticks sans injection, le signal doit être presque nul
         # 3.0 * 0.92^50 ≈ 0.047
         assert t.grid[5][5] < 0.1
+
+
+# ─────────────────────────────────────────────
+# Corrections profondes — audit cohérence
+# ─────────────────────────────────────────────
+
+class TestNormalize:
+    """Tests pour _normalize() — garde-fou anti-divergence des signaux cognitifs."""
+
+    def test_normalize_clamps_emotion_high(self):
+        t = NeuralTissue()
+        t._cognitive_state["emotion_intensity"] = 5.0
+        t._normalize()
+        assert t._cognitive_state["emotion_intensity"] == 1.0
+
+    def test_normalize_clamps_emotion_low(self):
+        t = NeuralTissue()
+        t._cognitive_state["emotion_intensity"] = -2.0
+        t._normalize()
+        assert t._cognitive_state["emotion_intensity"] == 0.0
+
+    def test_normalize_clamps_threat_level(self):
+        t = NeuralTissue()
+        t._cognitive_state["threat_level"] = 25.0
+        t._normalize()
+        assert t._cognitive_state["threat_level"] == 10.0
+
+    def test_normalize_clamps_dopamine(self):
+        t = NeuralTissue()
+        t._cognitive_state["dopamine_level"] = 3.0
+        t._normalize()
+        assert t._cognitive_state["dopamine_level"] == 1.0
+
+    def test_normalize_clamps_goal_count(self):
+        t = NeuralTissue()
+        t._cognitive_state["goal_count"] = 50
+        t._normalize()
+        assert t._cognitive_state["goal_count"] == 10
+
+    def test_normalize_clamps_desire_intensity(self):
+        t = NeuralTissue()
+        t._cognitive_state["desire_intensity"] = 200.0
+        t._normalize()
+        assert t._cognitive_state["desire_intensity"] == 100.0
+
+    def test_normalize_clamps_all_01_channels(self):
+        """Tous les canaux [0,1] sont bien clampés."""
+        t = NeuralTissue()
+        for key in ["memory_activity", "stability", "creativity", "cognition_level"]:
+            t._cognitive_state[key] = 99.0
+        t._normalize()
+        for key in ["memory_activity", "stability", "creativity", "cognition_level"]:
+            assert t._cognitive_state[key] == 1.0, f"{key} non clampé"
+
+    def test_normalize_preserves_valid_values(self):
+        t = NeuralTissue()
+        t._cognitive_state["emotion_intensity"] = 0.6
+        t._cognitive_state["threat_level"] = 5.0
+        t._cognitive_state["dopamine_level"] = 0.7
+        t._normalize()
+        assert t._cognitive_state["emotion_intensity"] == 0.6
+        assert t._cognitive_state["threat_level"] == 5.0
+        assert t._cognitive_state["dopamine_level"] == 0.7
+
+    def test_normalize_called_in_tick(self):
+        """_tick() appelle _normalize() — les valeurs hors bornes sont corrigées."""
+        t = NeuralTissue()
+        t._seed_population()
+        t._cognitive_state["creativity"] = 50.0  # hors bornes
+        t._tick()
+        assert t._cognitive_state["creativity"] <= 1.0
+
+    def test_normalize_handles_string_values(self):
+        """_normalize() convertit les types via float() — robustesse load."""
+        t = NeuralTissue()
+        t._cognitive_state["emotion_intensity"] = "0.8"
+        t._normalize()
+        assert t._cognitive_state["emotion_intensity"] == 0.8
+
+
+class TestBlendPattern:
+    """Tests pour le blend pattern (old*0.7 + new*0.3) sur les handlers absolus."""
+
+    def test_cardiac_beat_blend(self):
+        """emotion_intensity utilise blend, pas remplacement brut."""
+        import asyncio
+        t = NeuralTissue()
+        t._cognitive_state["emotion_intensity"] = 0.5
+        asyncio.get_event_loop().run_until_complete(
+            t._on_cardiac_beat({"arousal": 1.0})
+        )
+        # blend: 0.5*0.7 + 1.0*0.3 = 0.35 + 0.3 = 0.65
+        assert t._cognitive_state["emotion_intensity"] == pytest.approx(0.65)
+
+    def test_cardiac_beat_blend_from_zero(self):
+        import asyncio
+        t = NeuralTissue()
+        t._cognitive_state["emotion_intensity"] = 0.0
+        asyncio.get_event_loop().run_until_complete(
+            t._on_cardiac_beat({"arousal": 1.0})
+        )
+        # blend: 0.0*0.7 + 1.0*0.3 = 0.3
+        assert t._cognitive_state["emotion_intensity"] == pytest.approx(0.3)
+
+    def test_cardiac_beat_clamp_extreme(self):
+        """Même avec arousal=999, le blend ne dépasse pas 1.0."""
+        import asyncio
+        t = NeuralTissue()
+        t._cognitive_state["emotion_intensity"] = 0.5
+        asyncio.get_event_loop().run_until_complete(
+            t._on_cardiac_beat({"arousal": 999.0})
+        )
+        # clamp d'entrée: 999 → 1.0, blend: 0.5*0.7 + 1.0*0.3 = 0.65
+        assert t._cognitive_state["emotion_intensity"] == pytest.approx(0.65)
+
+    def test_reptilian_alert_blend(self):
+        """threat_level utilise blend, pas remplacement brut."""
+        import asyncio
+        t = NeuralTissue()
+        t._cognitive_state["threat_level"] = 2.0
+        asyncio.get_event_loop().run_until_complete(
+            t._on_reptilian_alert({"threat_level": 8.0})
+        )
+        # blend: 2.0*0.7 + 8.0*0.3 = 1.4 + 2.4 = 3.8
+        assert t._cognitive_state["threat_level"] == pytest.approx(3.8)
+
+    def test_reptilian_alert_clamp_extreme(self):
+        """Même avec threat_level=100, le blend ne dépasse pas 10.0*0.3 = 3.0."""
+        import asyncio
+        t = NeuralTissue()
+        t._cognitive_state["threat_level"] = 0.0
+        asyncio.get_event_loop().run_until_complete(
+            t._on_reptilian_alert({"threat_level": 100.0})
+        )
+        # clamp entrée: 100 → 10.0, blend: 0.0*0.7 + 10.0*0.3 = 3.0
+        assert t._cognitive_state["threat_level"] == pytest.approx(3.0)
+
+    def test_reptilian_alert_blend_negative(self):
+        """Valeurs négatives clampées à 0."""
+        import asyncio
+        t = NeuralTissue()
+        t._cognitive_state["threat_level"] = 5.0
+        asyncio.get_event_loop().run_until_complete(
+            t._on_reptilian_alert({"threat_level": -10.0})
+        )
+        # clamp entrée: -10 → 0.0, blend: 5.0*0.7 + 0.0*0.3 = 3.5
+        assert t._cognitive_state["threat_level"] == pytest.approx(3.5)
+
+
+class TestCorpusCallosumRecovery:
+    """Tests pour le handler recovery manquant dans _on_corpus_callosum."""
+
+    def test_recovery_boosts_stability(self):
+        import asyncio
+        t = NeuralTissue()
+        t._cognitive_state["stability"] = 0.3
+        asyncio.get_event_loop().run_until_complete(
+            t._on_corpus_callosum({"cognitive_state": "recovery"})
+        )
+        assert t._cognitive_state["stability"] == pytest.approx(0.5)
+
+    def test_recovery_boosts_creativity(self):
+        import asyncio
+        t = NeuralTissue()
+        t._cognitive_state["creativity"] = 0.2
+        asyncio.get_event_loop().run_until_complete(
+            t._on_corpus_callosum({"cognitive_state": "recovery"})
+        )
+        assert t._cognitive_state["creativity"] == pytest.approx(0.3)
+
+    def test_recovery_caps_stability_at_1(self):
+        import asyncio
+        t = NeuralTissue()
+        t._cognitive_state["stability"] = 0.95
+        asyncio.get_event_loop().run_until_complete(
+            t._on_corpus_callosum({"cognitive_state": "recovery"})
+        )
+        assert t._cognitive_state["stability"] == 1.0
+
+    def test_all_six_corpus_states_handled(self):
+        """Les 6 états cognitifs du corpus callosum sont tous gérés."""
+        import asyncio
+        loop = asyncio.get_event_loop()
+        states = ["flow", "creative_surge", "crisis", "stagnation", "exploration", "recovery"]
+        for state in states:
+            NeuralTissue.reset_singleton()
+            t = NeuralTissue()
+            initial_state = dict(t._cognitive_state)
+            loop.run_until_complete(
+                t._on_corpus_callosum({"cognitive_state": state})
+            )
+            # Au moins une valeur doit avoir changé
+            changed = any(
+                t._cognitive_state[k] != initial_state[k]
+                for k in t._cognitive_state
+            )
+            assert changed, f"État '{state}' n'a produit aucun effet"
+
+
+class TestCrepusculePhase:
+    """Tests pour le handler circadien crépuscule."""
+
+    def test_crepuscule_boosts_creativity(self):
+        import asyncio
+        t = NeuralTissue()
+        t._cognitive_state["creativity"] = 0.3
+        asyncio.get_event_loop().run_until_complete(
+            t._on_circadian_change({"phase": "crepuscule"})
+        )
+        assert t._cognitive_state["creativity"] == pytest.approx(0.45)
+
+    def test_crepuscule_doubles_mutation_rate(self):
+        t = NeuralTissue()
+        t._circadian_phase = "crepuscule"
+        rate = t._get_effective_mutation_rate()
+        assert rate == pytest.approx(MUTATION_RATE * 2.0)
+
+    def test_crepuscule_phase_stored(self):
+        import asyncio
+        t = NeuralTissue()
+        asyncio.get_event_loop().run_until_complete(
+            t._on_circadian_change({"phase": "crepuscule"})
+        )
+        assert t._circadian_phase == "crepuscule"
+
+
+class TestZoneDesertDensity:
+    """Tests pour TISSUE_ZONE_DESERT utilisant density au lieu de activity."""
+
+    def test_zone_desert_uses_density(self):
+        """Zone avec activity > 0 mais density = 0 → détectée comme déserte."""
+        t = NeuralTissue()
+        t._seed_population()
+        t.tick_count = 100  # Dépasser le seuil tick > 50
+        # Forcer zone_signals avec activity haute mais density basse
+        t._zone_signals = {
+            "emotion": {
+                "activity": 1.0,  # Signal fort (serait ignoré par l'ancien code)
+                "density": 0.0,   # Mais aucune cellule (=désert)
+                "energy": 0.0,
+                "diversity": 0.0,
+            },
+        }
+        # On vérifie que _check_thresholds publie TISSUE_ZONE_DESERT
+        published = []
+        original_try_publish = t._try_publish
+        def mock_publish(name, payload):
+            published.append((name, payload))
+            # Ne pas appeler l'original (pas de bus dans les tests)
+        t._try_publish = mock_publish
+        t._check_thresholds()
+        desert_events = [p for p in published if p[0] == "TISSUE_ZONE_DESERT"]
+        assert len(desert_events) >= 1
+        assert desert_events[0][1]["zone"] == "emotion"
+        assert "density" in desert_events[0][1]
+
+    def test_zone_not_desert_if_density_ok(self):
+        """Zone avec density > seuil → pas de TISSUE_ZONE_DESERT."""
+        t = NeuralTissue()
+        t._seed_population()
+        t.tick_count = 100
+        t._zone_signals = {
+            "emotion": {
+                "activity": 0.01,  # Faible activity
+                "density": 0.2,    # Mais cellules présentes
+                "energy": 50.0,
+                "diversity": 0.5,
+            },
+        }
+        published = []
+        t._try_publish = lambda name, payload: published.append((name, payload))
+        t._check_thresholds()
+        desert_events = [p for p in published if p[0] == "TISSUE_ZONE_DESERT"]
+        assert len(desert_events) == 0
+
+
+class TestPersistenceGoalBonusAndThreat:
+    """Tests pour la persistance de _goal_bonus_zones et _threat_was_high."""
+
+    def test_goal_bonus_zones_persisted(self):
+        t = NeuralTissue()
+        t._seed_population()
+        t._goal_bonus_zones = {"creativity": 4, "memory": 2}
+        t._save()
+
+        NeuralTissue.reset_singleton()
+        t2 = NeuralTissue()
+        assert t2._goal_bonus_zones == {"creativity": 4, "memory": 2}
+
+    def test_threat_was_high_persisted(self):
+        t = NeuralTissue()
+        t._seed_population()
+        t._threat_was_high = True
+        t._save()
+
+        NeuralTissue.reset_singleton()
+        t2 = NeuralTissue()
+        assert t2._threat_was_high is True
+
+    def test_circadian_phase_persisted(self):
+        t = NeuralTissue()
+        t._seed_population()
+        t._circadian_phase = "crepuscule"
+        t._save()
+
+        NeuralTissue.reset_singleton()
+        t2 = NeuralTissue()
+        assert t2._circadian_phase == "crepuscule"
+
+    def test_goal_bonus_zones_default_empty(self):
+        """Sans données sauvées, _goal_bonus_zones est vide."""
+        t = NeuralTissue()
+        assert t._goal_bonus_zones == {}
+
+    def test_threat_was_high_default_false(self):
+        t = NeuralTissue()
+        assert t._threat_was_high is False
+
+
+class TestLoadValidation:
+    """Tests pour la validation de _cognitive_state au chargement."""
+
+    def test_load_filters_unknown_keys(self):
+        """Les clés inconnues dans le JSON sauvé ne polluent pas _cognitive_state."""
+        t = NeuralTissue()
+        t._seed_population()
+        t._save()
+
+        # Injecter une clé inconnue dans le fichier sauvé
+        with open(_FAKE_STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        data["cognitive_state"]["fake_key_xyz"] = 999.0
+        with open(_FAKE_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+        NeuralTissue.reset_singleton()
+        t2 = NeuralTissue()
+        assert "fake_key_xyz" not in t2._cognitive_state
+
+    def test_load_clamps_out_of_range_values(self):
+        """Les valeurs hors bornes dans le JSON sauvé sont clampées."""
+        t = NeuralTissue()
+        t._seed_population()
+        t._save()
+
+        with open(_FAKE_STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        data["cognitive_state"]["emotion_intensity"] = 50.0
+        data["cognitive_state"]["threat_level"] = -20.0
+        data["cognitive_state"]["dopamine_level"] = 999.0
+        with open(_FAKE_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+        NeuralTissue.reset_singleton()
+        t2 = NeuralTissue()
+        assert t2._cognitive_state["emotion_intensity"] == 1.0
+        assert t2._cognitive_state["threat_level"] == 0.0
+        assert t2._cognitive_state["dopamine_level"] == 1.0
+
+
+class TestComputeTissueBonusIntent:
+    """Tests pour compute_tissue_bonus utilisant le param intent."""
+
+    def test_bonus_without_intent(self):
+        """Sans intent, le bonus est basé uniquement sur les patterns."""
+        t = NeuralTissue()
+        t._seed_population()
+        t.dominant_patterns = [{"genome": "ACG", "frequency": 0.4, "avg_fitness": 0.5}]
+        result = t.compute_tissue_bonus("")
+        assert result > 0.0
+
+    def test_bonus_with_matching_intent(self):
+        """Intent correspondant à une zone active → bonus amplifié."""
+        t = NeuralTissue()
+        t._seed_population()
+        t.dominant_patterns = [{"genome": "ACG", "frequency": 0.4, "avg_fitness": 0.5}]
+        t._zone_signals = {
+            "creativity": {"activity": 1.0, "density": 0.3, "energy": 50.0, "diversity": 0.5},
+        }
+        # "exploration" matche "explor" → zones creativity + desire
+        result_with = t.compute_tissue_bonus("EXPLORATION_CREATIVE")
+        result_without = t.compute_tissue_bonus("AUDIT_SECURITY")
+        # Avec intent matchant une zone active → bonus zone (+0.2)
+        assert result_with > result_without
+
+    def test_bonus_no_zone_signals(self):
+        """Sans zone_signals, seul le bonus pattern est retourné."""
+        t = NeuralTissue()
+        t._seed_population()
+        t.dominant_patterns = [{"genome": "ACG", "frequency": 0.4, "avg_fitness": 0.5}]
+        t._zone_signals = {}
+        result = t.compute_tissue_bonus("exploration")
+        assert result > 0.0
+
+
+class TestThreatSubsidedConstant:
+    """Tests pour la constante THRESHOLD_THREAT_SUBSIDED."""
+
+    def test_constant_exists(self):
+        assert THRESHOLD_THREAT_SUBSIDED == 0.5
+
+    def test_threat_subsided_uses_constant(self):
+        """TISSUE_THREAT_SUBSIDED utilise la constante, pas un hardcoded."""
+        t = NeuralTissue()
+        t._seed_population()
+        t._threat_was_high = True
+        t.tick_count = 100
+        # Activité juste en dessous du seuil
+        t._zone_signals = {
+            "threat": {
+                "activity": THRESHOLD_THREAT_SUBSIDED - 0.01,
+                "density": 0.1, "energy": 50.0, "diversity": 0.5,
+            },
+        }
+        published = []
+        t._try_publish = lambda name, payload: published.append((name, payload))
+        t._check_thresholds()
+        subsided = [p for p in published if p[0] == "TISSUE_THREAT_SUBSIDED"]
+        assert len(subsided) == 1
+        assert t._threat_was_high is False

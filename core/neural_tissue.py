@@ -60,6 +60,7 @@ THRESHOLD_EXTINCTION_RISK = 10      # Population < seuil
 THRESHOLD_DIVERSITY_DROP = 3        # Génomes uniques < seuil
 THRESHOLD_CREATIVITY_SPIKE = 1.5    # Activité zone creativity > seuil
 PUBLISH_COOLDOWN_TICKS = 10         # Min 10 ticks (20s) entre publications
+THRESHOLD_THREAT_SUBSIDED = 0.5     # Retour au calme zone threat
 
 # Mapping goal → zone(s) bonusée(s) (Sprint 6 - Pression sélective)
 # Mots-clés dans le titre du goal → zones qui reçoivent un bonus de nourriture
@@ -462,6 +463,9 @@ class NeuralTissue:
         # 10. Publier les événements de seuil (efférences)
         self._check_thresholds()
 
+        # 11. Normaliser les signaux cognitifs (garde-fou anti-divergence)
+        self._normalize()
+
         self.tick_count += 1
         self._last_tick_ms = (time.perf_counter() - _t0) * 1000.0
         if self._last_tick_ms > 500.0:
@@ -603,6 +607,19 @@ class NeuralTissue:
         """Retourne les signaux de zone (shallow copy)."""
         return dict(self._zone_signals)
 
+    def _normalize(self):
+        """Clamp tous les signaux cognitifs dans leurs bornes valides."""
+        s = self._cognitive_state
+        s["emotion_intensity"] = max(0.0, min(float(s.get("emotion_intensity", 0.5)), 1.0))
+        s["threat_level"] = max(0.0, min(float(s.get("threat_level", 0.0)), 10.0))
+        s["dopamine_level"] = max(0.0, min(float(s.get("dopamine_level", 0.5)), 1.0))
+        s["goal_count"] = max(0, min(int(s.get("goal_count", 0)), 10))
+        s["desire_intensity"] = max(0.0, min(float(s.get("desire_intensity", 50.0)), 100.0))
+        s["memory_activity"] = max(0.0, min(float(s.get("memory_activity", 0.3)), 1.0))
+        s["stability"] = max(0.0, min(float(s.get("stability", 0.7)), 1.0))
+        s["creativity"] = max(0.0, min(float(s.get("creativity", 0.3)), 1.0))
+        s["cognition_level"] = max(0.0, min(float(s.get("cognition_level", 0.3)), 1.0))
+
     # --- Efférences de seuil (Sprint 5) ---
 
     def _publish_cooldown_ok(self, event_name: str) -> bool:
@@ -662,11 +679,12 @@ class NeuralTissue:
                     "tick": self.tick_count,
                 })
 
-            # TISSUE_ZONE_DESERT — zone déserte
-            if activity < THRESHOLD_ZONE_DESERT and self.tick_count > 50:
+            # TISSUE_ZONE_DESERT — zone déserte (pas de cellules)
+            density = sig.get("density", 0.0)
+            if density < THRESHOLD_ZONE_DESERT and self.tick_count > 50:
                 self._try_publish("TISSUE_ZONE_DESERT", {
                     "zone": zone_name,
-                    "activity": activity,
+                    "density": density,
                     "tick": self.tick_count,
                 })
 
@@ -684,7 +702,7 @@ class NeuralTissue:
         threat_activity = threat_sig.get("activity", 0.0)
         if threat_activity > THRESHOLD_ZONE_OVERLOAD:
             self._threat_was_high = True
-        elif self._threat_was_high and threat_activity < 0.5:
+        elif self._threat_was_high and threat_activity < THRESHOLD_THREAT_SUBSIDED:
             self._threat_was_high = False
             self._try_publish("TISSUE_THREAT_SUBSIDED", {
                 "activity": threat_activity,
@@ -695,11 +713,17 @@ class NeuralTissue:
 
     async def _on_cardiac_beat(self, event):
         data = event.get("data", event)
-        self._cognitive_state["emotion_intensity"] = data.get("arousal", 0.5)
+        new_val = max(0.0, min(float(data.get("arousal", 0.5)), 1.0))
+        self._cognitive_state["emotion_intensity"] = (
+            self._cognitive_state["emotion_intensity"] * 0.7 + new_val * 0.3
+        )
 
     async def _on_reptilian_alert(self, event):
         data = event.get("data", event)
-        self._cognitive_state["threat_level"] = data.get("threat_level", 0.0)
+        new_val = max(0.0, min(float(data.get("threat_level", 0.0)), 10.0))
+        self._cognitive_state["threat_level"] = (
+            self._cognitive_state["threat_level"] * 0.7 + new_val * 0.3
+        )
 
     async def _on_dopamine_surge(self, event):
         self._cognitive_state["dopamine_level"] = min(
@@ -721,6 +745,10 @@ class NeuralTissue:
             self._cognitive_state["stability"] = 0.9
         elif phase == "eveil":
             self._cognitive_state["stability"] = 0.5
+        elif phase == "crepuscule":
+            self._cognitive_state["creativity"] = min(
+                self._cognitive_state["creativity"] + 0.15, 1.0
+            )
         elif phase == "aube" and old_phase == "sommeil_profond":
             # Aube après sommeil → repeuplement des zones désertées
             self._dawn_repopulate()
@@ -801,6 +829,13 @@ class NeuralTissue:
         elif cog_state == "exploration":
             self._cognitive_state["creativity"] = min(
                 self._cognitive_state["creativity"] + 0.15, 1.0
+            )
+        elif cog_state == "recovery":
+            self._cognitive_state["stability"] = min(
+                self._cognitive_state["stability"] + 0.2, 1.0
+            )
+            self._cognitive_state["creativity"] = min(
+                self._cognitive_state["creativity"] + 0.1, 1.0
             )
 
     async def _on_inner_voice(self, event):
@@ -939,7 +974,10 @@ class NeuralTissue:
         return None
 
     def compute_tissue_bonus(self, intent: str) -> float:
-        """Bonus pour le scoring autonomy basé sur la vitalité du substrat."""
+        """Bonus pour le scoring autonomy basé sur la vitalité du substrat.
+
+        Si l'intent correspond à des zones actives, bonus amplifié.
+        """
         if not self.dominant_patterns or not self.cells:
             return 0.0
 
@@ -947,7 +985,18 @@ class NeuralTissue:
         freq_bonus = top["frequency"] * 0.5
         fitness_bonus = min(top["avg_fitness"] * 0.3, 0.5)
 
-        return round(freq_bonus + fitness_bonus, 3)
+        # Bonus zone : si l'intent correspond à une zone très active
+        zone_bonus = 0.0
+        if intent and self._zone_signals:
+            intent_lower = intent.lower()
+            for keyword, zones in GOAL_ZONE_MAP.items():
+                if keyword in intent_lower:
+                    for zone_name in zones:
+                        sig = self._zone_signals.get(zone_name, {})
+                        if sig.get("activity", 0.0) > 0.5:
+                            zone_bonus = max(zone_bonus, 0.2)
+
+        return round(freq_bonus + fitness_bonus + zone_bonus, 3)
 
     def get_tissue_context(self) -> str:
         """Texte injectable dans le purpose_context."""
@@ -1031,6 +1080,9 @@ class NeuralTissue:
             "dominant_patterns": self.dominant_patterns[:10],
             "cognitive_state": self._cognitive_state,
             "zone_signals": self._zone_signals,
+            "goal_bonus_zones": self._goal_bonus_zones,
+            "threat_was_high": self._threat_was_high,
+            "circadian_phase": self._circadian_phase,
             "top_cells": [
                 {
                     "genome": c.genome, "x": c.x, "y": c.y,
@@ -1060,8 +1112,16 @@ class NeuralTissue:
             self.total_deaths = data.get("total_deaths", 0)
             self.dominant_patterns = data.get("dominant_patterns", [])
             saved_state = data.get("cognitive_state", {})
-            self._cognitive_state.update(saved_state)
+            # Filtrer les clés inconnues et appliquer
+            valid_keys = set(self._cognitive_state.keys())
+            for k, v in saved_state.items():
+                if k in valid_keys:
+                    self._cognitive_state[k] = v
+            self._normalize()
             self._zone_signals = data.get("zone_signals", {})
+            self._goal_bonus_zones = data.get("goal_bonus_zones", {})
+            self._threat_was_high = data.get("threat_was_high", False)
+            self._circadian_phase = data.get("circadian_phase", "eveil")
 
             top_cells = data.get("top_cells", [])
             if top_cells:
