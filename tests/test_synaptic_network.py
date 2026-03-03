@@ -13,6 +13,7 @@ from core.synaptic_network import (
     _synapse_key,
     _make_node,
     _make_synapse,
+    _NODE_STOPLIST,
     emotional_distance,
     HEBBIAN_LEARNING_RATE,
     ANTI_HEBBIAN_RATE,
@@ -1515,3 +1516,101 @@ class TestPruningCap:
 
         assert report.get("pruning_capped") is not True
         assert report["pruned_synapses"] == 5
+
+
+# =====================================================================
+# TestNodeStoplist — Rejet des noeuds bruit par ensure_node()
+# =====================================================================
+
+class TestNodeStoplist:
+
+    def test_ensure_node_rejects_pycache(self, network):
+        """__pycache__ est rejete par la stoplist."""
+        nid = network.ensure_node("__pycache__")
+        assert nid == ""
+        assert len(network.nodes) == 0
+
+    def test_ensure_node_rejects_okay(self, network):
+        """'okay' est rejete par la stoplist."""
+        nid = network.ensure_node("okay")
+        assert nid == ""
+
+    def test_ensure_node_rejects_case_insensitive(self, network):
+        """La stoplist est case-insensitive."""
+        nid = network.ensure_node("  Okay  ")
+        assert nid == ""
+
+    def test_ensure_node_accepts_valid_concept(self, network):
+        """Un concept valide passe la stoplist."""
+        nid = network.ensure_node("refactoring")
+        assert nid != ""
+        assert nid in network.nodes
+
+    def test_stoplist_contains_expected_words(self):
+        """Verification que la stoplist contient les mots attendus."""
+        for word in ["__pycache__", "okay", "suis", "juste", "vraiment"]:
+            assert word in _NODE_STOPLIST
+
+
+# =====================================================================
+# TestPurgeNoiseNodes — Purge one-shot des noeuds bruit
+# =====================================================================
+
+class TestPurgeNoiseNodes:
+
+    def test_purge_removes_noise_nodes(self, network):
+        """purge_noise_nodes supprime les noeuds dont le concept est dans la stoplist."""
+        # Injecter des noeuds bruit directement (sans passer par ensure_node qui les bloque)
+        for concept in ["__pycache__", "okay", "suis"]:
+            nid = _make_node_id(concept)
+            network.nodes[nid] = _make_node(concept, "memory", 0.5)
+        # Et un noeud valide
+        valid_nid = _make_node_id("refactoring")
+        network.nodes[valid_nid] = _make_node("refactoring", "memory", 0.5)
+
+        with patch.object(network, "_auto_save"):
+            report = network.purge_noise_nodes()
+
+        assert report["purged_nodes"] == 3
+        assert valid_nid in network.nodes
+        assert len(network.nodes) == 1
+
+    def test_purge_removes_orphan_synapses(self, network):
+        """Les synapses dont source ou target est purge sont supprimees."""
+        noise_nid = _make_node_id("__pycache__")
+        valid_nid = _make_node_id("python")
+        other_nid = _make_node_id("refactor")
+
+        network.nodes[noise_nid] = _make_node("__pycache__", "memory", 0.5)
+        network.nodes[valid_nid] = _make_node("python", "memory", 0.5)
+        network.nodes[other_nid] = _make_node("refactor", "memory", 0.5)
+
+        # Synapse noise->valid (orpheline apres purge)
+        key1 = _synapse_key(noise_nid, valid_nid)
+        network.synapses[key1] = _make_synapse(noise_nid, valid_nid, 0.3)
+        # Synapse valid->other (non-orpheline)
+        key2 = _synapse_key(valid_nid, other_nid)
+        network.synapses[key2] = _make_synapse(valid_nid, other_nid, 0.5)
+
+        with patch.object(network, "_auto_save"):
+            report = network.purge_noise_nodes()
+
+        assert report["purged_nodes"] == 1
+        assert report["purged_synapses"] == 1
+        assert key1 not in network.synapses
+        assert key2 in network.synapses
+
+    def test_purge_no_noise_returns_zero(self, network):
+        """Sans noeuds bruit, la purge retourne 0."""
+        nid = _make_node_id("python")
+        network.nodes[nid] = _make_node("python", "memory", 0.5)
+
+        report = network.purge_noise_nodes()
+        assert report["purged_nodes"] == 0
+        assert report["purged_synapses"] == 0
+
+    def test_purge_on_empty_network(self, network):
+        """Purge sur un reseau vide ne plante pas."""
+        report = network.purge_noise_nodes()
+        assert report["purged_nodes"] == 0
+        assert report["purged_synapses"] == 0

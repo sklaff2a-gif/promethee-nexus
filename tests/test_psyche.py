@@ -347,6 +347,11 @@ class TestCouncilForge:
         # Ne doit PAS re-sélectionner "survie" comme subject_key
         assert topic["subject_key"] != "survie"
 
+    def test_roadmap_council_disabled(self):
+        """Priorite 2.2 roadmap est desactivee — aucun sujet roadmap_ genere."""
+        topic = self.engine.select_council_topic()
+        assert not topic["subject_key"].startswith("roadmap_")
+
 
 @pytest.mark.asyncio
 class TestEventHandlers:

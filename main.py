@@ -277,6 +277,12 @@ async def lifespan(app: FastAPI):
     # --- CORTEX ASSOCIATIF ---
     from core.synaptic_network import cortex
     cortex.init()
+    purge_report = cortex.purge_noise_nodes()
+    if purge_report["purged_nodes"] > 0:
+        logger.info(
+            f"CORTEX: Purge bruit — {purge_report['purged_nodes']} noeuds, "
+            f"{purge_report['purged_synapses']} synapses"
+        )
     print(f"   🧬 SYNAPSE: Cortex associatif actif "
           f"({len(cortex.nodes)} noeuds, {len(cortex.synapses)} synapses).")
 

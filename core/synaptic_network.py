@@ -37,6 +37,13 @@ _STDP_EXCLUDED_PREFIXES = frozenset({
     "reflex:", "trait:", "pulsion:",
 })
 
+# Noeuds bruit rejetes par ensure_node() — artefacts filesystem et mots-béquilles LLM
+_NODE_STOPLIST = frozenset({
+    "__pycache__", "node_modules", ".git", "venv", "__init__",
+    "okay", "suis", "juste", "vraiment", "d'accord",
+    "dossiers", "fichiers", "répertoire", "résultats",
+})
+
 STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "memory", "synaptic_network.json"
@@ -182,6 +189,45 @@ class SynapticNetwork:
             cls._instance.reset()
             cls._instance = None
 
+    # --- Purge bruit ---
+
+    def purge_noise_nodes(self) -> dict:
+        """Supprime les noeuds dont le concept est dans _NODE_STOPLIST.
+
+        Supprime aussi les synapses orphelines (source ou target supprime).
+        Publie node_removed pour chaque noeud purge (neural_tissue recoit le signal).
+        Retourne {"purged_nodes": int, "purged_synapses": int}.
+        """
+        purged_nodes = 0
+        purged_synapses = 0
+
+        # 1. Identifier et supprimer les noeuds bruit
+        to_remove = [
+            nid for nid, node in self.nodes.items()
+            if node.get("concept", "").lower() in _NODE_STOPLIST
+        ]
+        for nid in to_remove:
+            concept = self.nodes[nid].get("concept", "")
+            del self.nodes[nid]
+            purged_nodes += 1
+            self._publish_delta("node_removed", {"id": nid, "concept": concept})
+
+        # 2. Supprimer les synapses orphelines
+        if purged_nodes > 0:
+            removed_ids = set(to_remove)
+            orphan_keys = [
+                key for key, syn in self.synapses.items()
+                if syn["source"] in removed_ids or syn["target"] in removed_ids
+            ]
+            for key in orphan_keys:
+                del self.synapses[key]
+                purged_synapses += 1
+
+            self._mutations_since_save += purged_nodes + purged_synapses
+            self._auto_save()
+
+        return {"purged_nodes": purged_nodes, "purged_synapses": purged_synapses}
+
     # --- Publication delta temps reel ---
 
     def _publish_delta(self, change_type: str, data: dict):
@@ -248,6 +294,8 @@ class SynapticNetwork:
         """Cree ou met a jour un noeud. Retourne le node_id (vide si concept rejete)."""
         cleaned = concept.strip()
         if len(cleaned) < MIN_CONCEPT_LENGTH:
+            return ""
+        if cleaned.lower() in _NODE_STOPLIST:
             return ""
         node_id = _make_node_id(concept)
 

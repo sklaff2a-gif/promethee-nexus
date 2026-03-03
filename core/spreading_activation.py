@@ -36,6 +36,21 @@ _STOPWORDS = frozenset({
     "there", "their", "other", "your",
 })
 
+# Mots-bruit : artefacts filesystem, mots-béquilles LLM, fragments non-informatifs
+_NOISE_WORDS = frozenset({
+    # Artefacts filesystem
+    "__pycache__", "node_modules", "venv", "__init__",
+    # Mots-béquilles LLM français
+    "okay", "d'accord", "suis", "juste", "vraiment", "alors",
+    "voilà", "effectivement", "évidemment", "exactement",
+    "absolument", "simplement", "certainement",
+    # Mots-béquilles LLM anglais
+    "sure", "right", "actually", "basically",
+    "essentially", "simply",
+    # Fragments trop courts mais >= 4 chars
+    "être", "fait", "même", "rien", "cela", "ceci",
+})
+
 # Patterns techniques (fichiers, fonctions, classes)
 _TECH_PATTERN = re.compile(
     r'(?:'
@@ -112,7 +127,7 @@ def extract_concepts(text: str, max_concepts: int = 15) -> List[Tuple[str, float
     total_words = max(len(words), 1)
     word_freq: Dict[str, int] = {}
     for w in words:
-        if w not in _STOPWORDS:
+        if w not in _STOPWORDS and w not in _NOISE_WORDS:
             word_freq[w] = word_freq.get(w, 0) + 1
 
     for word, count in word_freq.items():
@@ -123,7 +138,7 @@ def extract_concepts(text: str, max_concepts: int = 15) -> List[Tuple[str, float
     sentences = re.split(r'[.!?\n]', text)
     for sentence in sentences:
         first_words = re.findall(r'[a-zA-ZÀ-ÿ_]{4,}', sentence.strip().lower())
-        if first_words and first_words[0] not in _STOPWORDS:
+        if first_words and first_words[0] not in _STOPWORDS and first_words[0] not in _NOISE_WORDS:
             scores[first_words[0]] = scores.get(first_words[0], 0.0) + 1.0
 
     # Bonus après tirets (listes)
@@ -132,7 +147,7 @@ def extract_concepts(text: str, max_concepts: int = 15) -> List[Tuple[str, float
         if line.startswith(('-', '•', '*')):
             line_words = re.findall(r'[a-zA-ZÀ-ÿ_]{4,}', line.lower())
             for w in line_words[:2]:
-                if w not in _STOPWORDS:
+                if w not in _STOPWORDS and w not in _NOISE_WORDS:
                     scores[w] = scores.get(w, 0.0) + 0.5
 
     # 2. Patterns techniques : poids 2x

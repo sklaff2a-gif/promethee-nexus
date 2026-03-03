@@ -463,28 +463,30 @@ class PsycheEngine:
             except Exception:
                 pass
 
-        # Priorite 2.2 : roadmap — si un module est ready/specifying, debat cible sur son implementation
-        try:
-            from core.roadmap_engine import roadmap as roadmap_engine
-            for mod in roadmap_engine.modules.values():
-                if mod.get("status") in ("ready", "specifying"):
-                    mod_display = mod.get("display", mod["id"])
-                    mod_key = f"roadmap_{mod_display}"
-                    if mod_key not in recent[-5:]:
-                        return {
-                            "participants": ["strategist", "architect", "coder"],
-                            "mission": (
-                                f"Le module '{mod_display}' (Phase {mod.get('phase', '?')} "
-                                f"{mod.get('phase_name', '')}) est pret a etre implemente. "
-                                f"Description: {mod.get('description', '')}. "
-                                f"Comment l'integrer dans l'architecture existante ?"
-                            ),
-                            "needs_research": False,
-                            "research_query": None,
-                            "subject_key": mod_key,
-                        }
-        except Exception:
-            pass
+        # Priorite 2.2 : DESACTIVE — les councils architecture produisent
+        # des hallucinations avec les LLMs locaux 8B-14B (analyse run 2026-03-03).
+        # Reactiver quand specs structurees non-LLM disponibles.
+        # try:
+        #     from core.roadmap_engine import roadmap as roadmap_engine
+        #     for mod in roadmap_engine.modules.values():
+        #         if mod.get("status") in ("ready", "specifying"):
+        #             mod_display = mod.get("display", mod["id"])
+        #             mod_key = f"roadmap_{mod_display}"
+        #             if mod_key not in recent[-5:]:
+        #                 return {
+        #                     "participants": ["strategist", "architect", "coder"],
+        #                     "mission": (
+        #                         f"Le module '{mod_display}' (Phase {mod.get('phase', '?')} "
+        #                         f"{mod.get('phase_name', '')}) est pret a etre implemente. "
+        #                         f"Description: {mod.get('description', '')}. "
+        #                         f"Comment l'integrer dans l'architecture existante ?"
+        #                     ),
+        #                     "needs_research": False,
+        #                     "research_query": None,
+        #                     "subject_key": mod_key,
+        #                 }
+        # except Exception:
+        #     pass
 
         # Priorité 2 (par défaut) : débat alimenté par la recherche web (rotation)
         # Avancer l'index si le thème a déjà été débattu récemment
