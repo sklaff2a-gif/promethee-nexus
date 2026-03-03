@@ -105,6 +105,9 @@ class OrganSnapshot:
     # InnerVoice
     voice_active: bool = False
     voice_mode: str = ""
+    # Hippocampus
+    hippocampus_arcs: int = 0
+    hippocampus_last_arc: str = ""
 
 
 @dataclass
@@ -212,6 +215,7 @@ class CorpusCallosum:
         bus.subscribe("INNER_VOICE_BROADCAST", self._on_voice_broadcast)
         bus.subscribe("SYNAPTIC_UPDATE", self._on_synaptic_update)
         bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
+        bus.subscribe("HIPPOCAMPUS_ARC_CREATED", self._on_hippocampus_arc)
 
     async def start_resonance(self):
         """Boucle async principale — 60s."""
@@ -285,6 +289,29 @@ class CorpusCallosum:
     async def _on_routine_complete(self, event: dict):
         """Routine terminee — passif."""
         pass
+
+    async def _on_hippocampus_arc(self, event: dict):
+        """Arc narratif hippocampe — bridge cross-organe."""
+        arc_type = event.get("arc_type", "")
+        if arc_type == "breakthrough":
+            # Micro-boost dopamine (+0.08) pour renforcer le succes
+            try:
+                from core.dopamine_system import dopamine
+                dopamine.dopamine_level = min(1.0, dopamine.dopamine_level + 0.08)
+                logger.debug("CORPUS CALLOSUM: Bridge hippocampus→dopamine (breakthrough +0.08).")
+            except Exception:
+                pass
+        elif arc_type == "crisis":
+            # Confirmer/forcer l'etat CRISIS si pas deja actif
+            if self.cognitive_state != "crisis":
+                self._previous_state = self.cognitive_state
+                self.cognitive_state = "crisis"
+                self._state_since = time.time()
+                self._stats["state_transitions"] += 1
+                logger.info(
+                    "CORPUS CALLOSUM: Arc crise hippocampe "
+                    "→ transition en CRISIS."
+                )
 
     # ============================================================
     # Cycle de Resonance
@@ -422,6 +449,15 @@ class CorpusCallosum:
             snap.voice_active = not inner_voice._is_idle
             if inner_voice.stream:
                 snap.voice_mode = inner_voice.stream[-1].mode
+        except Exception:
+            pass
+
+        # Hippocampus (lecture seule — nombre d'arcs et dernier type)
+        try:
+            from core.hippocampus import hippocampus
+            snap.hippocampus_arcs = len(hippocampus._arcs)
+            if hippocampus._arcs:
+                snap.hippocampus_last_arc = hippocampus._arcs[-1].arc_type
         except Exception:
             pass
 

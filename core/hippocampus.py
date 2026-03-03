@@ -747,6 +747,7 @@ class Hippocampus:
             )
             self._arcs.append(arc)
             self._stats["arcs_created"] += 1
+            self._publish_arc_event(arc)
 
     def _detect_breakthrough(self, episodes: List[Episode]):
         """Detecte un succes avec error_streak >= 3 + echecs precedents."""
@@ -789,6 +790,7 @@ class Hippocampus:
             )
             self._arcs.append(arc)
             self._stats["arcs_created"] += 1
+            self._publish_arc_event(arc)
 
     def _detect_transition(self, episodes: List[Episode]):
         """Detecte un changement d'etat cognitif + episodes dans les 5 min."""
@@ -825,6 +827,7 @@ class Hippocampus:
             )
             self._arcs.append(arc)
             self._stats["arcs_created"] += 1
+            self._publish_arc_event(arc)
 
     def _detect_crisis(self, episodes: List[Episode]):
         """Detecte alerte reptilienne + echecs/vetos/loop_breaker dans les 10 min."""
@@ -865,6 +868,24 @@ class Hippocampus:
             )
             self._arcs.append(arc)
             self._stats["arcs_created"] += 1
+            self._publish_arc_event(arc)
+
+    # ─── Publication bus ──────────────────────────────────────────────────
+
+    def _publish_arc_event(self, arc):
+        """Fire-and-forget : publie HIPPOCAMPUS_ARC_CREATED sur le bus."""
+        try:
+            from core.event_bus.bus import bus
+            import asyncio
+            loop = asyncio.get_running_loop()
+            loop.create_task(bus.publish("HIPPOCAMPUS_ARC_CREATED", {
+                "arc_type": arc.arc_type,
+                "title": arc.title,
+                "intent": arc.intent,
+                "narrative": arc.narrative[:200],
+            }))
+        except (RuntimeError, Exception):
+            pass  # Pas de loop active ou import échoué — dégradation gracieuse
 
     # ─── Methodes de restitution ─────────────────────────────────────────
 

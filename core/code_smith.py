@@ -774,6 +774,36 @@ def _int_007(spec, source):
 
 # --- OBSERVABILITY ---
 
+@_register("OBS-001")
+def _obs_001(spec, source):
+    """Métriques par agent dans SelfAwareness."""
+    return [
+        TransformAction(
+            type=TransformType.ADD_CLASS_ATTRIBUTE,
+            target_class="SelfAwarenessEngine",
+            code='_per_agent_metrics: dict = {}',
+        ),
+        TransformAction(
+            type=TransformType.ADD_METHOD,
+            target_class="SelfAwarenessEngine",
+            code=textwrap.dedent('''\
+                async def _on_agent_response(self, event: dict):
+                    """Tracking calls/successes/latency par agent."""
+                    self._mission_count += 1
+                    agent = event.get("agent", "unknown")
+                    metrics = self._per_agent_metrics.setdefault(
+                        agent, {"calls": 0, "successes": 0, "total_latency": 0.0}
+                    )
+                    metrics["calls"] += 1
+                    if event.get("status") == "success":
+                        self._mission_success += 1
+                        metrics["successes"] += 1
+                    metrics["total_latency"] += event.get("duration", 0.0)
+            '''),
+        ),
+    ]
+
+
 @_register("OBS-002")
 def _obs_002(spec, source):
     """Compteur Cloud par agent."""
@@ -791,6 +821,25 @@ def _obs_002(spec, source):
                 def get_cloud_usage(cls) -> dict:
                     """Retourne le compteur d'appels Cloud par agent."""
                     return dict(cls._cloud_calls_by_agent)
+            '''),
+        ),
+    ]
+
+
+@_register("OBS-004")
+def _obs_004(spec, source):
+    """Dashboard santé enrichi — injection métriques per-agent dans get_self_context."""
+    return [
+        TransformAction(
+            type=TransformType.INSERT_BEFORE_RETURN,
+            target_class="SelfAwarenessEngine",
+            target_method="get_self_context",
+            code=textwrap.dedent('''\
+                per_agent = snap.get("per_agent_metrics", {})
+                if per_agent:
+                    top3 = sorted(per_agent.items(), key=lambda x: x[1].get("calls", 0), reverse=True)[:3]
+                    agent_info = ", ".join(f"{a}({m['calls']}appels)" for a, m in top3)
+                    parts.append(f"Top agents: {agent_info}.")
             '''),
         ),
     ]

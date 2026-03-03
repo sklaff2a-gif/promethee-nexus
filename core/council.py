@@ -610,11 +610,33 @@ class Council:
 
     def _format_transcript(self) -> str:
         """Formate le transcript pour l'injecter dans le prompt des agents.
-        Inclut le score de pertinence de chaque argument."""
+        Optimisé : tours anciens résumés (1 ligne/agent), 2 derniers tours en détail."""
         if not self.transcript:
             return "(Aucune contribution précédente)"
+
+        max_round = max(e["round"] for e in self.transcript)
+        cutoff = max(1, max_round - 1)  # Garder 2 derniers rounds en détail
+
         lines = []
-        for entry in self.transcript:
+
+        # Tours anciens : résumé compact (1 ligne par agent)
+        old = [e for e in self.transcript if e["round"] < cutoff]
+        if old:
+            lines.append(f"--- TOURS 1-{cutoff - 1} (resume) ---")
+            for e in old:
+                if e.get("is_student"):
+                    short = e["content"][:80].replace("\n", " ")
+                    lines.append(f"[T{e['round']}] ETUDIANT: {short}...")
+                elif e.get("is_advocate"):
+                    short = e["content"][:80].replace("\n", " ")
+                    lines.append(f"[T{e['round']}] AVOCAT: {short}...")
+                else:
+                    short = e["content"][:80].replace("\n", " ")
+                    lines.append(f"[T{e['round']}] {e['agent'].upper()}: {short}...")
+
+        # Tours récents : détail complet
+        recent = [e for e in self.transcript if e["round"] >= cutoff]
+        for entry in recent:
             if entry.get("is_student"):
                 lines.append(
                     f"[Tour {entry['round']}] PROMETHEE-ETUDIANT :\n{entry['content']}"
@@ -754,7 +776,7 @@ class Council:
             f"{round_instructions}\n"
             f"{president_block}"
             f"{intuition_block}"
-            f"{_council_guardrail(project_files)}"
+            f"{_council_guardrail()}"  # fichiers deja affiches dans le bloc FICHIERS AUTORISES
         )
 
     def _build_president_prompt(self, round_num: int) -> str:
