@@ -2,46 +2,24 @@ import logging
 import re
 from typing import Dict, Any
 from core.base_agent import BaseAgent
-from core.prompt_templates import CODE_GENERATION_GUARDRAIL
+from core.prompt_templates import CODE_GENERATION_GUARDRAIL, FORBIDDEN_FRAMEWORKS, get_project_structure
 
 logger = logging.getLogger("coder")
 
 # Mots-clés hors-sujet fréquemment produits par le LLM local en mode autonome.
-# Si le code généré est dominé par ces termes, c'est du bruit — pas une amélioration Prométhée.
-_OFFTOPIC_KEYWORDS = {
-    "blockchain", "smart contract", "smart_contract", "solidity", "ethereum",
-    "web3", "token", "nft", "crypto", "wallet", "0x",
+# Base : FORBIDDEN_FRAMEWORKS + mots-clés spécifiques trading/blockchain/RSS
+_OFFTOPIC_KEYWORDS = FORBIDDEN_FRAMEWORKS | {
+    "smart contract", "smart_contract", "ethereum",
+    "token", "nft", "crypto", "wallet", "0x",
     "trading", "trade", "merchant", "marchand", "order_processor",
     "transaction_manager", "buy_order", "sell_order", "swap",
     "rss", "feedparser", "rss_agent", "rss_processor",
-    "flask", "django", "streamlit", "gradio",
-    "langchain", "langgraph", "crewai", "autogen",
-    "kubernetes", "docker", "terraform", "kafka",
-    "openai", "faiss", "torch", "tensorflow",
     "huggingface", "transformers", "pdfplumber", "pypdf",
 }
 
 # Seuil : si plus de N mots-clés hors-sujet distincts, on rejette
 _OFFTOPIC_THRESHOLD = 2
 
-# Modules existants du projet (injecté dans le prompt pour ancrage)
-_PROJECT_CONTEXT = """
-PROJET PROMÉTHÉE — Système multi-agents IA autonome.
-MODULES EXISTANTS (ne les recrée PAS, améliore-les) :
-  - core/orchestrator.py : dispatch multi-agents, kill switch, chaînes de réaction
-  - core/base_agent.py : classe mère, RAG (remember/recall), routage Cloud/Local
-  - core/router.py : RouterAgent, classification d'intent 3 niveaux
-  - core/autonomy_engine.py : routines autonomes, scoring, health checks
-  - core/event_bus/bus.py : bus pub/sub en mémoire (singleton)
-  - core/summoner.py : chargement dynamique d'agents depuis core/grimoire/
-  - core/ci_pipeline.py : tests auto-générés, rollback, mémoire CI/CD
-  - core/self_awareness.py : conscience de soi, snapshots, humeur, patterns
-  - core/council.py : débats multi-agents avec consensus
-  - core/psyche.py : personnalité multi-traits par agent
-  - core/vector_store.py : mémoire vectorielle ChromaDB
-  - Agents/ : 10 agents (strategist, coder, architect, factory, formatter, researcher, writer, security, infra, evolution)
-STACK : Python 3.11, FastAPI, Ollama (LLM local), Google Gemini (Cloud), ChromaDB, WebSocket.
-"""
 
 
 def _count_offtopic(text: str) -> int:
@@ -55,7 +33,9 @@ class DivineCoder(BaseAgent):
         super().__init__(name="coder", role="AI Software Architect", description="Expert Python.")
         self.system_instructions = f"""
 Tu es le développeur principal du projet PROMÉTHÉE.
-{_PROJECT_CONTEXT}
+PROJET PROMÉTHÉE — Système multi-agents IA autonome.
+{get_project_structure()}
+STACK : Python 3.11, FastAPI, Ollama (LLM local), Google Gemini (Cloud), ChromaDB, WebSocket.
 
 RÈGLES ABSOLUES :
 1. Tu ne génères QUE du code Python pertinent pour PROMÉTHÉE.
@@ -79,7 +59,9 @@ RÈGLES ABSOLUES :
             self.log_thought("Aucune leçon précédente trouvée. J'innove.", type="info")
 
         # 2. INTÉGRER LES LEÇONS AU PROMPT
-        context_section = f"\nCONTEXTE SUPPLÉMENTAIRE :\n{context}\n" if context else ""
+        # M04: tronquer le context AVANT le guardrail pour que celui-ci reste visible au LLM
+        truncated_context = context[:4000] if context else ""
+        context_section = f"\nCONTEXTE SUPPLÉMENTAIRE :\n{truncated_context}\n" if truncated_context else ""
         full_prompt = f"""
         {self.system_instructions}
 

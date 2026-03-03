@@ -4,6 +4,7 @@ import logging
 from typing import Dict, Any, List
 from core.base_agent import BaseAgent
 from core.capabilities.web_surfer import WebSurfer
+from core.prompt_templates import AUTONOMY_GUARDRAIL
 
 logger = logging.getLogger("researcher")
 
@@ -53,7 +54,8 @@ class DivineResearcher(BaseAgent):
         synthesis = await self.generate_content(
             f"Tu es un analyste expert. Voici des résultats de recherche bruts concernant '{query}'.\n"
             f"Fais-en une synthèse structurée et exploitable pour un système IA.\n\n"
-            f"[DONNÉES WEB]:\n{web_results}"
+            f"[DONNÉES WEB]:\n{web_results[:4000]}"
+            f"{AUTONOMY_GUARDRAIL}"
         )
         
         # Sauvegarde en mémoire pour le futur (RAG)

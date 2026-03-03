@@ -29,9 +29,9 @@ class Orchestrator:
 
     @staticmethod
     def _contains_python_code(text: str) -> bool:
-        """Détecte du vrai code Python structurel (pas une simple mention dans du texte)."""
-        code_patterns = re.findall(r'^(import |from \w+ import|class \w+|def \w+\(|@\w+)', text, re.MULTILINE)
-        return len(code_patterns) >= 2
+        """Détecte du vrai code Python structurel. Délègue à core.code_utils (M05)."""
+        from core.code_utils import contains_python_code
+        return contains_python_code(text)
 
     # Marqueurs de contextes internes — importé depuis BaseAgent (source unique)
     @staticmethod
@@ -141,11 +141,15 @@ class Orchestrator:
             )
 
             # --- [V17.0] LE PONT D'EXÉCUTION (Architecte -> Factory) ---
+            # M06: L'Architecte route désormais en interne vers le Formatter (retourne FORMATÉ_*).
+            # Le Bridge ne déclenche que si l'Architecte retourne un VALIDÉ brut sans avoir
+            # déjà routé lui-même (safety net pour appels directs sans routage interne).
             if target_slug == "architect" and response.get("status") == "success" and not is_internal_pipeline:
                 res_text = str(response.get("result", ""))
 
-                if self._is_validated(res_text):
-                    logger.info("🚀 [BRIDGE] Architecte a validé. Transfert vers Factory...")
+                # Skip si l'Architecte a déjà géré le routage (FORMATÉ_*, SANS_CODE)
+                if self._is_validated(res_text) and "SANS_CODE" not in res_text and "FORMATÉ" not in res_text:
+                    logger.info("🚀 [BRIDGE] Architecte a validé (sans routage interne). Transfert vers Factory...")
 
                     code_to_apply = task_payload.get("context", "")
 

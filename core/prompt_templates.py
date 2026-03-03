@@ -9,13 +9,36 @@ en dernier et les respecte davantage.
 import os
 
 # ---------------------------------------------------------------------------
+# Frameworks/bibliothèques interdits — source unique de vérité
+# Utilisé par : guardrails, coder_agent (_OFFTOPIC_KEYWORDS), evolution_agent (_ALIEN_IMPORTS)
+# ---------------------------------------------------------------------------
+FORBIDDEN_FRAMEWORKS = frozenset({
+    "langchain", "langgraph", "crewai", "autogen",
+    "openai", "anthropic", "cohere",
+    "flask", "django", "streamlit", "gradio",
+    "torch", "tensorflow", "keras", "sklearn",
+    "pandas", "numpy", "scipy",
+    "kubernetes", "docker", "terraform", "kafka",
+    "blockchain", "web3", "solidity", "brownie",
+    "faiss", "pinecone", "weaviate", "qdrant",
+    "pygame", "tkinter",
+    "sqlalchemy", "peewee", "mongoengine",
+    "fastapi_users", "starlette_admin",
+    "express", "react", "vue", "angular",
+})
+
+
+def forbidden_frameworks_str() -> str:
+    """Liste triée des frameworks interdits pour injection dans les prompts."""
+    return ", ".join(sorted(FORBIDDEN_FRAMEWORKS))
+
+# ---------------------------------------------------------------------------
 # Guardrail : GÉNÉRATION DE CODE (Coder, Evolution, Grimoire)
 # ---------------------------------------------------------------------------
 CODE_GENERATION_GUARDRAIL = (
     "\n\n--- RAPPEL CRITIQUE (OBLIGATION ABSOLUE) ---\n"
     "Tu génères du code UNIQUEMENT pour le projet PROMÉTHÉE.\n"
-    "BIBLIOTHÈQUES INTERDITES : langchain, openai, flask, django, streamlit, "
-    "torch, tensorflow, FAISS, crewai, autogen, pandas, gradio.\n"
+    f"BIBLIOTHÈQUES INTERDITES : {forbidden_frameworks_str()}.\n"
     "Le code DOIT cibler un fichier EXISTANT du projet (core/, Agents/).\n"
     "Retourne UNIQUEMENT un bloc ```python, RIEN d'autre.\n"
 )
@@ -39,7 +62,7 @@ AUTONOMY_GUARDRAIL = (
     "\n\n--- RAPPEL ---\n"
     "Tu agis pour le projet PROMÉTHÉE (Python/FastAPI/Ollama sur UN SEUL PC Windows).\n"
     "Toute suggestion DOIT cibler des fichiers EXISTANTS du projet.\n"
-    "PAS de code utilisant des frameworks externes (langchain, openai, django, flask, etc.).\n"
+    f"FRAMEWORKS INTERDITS : {forbidden_frameworks_str()}.\n"
 )
 
 # ---------------------------------------------------------------------------
@@ -54,9 +77,9 @@ def council_guardrail(project_files: str = "") -> str:
         "\n\n--- RAPPEL CRITIQUE (DÉBAT COUNCIL) ---\n"
         "Tu débats pour le projet PROMÉTHÉE (Python/FastAPI/Ollama sur UN SEUL PC Windows).\n"
         "RÈGLES ABSOLUES :\n"
-        "1. Cite UNIQUEMENT des fichiers listés ci-dessous.\n"
-        "2. TECHNOLOGIES INTERDITES : Kubernetes, Docker, Kafka, microservices, blockchain, "
-        "load balancing, cluster, conteneurs, cloud infra, Redis, RabbitMQ.\n"
+        "1. Cite UNIQUEMENT des fichiers listés ci-dessus.\n"
+        f"2. TECHNOLOGIES INTERDITES : {forbidden_frameworks_str()}, "
+        "microservices, load balancing, cluster, conteneurs, cloud infra, Redis, RabbitMQ.\n"
         "3. Toute proposition DOIT cibler des fichiers EXISTANTS (core/, Agents/).\n"
         "4. RÉPONDS EN FRANÇAIS UNIQUEMENT.\n"
         "5. Ne propose PAS de fichiers qui n'existent pas.\n"
@@ -75,7 +98,7 @@ TEST_GENERATION_GUARDRAIL = (
     "\n\n--- RAPPEL CRITIQUE ---\n"
     "Les tests DOIVENT importer UNIQUEMENT les symboles listés dans 'API RÉELLE' ci-dessus.\n"
     "N'invente AUCUNE classe ou fonction. Utilise unittest.mock pour les dépendances.\n"
-    "PAS d'import langchain, openai, flask, django, torch.\n"
+    f"IMPORTS INTERDITS : {forbidden_frameworks_str()}.\n"
 )
 
 # ---------------------------------------------------------------------------

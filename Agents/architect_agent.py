@@ -58,10 +58,9 @@ FORMAT DE RÉPONSE :
 
     @staticmethod
     def _contains_python_code(text: str) -> bool:
-        """Détecte du vrai code Python structurel (pas une simple mention).
-        NB: même logique que Orchestrator._contains_python_code — synchroniser si modifié."""
-        code_patterns = re.findall(r'^(import |from \w+ import|class \w+|def \w+\(|@\w+)', text, re.MULTILINE)
-        return len(code_patterns) >= 2
+        """Détecte du vrai code Python structurel. Délègue à core.code_utils (M05)."""
+        from core.code_utils import contains_python_code
+        return contains_python_code(text)
 
     def _analyze_risk(self, text: str) -> str:
         """Analyse heuristique rapide des dangers."""

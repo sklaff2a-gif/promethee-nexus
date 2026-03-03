@@ -241,15 +241,16 @@ class RoutineScorer:
                 score += 3.0
 
             # Repetition penalty : basée sur le TOTAL d'occurrences récentes (fenêtre 10)
+            recency_penalty = 0.0
             total_recent = sum(1 for h in recent_intents if h == intent)
             if total_recent >= 4:
-                score -= 5.0
+                recency_penalty += 5.0
             elif total_recent >= 3:
-                score -= 3.0
+                recency_penalty += 3.0
             elif total_recent == 2:
-                score -= 1.5
+                recency_penalty += 1.5
             elif total_recent == 1:
-                score -= 0.5
+                recency_penalty += 0.5
 
             # Cooldown temporel : pénaliser si le même intent a été exécuté récemment
             for h in reversed(routine_history):
@@ -258,14 +259,17 @@ class RoutineScorer:
                         last_exec = datetime.fromisoformat(h["timestamp"])
                         hours_ago = (now - last_exec).total_seconds() / 3600
                         if hours_ago < 2:
-                            score -= 5.0  # Quasi-bloquant dans les 2 premières heures
+                            recency_penalty += 5.0
                         elif hours_ago < 4:
-                            score -= 2.5
+                            recency_penalty += 2.5
                         elif hours_ago < 6:
-                            score -= 1.0
+                            recency_penalty += 1.0
                     except (ValueError, TypeError):
                         pass
                     break  # Seule la dernière occurrence compte
+
+            # m16: cap combiné repetition+cooldown à -6.0 max (évite suppression permanente)
+            score -= min(recency_penalty, 6.0)
 
             # Health penalty : si DEGRADED, pénaliser les routines lourdes
             if health_verdict == "DEGRADED" and intent == "EXPANSION_CODE":
@@ -361,6 +365,9 @@ class AutonomyEngine:
         self._temp_blacklist: set = set()
         # Loop breaker : intent force par le loop_breaker (bypass scoring)
         self._forced_next_intent: str = ""
+        # M01: Anti-boucle drive — compteur de forçages par pulsion {drive_name: count}
+        self._drive_force_counts: dict = {}
+        self._drive_force_cycle: int = 0  # cycle courant pour le reset fenêtre
         # Transients pour feedback council/grimoire
         self._current_council_subject: str = ""
         self._last_grimoire_slug: str = ""
@@ -1163,6 +1170,10 @@ class AutonomyEngine:
                 await self._trigger_targeted_learning(selected["mission"], agent, intent)
 
         # --- Frustration DesireEngine : forcer l'intent suivant si pulsion frustrée ---
+        # M01: compteur de forçage par drive — cooldown 10 cycles si >2 forçages en 5 cycles
+        self._drive_force_cycle += 1
+        if self._drive_force_cycle % 5 == 0:
+            self._drive_force_counts = {}  # reset fenêtre tous les 5 cycles
         if not self._forced_next_intent:
             try:
                 from core.desire_engine import desires as _desires, DRIVE_ROUTINE_AFFINITY
@@ -1173,14 +1184,20 @@ class AutonomyEngine:
                 if frustrated:
                     frustrated.sort(key=lambda x: x[1].deprivation, reverse=True)
                     drive_name, drive = frustrated[0]
-                    forced_intent_map = DRIVE_ROUTINE_AFFINITY.get(drive_name, {})
-                    if forced_intent_map:
-                        best_intent = max(forced_intent_map, key=forced_intent_map.get)
-                        # Anti-boucle : ne pas forcer le même intent deux fois de suite
-                        last_intent = self.routine_history[-1].get("intent", "") if self.routine_history else ""
-                        if best_intent != last_intent:
-                            self._forced_next_intent = best_intent
-                            logger.warning(f"[EVEIL] Pulsion {drive_name} critique (dep={drive.deprivation:.0f}) → force {best_intent}")
+                    # M01: vérifier le cooldown avant de forcer
+                    force_count = self._drive_force_counts.get(drive_name, 0)
+                    if force_count > 2:
+                        logger.info(f"[EVEIL] Pulsion {drive_name} en cooldown (forcé {force_count}x en 5 cycles), skip")
+                    else:
+                        forced_intent_map = DRIVE_ROUTINE_AFFINITY.get(drive_name, {})
+                        if forced_intent_map:
+                            best_intent = max(forced_intent_map, key=forced_intent_map.get)
+                            # Anti-boucle : ne pas forcer le même intent deux fois de suite
+                            last_intent = self.routine_history[-1].get("intent", "") if self.routine_history else ""
+                            if best_intent != last_intent:
+                                self._forced_next_intent = best_intent
+                                self._drive_force_counts[drive_name] = force_count + 1
+                                logger.warning(f"[EVEIL] Pulsion {drive_name} critique (dep={drive.deprivation:.0f}) → force {best_intent} ({force_count + 1}/3)")
             except Exception:
                 pass
 
@@ -2234,7 +2251,8 @@ class AutonomyEngine:
                 except Exception:
                     pass
                 # Décroissance progressive : réduire l'error_streak de 1 à chaque cycle pour sortir de la spirale
-                if self.error_streak >= 5:
+                # Mo01: seuil abaissé de 5 à 3 — un streak de 3-4 ne doit pas être permanent
+                if self.error_streak >= 3:
                     self.error_streak -= 1
 
             # Modulation circadienne du sleep

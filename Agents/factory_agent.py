@@ -154,7 +154,9 @@ class DivineFactory(BaseAgent):
         
         for folder in watched_dirs:
             potential_path = os.path.join(folder, filename)
-            if os.path.exists(potential_path):
+            # M07: résoudre par rapport au project_root, pas au cwd
+            absolute_check = os.path.join(self.project_root, potential_path)
+            if os.path.exists(absolute_check):
                 self.log_thought(f"📍 Redirection intelligente : {filename} -> {potential_path}", type="info")
                 return potential_path
                 
@@ -241,7 +243,8 @@ class DivineFactory(BaseAgent):
 
             try:
                 if ".." in target_path: raise Exception("Path Traversal Interdit")
-                full_path = os.path.abspath(target_path)
+                # M08: résoudre par rapport au project_root, pas au cwd
+                full_path = os.path.normpath(os.path.join(self.project_root, target_path))
 
                 # Sandboxing : écriture dans le périmètre projet uniquement
                 if not full_path.startswith(self.project_root):

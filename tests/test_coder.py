@@ -100,7 +100,8 @@ class TestCoderSystemPrompt:
     def test_system_instructions_contain_project_context(self):
         coder = DivineCoder()
         assert "PROMÉTHÉE" in coder.system_instructions
-        assert "core/orchestrator.py" in coder.system_instructions
+        # get_project_structure() liste par dossier : "core/ : orchestrator.py, ..."
+        assert "orchestrator.py" in coder.system_instructions
         assert "trading" in coder.system_instructions.lower()  # dans les interdictions
         assert "blockchain" in coder.system_instructions.lower()
 

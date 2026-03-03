@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, Any
 from core.base_agent import BaseAgent
+from core.prompt_templates import AUTONOMY_GUARDRAIL
 
 logger = logging.getLogger("strategist")
 
@@ -45,6 +46,7 @@ Ne sois pas passif. Tes réponses doivent commencer par "ANALYSE :" suivi de "RE
         # Structure projet réelle (anti-hallucination de chemins)
         project_files = self._get_project_files()
 
+        # Mo06: tronquer le context pour ne pas pousser le guardrail hors fenêtre LLM
         full_prompt = f"""
         {self.system_instructions}
 
@@ -55,11 +57,12 @@ Ne sois pas passif. Tes réponses doivent commencer par "ANALYSE :" suivi de "RE
         MISSION : {mission}
 
         CONTEXTE TECHNIQUE / RÉSULTATS PRÉCÉDENTS :
-        {context}
+        {context[:4000]}
         --------------------------
 
         IMPORTANT : Ne cite QUE des fichiers listés ci-dessus. N'invente PAS de chemins.
         Agis maintenant en tant que Stratège (COO). Quelle est la meilleure approche ?
+        {AUTONOMY_GUARDRAIL}
         """
 
         response = await self.generate_content(full_prompt)

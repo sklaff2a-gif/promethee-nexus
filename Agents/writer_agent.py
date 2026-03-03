@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, Any
 from core.base_agent import BaseAgent
+from core.prompt_templates import AUTONOMY_GUARDRAIL
 
 logger = logging.getLogger("writer")
 
@@ -57,12 +58,13 @@ FORMATS SUPPORTÉS :
 MISSION : {mission}
 
 CONTEXTE :
-{context[:3000]}
+{context[:4000]}
 
 MÉMOIRE PERTINENTE :
 {rag_context[:1000] if rag_context else "(aucune)"}
 
-Rédige le contenu demandé en respectant le format approprié."""
+Rédige le contenu demandé en respectant le format approprié.
+{AUTONOMY_GUARDRAIL}"""
 
         response = await self.generate_content(prompt)
 

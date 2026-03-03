@@ -2,8 +2,13 @@ import logging
 import psutil
 from typing import Dict, Any
 from core.base_agent import BaseAgent
-from core.event_bus.bus import bus 
-from config import Config
+from core.event_bus.bus import bus
+
+# M10: import Config avec fallback pour éviter crash si config.py a une erreur
+try:
+    from config import Config
+except Exception:
+    Config = None
 
 try:
     import GPUtil
@@ -24,7 +29,7 @@ class DivineInfra(BaseAgent):
             role="DevOps SRE & Hardware Guardian",
             description="Gère l'infrastructure et protège les limites physiques du serveur."
         )
-        self.limits = getattr(Config, "HARDWARE", {"RAM_GB": 32, "VRAM_GB": 16})
+        self.limits = getattr(Config, "HARDWARE", {"RAM_GB": 32, "VRAM_GB": 16}) if Config else {"RAM_GB": 32, "VRAM_GB": 16}
         self.system_instructions = """Tu es le gardien infrastructure du projet Prométhée.
 CONTEXTE : Système multi-agents Python sur UN SEUL PC Windows (Ollama local, ChromaDB, FastAPI).
 TON RÔLE : Monitorer CPU/RAM/VRAM, diagnostiquer les problèmes de performance, recommander des optimisations.

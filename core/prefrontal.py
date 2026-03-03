@@ -55,7 +55,7 @@ _HORIZON_DURATIONS = {
 }
 
 # Scoring d'attention
-FOCUS_BONUS_PRIMARY = 6.0       # Goal #1
+FOCUS_BONUS_PRIMARY = 4.0       # Goal #1 (réduit de 6.0 — M12: éviter tunnel vision)
 FOCUS_BONUS_SECONDARY = 3.0     # Goal #2
 FOCUS_BONUS_TERTIARY = 1.5      # Goal #3
 DISTRACTION_PENALTY = -2.0      # Hors-focus
