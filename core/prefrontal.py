@@ -232,6 +232,7 @@ class PrefrontalCortex:
         bus.subscribe("COUNCIL_PRESIDENT_VERDICT", self._on_president_verdict)
         bus.subscribe("ROADMAP_MODULE_COMPLETED", self._on_roadmap_completed)
         bus.subscribe("TISSUE_PATTERN_EMERGED", self._on_tissue_pattern)
+        bus.subscribe("TISSUE_CREATIVITY_SPIKE", self._on_tissue_creativity_spike)
 
     async def _on_inner_voice(self, data: dict):
         """Intègre la pensée broadcast dans le narrative_log."""
@@ -409,6 +410,14 @@ class PrefrontalCortex:
         if freq > 0.3:
             self._narrate("observation", f"Pattern neural [{genome}] domine ({freq:.0%}). Substrat converge.")
             self._recent_events.append("TISSUE_PATTERN_EMERGED")
+
+    async def _on_tissue_creativity_spike(self, data: dict):
+        """Pic de créativité dans le tissu → narration exploratoire."""
+        if not isinstance(data, dict):
+            return
+        activity = data.get("activity", 0.0)
+        self._narrate("hypothesis", f"Pic créatif substrat (activité={activity:.2f}). Potentiel d'innovation.")
+        self._recent_events.append("TISSUE_CREATIVITY_SPIKE")
 
     # ─── 1. GOALS (dlPFC) ────────────────────────────────────────────
 

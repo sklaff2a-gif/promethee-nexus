@@ -214,6 +214,7 @@ class DopamineSystem:
             bus.subscribe("SANDBOX_TEST_FAIL", self._on_sandbox_fail)
             bus.subscribe("ROADMAP_MODULE_COMPLETED", self._on_roadmap_completed)
             bus.subscribe("TISSUE_PATTERN_EMERGED", self._on_tissue_pattern)
+            bus.subscribe("TISSUE_DIVERSITY_DROP", self._on_tissue_diversity_drop)
         except Exception as e:
             logger.warning(f"DOPAMINE: Echec souscription bus: {e}")
 
@@ -541,6 +542,11 @@ class DopamineSystem:
             boost = min(freq * 0.1, 0.05)
             self.dopamine_level = min(MAX_DOPAMINE, self.dopamine_level + boost)
             logger.debug(f"DOPAMINE: Tissue pattern reward +{boost:.3f}")
+
+    async def _on_tissue_diversity_drop(self, event: dict):
+        """Diversité tissu en chute → dip pour favoriser exploration."""
+        self.dopamine_level = max(0.0, self.dopamine_level - 0.1)
+        logger.debug("DOPAMINE: Tissue diversity drop → dip -0.1")
 
 
 # --- Singleton ---

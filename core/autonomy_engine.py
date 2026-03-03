@@ -375,6 +375,19 @@ class AutonomyEngine:
         self._council_degraded: bool = False
 
         bus.subscribe("USER_COMMAND", self.reset_timer)
+        bus.subscribe("TISSUE_ZONE_DESERT", self._on_tissue_desert)
+
+        # Zones tissu désertiques — routines de stimulation programmées
+        self._tissue_stimulation_zones: list = []
+
+    async def _on_tissue_desert(self, event: dict):
+        """Zone tissu déserte → programmer une routine de stimulation."""
+        zone = event.get("zone", "")
+        if zone and zone not in self._tissue_stimulation_zones:
+            self._tissue_stimulation_zones.append(zone)
+            if len(self._tissue_stimulation_zones) > 5:
+                self._tissue_stimulation_zones.pop(0)
+            logger.info(f"AUTONOMY: Zone tissu déserte '{zone}' → stimulation programmée")
 
     def _check_daily_budget(self) -> str:
         """Vérifie et reset le compteur quotidien.

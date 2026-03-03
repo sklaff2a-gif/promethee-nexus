@@ -803,3 +803,35 @@ class TestShedGraduated:
         assert active
         # La cause principale est "budget" (5.0 > 3.0)
         assert max_cost == 4
+
+
+class TestTissueHandlersReptilian:
+    """Sprint 5 — Grand Câblage : handlers tissue dans reptilian_core."""
+
+    @pytest.mark.asyncio
+    async def test_tissue_overload_boosts_threat(self, rept):
+        """Zone surchargée → threat +2.0."""
+        rept.threat_level = 1.0
+        await rept._on_tissue_overload({"zone": "emotion", "activity": 3.0})
+        assert rept.threat_level == 3.0
+
+    @pytest.mark.asyncio
+    async def test_tissue_overload_clamped(self, rept):
+        """Threat ne dépasse pas 10."""
+        rept.threat_level = 9.5
+        await rept._on_tissue_overload({"zone": "threat", "activity": 5.0})
+        assert rept.threat_level == 10.0
+
+    @pytest.mark.asyncio
+    async def test_tissue_extinction_boosts_threat_strongly(self, rept):
+        """Population en danger → threat +4.0."""
+        rept.threat_level = 2.0
+        await rept._on_tissue_extinction({"population": 5})
+        assert rept.threat_level == 6.0
+
+    @pytest.mark.asyncio
+    async def test_tissue_extinction_clamped(self, rept):
+        """Threat ne dépasse pas 10."""
+        rept.threat_level = 8.0
+        await rept._on_tissue_extinction({"population": 3})
+        assert rept.threat_level == 10.0

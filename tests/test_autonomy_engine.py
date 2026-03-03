@@ -2067,3 +2067,47 @@ class TestDeprivationCritique:
             ]
             frustrated.sort(key=lambda x: x[1].deprivation, reverse=True)
             assert frustrated[0][0] == "MAITRISE"
+
+
+class TestTissueDesertHandler:
+    """Sprint 5 — Grand Câblage : handler TISSUE_ZONE_DESERT dans autonomy_engine."""
+
+    def _make_engine(self):
+        """Crée un engine minimal pour tester le handler."""
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._tissue_stimulation_zones = []
+        engine.daily_budget_used = 0
+        engine._council_degraded = False
+        return engine
+
+    @pytest.mark.asyncio
+    async def test_desert_zone_recorded(self):
+        """Zone déserte → ajoutée à la liste de stimulation."""
+        engine = self._make_engine()
+        await engine._on_tissue_desert({"zone": "emotion", "activity": 0.01})
+        assert "emotion" in engine._tissue_stimulation_zones
+
+    @pytest.mark.asyncio
+    async def test_desert_zone_no_duplicate(self):
+        """Même zone deux fois → pas de doublon."""
+        engine = self._make_engine()
+        await engine._on_tissue_desert({"zone": "emotion"})
+        await engine._on_tissue_desert({"zone": "emotion"})
+        assert engine._tissue_stimulation_zones.count("emotion") == 1
+
+    @pytest.mark.asyncio
+    async def test_desert_zone_max_5(self):
+        """Maximum 5 zones stockées (FIFO)."""
+        engine = self._make_engine()
+        for z in ["a", "b", "c", "d", "e", "f"]:
+            await engine._on_tissue_desert({"zone": z})
+        assert len(engine._tissue_stimulation_zones) == 5
+        assert "a" not in engine._tissue_stimulation_zones
+        assert "f" in engine._tissue_stimulation_zones
+
+    @pytest.mark.asyncio
+    async def test_desert_zone_empty_name_ignored(self):
+        """Zone vide → ignorée."""
+        engine = self._make_engine()
+        await engine._on_tissue_desert({"zone": ""})
+        assert len(engine._tissue_stimulation_zones) == 0

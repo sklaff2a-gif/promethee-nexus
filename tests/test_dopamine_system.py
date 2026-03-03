@@ -761,3 +761,17 @@ class TestTissuePatternHandler:
         isolate_dopamine.dopamine_level = 0.99
         await isolate_dopamine._on_tissue_pattern({"frequency": 0.8, "fitness": 0.5})
         assert isolate_dopamine.dopamine_level <= 1.0
+
+    @pytest.mark.asyncio
+    async def test_tissue_diversity_drop_dips_dopamine(self, isolate_dopamine):
+        """Chute diversité tissu → dip dopamine."""
+        isolate_dopamine.dopamine_level = 0.5
+        await isolate_dopamine._on_tissue_diversity_drop({"unique_genomes": 2, "population": 20})
+        assert isolate_dopamine.dopamine_level == pytest.approx(0.4)
+
+    @pytest.mark.asyncio
+    async def test_tissue_diversity_drop_clamped(self, isolate_dopamine):
+        """Dip dopamine ne descend pas sous 0."""
+        isolate_dopamine.dopamine_level = 0.05
+        await isolate_dopamine._on_tissue_diversity_drop({})
+        assert isolate_dopamine.dopamine_level >= 0.0

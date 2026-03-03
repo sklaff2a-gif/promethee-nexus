@@ -52,6 +52,14 @@ FOOD_SPAWN_PER_ZONE = 2
 PATTERN_TRACK_SIZE = 20
 EXTINCTION_THRESHOLD = 5       # Repeuplement si < 5 cellules
 
+# Seuils efférents (Sprint 5)
+THRESHOLD_ZONE_OVERLOAD = 2.5       # Activité moyenne zone > seuil
+THRESHOLD_ZONE_DESERT = 0.05        # Activité moyenne zone < seuil
+THRESHOLD_EXTINCTION_RISK = 10      # Population < seuil
+THRESHOLD_DIVERSITY_DROP = 3        # Génomes uniques < seuil
+THRESHOLD_CREATIVITY_SPIKE = 1.5    # Activité zone creativity > seuil
+PUBLISH_COOLDOWN_TICKS = 10         # Min 10 ticks (20s) entre publications
+
 # Zones de la grille où les signaux cognitifs sont injectés
 SIGNAL_ZONES = {
     "emotion":    (0,  0,  4,  4),
@@ -62,6 +70,7 @@ SIGNAL_ZONES = {
     "memory":     (6,  12, 10, 16),
     "stability":  (0,  6,  4,  10),
     "creativity": (12, 6,  16, 10),
+    "cognition":  (6,  6,  10, 10),   # Matrice grise — néocortex
 }
 
 
@@ -225,10 +234,15 @@ class NeuralTissue:
             "memory_activity": 0.3,
             "stability": 0.7,
             "creativity": 0.3,
+            "cognition_level": 0.3,
         }
 
         self._last_tick_ms: float = 0.0
         self._zone_signals: Dict[str, Dict[str, float]] = {}
+        # Cooldowns pour events haute fréquence (tick_count au dernier traitement)
+        self._event_cooldowns: Dict[str, int] = {}
+        # Cooldowns pour publications de seuil
+        self._publish_cooldowns: Dict[str, int] = {}
 
         self._load()
 
@@ -258,8 +272,16 @@ class NeuralTissue:
             bus.subscribe("HALLUCINATION_DETECTED", self._on_hallucination)
             bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
             bus.subscribe("KNOWLEDGE_GAP_DETECTED", self._on_knowledge_gap)
+            # Afférences complètes — 7 canaux supplémentaires
+            bus.subscribe("PREFRONTAL_THOUGHT", self._on_prefrontal_thought)
+            bus.subscribe("PSYCHE_UPDATE", self._on_psyche_update)
+            bus.subscribe("SYNAPTIC_UPDATE", self._on_synaptic_update)
+            bus.subscribe("COUNCIL_END", self._on_council_end)
+            bus.subscribe("EVOLUTION_FEEDBACK", self._on_evolution_feedback)
+            bus.subscribe("EXPERIENCE_RECORDED", self._on_experience_recorded)
+            bus.subscribe("SOLILOQUE_EXCHANGE", self._on_soliloque_exchange)
             self._subscribed = True
-            logger.info("TISSUE: Substrat cellulaire neuronal actif (13 canaux).")
+            logger.info("TISSUE: Substrat cellulaire neuronal actif (20 canaux).")
         except Exception as e:
             logger.warning(f"TISSUE: Erreur init bus: {e}")
 
@@ -358,6 +380,9 @@ class NeuralTissue:
         # 9. Mettre à jour les signaux de zone
         self._update_zone_signals()
 
+        # 10. Publier les événements de seuil (efférences)
+        self._check_thresholds()
+
         self.tick_count += 1
         self._last_tick_ms = (time.perf_counter() - _t0) * 1000.0
         if self._last_tick_ms > 500.0:
@@ -375,6 +400,7 @@ class NeuralTissue:
             "memory":     state["memory_activity"],
             "stability":  state["stability"],
             "creativity": state["creativity"],
+            "cognition":  state["cognition_level"],
         }
 
         for zone_name, (x1, y1, x2, y2) in SIGNAL_ZONES.items():
@@ -489,6 +515,82 @@ class NeuralTissue:
         """Retourne les signaux de zone (shallow copy)."""
         return dict(self._zone_signals)
 
+    # --- Efférences de seuil (Sprint 5) ---
+
+    def _publish_cooldown_ok(self, event_name: str) -> bool:
+        """Vérifie le cooldown de publication (min PUBLISH_COOLDOWN_TICKS entre 2 pubs)."""
+        last = self._publish_cooldowns.get(event_name, -PUBLISH_COOLDOWN_TICKS)
+        if self.tick_count - last < PUBLISH_COOLDOWN_TICKS:
+            return False
+        self._publish_cooldowns[event_name] = self.tick_count
+        return True
+
+    def _try_publish(self, event_name: str, payload: dict):
+        """Publie un event si le cooldown est OK (fire-and-forget async)."""
+        if not self._publish_cooldown_ok(event_name):
+            return
+        try:
+            from core.event_bus.bus import bus
+            import asyncio as _aio
+            loop = _aio.get_running_loop()
+            loop.create_task(bus.publish(event_name, payload))
+            logger.debug(f"TISSUE: {event_name} publié")
+        except Exception:
+            pass
+
+    def _check_thresholds(self):
+        """Vérifie les seuils et publie les events efférents."""
+        if not self._zone_signals:
+            return
+
+        alive = [c for c in self.cells if c.alive]
+        population = len(alive)
+
+        # TISSUE_EXTINCTION_RISK — population dangereusement basse
+        if population < THRESHOLD_EXTINCTION_RISK:
+            self._try_publish("TISSUE_EXTINCTION_RISK", {
+                "population": population,
+                "tick": self.tick_count,
+            })
+
+        # TISSUE_DIVERSITY_DROP — trop peu de génomes uniques
+        unique_genomes = len(set(c.genome for c in alive)) if alive else 0
+        if 0 < unique_genomes < THRESHOLD_DIVERSITY_DROP and population > EXTINCTION_THRESHOLD:
+            self._try_publish("TISSUE_DIVERSITY_DROP", {
+                "unique_genomes": unique_genomes,
+                "population": population,
+                "tick": self.tick_count,
+            })
+
+        # Vérification par zone
+        for zone_name, sig in self._zone_signals.items():
+            activity = sig.get("activity", 0.0)
+
+            # TISSUE_ZONE_OVERLOAD — zone surchargée
+            if activity > THRESHOLD_ZONE_OVERLOAD:
+                self._try_publish("TISSUE_ZONE_OVERLOAD", {
+                    "zone": zone_name,
+                    "activity": activity,
+                    "tick": self.tick_count,
+                })
+
+            # TISSUE_ZONE_DESERT — zone déserte
+            if activity < THRESHOLD_ZONE_DESERT and self.tick_count > 50:
+                self._try_publish("TISSUE_ZONE_DESERT", {
+                    "zone": zone_name,
+                    "activity": activity,
+                    "tick": self.tick_count,
+                })
+
+        # TISSUE_CREATIVITY_SPIKE — zone creativity en pointe
+        creativity_sig = self._zone_signals.get("creativity", {})
+        if creativity_sig.get("activity", 0.0) > THRESHOLD_CREATIVITY_SPIKE:
+            self._try_publish("TISSUE_CREATIVITY_SPIKE", {
+                "activity": creativity_sig["activity"],
+                "density": creativity_sig.get("density", 0.0),
+                "tick": self.tick_count,
+            })
+
     # --- Handlers bus ---
 
     async def _on_cardiac_beat(self, event):
@@ -568,9 +670,15 @@ class NeuralTissue:
             )
 
     async def _on_inner_voice(self, event):
-        """Voix intérieure → stimuler l'activité mémoire."""
+        """Voix intérieure → stimuler mémoire + créativité + cognition."""
         self._cognitive_state["memory_activity"] = min(
             self._cognitive_state["memory_activity"] + 0.15, 1.0
+        )
+        self._cognitive_state["creativity"] = min(
+            self._cognitive_state["creativity"] + 0.1, 1.0
+        )
+        self._cognitive_state["cognition_level"] = min(
+            self._cognitive_state["cognition_level"] + 0.1, 1.0
         )
 
     async def _on_hallucination(self, event):
@@ -599,6 +707,89 @@ class NeuralTissue:
         )
         self._cognitive_state["desire_intensity"] = min(
             self._cognitive_state["desire_intensity"] + 5.0, 100.0
+        )
+
+    # --- Afférences complètes (Guide Sprints 2-4) ---
+
+    def _cooldown_ok(self, event_name: str, min_ticks: int = 1) -> bool:
+        """Vérifie si le cooldown est écoulé pour un event haute fréquence."""
+        last = self._event_cooldowns.get(event_name, -min_ticks)
+        if self.tick_count - last < min_ticks:
+            return False
+        self._event_cooldowns[event_name] = self.tick_count
+        return True
+
+    async def _on_prefrontal_thought(self, event):
+        """Pensée préfrontale → cognition + créativité (cooldown 1 tick)."""
+        if not self._cooldown_ok("PREFRONTAL_THOUGHT"):
+            return
+        self._cognitive_state["cognition_level"] = min(
+            self._cognitive_state["cognition_level"] + 0.15, 1.0
+        )
+        category = event.get("category", "")
+        if category in ("hypothesis", "strategy", "observation"):
+            self._cognitive_state["creativity"] = min(
+                self._cognitive_state["creativity"] + 0.05, 1.0
+            )
+
+    async def _on_psyche_update(self, event):
+        """Mise à jour PSYCHE → stabilité via system_average."""
+        data = event.get("data", event)
+        avg = data.get("system_average", {})
+        if isinstance(avg, dict):
+            coherence = avg.get("coherence", avg.get("stability", 0.5))
+            self._cognitive_state["stability"] = (
+                self._cognitive_state["stability"] * 0.7 + float(coherence) * 0.3
+            )
+
+    async def _on_synaptic_update(self, event):
+        """Mise à jour synaptique → activité mémoire."""
+        self._cognitive_state["memory_activity"] = min(
+            self._cognitive_state["memory_activity"] + 0.1, 1.0
+        )
+
+    async def _on_council_end(self, event):
+        """Fin de council → stabilité selon résultat."""
+        data = event.get("data", event)
+        status = data.get("status", "")
+        if status == "consensus":
+            self._cognitive_state["stability"] = min(
+                self._cognitive_state["stability"] + 0.15, 1.0
+            )
+        else:
+            self._cognitive_state["stability"] = max(
+                self._cognitive_state["stability"] - 0.05, 0.0
+            )
+
+    async def _on_evolution_feedback(self, event):
+        """Feedback évolution → créativité/désir selon verdict."""
+        data = event.get("data", event)
+        verdict = data.get("verdict", "")
+        if "success" in verdict.lower() or "validated" in verdict.lower():
+            self._cognitive_state["creativity"] = min(
+                self._cognitive_state["creativity"] + 0.15, 1.0
+            )
+        else:
+            self._cognitive_state["desire_intensity"] = min(
+                self._cognitive_state["desire_intensity"] + 3.0, 100.0
+            )
+
+    async def _on_experience_recorded(self, event):
+        """Expérience enregistrée → mémoire + cognition."""
+        self._cognitive_state["memory_activity"] = min(
+            self._cognitive_state["memory_activity"] + 0.1, 1.0
+        )
+        self._cognitive_state["cognition_level"] = min(
+            self._cognitive_state["cognition_level"] + 0.05, 1.0
+        )
+
+    async def _on_soliloque_exchange(self, event):
+        """Dialogue interne → cognition + mémoire."""
+        self._cognitive_state["cognition_level"] = min(
+            self._cognitive_state["cognition_level"] + 0.1, 1.0
+        )
+        self._cognitive_state["memory_activity"] = min(
+            self._cognitive_state["memory_activity"] + 0.05, 1.0
         )
 
     # --- API publique ---

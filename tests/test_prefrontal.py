@@ -858,3 +858,29 @@ class TestTissuePatternHandler:
         pf = _make_prefrontal()
         await pf._on_tissue_pattern("not a dict")
         assert len(pf.narrative_log) == 0
+
+
+class TestTissueCreativitySpikeHandler:
+    """Sprint 5 — Grand Câblage : handler TISSUE_CREATIVITY_SPIKE."""
+
+    @pytest.mark.asyncio
+    async def test_creativity_spike_narrates(self):
+        """Pic créativité → narration hypothèse."""
+        pf = _make_prefrontal()
+        await pf._on_tissue_creativity_spike({"activity": 2.0, "density": 0.3})
+        assert any("créatif" in n.thought.lower() or "innovation" in n.thought.lower()
+                    for n in pf.narrative_log)
+
+    @pytest.mark.asyncio
+    async def test_creativity_spike_adds_recent_event(self):
+        """Pic créativité → ajouté aux recent_events."""
+        pf = _make_prefrontal()
+        await pf._on_tissue_creativity_spike({"activity": 2.0})
+        assert "TISSUE_CREATIVITY_SPIKE" in pf._recent_events
+
+    @pytest.mark.asyncio
+    async def test_creativity_spike_invalid_data(self):
+        """Données invalides → pas de crash."""
+        pf = _make_prefrontal()
+        await pf._on_tissue_creativity_spike("not a dict")
+        assert len(pf.narrative_log) == 0

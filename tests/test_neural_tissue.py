@@ -778,4 +778,312 @@ class TestTissueInit:
         with patch.dict("sys.modules", {"core.event_bus.bus": MagicMock(bus=mock_bus)}):
             t.init()
         assert t._subscribed is True
-        assert mock_bus.subscribe.call_count == 13
+        assert mock_bus.subscribe.call_count == 20
+
+
+class TestTissueAfferencesCompletes:
+    """Tests pour les 7 handlers afférents ajoutés (Sprints 2-4 complet)."""
+
+    @pytest.mark.asyncio
+    async def test_prefrontal_thought_boosts_cognition(self):
+        t = NeuralTissue()
+        t._cognitive_state["cognition_level"] = 0.3
+        t.tick_count = 10
+        await t._on_prefrontal_thought({"category": "observation"})
+        assert t._cognitive_state["cognition_level"] == pytest.approx(0.45)
+
+    @pytest.mark.asyncio
+    async def test_prefrontal_thought_hypothesis_boosts_creativity(self):
+        t = NeuralTissue()
+        t._cognitive_state["cognition_level"] = 0.3
+        t._cognitive_state["creativity"] = 0.3
+        t.tick_count = 10
+        await t._on_prefrontal_thought({"category": "hypothesis"})
+        assert t._cognitive_state["creativity"] == pytest.approx(0.35)
+
+    @pytest.mark.asyncio
+    async def test_prefrontal_thought_no_creativity_on_generic(self):
+        t = NeuralTissue()
+        t._cognitive_state["creativity"] = 0.3
+        t.tick_count = 10
+        await t._on_prefrontal_thought({"category": "unknown"})
+        assert t._cognitive_state["creativity"] == 0.3
+
+    @pytest.mark.asyncio
+    async def test_prefrontal_thought_cooldown(self):
+        t = NeuralTissue()
+        t._cognitive_state["cognition_level"] = 0.3
+        t.tick_count = 10
+        await t._on_prefrontal_thought({})
+        assert t._cognitive_state["cognition_level"] == pytest.approx(0.45)
+        # Même tick → cooldown, pas de boost
+        await t._on_prefrontal_thought({})
+        assert t._cognitive_state["cognition_level"] == pytest.approx(0.45)
+        # Tick suivant → ok
+        t.tick_count = 11
+        await t._on_prefrontal_thought({})
+        assert t._cognitive_state["cognition_level"] == pytest.approx(0.6)
+
+    @pytest.mark.asyncio
+    async def test_psyche_update_blends_stability(self):
+        t = NeuralTissue()
+        t._cognitive_state["stability"] = 0.7
+        await t._on_psyche_update({"data": {"system_average": {"coherence": 0.3}}})
+        # 0.7 * 0.7 + 0.3 * 0.3 = 0.49 + 0.09 = 0.58
+        assert t._cognitive_state["stability"] == pytest.approx(0.58)
+
+    @pytest.mark.asyncio
+    async def test_psyche_update_stability_key_fallback(self):
+        t = NeuralTissue()
+        t._cognitive_state["stability"] = 0.5
+        await t._on_psyche_update({"data": {"system_average": {"stability": 1.0}}})
+        # 0.5 * 0.7 + 1.0 * 0.3 = 0.35 + 0.30 = 0.65
+        assert t._cognitive_state["stability"] == pytest.approx(0.65)
+
+    @pytest.mark.asyncio
+    async def test_synaptic_update_boosts_memory(self):
+        t = NeuralTissue()
+        t._cognitive_state["memory_activity"] = 0.3
+        await t._on_synaptic_update({})
+        assert t._cognitive_state["memory_activity"] == pytest.approx(0.4)
+
+    @pytest.mark.asyncio
+    async def test_synaptic_update_memory_clamped(self):
+        t = NeuralTissue()
+        t._cognitive_state["memory_activity"] = 0.95
+        await t._on_synaptic_update({})
+        assert t._cognitive_state["memory_activity"] <= 1.0
+
+    @pytest.mark.asyncio
+    async def test_council_end_consensus_boosts_stability(self):
+        t = NeuralTissue()
+        t._cognitive_state["stability"] = 0.5
+        await t._on_council_end({"data": {"status": "consensus"}})
+        assert t._cognitive_state["stability"] == pytest.approx(0.65)
+
+    @pytest.mark.asyncio
+    async def test_council_end_no_consensus_lowers_stability(self):
+        t = NeuralTissue()
+        t._cognitive_state["stability"] = 0.5
+        await t._on_council_end({"data": {"status": "timeout"}})
+        assert t._cognitive_state["stability"] == pytest.approx(0.45)
+
+    @pytest.mark.asyncio
+    async def test_evolution_feedback_success_boosts_creativity(self):
+        t = NeuralTissue()
+        t._cognitive_state["creativity"] = 0.3
+        await t._on_evolution_feedback({"data": {"verdict": "success"}})
+        assert t._cognitive_state["creativity"] == pytest.approx(0.45)
+
+    @pytest.mark.asyncio
+    async def test_evolution_feedback_failure_boosts_desire(self):
+        t = NeuralTissue()
+        t._cognitive_state["desire_intensity"] = 50.0
+        await t._on_evolution_feedback({"data": {"verdict": "rejected"}})
+        assert t._cognitive_state["desire_intensity"] == 53.0
+
+    @pytest.mark.asyncio
+    async def test_experience_recorded_boosts_memory_and_cognition(self):
+        t = NeuralTissue()
+        t._cognitive_state["memory_activity"] = 0.3
+        t._cognitive_state["cognition_level"] = 0.3
+        await t._on_experience_recorded({})
+        assert t._cognitive_state["memory_activity"] == pytest.approx(0.4)
+        assert t._cognitive_state["cognition_level"] == pytest.approx(0.35)
+
+    @pytest.mark.asyncio
+    async def test_soliloque_exchange_boosts_cognition_and_memory(self):
+        t = NeuralTissue()
+        t._cognitive_state["cognition_level"] = 0.3
+        t._cognitive_state["memory_activity"] = 0.3
+        await t._on_soliloque_exchange({})
+        assert t._cognitive_state["cognition_level"] == pytest.approx(0.4)
+        assert t._cognitive_state["memory_activity"] == pytest.approx(0.35)
+
+    @pytest.mark.asyncio
+    async def test_inner_voice_also_boosts_creativity_and_cognition(self):
+        """Sprint 2-4 enrichi : inner voice → mémoire + créativité + cognition."""
+        t = NeuralTissue()
+        t._cognitive_state["memory_activity"] = 0.3
+        t._cognitive_state["creativity"] = 0.3
+        t._cognitive_state["cognition_level"] = 0.3
+        await t._on_inner_voice({})
+        assert t._cognitive_state["memory_activity"] == pytest.approx(0.45)
+        assert t._cognitive_state["creativity"] == pytest.approx(0.4)
+        assert t._cognitive_state["cognition_level"] == pytest.approx(0.4)
+
+
+class TestCooldownSystem:
+    """Tests pour le mécanisme de cooldown _cooldown_ok et _publish_cooldown_ok."""
+
+    def test_cooldown_ok_first_call(self):
+        t = NeuralTissue()
+        t.tick_count = 5
+        assert t._cooldown_ok("TEST_EVENT") is True
+
+    def test_cooldown_ok_blocked_same_tick(self):
+        t = NeuralTissue()
+        t.tick_count = 5
+        t._cooldown_ok("TEST_EVENT")
+        assert t._cooldown_ok("TEST_EVENT") is False
+
+    def test_cooldown_ok_passes_after_ticks(self):
+        t = NeuralTissue()
+        t.tick_count = 5
+        t._cooldown_ok("TEST_EVENT", min_ticks=3)
+        t.tick_count = 7
+        assert t._cooldown_ok("TEST_EVENT", min_ticks=3) is False
+        t.tick_count = 8
+        assert t._cooldown_ok("TEST_EVENT", min_ticks=3) is True
+
+    def test_cooldown_ok_different_events_independent(self):
+        t = NeuralTissue()
+        t.tick_count = 5
+        t._cooldown_ok("EVENT_A")
+        assert t._cooldown_ok("EVENT_B") is True
+
+    def test_publish_cooldown_ok_first_call(self):
+        t = NeuralTissue()
+        t.tick_count = 0
+        assert t._publish_cooldown_ok("TISSUE_TEST") is True
+
+    def test_publish_cooldown_ok_blocked_within_window(self):
+        t = NeuralTissue()
+        t.tick_count = 0
+        t._publish_cooldown_ok("TISSUE_TEST")
+        t.tick_count = 5
+        assert t._publish_cooldown_ok("TISSUE_TEST") is False
+
+    def test_publish_cooldown_ok_passes_after_window(self):
+        from core.neural_tissue import PUBLISH_COOLDOWN_TICKS
+        t = NeuralTissue()
+        t.tick_count = 0
+        t._publish_cooldown_ok("TISSUE_TEST")
+        t.tick_count = PUBLISH_COOLDOWN_TICKS
+        assert t._publish_cooldown_ok("TISSUE_TEST") is True
+
+
+class TestTissueThresholds:
+    """Tests pour les efférences de seuil (_check_thresholds)."""
+
+    def test_extinction_risk_published(self):
+        from core.neural_tissue import THRESHOLD_EXTINCTION_RISK
+        t = NeuralTissue()
+        # Population sous le seuil
+        t.cells = [NeuralCell(genome="CG", x=0, y=0) for _ in range(THRESHOLD_EXTINCTION_RISK - 1)]
+        t._update_zone_signals()
+        published = []
+        t._try_publish = lambda name, payload: published.append(name)
+        t._check_thresholds()
+        assert "TISSUE_EXTINCTION_RISK" in published
+
+    def test_no_extinction_risk_above_threshold(self):
+        from core.neural_tissue import THRESHOLD_EXTINCTION_RISK
+        t = NeuralTissue()
+        t.cells = [NeuralCell(genome="CG", x=i, y=0) for i in range(THRESHOLD_EXTINCTION_RISK + 5)]
+        t._update_zone_signals()
+        published = []
+        t._try_publish = lambda name, payload: published.append(name)
+        t._check_thresholds()
+        assert "TISSUE_EXTINCTION_RISK" not in published
+
+    def test_diversity_drop_published(self):
+        from core.neural_tissue import THRESHOLD_DIVERSITY_DROP, EXTINCTION_THRESHOLD
+        t = NeuralTissue()
+        # Beaucoup de cellules, mais peu de génomes uniques
+        t.cells = [NeuralCell(genome="AA", x=i % GRID_SIZE, y=i // GRID_SIZE)
+                    for i in range(EXTINCTION_THRESHOLD + 5)]
+        # Un seul genome unique → diversity = 1 < THRESHOLD_DIVERSITY_DROP
+        t._update_zone_signals()
+        published = []
+        t._try_publish = lambda name, payload: published.append(name)
+        t._check_thresholds()
+        assert "TISSUE_DIVERSITY_DROP" in published
+
+    def test_zone_overload_published(self):
+        from core.neural_tissue import THRESHOLD_ZONE_OVERLOAD
+        t = NeuralTissue()
+        t.cells = [NeuralCell(genome="CG", x=0, y=0) for _ in range(20)]
+        # Forcer un signal très fort dans la zone emotion
+        for y in range(4):
+            for x in range(4):
+                t.grid[y][x] = THRESHOLD_ZONE_OVERLOAD + 1.0
+        t._update_zone_signals()
+        published = []
+        t._try_publish = lambda name, payload: published.append(name)
+        t._check_thresholds()
+        assert "TISSUE_ZONE_OVERLOAD" in published
+
+    def test_zone_desert_published(self):
+        t = NeuralTissue()
+        t.cells = [NeuralCell(genome="CG", x=0, y=0) for _ in range(20)]
+        t.tick_count = 100  # > 50 requis
+        # Grille vide → toutes zones désertiques
+        t._update_zone_signals()
+        published = []
+        t._try_publish = lambda name, payload: published.append(name)
+        t._check_thresholds()
+        assert "TISSUE_ZONE_DESERT" in published
+
+    def test_zone_desert_not_published_early(self):
+        t = NeuralTissue()
+        t.cells = [NeuralCell(genome="CG", x=0, y=0) for _ in range(20)]
+        t.tick_count = 10  # < 50
+        t._update_zone_signals()
+        published = []
+        t._try_publish = lambda name, payload: published.append(name)
+        t._check_thresholds()
+        assert "TISSUE_ZONE_DESERT" not in published
+
+    def test_creativity_spike_published(self):
+        from core.neural_tissue import THRESHOLD_CREATIVITY_SPIKE
+        t = NeuralTissue()
+        t.cells = [NeuralCell(genome="CG", x=0, y=0) for _ in range(20)]
+        # Zone creativity = (12, 6, 16, 10) → forcer signal fort
+        for y in range(6, 10):
+            for x in range(12, 16):
+                t.grid[y][x] = THRESHOLD_CREATIVITY_SPIKE + 1.0
+        t._update_zone_signals()
+        published = []
+        t._try_publish = lambda name, payload: published.append(name)
+        t._check_thresholds()
+        assert "TISSUE_CREATIVITY_SPIKE" in published
+
+    def test_check_thresholds_no_crash_empty_signals(self):
+        t = NeuralTissue()
+        t._zone_signals = {}
+        t._check_thresholds()  # Pas de crash
+
+    def test_try_publish_respects_cooldown(self):
+        t = NeuralTissue()
+        t.tick_count = 0
+        calls = []
+        original_cooldown = t._publish_cooldown_ok
+        t._publish_cooldown_ok = lambda name: (calls.append(name), False)[1]
+        t._try_publish("TEST_EVENT", {})
+        assert "TEST_EVENT" in calls  # Vérifié mais pas publié
+
+
+class TestCognitionZone:
+    """Tests pour la zone cognition (6,6→10,10)."""
+
+    def test_cognition_zone_exists(self):
+        assert "cognition" in SIGNAL_ZONES
+        assert SIGNAL_ZONES["cognition"] == (6, 6, 10, 10)
+
+    def test_cognition_level_in_cognitive_state(self):
+        t = NeuralTissue()
+        assert "cognition_level" in t._cognitive_state
+        assert t._cognitive_state["cognition_level"] == 0.3
+
+    def test_inject_signals_includes_cognition(self):
+        t = NeuralTissue()
+        t._cognitive_state["cognition_level"] = 1.0
+        random.seed(42)
+        t._inject_signals()
+        # Zone cognition (6,6 → 10,10)
+        total = sum(t.grid[y][x] for y in range(6, 10) for x in range(6, 10))
+        assert total > 0
+
+    def test_nine_zones_total(self):
+        assert len(SIGNAL_ZONES) == 9
