@@ -46,6 +46,7 @@ DELETION_RATE = 0.003
 MAX_GENOME_LENGTH = 24
 MIN_GENOME_LENGTH = 2
 SIGNAL_DECAY = 0.92
+MAX_GRID_SIGNAL = 5.0              # Saturation : signal max par cellule de grille
 TICK_INTERVAL = 2.0
 SAVE_EVERY_N_TICKS = 50
 FOOD_SPAWN_PER_ZONE = 2
@@ -275,6 +276,8 @@ class NeuralTissue:
         self._goal_bonus_zones: Dict[str, int] = {}  # zone_name → nb bonus food
         # Phase circadienne courante (Sprint 6)
         self._circadian_phase: str = "eveil"
+        # Boucles de rétroaction (Sprint 7) — suivi historique zone threat
+        self._threat_was_high: bool = False  # zone threat était en surcharge
 
         self._load()
 
@@ -442,10 +445,10 @@ class NeuralTissue:
         if len(self.cells) < EXTINCTION_THRESHOLD:
             self._seed_population()
 
-        # 6. Decay des signaux
+        # 6. Decay des signaux + saturation (garde-fou anti-divergence)
         for row in self.grid:
             for x in range(len(row)):
-                row[x] *= SIGNAL_DECAY
+                row[x] = min(row[x] * SIGNAL_DECAY, MAX_GRID_SIGNAL)
 
         # 7. Mettre à jour les patterns dominants
         self._update_dominant_patterns()
@@ -490,7 +493,10 @@ class NeuralTissue:
             for _ in range(food_count):
                 sx = random.randint(x1, min(x2 - 1, GRID_SIZE - 1))
                 sy = random.randint(y1, min(y2 - 1, GRID_SIZE - 1))
-                self.grid[sy][sx] += intensity * random.uniform(0.5, 1.5)
+                self.grid[sy][sx] = min(
+                    self.grid[sy][sx] + intensity * random.uniform(0.5, 1.5),
+                    MAX_GRID_SIGNAL
+                )
 
     def _get_neighbors(self, cell: NeuralCell) -> List[NeuralCell]:
         """Retourne les cellules adjacentes (rayon 2, wrap-around)."""
@@ -670,6 +676,18 @@ class NeuralTissue:
             self._try_publish("TISSUE_CREATIVITY_SPIKE", {
                 "activity": creativity_sig["activity"],
                 "density": creativity_sig.get("density", 0.0),
+                "tick": self.tick_count,
+            })
+
+        # Boucle menace ↔ tissu (Sprint 7) — retour au calme
+        threat_sig = self._zone_signals.get("threat", {})
+        threat_activity = threat_sig.get("activity", 0.0)
+        if threat_activity > THRESHOLD_ZONE_OVERLOAD:
+            self._threat_was_high = True
+        elif self._threat_was_high and threat_activity < 0.5:
+            self._threat_was_high = False
+            self._try_publish("TISSUE_THREAT_SUBSIDED", {
+                "activity": threat_activity,
                 "tick": self.tick_count,
             })
 

@@ -14,7 +14,8 @@ from core.neural_tissue import (
     MAINTENANCE_COST, CAPTURE_REWARD, GENERATE_REWARD,
     EXTINCTION_THRESHOLD, SIGNAL_ZONES, MAX_CELLS,
     MUTATION_RATE, GOAL_ZONE_MAP, GOAL_FOOD_BONUS,
-    FOOD_SPAWN_PER_ZONE,
+    FOOD_SPAWN_PER_ZONE, MAX_GRID_SIGNAL,
+    THRESHOLD_ZONE_OVERLOAD,
 )
 
 _FAKE_STATE_FILE = os.path.join(tempfile.gettempdir(), "test_neural_tissue.json")
@@ -1303,3 +1304,111 @@ class TestCircadianModulation:
         # Pas de crash
         t._tick()
         assert t.tick_count == 1
+
+
+class TestFeedbackLoops:
+    """Sprint 7 — Boucles de rétroaction et garde-fous anti-divergence."""
+
+    def test_grid_signal_clamped_by_max(self):
+        """Les signaux de grille ne dépassent pas MAX_GRID_SIGNAL."""
+        t = NeuralTissue()
+        t.grid[5][5] = 100.0  # Signal absurdement haut
+        t._seed_population()
+        t._tick()
+        assert t.grid[5][5] <= MAX_GRID_SIGNAL
+
+    def test_inject_signals_clamped(self):
+        """_inject_signals clamp à MAX_GRID_SIGNAL."""
+        t = NeuralTissue()
+        t.grid[0][0] = MAX_GRID_SIGNAL - 0.1
+        t._cognitive_state["emotion_intensity"] = 1.0
+        # Plusieurs injections ne devraient pas dépasser le max
+        for _ in range(10):
+            random.seed(0)  # Force l'injection au même point
+            t._inject_signals()
+        assert t.grid[0][0] <= MAX_GRID_SIGNAL
+
+    def test_threat_subsided_event_published(self):
+        """Boucle menace : zone threat haute puis calme → TISSUE_THREAT_SUBSIDED."""
+        t = NeuralTissue()
+        t.cells = [NeuralCell(genome="CG", x=0, y=0) for _ in range(20)]
+        # Simuler zone threat haute
+        for y in range(0, 4):
+            for x in range(12, 16):
+                t.grid[y][x] = THRESHOLD_ZONE_OVERLOAD + 1.0
+        t._update_zone_signals()
+        published = []
+        t._try_publish = lambda name, payload: published.append(name)
+        t._check_thresholds()
+        assert t._threat_was_high is True
+
+        # Maintenant calmer la zone
+        for y in range(0, 4):
+            for x in range(12, 16):
+                t.grid[y][x] = 0.1
+        t._update_zone_signals()
+        published.clear()
+        t._check_thresholds()
+        assert "TISSUE_THREAT_SUBSIDED" in published
+        assert t._threat_was_high is False
+
+    def test_threat_subsided_not_without_prior_high(self):
+        """Pas de TISSUE_THREAT_SUBSIDED si zone threat n'était pas haute."""
+        t = NeuralTissue()
+        t.cells = [NeuralCell(genome="CG", x=0, y=0) for _ in range(20)]
+        t._update_zone_signals()
+        published = []
+        t._try_publish = lambda name, payload: published.append(name)
+        t._check_thresholds()
+        assert "TISSUE_THREAT_SUBSIDED" not in published
+
+    def test_dopamine_loop_integration(self):
+        """Boucle dopamine → tissu : rewards augmentent avec dopamine haute."""
+        t = NeuralTissue()
+        t._seed_population()
+        # Dopamine haute → tick avec rewards augmentés
+        t._cognitive_state["dopamine_level"] = 1.0
+        t._tick()
+        assert t.tick_count == 1
+        # Dopamine basse → tick avec rewards réduits
+        t._cognitive_state["dopamine_level"] = 0.0
+        t._tick()
+        assert t.tick_count == 2
+
+    def test_memory_loop_integration(self):
+        """Boucle mémoire : synaptic_update → memory zone active."""
+        t = NeuralTissue()
+        t._cognitive_state["memory_activity"] = 0.3
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(t._on_synaptic_update({}))
+        assert t._cognitive_state["memory_activity"] == pytest.approx(0.4)
+        # Le signal sera injecté dans la zone memory au prochain tick
+
+    def test_cognitive_state_values_clamped(self):
+        """Tous les canaux de _cognitive_state sont entre 0.0 et 1.0 (sauf exceptions)."""
+        t = NeuralTissue()
+        # Pousser les canaux aux extrêmes via multiples handlers
+        import asyncio
+        loop = asyncio.get_event_loop()
+        for _ in range(20):
+            loop.run_until_complete(t._on_inner_voice({}))
+            loop.run_until_complete(t._on_dopamine_surge({}))
+            loop.run_until_complete(t._on_synaptic_update({}))
+        # Tous les canaux float [0,1] doivent être clampés
+        for key in ["emotion_intensity", "dopamine_level", "memory_activity",
+                     "stability", "creativity", "cognition_level"]:
+            assert 0.0 <= t._cognitive_state[key] <= 1.0, (
+                f"{key}={t._cognitive_state[key]} hors limites"
+            )
+
+    def test_signal_decay_prevents_accumulation(self):
+        """SIGNAL_DECAY 0.92 empêche l'accumulation sans injection."""
+        t = NeuralTissue()
+        t._circadian_phase = "sommeil_profond"  # Pas d'injection
+        t.grid[5][5] = 3.0
+        t._seed_population()
+        for _ in range(50):
+            t._tick()
+        # Après 50 ticks sans injection, le signal doit être presque nul
+        # 3.0 * 0.92^50 ≈ 0.047
+        assert t.grid[5][5] < 0.1

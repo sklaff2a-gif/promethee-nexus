@@ -835,3 +835,25 @@ class TestTissueHandlersReptilian:
         rept.threat_level = 8.0
         await rept._on_tissue_extinction({"population": 3})
         assert rept.threat_level == 10.0
+
+    @pytest.mark.asyncio
+    async def test_tissue_threat_subsided_reduces_threat(self, rept):
+        """Zone threat calme → threat -1.5 (boucle rétroaction)."""
+        rept.threat_level = 5.0
+        await rept._on_tissue_threat_subsided({"activity": 0.3})
+        assert rept.threat_level == 3.5
+
+    @pytest.mark.asyncio
+    async def test_tissue_threat_subsided_clamped_at_zero(self, rept):
+        """Threat ne descend pas sous 0."""
+        rept.threat_level = 1.0
+        await rept._on_tissue_threat_subsided({"activity": 0.1})
+        assert rept.threat_level == 0.0
+
+    @pytest.mark.asyncio
+    async def test_tissue_threat_subsided_reduces_adrenaline(self, rept):
+        """Zone calme → adrenaline réduite aussi."""
+        rept.threat_level = 3.0
+        rept.adrenaline = 0.5
+        await rept._on_tissue_threat_subsided({})
+        assert rept.adrenaline == pytest.approx(0.4)

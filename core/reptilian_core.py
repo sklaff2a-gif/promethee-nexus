@@ -534,6 +534,7 @@ class ReptilianCore:
             bus.subscribe("OLLAMA_UNRESPONSIVE", self._on_ollama_event)
             bus.subscribe("TISSUE_ZONE_OVERLOAD", self._on_tissue_overload)
             bus.subscribe("TISSUE_EXTINCTION_RISK", self._on_tissue_extinction)
+            bus.subscribe("TISSUE_THREAT_SUBSIDED", self._on_tissue_threat_subsided)
         except Exception as e:
             logger.warning(f"REPTILIEN: Échec souscription bus: {e}")
 
@@ -578,6 +579,12 @@ class ReptilianCore:
         pop = event.get("population", 0)
         self.threat_level = min(10.0, self.threat_level + 4.0)
         logger.warning(f"REPTILIEN: Tissue extinction risk (pop={pop}) → threat +4.0")
+
+    async def _on_tissue_threat_subsided(self, event: dict):
+        """Zone threat du tissu apaisée → réduction menace (boucle rétroaction)."""
+        self.threat_level = max(0.0, self.threat_level - 1.5)
+        self.adrenaline = max(0.0, self.adrenaline - 0.1)
+        logger.info(f"REPTILIEN: Tissue calme → threat -1.5 (now {self.threat_level:.1f})")
 
     def on_routine_success(self, intent: str = ""):
         """Apaisement après un succès — appelé par AutonomyEngine."""
