@@ -167,7 +167,7 @@ class DivineFactory(BaseAgent):
         mission = task_payload.get("mission", "")
         context = task_payload.get("context", "")
         
-        self.log_thought(f"Analyse Factory V25.0 : {mission[:50]}...", type="thought")
+        self.log_thought(f"Analyse Factory V26.0 : {mission[:50]}...", type="thought")
 
         # 1. DÉTECTION DU CHEMIN
         # Regex durcie : exige au moins un . / ou \ dans le groupe capturé (évite "les", "des", etc.)

@@ -1524,6 +1524,20 @@ class EvolutionCatalog:
                         self._save()
                 except (ValueError, TypeError):
                     pass
+        # M11: Auto-unlock des specs "failed" après 7 jours — le système a peut-être progressé
+        for spec in self.specs.values():
+            if spec.status == "failed" and spec.last_attempt:
+                try:
+                    last = datetime.fromisoformat(spec.last_attempt)
+                    if (now - last) > timedelta(days=7):
+                        logger.info(f"Catalogue: {spec.id} auto-unlock (failed > 7 jours) → available")
+                        spec.status = "available"
+                        spec.attempts = 0
+                        spec.failure_reasons = []
+                        self._save()
+                except (ValueError, TypeError):
+                    pass
+
         eligible = []
         for spec in self.specs.values():
             # Exclure : pas available

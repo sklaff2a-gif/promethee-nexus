@@ -21,7 +21,12 @@ logger = logging.getLogger("Soliloque")
 MAX_EXCHANGES = 4           # Tours de dialogue max
 MAX_HISTORY = 20            # Sessions conservées
 COMPANION_MODEL = "promethee-companion"
-REFLECT_MODEL = "promethee-general"
+# c06: REFLECT_MODEL depuis Config (fallback si Config indisponible)
+try:
+    from config import Config as _SolConfig
+    REFLECT_MODEL = _SolConfig.DEFAULT_LOCAL_MODEL
+except Exception:
+    REFLECT_MODEL = "promethee-general"
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
 OLLAMA_GENERATE_URL = "http://localhost:11434/api/generate"
 
@@ -62,8 +67,17 @@ _OPENING_TEMPLATES = {
 
 class SoliloqueEngine:
     """Moteur de dialogue introspectif — Prométhée converse avec un miroir socratique."""
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
 
     def __init__(self):
+        if hasattr(self, "_init_done"):
+            return
+        self._init_done = True
         self.session_count: int = 0
         self.last_theme: str = ""
         self.theme_index: int = 0
@@ -529,7 +543,7 @@ class SoliloqueEngine:
     # ─── PERSISTANCE ─────────────────────────────────────────────────────
 
     def _save(self):
-        """Sauvegarde l'état sur disque."""
+        """Sauvegarde l'état sur disque (écriture atomique via tmp + os.replace)."""
         state = {
             "version": "1.0",
             "session_count": self.session_count,
@@ -539,8 +553,10 @@ class SoliloqueEngine:
             "timestamp": time.time(),
         }
         try:
-            with open(SOLILOQUE_STATE_FILE, "w", encoding="utf-8") as f:
+            tmp_path = SOLILOQUE_STATE_FILE.with_suffix(".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(state, f, ensure_ascii=False, indent=2)
+            os.replace(str(tmp_path), str(SOLILOQUE_STATE_FILE))
         except Exception as e:
             logger.warning(f"SOLILOQUE: Sauvegarde échouée — {e}")
 
@@ -563,6 +579,9 @@ class SoliloqueEngine:
     def reset_singleton(cls):
         """Reset pour les tests."""
         global soliloque
+        if cls._instance is not None and hasattr(cls._instance, "_init_done"):
+            del cls._instance._init_done
+        cls._instance = None
         soliloque = cls()
 
 

@@ -69,7 +69,7 @@ _RE_BUS_SUBSCRIBE = re.compile(
 _ROADMAP_FALLBACK = [
     # --- ETAPE 1 : FONDATIONS ---
     {
-        "id": "implemented.roadmap_engine",
+        "id": "roadmap_engine",
         "display": "roadmap_engine",
         "phase": 1, "phase_name": "FONDATIONS",
         "status": "implemented",
@@ -78,14 +78,14 @@ _ROADMAP_FALLBACK = [
     },
     # --- ETAPE 2 : ORGANES MANQUANTS ---
     {
-        "id": "planned.thalamus",
+        "id": "thalamus",
         "display": "thalamus",
         "phase": 2, "phase_name": "ORGANES MANQUANTS",
         "description": "Filtre sensoriel — routeur attentionnel",
         "connects_to": ["core.event_bus.bus", "core.prefrontal", "core.reptilian_core"],
     },
     {
-        "id": "planned.amygdala",
+        "id": "amygdala",
         "display": "amygdala",
         "phase": 2, "phase_name": "ORGANES MANQUANTS",
         "description": "Amygdale emotionnelle — valence rapide",
@@ -93,7 +93,7 @@ _ROADMAP_FALLBACK = [
     },
     # --- ETAPE 3 : SIGNAL BUS ---
     {
-        "id": "planned.signal_bus",
+        "id": "signal_bus",
         "display": "signal_bus",
         "phase": 3, "phase_name": "SIGNAL BUS",
         "description": "Bus de signaux neuraux types",
@@ -101,7 +101,7 @@ _ROADMAP_FALLBACK = [
     },
     # --- ETAPE 4 : VM NEURALE ---
     {
-        "id": "planned.brain_vm",
+        "id": "brain_vm",
         "display": "brain_vm",
         "phase": 4, "phase_name": "VM NEURALE",
         "description": "Machine virtuelle neurale — runtime unifie",
@@ -109,7 +109,7 @@ _ROADMAP_FALLBACK = [
     },
     # --- ETAPE 5 : NEUROCHIMIE ---
     {
-        "id": "planned.neurochemistry",
+        "id": "neurochemistry",
         "display": "neurochemistry",
         "phase": 5, "phase_name": "NEUROCHIMIE",
         "description": "Neurochimie simulee — neurotransmetteurs virtuels",
@@ -117,7 +117,7 @@ _ROADMAP_FALLBACK = [
     },
     # --- ETAPE 6 : VIRTUALISATION LLM ---
     {
-        "id": "planned.lora_pipeline",
+        "id": "lora_pipeline",
         "display": "lora_pipeline",
         "phase": 6, "phase_name": "VIRTUALISATION LLM",
         "description": "Pipeline LoRA — fine-tuning local",
@@ -125,21 +125,21 @@ _ROADMAP_FALLBACK = [
     },
     # --- ETAPE 7 : CONSCIENCE & EMERGENCE ---
     {
-        "id": "planned.global_workspace",
+        "id": "global_workspace",
         "display": "global_workspace",
         "phase": 7, "phase_name": "CONSCIENCE & EMERGENCE",
         "description": "Espace de travail conscient (Baars)",
         "connects_to": ["core.prefrontal", "core.inner_voice", "core.self_awareness"],
     },
     {
-        "id": "planned.deep_metacognition",
+        "id": "deep_metacognition",
         "display": "deep_metacognition",
         "phase": 7, "phase_name": "CONSCIENCE & EMERGENCE",
         "description": "Meta-cognition profonde — raisonnement sur son propre raisonnement",
         "connects_to": ["core.self_awareness", "core.inner_voice", "core.prefrontal", "core.psyche"],
     },
     {
-        "id": "planned.simulation_framework",
+        "id": "simulation_framework",
         "display": "simulation_framework",
         "phase": 7, "phase_name": "CONSCIENCE & EMERGENCE",
         "description": "Framework de simulation — scenarios complets",

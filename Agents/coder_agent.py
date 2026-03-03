@@ -1,5 +1,4 @@
 import logging
-import re
 from typing import Dict, Any
 from core.base_agent import BaseAgent
 from core.prompt_templates import CODE_GENERATION_GUARDRAIL, FORBIDDEN_FRAMEWORKS, get_project_structure

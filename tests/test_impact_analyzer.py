@@ -662,11 +662,11 @@ class TestRoadmap:
         planned = [n for n in result["nodes"] if n["type"] == "planned"]
         assert len(planned) == 10
         ids = {n["id"] for n in planned}
-        assert "planned.thalamus" in ids
-        assert "planned.amygdala" in ids
-        assert "planned.brain_vm" in ids
-        assert "planned.deep_metacognition" in ids
-        assert "planned.simulation_framework" in ids
+        assert "thalamus" in ids
+        assert "amygdala" in ids
+        assert "brain_vm" in ids
+        assert "deep_metacognition" in ids
+        assert "simulation_framework" in ids
 
     def test_planned_node_fields(self, analyzer_instance, mock_project, monkeypatch):
         """Les nœuds planned ont les champs phase, phase_name, description."""
@@ -676,7 +676,7 @@ class TestRoadmap:
             "core.reptilian_core": MagicMock(reptile=MagicMock(get_stats=lambda: {"threat_level": 0})),
         }):
             result = analyzer_instance.build_graph()
-        amygdala = next(n for n in result["nodes"] if n["id"] == "planned.amygdala")
+        amygdala = next(n for n in result["nodes"] if n["id"] == "amygdala")
         assert amygdala["phase"] == 2
         assert amygdala["phase_name"] == "ORGANES MANQUANTS"
         assert "emotionnelle" in amygdala["description"].lower()
@@ -762,7 +762,7 @@ class TestRoadmapDynamic:
         data = {
             "_wip_paused": False,
             "modules": [{
-                "id": "planned.test_dynamic",
+                "id": "test_dynamic",
                 "phase": 99,
                 "phase_name": "TEST",
                 "display": "test_dynamic",
@@ -807,7 +807,7 @@ def _get_roadmap_data():
 
         result = mod._get_roadmap_data()
         assert len(result) == 1
-        assert result[0]["id"] == "planned.test_dynamic"
+        assert result[0]["id"] == "test_dynamic"
         assert result[0]["status"] == "researching"
 
         RoadmapEngine.reset_singleton()
@@ -826,4 +826,4 @@ def _get_roadmap_data():
         monkeypatch.setattr(mod, "_get_roadmap_data", failing_get_roadmap_data)
         result = mod._get_roadmap_data()
         assert len(result) == len(mod._ROADMAP_FALLBACK)
-        assert result[0]["id"] == "implemented.roadmap_engine"
+        assert result[0]["id"] == "roadmap_engine"

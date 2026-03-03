@@ -3,7 +3,7 @@
   "_wip_paused": false,
   "modules": [
     {
-      "id": "implemented.roadmap_engine",
+      "id": "roadmap_engine",
       "phase": 1,
       "phase_name": "FONDATIONS",
       "display": "roadmap_engine",
@@ -19,12 +19,12 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "in_progress.vision_agent",
+      "id": "vision_agent",
       "phase": 1,
       "phase_name": "FONDATIONS",
       "display": "vision_agent",
       "description": "Agent de visualisation — graphe D3.js force-directed, carte neurale, impact graph",
-      "status": "in_progress",
+      "status": "implemented",
       "specs": [],
       "depends_on": [],
       "estimated_cost": 4,
@@ -35,7 +35,7 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.roadmap_curator",
+      "id": "roadmap_curator",
       "phase": 1,
       "phase_name": "FONDATIONS",
       "display": "roadmap_curator",
@@ -51,7 +51,7 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.thalamus",
+      "id": "thalamus",
       "phase": 2,
       "phase_name": "ORGANES MANQUANTS",
       "display": "thalamus",
@@ -67,7 +67,7 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.amygdala",
+      "id": "amygdala",
       "phase": 2,
       "phase_name": "ORGANES MANQUANTS",
       "display": "amygdala",
@@ -83,7 +83,7 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.hypothalamus",
+      "id": "hypothalamus",
       "phase": 2,
       "phase_name": "ORGANES MANQUANTS",
       "display": "hypothalamus",
@@ -99,14 +99,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.insula",
+      "id": "insula",
       "phase": 2,
       "phase_name": "ORGANES MANQUANTS",
       "display": "insula",
       "description": "Conscience interoceptive — perception de l'etat interne, integration somatique, awareness corporelle",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.hypothalamus"],
+      "depends_on": ["hypothalamus"],
       "estimated_cost": 5,
       "completion_criteria": [],
       "research_topics": ["insula interoception body awareness internal state perception AI"],
@@ -115,7 +115,7 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.cingulate_cortex",
+      "id": "cingulate_cortex",
       "phase": 2,
       "phase_name": "ORGANES MANQUANTS",
       "display": "cingulate_cortex",
@@ -131,14 +131,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.basal_ganglia",
+      "id": "basal_ganglia",
       "phase": 2,
       "phase_name": "ORGANES MANQUANTS",
       "display": "basal_ganglia",
       "description": "Ganglions de la base — selection d'actions, apprentissage par renforcement, inhibition motrice",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.thalamus"],
+      "depends_on": ["thalamus"],
       "estimated_cost": 6,
       "completion_criteria": [],
       "research_topics": ["basal ganglia action selection reinforcement learning motor inhibition AI"],
@@ -147,7 +147,7 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.default_mode_network",
+      "id": "default_mode_network",
       "phase": 2,
       "phase_name": "ORGANES MANQUANTS",
       "display": "default_mode_network",
@@ -163,14 +163,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.signal_bus",
+      "id": "signal_bus",
       "phase": 3,
       "phase_name": "SIGNAL BUS",
       "display": "signal_bus",
       "description": "Bus de signaux neuraux — transport de signaux types entre organes, priorites, throttling, metriques",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.thalamus"],
+      "depends_on": ["thalamus"],
       "estimated_cost": 6,
       "completion_criteria": [],
       "research_topics": ["neural signal bus typed messaging priority queue throttling metrics"],
@@ -179,14 +179,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.signal_bridge",
+      "id": "signal_bridge",
       "phase": 3,
       "phase_name": "SIGNAL BUS",
       "display": "signal_bridge",
       "description": "Pont de signaux — traduction entre protocoles, adaptation de format, routage intelligent",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.signal_bus"],
+      "depends_on": ["signal_bus"],
       "estimated_cost": 5,
       "completion_criteria": [],
       "research_topics": ["signal bridge protocol translation format adaptation intelligent routing"],
@@ -195,14 +195,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.connectivity_matrix",
+      "id": "connectivity_matrix",
       "phase": 3,
       "phase_name": "SIGNAL BUS",
       "display": "connectivity_matrix",
       "description": "Matrice de connectivite — poids des connexions inter-organes, plasticite synaptique dynamique",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.signal_bus"],
+      "depends_on": ["signal_bus"],
       "estimated_cost": 5,
       "completion_criteria": [],
       "research_topics": ["connectivity matrix synaptic plasticity weight adaptation inter-organ AI"],
@@ -211,14 +211,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.brain_vm",
+      "id": "brain_vm",
       "phase": 4,
       "phase_name": "VM NEURALE",
       "display": "brain_vm",
       "description": "Machine virtuelle neurale — runtime unifie pour tous les organes, cycle tick, isolation, monitoring",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.signal_bus", "planned.connectivity_matrix"],
+      "depends_on": ["signal_bus", "connectivity_matrix"],
       "estimated_cost": 8,
       "completion_criteria": [],
       "research_topics": ["neural virtual machine runtime tick cycle organ isolation monitoring AI"],
@@ -227,14 +227,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.tick_generator",
+      "id": "tick_generator",
       "phase": 4,
       "phase_name": "VM NEURALE",
       "display": "tick_generator",
       "description": "Generateur de ticks — horloge interne unifiee, cadence adaptative, synchronisation inter-organes",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.brain_vm"],
+      "depends_on": ["brain_vm"],
       "estimated_cost": 4,
       "completion_criteria": [],
       "research_topics": ["tick generator internal clock adaptive cadence synchronization neural AI"],
@@ -243,14 +243,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.topology",
+      "id": "topology",
       "phase": 4,
       "phase_name": "VM NEURALE",
       "display": "topology",
       "description": "Topologie neurale — carte des connexions, regions fonctionnelles, hubs, metriques de graphe",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.brain_vm"],
+      "depends_on": ["brain_vm"],
       "estimated_cost": 5,
       "completion_criteria": [],
       "research_topics": ["neural topology functional regions hub detection graph metrics brain mapping"],
@@ -259,14 +259,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.workspace",
+      "id": "workspace",
       "phase": 4,
       "phase_name": "VM NEURALE",
       "display": "workspace",
-      "description": "Espace de travail global — blackboard partage entre organes, broadcasting, acces concurrent",
+      "description": "Blackboard technique — memoire partagee inter-organes, broadcasting, acces concurrent (infra pour global_workspace Phase 7)",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.brain_vm", "planned.topology"],
+      "depends_on": ["brain_vm", "topology"],
       "estimated_cost": 6,
       "completion_criteria": [],
       "research_topics": ["global workspace theory blackboard architecture broadcasting concurrent access AI"],
@@ -275,7 +275,7 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "in_progress.neural_tissue",
+      "id": "neural_tissue",
       "phase": 4,
       "phase_name": "VM NEURALE",
       "display": "neural_tissue",
@@ -291,14 +291,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.neurochemistry",
+      "id": "neurochemistry",
       "phase": 5,
       "phase_name": "NEUROCHIMIE",
       "display": "neurochemistry",
       "description": "Neurochimie simulee — neurotransmetteurs virtuels (serotonine, noradrenaline, GABA), modulation globale",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.brain_vm"],
+      "depends_on": ["brain_vm"],
       "estimated_cost": 7,
       "completion_criteria": [],
       "research_topics": ["neurochemistry simulation neurotransmitters serotonin noradrenaline GABA modulation AI"],
@@ -307,14 +307,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.lora_pipeline",
+      "id": "lora_pipeline",
       "phase": 6,
       "phase_name": "VIRTUALISATION LLM",
       "display": "lora_pipeline",
       "description": "Pipeline LoRA — fine-tuning local de modeles, generation de datasets, evaluation automatique",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.neurochemistry"],
+      "depends_on": ["neurochemistry"],
       "estimated_cost": 9,
       "completion_criteria": [],
       "research_topics": ["LoRA fine-tuning local LLM dataset generation automated evaluation"],
@@ -323,14 +323,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.modelfile_generator",
+      "id": "modelfile_generator",
       "phase": 6,
       "phase_name": "VIRTUALISATION LLM",
       "display": "modelfile_generator",
       "description": "Generateur de Modelfiles — creation automatique de Modelfiles Ollama avec system prompts adaptatifs",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.lora_pipeline"],
+      "depends_on": ["lora_pipeline"],
       "estimated_cost": 5,
       "completion_criteria": [],
       "research_topics": ["Ollama Modelfile generation system prompt engineering adaptive AI"],
@@ -339,14 +339,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.ab_testing",
+      "id": "ab_testing",
       "phase": 6,
       "phase_name": "VIRTUALISATION LLM",
       "display": "ab_testing",
       "description": "A/B testing de modeles — comparaison automatisee de variantes LLM, selection par metriques",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.modelfile_generator"],
+      "depends_on": ["modelfile_generator"],
       "estimated_cost": 6,
       "completion_criteria": [],
       "research_topics": ["A/B testing LLM model comparison automated selection metrics evaluation"],
@@ -355,14 +355,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.global_workspace",
+      "id": "global_workspace",
       "phase": 7,
       "phase_name": "CONSCIENCE & EMERGENCE",
       "display": "global_workspace",
       "description": "Espace de travail conscient (Baars) — integration de l'information, broadcasting global, attention selective",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.workspace", "planned.neurochemistry"],
+      "depends_on": ["workspace", "neurochemistry"],
       "estimated_cost": 8,
       "completion_criteria": [],
       "research_topics": ["global workspace theory Baars consciousness information integration broadcasting AI"],
@@ -371,14 +371,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.deep_metacognition",
+      "id": "deep_metacognition",
       "phase": 7,
       "phase_name": "CONSCIENCE & EMERGENCE",
       "display": "deep_metacognition",
       "description": "Meta-cognition profonde — raisonnement sur son propre raisonnement, detection de confusion, calibration de confiance",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.global_workspace"],
+      "depends_on": ["global_workspace"],
       "estimated_cost": 7,
       "completion_criteria": [],
       "research_topics": ["metacognition AI self-monitoring confidence calibration uncertainty detection"],
@@ -387,14 +387,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.emergence_tests",
+      "id": "emergence_tests",
       "phase": 7,
       "phase_name": "CONSCIENCE & EMERGENCE",
       "display": "emergence_tests",
       "description": "Tests d'emergence — batterie de tests pour detecter et mesurer les comportements emergents",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.deep_metacognition"],
+      "depends_on": ["deep_metacognition"],
       "estimated_cost": 6,
       "completion_criteria": [],
       "research_topics": ["emergence testing behavioral detection measurement consciousness AI"],
@@ -403,14 +403,14 @@
       "updated_at": "2026-03-01T00:00:00"
     },
     {
-      "id": "planned.simulation_framework",
+      "id": "simulation_framework",
       "phase": 7,
       "phase_name": "CONSCIENCE & EMERGENCE",
       "display": "simulation_framework",
       "description": "Framework de simulation — simulation de scenarios complets, test d'hypotheses, prediction de consequences",
       "status": "planned",
       "specs": [],
-      "depends_on": ["planned.brain_vm", "planned.global_workspace"],
+      "depends_on": ["brain_vm", "global_workspace"],
       "estimated_cost": 8,
       "completion_criteria": [],
       "research_topics": ["simulation framework scenario testing hypothesis prediction consequence analysis AI"],

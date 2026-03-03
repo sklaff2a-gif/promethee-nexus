@@ -69,6 +69,11 @@ class Config:
     AGENT_NUM_CTX = {
         "coder": 16384,
         "evolution": 16384,
+        "architect": 12288,
+        "strategist": 12288,
+        "writer": 12288,
+        "researcher": 12288,
+        "formatter": 8192,
         "default": 8192,
     }
     

@@ -88,7 +88,7 @@ FORMAT DE RÉPONSE :
         mission = task_payload.get("mission", "")
         full_content = f"{mission}\n{context}"
 
-        self.log_thought("⚖️ Analyse & Routage V26.1...", type="thought")
+        self.log_thought("⚖️ Analyse & Routage V26.2...", type="thought")
         
         # 1. ANALYSE HEURISTIQUE
         risk_level = self._analyze_risk(full_content)

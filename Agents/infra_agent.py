@@ -2,7 +2,6 @@ import logging
 import psutil
 from typing import Dict, Any
 from core.base_agent import BaseAgent
-from core.event_bus.bus import bus
 
 # M10: import Config avec fallback pour éviter crash si config.py a une erreur
 try:
@@ -101,6 +100,7 @@ RÈGLES : Réponds en français. Base tes analyses sur les métriques réelles. 
             report += f"\n⚠️ ALERTES ACTIVE: {', '.join(warnings)}"
 
         # Publication explicite
+        from core.event_bus.bus import bus
         await bus.publish("THOUGHT_STREAM", {
             "agent": self.name,
             "content": report,

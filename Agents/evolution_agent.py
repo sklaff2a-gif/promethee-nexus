@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from typing import Dict, Any
 from core.base_agent import BaseAgent
-from core.prompt_templates import CODE_GENERATION_GUARDRAIL
+from core.prompt_templates import CODE_GENERATION_GUARDRAIL, FORBIDDEN_FRAMEWORKS, get_project_structure
 from core.experience_registry import ExperienceRegistry, Experience
 
 logger = logging.getLogger("evolution")
@@ -26,47 +26,17 @@ _SEARCH_QUERIES = [
     "websocket real-time notification system python",
 ]
 
-# Modules existants du projet (pour le contexte de pertinence)
-_PROJECT_MODULES = [
-    "core/orchestrator.py — dispatch multi-agents, kill switch, chaînes de réaction",
-    "core/base_agent.py — classe mère, RAG (remember/recall), routage Cloud/Local",
-    "core/router.py — RouterAgent : classification d'intent 3 niveaux",
-    "core/autonomy_engine.py — routines autonomes après inactivité, scoring, health checks",
-    "core/event_bus/bus.py — bus pub/sub en mémoire",
-    "core/summoner.py — chargement dynamique d'agents depuis core/grimoire/",
-    "core/ci_pipeline.py — tests auto-générés, rollback, mémoire CI/CD",
-    "core/self_awareness.py — conscience de soi, snapshots, PSYCHE",
-    "core/council.py — débats multi-agents avec consensus",
-    "Agents/ — 10 agents (strategist, coder, architect, factory, formatter, researcher, writer, security, infra, evolution)",
-]
-
-# Mots-clés hors-sujet dans les specs — si la spec en contient trop, c'est du bruit
-_SPEC_OFFTOPIC_KEYWORDS = {
-    "blockchain", "smart contract", "solidity", "ethereum", "web3",
+# Mots-clés hors-sujet dans les specs — base FORBIDDEN_FRAMEWORKS + spécifiques
+_SPEC_OFFTOPIC_KEYWORDS = FORBIDDEN_FRAMEWORKS | {
+    "smart contract", "ethereum",
     "trading", "trade", "merchant", "marchand", "order",
     "rss", "feedparser", "rss_agent",
-    "flask", "django", "streamlit",
-    "langchain", "langgraph", "crewai", "autogen",
-    "kubernetes", "docker", "terraform", "kafka",
     "nft", "crypto", "wallet", "token",
 }
 _SPEC_OFFTOPIC_THRESHOLD = 2
 
-# Imports étrangers au projet — si le code généré en contient, c'est une hallucination
-# (set élargi : couvre les frameworks ML, web, BDD, vector DBs, cloud providers)
-_ALIEN_IMPORTS = {
-    "django", "flask", "streamlit", "gradio", "pygame", "tkinter",
-    "langchain", "langgraph", "crewai", "autogen",
-    "tensorflow", "torch", "keras", "sklearn",
-    "pandas", "numpy", "scipy",
-    "kubernetes", "docker", "terraform", "kafka",
-    "web3", "solidity", "brownie",
-    "sqlalchemy", "peewee", "mongoengine",
-    "fastapi_users", "starlette_admin",
-    "faiss", "pinecone", "weaviate", "qdrant",
-    "openai", "anthropic", "cohere",
-    "express", "react", "vue", "angular",
-}
+# Imports étrangers au projet — source unique dans FORBIDDEN_FRAMEWORKS
+_ALIEN_IMPORTS = FORBIDDEN_FRAMEWORKS
 
 # Fichiers existants valides (préfixes) — la spec doit cibler un de ces chemins
 _VALID_TARGET_PREFIXES = ("core/", "Agents/", "config.py", "main.py")
@@ -237,8 +207,8 @@ class DivineEvolution(BaseAgent):
                 perf = snap.get("performance", {})
                 ctx["success_rate"] = perf.get("success_rate", 1.0)
                 ctx["error_streak"] = perf.get("error_streak", 0)
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug(f"awareness snapshot echoue: {_e}")
         return ctx
 
     def _read_target_file(self, target_file: str) -> str:
@@ -498,7 +468,8 @@ class DivineEvolution(BaseAgent):
         # Filtrer aussi via les insights d'apprentissage (specs qui échouent systématiquement)
         registry = ExperienceRegistry()
         insights = registry.get_learning_insights()
-        stuck_specs = {i["spec_id"] for i in insights if i["type"] == "repeated_phase_failure" and i["count"] >= 3}
+        # Mo05: seuil abaissé de 3 à 2 (atteignable avec max_attempts=3)
+        stuck_specs = {i["spec_id"] for i in insights if i["type"] == "repeated_phase_failure" and i["count"] >= 2}
 
         candidates = [c for c in catalog.get_top_candidates(8)
                       if _is_eligible(c) and c[0].id not in stuck_specs][:5]
@@ -548,8 +519,8 @@ class DivineEvolution(BaseAgent):
                     system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
                     error_streak_at_attempt=ctx["error_streak"],
                 ))
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"operation optionnelle echouee: {_e}")
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
         # Vérifier que le fichier n'est pas critique (_CRITICAL_FILES importé en Phase 1)
@@ -568,11 +539,24 @@ class DivineEvolution(BaseAgent):
                     system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
                     error_streak_at_attempt=ctx["error_streak"],
                 ))
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"operation optionnelle echouee: {_e}")
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
         # --- PHASE 3 : MATÉRIALISATION ---
+        # Guard CRISIS : en état cognitif CRISIS + spec difficile → bloquer
+        _cognitive_safe = True
+        try:
+            from core.corpus_callosum import callosum
+            if callosum.cognitive_state == "crisis" and spec.difficulty > 1:
+                self.log_thought(f"[CodeSmith] Spec [{spec.id}] bloquée en CRISIS.", type="warning")
+                _cognitive_safe = False
+        except Exception as _e:
+            logger.debug(f"corpus_callosum import echoue: {_e}")
+        if not _cognitive_safe:
+            catalog.mark_failed(spec.id, "Bloqué en état cognitif CRISIS")
+            return {"status": "warning", "result": "R.A.S — évolution bloquée en mode crise."}
+
         # Tentative 1 : CodeSmith (déterministe, pas de LLM)
         try:
             from core.code_smith import CodeSmith, spec_to_actions
@@ -591,6 +575,11 @@ class DivineEvolution(BaseAgent):
             else:
                 self.log_thought(f"[CodeSmith] Échec: {cs_result.error}. Fallback LLM...", type="warning")
                 generated_code = ""
+        else:
+            self.log_thought(
+                f"[CodeSmith] Spec [{spec.id}] non supportée, fallback LLM.",
+                type="info"
+            )
 
         # Tentative 2 : LLM Cloud/Local (si CodeSmith n'a pas produit de résultat)
         micro_mode = False
@@ -599,6 +588,16 @@ class DivineEvolution(BaseAgent):
 
             # Consulter le registre d'expériences
             past_failures = registry.get_failure_summary(spec.id)
+
+            # Mo05: injecter les alien imports récurrents dans le prompt
+            alien_warning = ""
+            try:
+                recurring_aliens = [i for i in insights if i["type"] == "recurring_alien"]
+                if recurring_aliens:
+                    alien_list = ", ".join(i["import"] for i in recurring_aliens)
+                    alien_warning = f"\nIMPORTS INTERDITS (rejetés {recurring_aliens[0]['count']}+ fois) : {alien_list}\n"
+            except Exception as _e:
+                logger.debug(f"alien insights extraction echouee: {_e}")
 
             # Tenter le micro-découpage contextuel (méthode seule au lieu du fichier entier)
             method_ctx = self._extract_method_context(source_code, spec.target_method)
@@ -615,6 +614,7 @@ class DivineEvolution(BaseAgent):
                     f"AMÉLIORATION [{spec.id}] : {spec.name}\n"
                     f"DESCRIPTION : {spec.description}\n"
                     f"TEMPLATE :\n{spec.code_template}\n\n"
+                    f"{past_failures}\n{alien_warning}"
                     f"CONTEXTE ({spec.target_file}) :\n"
                     f"{method_ctx['imports']}\n\n"
                     f"{method_ctx['class_signature']}\n"
@@ -633,6 +633,7 @@ class DivineEvolution(BaseAgent):
                     f"AMÉLIORATION [{spec.id}] : {spec.name}\n"
                     f"DESCRIPTION : {spec.description}\n"
                     f"TEMPLATE DE CODE À INTÉGRER :\n{spec.code_template}\n\n"
+                    f"{past_failures}\n{alien_warning}"
                     f"CODE SOURCE ACTUEL DU FICHIER :\n{source_code[:3000]}\n\n"
                     f"INSTRUCTIONS :\n"
                     f"- Intègre le template dans le code existant\n"
@@ -765,8 +766,8 @@ class DivineEvolution(BaseAgent):
                     system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
                     error_streak_at_attempt=ctx["error_streak"],
                 ))
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"operation optionnelle echouee: {_e}")
             return {"status": "warning", "result": f"R.A.S — {reason}."}
 
         # --- PHASE 4 : VALIDATION SYNTAXE (avec boucle de retries) ---
@@ -817,7 +818,8 @@ class DivineEvolution(BaseAgent):
                             "context": f"EVOLUTION_PIPELINE\nSPEC_ID: {spec.id}\nSYNTAX_FIX"
                         })
                         retry_code = coder_resp.get("result", "")
-                    except Exception:
+                    except Exception as _e:
+                        logger.debug(f"coder dispatch retry echoue: {_e}")
                         retry_code = ""
 
                 if retry_code:
@@ -840,8 +842,8 @@ class DivineEvolution(BaseAgent):
                     system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
                     error_streak_at_attempt=ctx["error_streak"],
                 ))
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"operation optionnelle echouee: {_e}")
             return {"status": "error", "result": f"Spec [{spec.id}] rejetée : {reason}"}
 
         # --- PHASE 4b : FILTRE ANTI-HALLUCINATION (imports aliens) ---
@@ -875,8 +877,8 @@ class DivineEvolution(BaseAgent):
             try:
                 from core.event_bus.bus import bus
                 await bus.publish("HALLUCINATION_DETECTED", {"agent": self.name, "type": "alien_imports", "intent": spec.name})
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"bus.publish HALLUCINATION_DETECTED echoue: {_e}")
             try:
                 registry.record(Experience(
                     id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
@@ -888,8 +890,8 @@ class DivineEvolution(BaseAgent):
                     system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
                     error_streak_at_attempt=ctx["error_streak"],
                 ))
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"operation optionnelle echouee: {_e}")
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
         # --- PHASE 4c : VALIDATION STRUCTURELLE ---
@@ -938,8 +940,8 @@ class DivineEvolution(BaseAgent):
             try:
                 from core.event_bus.bus import bus
                 await bus.publish("HALLUCINATION_DETECTED", {"agent": self.name, "type": "non_structural", "intent": spec.name})
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"bus.publish HALLUCINATION_DETECTED echoue: {_e}")
             try:
                 registry.record(Experience(
                     id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
@@ -950,8 +952,8 @@ class DivineEvolution(BaseAgent):
                     system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
                     error_streak_at_attempt=ctx["error_streak"],
                 ))
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"operation optionnelle echouee: {_e}")
             return {"status": "warning", "result": f"R.A.S — {reason}"}
 
         # --- PHASE 4d : ANTI-TRONCATURE ---
@@ -979,8 +981,8 @@ class DivineEvolution(BaseAgent):
                     diag = help_response.get("diagnosis", {})
                     if diag:
                         reason = f"{reason} [doctor: {diag.get('details', '')}]"
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"doctor diagnosis echoue: {_e}")
                 catalog.mark_failed(spec.id, reason)
                 self.log_thought(f"🛡️ [{spec.id}] {reason}", type="warning")
                 try:
@@ -994,8 +996,8 @@ class DivineEvolution(BaseAgent):
                         system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
                         error_streak_at_attempt=ctx["error_streak"],
                     ))
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.debug(f"operation optionnelle echouee: {_e}")
                 return {"status": "warning", "result": f"R.A.S — {reason}"}
 
         # --- PHASE 5 : DÉPLOIEMENT SÉCURISÉ (Architecte) ---
@@ -1107,8 +1109,8 @@ class DivineEvolution(BaseAgent):
                                 "tests_passed": result.tests_passed,
                                 "duration": result.duration_seconds,
                             })
-                        except Exception:
-                            pass
+                        except Exception as _e:
+                            logger.debug(f"bus.publish echoue: {_e}")
                     else:
                         deploy_status = "sandbox_test_fail"
                         sandbox_engine.discard(spec.target_file)
@@ -1124,12 +1126,12 @@ class DivineEvolution(BaseAgent):
                                 "tests_failed": result.tests_failed,
                                 "output": result.output[:500],
                             })
-                        except Exception:
-                            pass
+                        except Exception as _e:
+                            logger.debug(f"bus.publish echoue: {_e}")
             except ImportError:
-                pass  # sandbox indisponible → skip gracieusement
-            except Exception:
-                pass  # erreur sandbox → ne pas bloquer le pipeline
+                logger.debug("sandbox_engine indisponible, skip")
+            except Exception as _e:
+                logger.debug(f"sandbox echoue: {_e}")
 
         if deploy_status == "success":
             catalog.mark_pending_deploy(spec.id)
@@ -1147,8 +1149,8 @@ class DivineEvolution(BaseAgent):
                     system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
                     error_streak_at_attempt=ctx["error_streak"],
                 ))
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"operation optionnelle echouee: {_e}")
 
             # Publier l'événement
             try:
@@ -1160,8 +1162,8 @@ class DivineEvolution(BaseAgent):
                     "category": spec.category,
                     "difficulty": spec.difficulty,
                 })
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"operation optionnelle echouee: {_e}")
 
             # Journal stratégique
             if self.has_memory:
@@ -1184,8 +1186,8 @@ class DivineEvolution(BaseAgent):
                     system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
                     error_streak_at_attempt=ctx["error_streak"],
                 ))
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f"operation optionnelle echouee: {_e}")
 
         return {
             "status": "success",
@@ -1228,10 +1230,11 @@ class DivineEvolution(BaseAgent):
 
         self.log_thought("🧠 Phase 2 : Analyse de la pertinence...", type="thought")
 
-        modules_list = "\n".join(f"  - {m}" for m in _PROJECT_MODULES)
+        # c05: utiliser get_project_structure() (dynamique) au lieu de _PROJECT_MODULES (statique)
+        project_structure = get_project_structure()
         decision_prompt = (
             f"Tu es le Directeur R&D du projet PROMÉTHÉE (système multi-agents IA autonome).\n"
-            f"MODULES EXISTANTS DU PROJET :\n{modules_list}\n\n"
+            f"{project_structure}\n\n"
             f"Voici une veille technologique :\n{research_data[:2000]}\n\n"
             f"ANALYSE : Est-ce une amélioration CONCRÈTE et APPLICABLE à un module existant de PROMÉTHÉE ?\n"
             f"ATTENTION : Ne propose PAS de nouveau module générique (trading, commerce, smart contracts, RSS, etc.).\n"
