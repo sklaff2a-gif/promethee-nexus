@@ -377,7 +377,15 @@ class Council:
             if wm:
                 for slot in wm[:2]:
                     title = slot.get("goal_title", "")
-                    if title and not any(title.lower() in e.get("content", "").lower() for e in prev_entries):
+                    if not title:
+                        continue
+                    title_kw = _extract_keywords(title, top_n=3)
+                    if not title_kw:
+                        continue
+                    all_content = " ".join(e.get("content", "") for e in prev_entries)
+                    content_kw = _extract_keywords(all_content, top_n=20)
+                    overlap = title_kw & content_kw
+                    if len(overlap) < max(1, len(title_kw) * 0.5):
                         parts.append(f"Personne n'a aborde '{title}'")
         except Exception:
             pass
@@ -387,9 +395,14 @@ class Council:
             from core.desire_engine import desires
             narrative = desires.get_dominant_narrative(1)
             if narrative:
-                drive_word = narrative.split()[0] if narrative else ""
-                if drive_word and not any(drive_word.lower() in e.get("content", "").lower() for e in prev_entries):
-                    parts.append(f"Ma pulsion '{drive_word}' n'a pas ete abordee")
+                narr_kw = _extract_keywords(narrative, top_n=3)
+                if narr_kw:
+                    all_content = " ".join(e.get("content", "") for e in prev_entries)
+                    content_kw = _extract_keywords(all_content, top_n=20)
+                    overlap = narr_kw & content_kw
+                    if len(overlap) < max(1, len(narr_kw) * 0.5):
+                        short = narrative[:50]
+                        parts.append(f"Ma pulsion '{short}' n'a pas ete abordee")
         except Exception:
             pass
 

@@ -622,6 +622,10 @@ class NeuralCompiler:
             return
 
         fp = self.extract_fingerprint(agent_name, prompt)
+
+        # Council debates : pas de compilation (réponses trop contextuelles)
+        if fp.task_type == "council_debate":
+            return
         r_hash = _response_hash(response)
 
         # Déduplication : skip si même hash dans les 20 dernières observations
@@ -663,6 +667,11 @@ class NeuralCompiler:
             return None
 
         fp = self.extract_fingerprint(agent_name, prompt)
+
+        # Council debates : jamais de réponse compilée (multi-tours nécessite variation)
+        if fp.task_type == "council_debate":
+            return None
+
         best_rule, best_score = self._match_rule(fp)
 
         if best_rule is None or best_score < INTERCEPT_CONFIDENCE_THRESHOLD:
