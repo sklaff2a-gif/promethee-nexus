@@ -216,6 +216,7 @@ class CorpusCallosum:
         bus.subscribe("SYNAPTIC_UPDATE", self._on_synaptic_update)
         bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
         bus.subscribe("HIPPOCAMPUS_ARC_CREATED", self._on_hippocampus_arc)
+        bus.subscribe("TISSUE_PATTERN_EMERGED", self._on_tissue_pattern)
 
     async def start_resonance(self):
         """Boucle async principale — 60s."""
@@ -312,6 +313,14 @@ class CorpusCallosum:
                     "CORPUS CALLOSUM: Arc crise hippocampe "
                     "→ transition en CRISIS."
                 )
+
+    async def _on_tissue_pattern(self, event: dict):
+        """Pattern emergent du tissu neural → signal de creativite."""
+        freq = event.get("frequency", 0.0)
+        if freq > 0.4:
+            # Pattern dominant fort → mémoriser dans stats
+            self._tissue_frequency = freq
+            logger.debug(f"CORPUS CALLOSUM: Pattern tissu neural freq={freq:.2f} capture.")
 
     # ============================================================
     # Cycle de Resonance

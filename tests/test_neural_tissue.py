@@ -499,6 +499,15 @@ class TestTissueAPI:
         assert "CGT" in ctx
         assert "perception" in ctx
 
+    def test_get_tissue_context_includes_zones(self):
+        """Sprint 4 — contexte enrichi avec zones actives."""
+        t = NeuralTissue()
+        t.cells = [NeuralCell(genome="CGT", x=0, y=0) for _ in range(20)]
+        t._update_dominant_patterns()
+        t._update_zone_signals()
+        ctx = t.get_tissue_context()
+        assert "zones actives" in ctx
+
     def test_get_stats_structure(self):
         t = NeuralTissue()
         t._seed_population()
@@ -557,6 +566,137 @@ class TestTissueHandlers:
         assert t._cognitive_state["stability"] == 0.9
         await t._on_circadian_change({"data": {"phase": "eveil"}})
         assert t._cognitive_state["stability"] == 0.5
+
+
+class TestTissueGrandCablage:
+    """Tests Sprint 2 — 8 nouveaux handlers bus (Grand Câblage)."""
+
+    @pytest.mark.asyncio
+    async def test_goal_created_increments(self):
+        t = NeuralTissue()
+        assert t._cognitive_state["goal_count"] == 0
+        await t._on_goal_created({})
+        assert t._cognitive_state["goal_count"] == 1
+        await t._on_goal_created({})
+        assert t._cognitive_state["goal_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_goal_created_capped_at_10(self):
+        t = NeuralTissue()
+        t._cognitive_state["goal_count"] = 10
+        await t._on_goal_created({})
+        assert t._cognitive_state["goal_count"] == 10
+
+    @pytest.mark.asyncio
+    async def test_goal_complete_decrements_and_boosts_stability(self):
+        t = NeuralTissue()
+        t._cognitive_state["goal_count"] = 3
+        t._cognitive_state["stability"] = 0.5
+        await t._on_goal_complete({})
+        assert t._cognitive_state["goal_count"] == 2
+        assert t._cognitive_state["stability"] == 0.6
+
+    @pytest.mark.asyncio
+    async def test_goal_abandoned_decrements_and_lowers_stability(self):
+        t = NeuralTissue()
+        t._cognitive_state["goal_count"] = 2
+        t._cognitive_state["stability"] = 0.5
+        await t._on_goal_abandoned({})
+        assert t._cognitive_state["goal_count"] == 1
+        assert t._cognitive_state["stability"] == pytest.approx(0.45)
+
+    @pytest.mark.asyncio
+    async def test_corpus_callosum_flow(self):
+        t = NeuralTissue()
+        await t._on_corpus_callosum({"data": {"cognitive_state": "flow"}})
+        assert t._cognitive_state["stability"] == 0.9
+        assert t._cognitive_state["creativity"] == 0.8
+
+    @pytest.mark.asyncio
+    async def test_corpus_callosum_creative_surge(self):
+        t = NeuralTissue()
+        t._cognitive_state["creativity"] = 0.3
+        await t._on_corpus_callosum({"data": {"cognitive_state": "creative_surge"}})
+        assert t._cognitive_state["creativity"] == 0.6
+
+    @pytest.mark.asyncio
+    async def test_corpus_callosum_crisis(self):
+        t = NeuralTissue()
+        t._cognitive_state["stability"] = 0.7
+        await t._on_corpus_callosum({"data": {"cognitive_state": "crisis"}})
+        assert t._cognitive_state["stability"] == pytest.approx(0.4)
+
+    @pytest.mark.asyncio
+    async def test_corpus_callosum_stagnation(self):
+        t = NeuralTissue()
+        t._cognitive_state["creativity"] = 0.5
+        await t._on_corpus_callosum({"data": {"cognitive_state": "stagnation"}})
+        assert t._cognitive_state["creativity"] == 0.3
+
+    @pytest.mark.asyncio
+    async def test_corpus_callosum_exploration(self):
+        t = NeuralTissue()
+        t._cognitive_state["creativity"] = 0.3
+        await t._on_corpus_callosum({"data": {"cognitive_state": "exploration"}})
+        assert t._cognitive_state["creativity"] == pytest.approx(0.45)
+
+    @pytest.mark.asyncio
+    async def test_inner_voice_boosts_memory(self):
+        t = NeuralTissue()
+        t._cognitive_state["memory_activity"] = 0.3
+        await t._on_inner_voice({})
+        assert t._cognitive_state["memory_activity"] == pytest.approx(0.45)
+
+    @pytest.mark.asyncio
+    async def test_inner_voice_clamped(self):
+        t = NeuralTissue()
+        t._cognitive_state["memory_activity"] = 0.95
+        await t._on_inner_voice({})
+        assert t._cognitive_state["memory_activity"] <= 1.0
+
+    @pytest.mark.asyncio
+    async def test_hallucination_boosts_threat(self):
+        t = NeuralTissue()
+        t._cognitive_state["threat_level"] = 2.0
+        await t._on_hallucination({})
+        assert t._cognitive_state["threat_level"] == 5.0
+
+    @pytest.mark.asyncio
+    async def test_hallucination_threat_capped(self):
+        t = NeuralTissue()
+        t._cognitive_state["threat_level"] = 9.0
+        await t._on_hallucination({})
+        assert t._cognitive_state["threat_level"] == 10.0
+
+    @pytest.mark.asyncio
+    async def test_routine_complete_success_lowers_desire(self):
+        t = NeuralTissue()
+        t._cognitive_state["desire_intensity"] = 50.0
+        await t._on_routine_complete({"data": {"success": True}})
+        assert t._cognitive_state["desire_intensity"] == 45.0
+
+    @pytest.mark.asyncio
+    async def test_routine_complete_failure_raises_desire(self):
+        t = NeuralTissue()
+        t._cognitive_state["desire_intensity"] = 50.0
+        await t._on_routine_complete({"data": {"success": False}})
+        assert t._cognitive_state["desire_intensity"] == 53.0
+
+    @pytest.mark.asyncio
+    async def test_knowledge_gap_boosts_creativity_and_desire(self):
+        t = NeuralTissue()
+        t._cognitive_state["creativity"] = 0.3
+        t._cognitive_state["desire_intensity"] = 40.0
+        await t._on_knowledge_gap({})
+        assert t._cognitive_state["creativity"] == 0.5
+        assert t._cognitive_state["desire_intensity"] == 45.0
+
+    @pytest.mark.asyncio
+    async def test_knowledge_gap_creativity_capped(self):
+        t = NeuralTissue()
+        t._cognitive_state["creativity"] = 0.95
+        await t._on_knowledge_gap({})
+        assert t._cognitive_state["creativity"] <= 1.0
 
 
 class TestTissuePersistence:
@@ -638,4 +778,4 @@ class TestTissueInit:
         with patch.dict("sys.modules", {"core.event_bus.bus": MagicMock(bus=mock_bus)}):
             t.init()
         assert t._subscribed is True
-        assert mock_bus.subscribe.call_count == 5
+        assert mock_bus.subscribe.call_count == 13

@@ -249,8 +249,17 @@ class NeuralTissue:
             bus.subscribe("DOPAMINE_SURGE", self._on_dopamine_surge)
             bus.subscribe("DOPAMINE_DIP", self._on_dopamine_dip)
             bus.subscribe("CIRCADIAN_PHASE_CHANGE", self._on_circadian_change)
+            # Sprint 2 — Grand Câblage : 8 nouvelles connexions
+            bus.subscribe("PREFRONTAL_GOAL_CREATED", self._on_goal_created)
+            bus.subscribe("PREFRONTAL_GOAL_COMPLETE", self._on_goal_complete)
+            bus.subscribe("PREFRONTAL_GOAL_ABANDONED", self._on_goal_abandoned)
+            bus.subscribe("CORPUS_CALLOSUM_STATE", self._on_corpus_callosum)
+            bus.subscribe("INNER_VOICE_BROADCAST", self._on_inner_voice)
+            bus.subscribe("HALLUCINATION_DETECTED", self._on_hallucination)
+            bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
+            bus.subscribe("KNOWLEDGE_GAP_DETECTED", self._on_knowledge_gap)
             self._subscribed = True
-            logger.info("TISSUE: Substrat cellulaire neuronal actif.")
+            logger.info("TISSUE: Substrat cellulaire neuronal actif (13 canaux).")
         except Exception as e:
             logger.warning(f"TISSUE: Erreur init bus: {e}")
 
@@ -508,6 +517,90 @@ class NeuralTissue:
         elif phase == "eveil":
             self._cognitive_state["stability"] = 0.5
 
+    # --- Handlers Sprint 2 — Grand Câblage ---
+
+    async def _on_goal_created(self, event):
+        """Prefrontal crée un goal → enrichir la zone goals."""
+        self._cognitive_state["goal_count"] = min(
+            self._cognitive_state["goal_count"] + 1, 10
+        )
+
+    async def _on_goal_complete(self, event):
+        """Goal atteint → récompense zone goals + stabilité."""
+        self._cognitive_state["goal_count"] = max(
+            self._cognitive_state["goal_count"] - 1, 0
+        )
+        self._cognitive_state["stability"] = min(
+            self._cognitive_state["stability"] + 0.1, 1.0
+        )
+
+    async def _on_goal_abandoned(self, event):
+        """Goal abandonné → diminuer goals, baisser stabilité."""
+        self._cognitive_state["goal_count"] = max(
+            self._cognitive_state["goal_count"] - 1, 0
+        )
+        self._cognitive_state["stability"] = max(
+            self._cognitive_state["stability"] - 0.05, 0.0
+        )
+
+    async def _on_corpus_callosum(self, event):
+        """État cognitif global → moduler stabilité et créativité."""
+        data = event.get("data", event)
+        cog_state = data.get("cognitive_state", "")
+        if cog_state == "flow":
+            self._cognitive_state["stability"] = 0.9
+            self._cognitive_state["creativity"] = 0.8
+        elif cog_state == "creative_surge":
+            self._cognitive_state["creativity"] = min(
+                self._cognitive_state["creativity"] + 0.3, 1.0
+            )
+        elif cog_state == "crisis":
+            self._cognitive_state["stability"] = max(
+                self._cognitive_state["stability"] - 0.3, 0.0
+            )
+        elif cog_state == "stagnation":
+            self._cognitive_state["creativity"] = max(
+                self._cognitive_state["creativity"] - 0.2, 0.0
+            )
+        elif cog_state == "exploration":
+            self._cognitive_state["creativity"] = min(
+                self._cognitive_state["creativity"] + 0.15, 1.0
+            )
+
+    async def _on_inner_voice(self, event):
+        """Voix intérieure → stimuler l'activité mémoire."""
+        self._cognitive_state["memory_activity"] = min(
+            self._cognitive_state["memory_activity"] + 0.15, 1.0
+        )
+
+    async def _on_hallucination(self, event):
+        """Hallucination détectée → signal de menace."""
+        self._cognitive_state["threat_level"] = min(
+            self._cognitive_state["threat_level"] + 3.0, 10.0
+        )
+
+    async def _on_routine_complete(self, event):
+        """Routine autonome terminée → moduler désir selon succès."""
+        data = event.get("data", event)
+        success = data.get("success", False)
+        if success:
+            self._cognitive_state["desire_intensity"] = max(
+                self._cognitive_state["desire_intensity"] - 5.0, 0.0
+            )
+        else:
+            self._cognitive_state["desire_intensity"] = min(
+                self._cognitive_state["desire_intensity"] + 3.0, 100.0
+            )
+
+    async def _on_knowledge_gap(self, event):
+        """Lacune détectée → stimuler créativité et désir."""
+        self._cognitive_state["creativity"] = min(
+            self._cognitive_state["creativity"] + 0.2, 1.0
+        )
+        self._cognitive_state["desire_intensity"] = min(
+            self._cognitive_state["desire_intensity"] + 5.0, 100.0
+        )
+
     # --- API publique ---
 
     def get_emergent_patterns(self, top_n: int = 5) -> List[Dict[str, Any]]:
@@ -553,10 +646,24 @@ class NeuralTissue:
             instruction_names.get(ch, "?") for ch in genome[:5]
         )
 
-        return (
+        ctx = (
             f"Substrat cellulaire: {alive} cellules, gen {gen_max}, "
             f"pattern dominant [{genome}] ({freq:.0%}) = {desc}"
         )
+
+        # Ajouter les zones les plus actives
+        if self._zone_signals:
+            hot = sorted(
+                self._zone_signals.items(),
+                key=lambda kv: kv[1].get("activity", 0),
+                reverse=True,
+            )[:3]
+            zones_desc = ", ".join(
+                f"{name}={sig['activity']:.2f}" for name, sig in hot
+            )
+            ctx += f" | zones actives: {zones_desc}"
+
+        return ctx
 
     def get_stats(self) -> Dict[str, Any]:
         """Statistiques complètes du substrat."""

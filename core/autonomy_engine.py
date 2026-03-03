@@ -1066,6 +1066,14 @@ class AutonomyEngine:
                     purpose_ctx += f"\n{roadmap_ctx}"
             except Exception:
                 pass
+            # Substrat cellulaire neural
+            try:
+                from core.neural_tissue import tissue
+                tissue_ctx = tissue.get_tissue_context()
+                if tissue_ctx:
+                    purpose_ctx += f"\n{tissue_ctx}"
+            except Exception:
+                pass
             # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)
             raw_mission = selected["mission"]
             # Retirer le préfixe [MODE VEILLE] déjà présent dans certaines missions

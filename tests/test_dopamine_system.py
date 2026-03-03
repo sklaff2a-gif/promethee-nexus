@@ -729,3 +729,35 @@ class TestHabituationSeparation:
         actual_avg = sum(results) / len(results)
         # expected_reward devrait etre proche de la moyenne reelle (0.725)
         assert 0.4 < ev < 1.0
+
+
+class TestTissuePatternHandler:
+    """Sprint 3 — Grand Câblage : handler TISSUE_PATTERN_EMERGED."""
+
+    @pytest.mark.asyncio
+    async def test_tissue_pattern_boosts_dopamine(self, isolate_dopamine):
+        """Pattern fort → micro-surge dopamine."""
+        isolate_dopamine.dopamine_level = 0.5
+        await isolate_dopamine._on_tissue_pattern({"frequency": 0.5, "fitness": 0.1})
+        assert isolate_dopamine.dopamine_level > 0.5
+
+    @pytest.mark.asyncio
+    async def test_tissue_pattern_low_freq_no_boost(self, isolate_dopamine):
+        """Pattern faible freq → pas de boost."""
+        isolate_dopamine.dopamine_level = 0.5
+        await isolate_dopamine._on_tissue_pattern({"frequency": 0.2, "fitness": 0.1})
+        assert isolate_dopamine.dopamine_level == 0.5
+
+    @pytest.mark.asyncio
+    async def test_tissue_pattern_low_fitness_no_boost(self, isolate_dopamine):
+        """Pattern sans fitness → pas de boost."""
+        isolate_dopamine.dopamine_level = 0.5
+        await isolate_dopamine._on_tissue_pattern({"frequency": 0.5, "fitness": 0.0})
+        assert isolate_dopamine.dopamine_level == 0.5
+
+    @pytest.mark.asyncio
+    async def test_tissue_pattern_capped(self, isolate_dopamine):
+        """Boost dopamine ne depasse pas MAX_DOPAMINE."""
+        isolate_dopamine.dopamine_level = 0.99
+        await isolate_dopamine._on_tissue_pattern({"frequency": 0.8, "fitness": 0.5})
+        assert isolate_dopamine.dopamine_level <= 1.0

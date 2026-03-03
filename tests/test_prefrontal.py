@@ -826,3 +826,35 @@ class TestBusHandlers:
         original_prio = goal.priority
         await pf._on_cardiac_beat({"emotion": "flow", "coherence": 0.8})
         assert goal.priority >= original_prio
+
+
+class TestTissuePatternHandler:
+    """Sprint 3 — Grand Câblage : handler TISSUE_PATTERN_EMERGED."""
+
+    @pytest.mark.asyncio
+    async def test_tissue_pattern_narrates(self):
+        """Pattern fort → narration dans le log."""
+        pf = _make_prefrontal()
+        await pf._on_tissue_pattern({"genome": "CG", "frequency": 0.5})
+        assert any("CG" in n.thought for n in pf.narrative_log)
+
+    @pytest.mark.asyncio
+    async def test_tissue_pattern_adds_recent_event(self):
+        """Pattern fort → ajouté aux recent_events."""
+        pf = _make_prefrontal()
+        await pf._on_tissue_pattern({"genome": "CG", "frequency": 0.5})
+        assert "TISSUE_PATTERN_EMERGED" in pf._recent_events
+
+    @pytest.mark.asyncio
+    async def test_tissue_pattern_low_freq_ignored(self):
+        """Pattern faible freq → pas de narration."""
+        pf = _make_prefrontal()
+        await pf._on_tissue_pattern({"genome": "CG", "frequency": 0.2})
+        assert not any("CG" in n.thought for n in pf.narrative_log)
+
+    @pytest.mark.asyncio
+    async def test_tissue_pattern_invalid_data(self):
+        """Données invalides → pas de crash."""
+        pf = _make_prefrontal()
+        await pf._on_tissue_pattern("not a dict")
+        assert len(pf.narrative_log) == 0

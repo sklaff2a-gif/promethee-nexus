@@ -231,6 +231,7 @@ class PrefrontalCortex:
         bus.subscribe("INNER_VOICE_BROADCAST", self._on_inner_voice)
         bus.subscribe("COUNCIL_PRESIDENT_VERDICT", self._on_president_verdict)
         bus.subscribe("ROADMAP_MODULE_COMPLETED", self._on_roadmap_completed)
+        bus.subscribe("TISSUE_PATTERN_EMERGED", self._on_tissue_pattern)
 
     async def _on_inner_voice(self, data: dict):
         """Intègre la pensée broadcast dans le narrative_log."""
@@ -398,6 +399,16 @@ class PrefrontalCortex:
         phase = data.get("phase", "?")
         self._narrate("decision", f"Module roadmap valide: {display} (phase {phase}). Capacite acquise.")
         self._recent_events.append("ROADMAP_MODULE_COMPLETED")
+
+    async def _on_tissue_pattern(self, data: dict):
+        """Pattern emergent du tissu neural → narration + working memory."""
+        if not isinstance(data, dict):
+            return
+        genome = data.get("genome", "?")
+        freq = data.get("frequency", 0.0)
+        if freq > 0.3:
+            self._narrate("observation", f"Pattern neural [{genome}] domine ({freq:.0%}). Substrat converge.")
+            self._recent_events.append("TISSUE_PATTERN_EMERGED")
 
     # ─── 1. GOALS (dlPFC) ────────────────────────────────────────────
 

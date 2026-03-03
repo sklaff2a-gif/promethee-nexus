@@ -448,11 +448,24 @@ class SelfAwarenessEngine:
         try:
             from core.neural_tissue import tissue
             stats = tissue.get_stats()
+            zone_signals = tissue.get_zone_signals()
+            # Zones les plus actives
+            hot_zones = []
+            if zone_signals:
+                hot = sorted(
+                    zone_signals.items(),
+                    key=lambda kv: kv[1].get("activity", 0),
+                    reverse=True,
+                )[:3]
+                hot_zones = [name for name, _ in hot]
             snapshot["neural_tissue"] = {
-                "population": stats.get("population", 0),
+                "population": stats.get("alive_cells", 0),
                 "tick_count": stats.get("tick_count", 0),
+                "tick_ms": stats.get("tick_ms", 0),
                 "dominant_genome": stats.get("dominant_genome"),
-                "top_frequency": stats.get("top_frequency", 0),
+                "genome_diversity": stats.get("genome_diversity", 0),
+                "max_generation": stats.get("max_generation", 0),
+                "hot_zones": hot_zones,
             }
         except Exception:
             pass

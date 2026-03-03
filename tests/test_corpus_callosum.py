@@ -746,11 +746,11 @@ class TestBusIntegration:
     """Tests souscription bus et handlers."""
 
     def test_subscribe_events(self, isolate_callosum):
-        """init() souscrit aux 12 events (11 originaux + HIPPOCAMPUS_ARC_CREATED)."""
+        """init() souscrit aux 13 events (+HIPPOCAMPUS_ARC_CREATED +TISSUE_PATTERN_EMERGED)."""
         isolate_callosum._subscribed = False
         with patch("core.corpus_callosum.bus") as mock_bus:
             isolate_callosum._subscribe_events()
-        assert mock_bus.subscribe.call_count == 12
+        assert mock_bus.subscribe.call_count == 13
         isolate_callosum._subscribed = True  # Cleanup
 
     def test_subscribe_idempotent(self, isolate_callosum):
@@ -759,7 +759,7 @@ class TestBusIntegration:
         with patch("core.corpus_callosum.bus") as mock_bus:
             isolate_callosum._subscribe_events()
             isolate_callosum._subscribe_events()
-        assert mock_bus.subscribe.call_count == 12
+        assert mock_bus.subscribe.call_count == 13
 
     def test_on_reptilian_alert_freeze(self, isolate_callosum):
         """FREEZE declenche transition immediate en crisis."""
@@ -969,3 +969,19 @@ class TestResonanceCycle:
                 for _ in range(70):
                     await isolate_callosum._resonance_cycle()
         assert len(isolate_callosum._snapshots) <= 60
+
+
+class TestTissuePatternHandler:
+    """Sprint 3 — Grand Câblage : handler TISSUE_PATTERN_EMERGED."""
+
+    @pytest.mark.asyncio
+    async def test_tissue_pattern_high_freq_cached(self, isolate_callosum):
+        """Pattern freq > 0.4 → capturé dans _tissue_frequency."""
+        await isolate_callosum._on_tissue_pattern({"frequency": 0.5, "genome": "CG"})
+        assert isolate_callosum._tissue_frequency == 0.5
+
+    @pytest.mark.asyncio
+    async def test_tissue_pattern_low_freq_ignored(self, isolate_callosum):
+        """Pattern freq <= 0.4 → ignoré."""
+        await isolate_callosum._on_tissue_pattern({"frequency": 0.3, "genome": "CG"})
+        assert not hasattr(isolate_callosum, "_tissue_frequency") or isolate_callosum._tissue_frequency == 0.0
