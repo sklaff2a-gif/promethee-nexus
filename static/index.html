@@ -97,7 +97,10 @@
             <h1 class="text-lg font-bold tracking-[0.2em] leading-none">PROMÉTHÉE <span class="text-white">NEXUS</span></h1>
             <div class="text-[9px] text-gray-500" id="version-display">--</div>
         </div>
-        <button id="kill-switch" onclick="toggleKillSwitch()" class="border border-red-900 text-red-700 px-3 py-0 text-[10px] font-bold hover:bg-red-900 hover:text-white transition h-6">KILL SWITCH</button>
+        <div class="flex gap-2 items-center">
+            <button id="nap-button" onclick="toggleNapMode()" class="border border-indigo-700 text-indigo-400 px-3 py-0 text-[10px] font-bold hover:bg-indigo-800 hover:text-white transition h-6">SIESTE</button>
+            <button id="reboot-button" onclick="triggerReboot()" class="border border-red-900 text-red-700 px-3 py-0 text-[10px] font-bold hover:bg-red-900 hover:text-white transition h-6">REBOOT</button>
+        </div>
     </header>
 
     <div class="grid grid-cols-12 gap-1 flex-1 min-h-0">

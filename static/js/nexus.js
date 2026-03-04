@@ -276,9 +276,38 @@ function sendMission() {
     input.value = "";
 }
 
-function toggleKillSwitch() {
-    fetch('/api/override', { method: 'POST', headers: authHeaders(), body: JSON.stringify({active: true}) });
-    addLog('SYSTEM', 'KILL SWITCH ACTIONNÉ', 'err');
+function triggerReboot() {
+    if (!confirm('Redémarrer Prométhée ?')) return;
+    fetch('/api/reboot', { method: 'POST', headers: authHeaders(), body: JSON.stringify({}) });
+    addLog('SYSTEM', 'REBOOT EN COURS...', 'sys');
+}
+
+// --- Mode Sieste (hibernation 0-GPU) ---
+let napModeActive = false;
+
+function toggleNapMode() {
+    const newState = !napModeActive;
+    fetch('/api/sieste', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ enabled: newState })
+    }).then(r => r.json()).then(data => {
+        napModeActive = data.is_napping;
+        updateNapButton();
+        addLog('SYSTEM', napModeActive ? 'MODE SIESTE ACTIVÉ — GPU libéré' : 'RÉVEIL — reprise normale', napModeActive ? 'sys' : 'success');
+    }).catch(err => addLog('API', 'Erreur sieste: ' + err, 'err'));
+}
+
+function updateNapButton() {
+    const btn = document.getElementById('nap-button');
+    if (!btn) return;
+    if (napModeActive) {
+        btn.textContent = 'RÉVEIL';
+        btn.className = 'border border-blue-500 text-blue-300 px-3 py-0 text-[10px] font-bold hover:bg-blue-700 hover:text-white transition h-6 animate-pulse';
+    } else {
+        btn.textContent = 'SIESTE';
+        btn.className = 'border border-indigo-700 text-indigo-400 px-3 py-0 text-[10px] font-bold hover:bg-indigo-800 hover:text-white transition h-6';
+    }
 }
 
 // Chart Init (Psyché - Radar) — 6 dimensions dynamiques
@@ -414,6 +443,22 @@ function updateTelemBpm(p) {
 fetch('/api/reptilian/status').then(function(r) { return r.json(); }).then(function(data) {
     updateTelemReptilian(data);
 }).catch(function() {});
+
+// Chargement initial statut sieste + polling
+fetch('/api/autonomy/status').then(r => r.json()).then(data => {
+    if (data && typeof data.is_napping === 'boolean') {
+        napModeActive = data.is_napping;
+        updateNapButton();
+    }
+}).catch(() => {});
+setInterval(() => {
+    fetch('/api/autonomy/status').then(r => r.json()).then(data => {
+        if (data && typeof data.is_napping === 'boolean') {
+            napModeActive = data.is_napping;
+            updateNapButton();
+        }
+    }).catch(() => {});
+}, 30000);
 
 // Chargement version depuis /health
 fetch('/health').then(r => r.json()).then(data => {

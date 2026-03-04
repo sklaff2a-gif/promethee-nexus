@@ -500,6 +500,17 @@ async def autonomy_reset_budget():
     })
     return {"status": "ok", "previous_count": old_count, "new_count": 0}
 
+@app.post("/api/sieste", dependencies=[Depends(verify_token)])
+async def toggle_nap_mode(request: Request):
+    """Active ou désactive le mode sieste (hibernation 0-GPU)."""
+    data = await request.json()
+    enabled = data.get("enabled", False)
+    if enabled:
+        await autonomy.enter_nap()
+    else:
+        await autonomy.exit_nap()
+    return {"status": "ok", "is_napping": autonomy.is_napping}
+
 @app.get("/api/journal")
 async def api_journal():
     """Retourne le journal stratégique complet + métadonnées."""
@@ -692,13 +703,16 @@ async def api_create_objective(request: Request):
         raise HTTPException(status_code=409, detail="Création échouée")
     return {"status": "created", "objective": obj}
 
-@app.post("/api/override", dependencies=[Depends(verify_token)])
-async def api_override(request: Request):
-    data = await request.json()
-    active = data.get("active", False)
-    await orchestrator.set_kill_switch(active)
-    await bus.publish("SYSTEM_OVERRIDE", {"active": active})
-    return {"status": "ok", "kill_switch": active}
+@app.post("/api/reboot", dependencies=[Depends(verify_token)])
+async def api_reboot(request: Request):
+    """Redémarrage propre : bloque les nouvelles missions, flush, exit(65)."""
+    await orchestrator.set_kill_switch(True)
+    await bus.publish("THOUGHT_STREAM", {
+        "agent": "SYSTEM", "content": "Redémarrage en cours...", "type": "info"
+    })
+    await bus.publish("SYSTEM_OVERRIDE", {"active": True, "reboot": True})
+    await asyncio.sleep(2)
+    os._exit(65)
 
 async def strategic_feedback_loop(agent_name: str, mission: str, result: str):
     if agent_name in ["strategist", "architect", "factory"]: return
