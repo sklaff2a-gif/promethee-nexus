@@ -280,6 +280,14 @@ function triggerReboot() {
     if (!confirm('Redémarrer Prométhée ?')) return;
     fetch('/api/reboot', { method: 'POST', headers: authHeaders(), body: JSON.stringify({}) });
     addLog('SYSTEM', 'REBOOT EN COURS...', 'sys');
+    // Poll /health jusqu'à ce que le serveur revienne, puis reload
+    setTimeout(() => {
+        const poll = setInterval(() => {
+            fetch('/health').then(r => {
+                if (r.ok) { clearInterval(poll); location.reload(); }
+            }).catch(() => {});
+        }, 2000);
+    }, 3000);
 }
 
 // --- Mode Sieste (hibernation 0-GPU) ---
