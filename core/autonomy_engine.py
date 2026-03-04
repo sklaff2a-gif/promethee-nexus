@@ -2030,13 +2030,13 @@ class AutonomyEngine:
         dream_report = []
         # Phase 1 — Consolidation synaptique (REM simulé)
         try:
-            from core.synaptic_network import synapse
-            result = synapse.dream_consolidation()
+            from core.synaptic_network import cortex
+            result = cortex.dream_consolidation()
             pruned = result.get("pruned_synapses", 0)
             dream_cx = result.get("dream_connections", 0)
             meta = result.get("new_meta_concepts", 0)
             strengthened = result.get("strengthened", 0)
-            synapse.save()
+            cortex.save()
             summary = f"Rêve synaptique: {dream_cx} connexions oniriques, {strengthened} renforcées, {pruned} élaguées, {meta} méta-concepts"
             dream_report.append(summary)
             logger.info(f"[DREAM] {summary}")
