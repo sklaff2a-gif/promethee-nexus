@@ -2009,7 +2009,7 @@ class AutonomyEngine:
             logger.warning(f"SIESTE: Échec déchargement Ollama: {e}")
 
     async def _execute_nap_routine(self):
-        """Routine de sieste : maintenance 0-LLM uniquement."""
+        """Routine de sieste : maintenance 0-LLM + rêve consolidation."""
         # 1. Routines autonomy gratuites (tournantes)
         await self._execute_post_budget_routine()
         # 2. Tâches circadiennes si disponibles
@@ -2021,6 +2021,62 @@ class AutonomyEngine:
                 self._nap_tasks_done.append(task_name)
         except Exception:
             pass
+        # 3. Rêve — consolidation synaptique + stimulation cellulaire
+        await self._execute_dream_routine()
+
+    async def _execute_dream_routine(self):
+        """Micro-routine de rêve : consolide les synapses, nourrit le tissu neural.
+        100% déterministe, 0 LLM, léger en ressources."""
+        dream_report = []
+        # Phase 1 — Consolidation synaptique (REM simulé)
+        try:
+            from core.synaptic_network import synapse
+            result = synapse.dream_consolidation()
+            pruned = result.get("pruned_synapses", 0)
+            dream_cx = result.get("dream_connections", 0)
+            meta = result.get("new_meta_concepts", 0)
+            strengthened = result.get("strengthened", 0)
+            synapse.save()
+            summary = f"Rêve synaptique: {dream_cx} connexions oniriques, {strengthened} renforcées, {pruned} élaguées, {meta} méta-concepts"
+            dream_report.append(summary)
+            logger.info(f"[DREAM] {summary}")
+        except Exception as e:
+            logger.warning(f"[DREAM] Synapse consolidation échouée: {e}")
+
+        # Phase 2 — Stimulation tissue (nourriture + créativité boost)
+        try:
+            from core.neural_tissue import tissue
+            # Injecter un état cognitif favorable au rêve
+            tissue._cognitive_state["creativity"] = min(
+                tissue._cognitive_state.get("creativity", 0.5) + 0.3, 1.0
+            )
+            tissue._cognitive_state["stability"] = min(
+                tissue._cognitive_state.get("stability", 0.5) + 0.2, 1.0
+            )
+            tissue._cognitive_state["threat_level"] = 0.0
+            tissue._cognitive_state["dopamine_level"] = min(
+                tissue._cognitive_state.get("dopamine_level", 0.5) + 0.15, 0.8
+            )
+            # Forcer quelques ticks pour que les cellules réagissent
+            alive_before = len([c for c in tissue.cells if c.alive])
+            for _ in range(3):
+                tissue._tick()
+            alive_after = len([c for c in tissue.cells if c.alive])
+            delta = alive_after - alive_before
+            summary = f"Rêve cellulaire: {alive_after} cellules ({'+' if delta >= 0 else ''}{delta}), créativité={tissue._cognitive_state['creativity']:.2f}"
+            dream_report.append(summary)
+            logger.info(f"[DREAM] {summary}")
+        except Exception as e:
+            logger.warning(f"[DREAM] Tissue stimulation échouée: {e}")
+
+        # Phase 3 — Publier le rêve sur le bus
+        if dream_report:
+            self._nap_tasks_done.append("DREAM")
+            await bus.publish("THOUGHT_STREAM", {
+                "agent": "RÊVE",
+                "content": " | ".join(dream_report),
+                "type": "info"
+            })
 
     # ── Fin Mode Sieste ──────────────────────────────────────────────
 
