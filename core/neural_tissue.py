@@ -33,10 +33,12 @@ ALPHABET = "ACGTIR"
 
 GRID_SIZE = 16                  # 16x16 = 256 positions
 MAX_CELLS = 500
-INITIAL_CELLS = 30
+INITIAL_CELLS = 50
 INITIAL_ENERGY = 100.0
-DIVISION_THRESHOLD = 180.0
+DIVISION_THRESHOLD = 130.0
 MAINTENANCE_COST = 1.0
+MAINTENANCE_COST_BASAL = 0.3       # Coût réduit quand énergie < seuil (hibernation cellulaire)
+BASAL_ENERGY_THRESHOLD = 50.0      # Seuil d'activation du mode basal
 ACTION_COST = 0.5
 CAPTURE_REWARD = 3.0
 GENERATE_REWARD = 2.0
@@ -129,7 +131,8 @@ class NeuralCell:
             generate_reward if generate_reward is not None else GENERATE_REWARD,
         )
 
-        self.energy -= MAINTENANCE_COST
+        cost = MAINTENANCE_COST_BASAL if self.energy < BASAL_ENERGY_THRESHOLD else MAINTENANCE_COST
+        self.energy -= cost
         if self.energy <= 0:
             self.alive = False
         self.pointer = (self.pointer + 1) % len(self.genome)
@@ -486,14 +489,15 @@ class NeuralTissue:
             "cognition":  state["cognition_level"],
         }
 
-        # Phase circadienne : en sommeil, pas d'injection (sélection par mérite)
-        if self._circadian_phase == "sommeil_profond":
-            return
-
+        # Phase circadienne : en sommeil, signaux réduits à 25% (métabolisme cérébral ~75%)
+        sleep_mode = self._circadian_phase == "sommeil_profond"
         for zone_name, (x1, y1, x2, y2) in SIGNAL_ZONES.items():
             intensity = zone_intensities.get(zone_name, 0.3)
             # Nombre de food spawns : base + bonus des goals actifs
             food_count = FOOD_SPAWN_PER_ZONE + self._goal_bonus_zones.get(zone_name, 0)
+            if sleep_mode:
+                food_count = max(1, food_count // 4)
+                intensity *= 0.5
             for _ in range(food_count):
                 sx = random.randint(x1, min(x2 - 1, GRID_SIZE - 1))
                 sy = random.randint(y1, min(y2 - 1, GRID_SIZE - 1))
