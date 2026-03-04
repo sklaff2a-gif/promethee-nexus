@@ -308,13 +308,16 @@ function toggleNapMode() {
 
 function updateNapButton() {
     const btn = document.getElementById('nap-button');
+    const banner = document.getElementById('nap-banner');
     if (!btn) return;
     if (napModeActive) {
         btn.textContent = 'RÉVEIL';
-        btn.className = 'border border-blue-500 text-blue-300 px-3 py-0 text-[10px] font-bold hover:bg-blue-700 hover:text-white transition h-6 animate-pulse';
+        btn.className = 'bg-indigo-700 border border-indigo-400 text-white px-3 py-0 text-[10px] font-bold hover:bg-indigo-600 transition h-6 shadow-[0_0_8px_rgba(99,102,241,0.6)]';
+        if (banner) banner.classList.remove('hidden');
     } else {
         btn.textContent = 'SIESTE';
         btn.className = 'border border-indigo-700 text-indigo-400 px-3 py-0 text-[10px] font-bold hover:bg-indigo-800 hover:text-white transition h-6';
+        if (banner) banner.classList.add('hidden');
     }
 }
 
