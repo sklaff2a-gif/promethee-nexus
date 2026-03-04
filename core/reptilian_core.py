@@ -39,6 +39,10 @@ THREAT_DANGER = 6             # Réponse active requise
 THREAT_CRITICAL = 8           # Réflexes d'urgence
 THREAT_MORTAL = 10            # Survie pure — tout arrêter
 
+# Planchers tissue (max, pas accumulation — évite boucle feedback)
+TISSUE_OVERLOAD_THREAT = 3.0   # Modéré — au-dessus d'ALERT mais sous DANGER
+TISSUE_EXTINCTION_THREAT = 5.0  # Sérieux mais pas FREEZE (< 7.0)
+
 # Seuils de détection
 THRESHOLDS = {
     "error_streak_alert": 3,
@@ -123,6 +127,7 @@ class ReptilianCore:
         self._watchdog_task: Optional[asyncio.Task] = None
         self._alive: bool = False
         self._subscribed: bool = False
+        self._sleeping: bool = False  # Mode sieste : suspend le scan
         self._beat_counter: int = 0
         self._last_activity: float = time.time()
 
@@ -131,6 +136,8 @@ class ReptilianCore:
         self._last_ram: float = 0.0
         self._last_budget_ratio: float = 0.0
         self._ollama_ok: bool = True
+        self._ollama_ok_streak: int = 0     # Cycles consécutifs OK
+        self._ram_critical_logged: float = 0.0
 
         # --- Flags de réflexes actifs ---
         self._freeze_until: float = 0.0          # timestamp de fin de FREEZE
@@ -175,6 +182,12 @@ class ReptilianCore:
         """Boucle du tronc cérébral — scan, évalue, réagit, signale."""
         while self._alive:
             await asyncio.sleep(WATCHDOG_INTERVAL)
+
+            # Mode sieste : le reptilien dort, décroissance passive uniquement
+            if self._sleeping:
+                self.threat_level *= THREAT_DECAY_RATE
+                self.adrenaline = max(0.0, self.adrenaline * ADRENALINE_DECAY)
+                continue
 
             # 1. SENTIR — détecter les menaces
             threats = await self._sense_threats()
@@ -230,8 +243,18 @@ class ReptilianCore:
 
             if ram >= THRESHOLDS["ram_crit"]:
                 threats["ram"] = 8.0
+                now = time.time()
+                if now - self._ram_critical_logged > 120:  # Throttle 2 min
+                    logger.warning(
+                        f"REPTILIEN: RAM CRITIQUE {ram:.0f}% (seuil {THRESHOLDS['ram_crit']}%)"
+                    )
+                    self._ram_critical_logged = now
             elif ram >= THRESHOLDS["ram_warn"]:
                 threats["ram"] = 4.0
+                now = time.time()
+                if now - self._ram_critical_logged > 300:  # Throttle 5 min
+                    logger.info(f"REPTILIEN: RAM élevée {ram:.0f}% (seuil {THRESHOLDS['ram_warn']}%)")
+                    self._ram_critical_logged = now
 
             # Fuite mémoire Python
             proc = psutil.Process()
@@ -241,19 +264,26 @@ class ReptilianCore:
         except Exception:
             pass  # psutil indisponible → pas de menace détectée
 
-        # --- Ollama process ---
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                resp = await client.get("http://localhost:11434/api/tags", timeout=2.0)
-                if resp.status_code != 200:
-                    threats["ollama"] = 9.0
-                    self._ollama_ok = False
-                else:
-                    self._ollama_ok = True
-        except Exception:
-            threats["ollama"] = 9.0  # Ollama injoignable = menace critique
-            self._ollama_ok = False
+        # --- Ollama process (adaptatif: skip si stable) ---
+        OLLAMA_CHECK_SKIP = 12  # 12 cycles * 5s = 60s entre checks si stable
+        if self._ollama_ok and self._ollama_ok_streak >= OLLAMA_CHECK_SKIP:
+            self._ollama_ok_streak += 1  # Continue streak, skip check
+        else:
+            try:
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get("http://localhost:11434/api/tags", timeout=2.0)
+                    if resp.status_code != 200:
+                        threats["ollama"] = 9.0
+                        self._ollama_ok = False
+                        self._ollama_ok_streak = 0
+                    else:
+                        self._ollama_ok = True
+                        self._ollama_ok_streak += 1
+            except Exception:
+                threats["ollama"] = 9.0
+                self._ollama_ok = False
+                self._ollama_ok_streak = 0
 
         # --- Ollama GPU hang (circuit breaker) ---
         # Le process Ollama peut répondre à /api/tags mais le GPU est bloqué
@@ -535,6 +565,7 @@ class ReptilianCore:
             bus.subscribe("TISSUE_ZONE_OVERLOAD", self._on_tissue_overload)
             bus.subscribe("TISSUE_EXTINCTION_RISK", self._on_tissue_extinction)
             bus.subscribe("TISSUE_THREAT_SUBSIDED", self._on_tissue_threat_subsided)
+            bus.subscribe("NAP_MODE", self._on_nap_mode)
         except Exception as e:
             logger.warning(f"REPTILIEN: Échec souscription bus: {e}")
 
@@ -569,22 +600,35 @@ class ReptilianCore:
         logger.warning(f"REPTILIEN: Ollama unresponsive (timeouts={timeouts}, threat→{self.threat_level:.1f})")
 
     async def _on_tissue_overload(self, event: dict):
-        """Zone tissu surchargée → menace modérée."""
+        """Zone tissu surchargée → plancher de menace (pas d'accumulation)."""
         zone = event.get("zone", "?")
-        self.threat_level = min(10.0, self.threat_level + 2.0)
-        logger.info(f"REPTILIEN: Tissue zone {zone} surchargée → threat +2.0")
+        self.threat_level = max(self.threat_level, TISSUE_OVERLOAD_THREAT)
+        logger.info(f"REPTILIEN: Tissue zone {zone} surchargée → threat plancher {TISSUE_OVERLOAD_THREAT}")
 
     async def _on_tissue_extinction(self, event: dict):
-        """Population tissu en danger → menace forte."""
+        """Population tissu en danger → plancher de menace (pas d'accumulation)."""
         pop = event.get("population", 0)
-        self.threat_level = min(10.0, self.threat_level + 4.0)
-        logger.warning(f"REPTILIEN: Tissue extinction risk (pop={pop}) → threat +4.0")
+        self.threat_level = max(self.threat_level, TISSUE_EXTINCTION_THREAT)
+        logger.warning(f"REPTILIEN: Tissue extinction risk (pop={pop}) → threat plancher {TISSUE_EXTINCTION_THREAT}")
 
     async def _on_tissue_threat_subsided(self, event: dict):
         """Zone threat du tissu apaisée → réduction menace (boucle rétroaction)."""
         self.threat_level = max(0.0, self.threat_level - 1.5)
         self.adrenaline = max(0.0, self.adrenaline - 0.1)
         logger.info(f"REPTILIEN: Tissue calme → threat -1.5 (now {self.threat_level:.1f})")
+
+    async def _on_nap_mode(self, event: dict):
+        """Mode sieste : endort ou réveille le reptilien."""
+        active = event.get("active", False)
+        if active:
+            self._sleeping = True
+            self.threat_level = 0.0
+            self.adrenaline = 0.0
+            self.save()
+            logger.info("REPTILIEN: Sommeil activé — scan suspendu.")
+        else:
+            self._sleeping = False
+            logger.info("REPTILIEN: Réveil — scan repris.")
 
     def on_routine_success(self, intent: str = ""):
         """Apaisement après un succès — appelé par AutonomyEngine."""
