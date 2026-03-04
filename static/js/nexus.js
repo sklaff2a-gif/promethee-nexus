@@ -468,10 +468,14 @@ setInterval(() => {
     }).catch(() => {});
 }, 30000);
 
-// Chargement version depuis /health
+// Chargement version + état sieste depuis /health
 fetch('/health').then(r => r.json()).then(data => {
     if (data && data.version) {
         const el = document.getElementById('version-display');
         if (el) el.textContent = 'V' + data.version;
+    }
+    if (data && data.is_napping) {
+        napModeActive = true;
+        updateNapButton();
     }
 }).catch(() => {});

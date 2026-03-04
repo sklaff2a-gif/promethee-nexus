@@ -408,6 +408,7 @@ async def health():
         "agents": agents,
         "agents_count": len(agents),
         "kill_switch": orchestrator.kill_switch_active,
+        "is_napping": autonomy.is_napping,
         "memory_available": memory_ok,
     }
 

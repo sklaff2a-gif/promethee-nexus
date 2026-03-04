@@ -25,6 +25,10 @@ BUDGET_RESERVE_POINTS = 20
 # Routines 0-LLM qui continuent même quand le budget est épuisé
 POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
 
+# Mode sieste : routines autorisées (0-LLM uniquement) et intervalle entre routines
+NAP_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
+NAP_SLEEP_INTERVAL = 300  # 5 min entre routines en sieste
+
 def _load_resource_costs() -> dict:
     """Charge les coûts par routine depuis config/resource_costs.json."""
     costs_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -306,6 +310,7 @@ class AutonomyStatePersistence:
         "total_routines_executed": 0,
         "learning_history": {},
         "security_audited_files": {},
+        "council_adjustments": {},
     }
 
     @staticmethod
@@ -368,11 +373,19 @@ class AutonomyEngine:
         # M01: Anti-boucle drive — compteur de forçages par pulsion {drive_name: count}
         self._drive_force_counts: dict = {}
         self._drive_force_cycle: int = 0  # cycle courant pour le reset fenêtre
+        self._drive_force_total: Dict[str, int] = {}   # Compteur session par drive
+        # Council data-driven : adjustments temporaires {intent: {delta, expires, reason}}
+        self._council_adjustments: dict = persisted.get("council_adjustments", {})
         # Transients pour feedback council/grimoire
         self._current_council_subject: str = ""
         self._last_grimoire_slug: str = ""
         # Flag council dégradé (mode reserve budget)
         self._council_degraded: bool = False
+
+        # Mode sieste : hibernation réparatrice 0-GPU
+        self.is_napping: bool = persisted.get("is_napping", False)
+        self._nap_started_at: float = persisted.get("_nap_started_at", 0.0)
+        self._nap_tasks_done: list = []
 
         bus.subscribe("USER_COMMAND", self.reset_timer)
         bus.subscribe("TISSUE_ZONE_DESERT", self._on_tissue_desert)
@@ -462,6 +475,9 @@ class AutonomyEngine:
             "total_routines_executed": self.total_routines_executed,
             "learning_history": self._learning_history,
             "security_audited_files": self._security_audited_files,
+            "council_adjustments": self._council_adjustments,
+            "is_napping": self.is_napping,
+            "_nap_started_at": self._nap_started_at,
         }
         AutonomyStatePersistence.save(state)
 
@@ -647,6 +663,7 @@ class AutonomyEngine:
             "version": "24.0",
             "is_running": self.is_running,
             "is_processing": self.is_processing,
+            "is_napping": self.is_napping,
             "daily_count": self.daily_count,
             "max_daily_routines": MAX_DAILY_ROUTINES,
             "last_reset_day": self.last_reset_day.isoformat() if self.last_reset_day else None,
@@ -876,6 +893,21 @@ class AutonomyEngine:
                     scored[i] = (routine, s + tissue_bonus)
         except Exception:
             pass
+
+        # --- Verdicts Council data-driven (Couche 14) ---
+        council_adj = getattr(self, "_council_adjustments", {})
+        if council_adj:
+            now_iso = datetime.now().isoformat()
+            expired_keys = []
+            for intent_key, adj in council_adj.items():
+                if adj.get("expires", "") < now_iso:
+                    expired_keys.append(intent_key)
+                    continue
+                for i, (routine, s) in enumerate(scored):
+                    if routine["intent"] == intent_key:
+                        scored[i] = (routine, s + adj["delta"])
+            for k in expired_keys:
+                del council_adj[k]
 
         if not scored:
             logger.warning("[AUTONOMY] Aucune routine disponible apres filtrage. Cycle avorte.")
@@ -1207,8 +1239,11 @@ class AutonomyEngine:
                     drive_name, drive = frustrated[0]
                     # M01: vérifier le cooldown avant de forcer
                     force_count = self._drive_force_counts.get(drive_name, 0)
+                    total_forces = self._drive_force_total.get(drive_name, 0)
                     if force_count > 2:
                         logger.info(f"[EVEIL] Pulsion {drive_name} en cooldown (forcé {force_count}x en 5 cycles), skip")
+                    elif total_forces >= 10:
+                        logger.info(f"[EVEIL] Pulsion {drive_name} plafond session ({total_forces} forçages), skip")
                     else:
                         forced_intent_map = DRIVE_ROUTINE_AFFINITY.get(drive_name, {})
                         if forced_intent_map:
@@ -1218,7 +1253,8 @@ class AutonomyEngine:
                             if best_intent != last_intent:
                                 self._forced_next_intent = best_intent
                                 self._drive_force_counts[drive_name] = force_count + 1
-                                logger.warning(f"[EVEIL] Pulsion {drive_name} critique (dep={drive.deprivation:.0f}) → force {best_intent} ({force_count + 1}/3)")
+                                self._drive_force_total[drive_name] = total_forces + 1
+                                logger.warning(f"[EVEIL] Pulsion {drive_name} critique (dep={drive.deprivation:.0f}) → force {best_intent} ({force_count + 1}/3, total={total_forces + 1}/10)")
             except Exception:
                 pass
 
@@ -1764,6 +1800,18 @@ class AutonomyEngine:
             except Exception as e:
                 logger.warning(f"[COUNCIL→ACTION] Extraction specs échouée: {e}")
 
+        # Verdict data-driven : extraire et appliquer
+        if topic.get("verdict_type"):
+            try:
+                from core.council_analytics import extract_verdict
+                verdict = extract_verdict(
+                    result.get("transcript", []), topic["verdict_type"]
+                )
+                if verdict:
+                    self._apply_council_verdict(verdict)
+            except Exception as e:
+                logger.warning(f"[COUNCIL] Extraction verdict echouee: {e}")
+
         # Enregistrer le débat dans le journal stratégique
         try:
             from core.strategic_journal import journal as strat_journal
@@ -1784,6 +1832,31 @@ class AutonomyEngine:
             logger.warning(f"[COUNCIL] Écriture council_journal échouée: {e}")
 
         return result
+
+    def _apply_council_verdict(self, verdict: dict):
+        """Applique un verdict Council data-driven."""
+        from datetime import timedelta
+        action = verdict.get("action", "")
+        target = verdict.get("target", "")
+        reason = verdict.get("reason", "")
+
+        if action in ("PRIORISER", "DEPRIORISER"):
+            delta = 2.0 if action == "PRIORISER" else -2.0
+            expires = (datetime.now() + timedelta(hours=24)).isoformat()
+            self._council_adjustments[target] = {
+                "delta": delta, "expires": expires, "reason": reason,
+            }
+            self._persist_state()
+            logger.info(f"[COUNCIL VERDICT] {action} {target} ({delta:+.1f}) — {reason}")
+
+        elif action == "ABANDONNER":
+            try:
+                from core.evolution_catalog import EvolutionCatalog
+                cat = EvolutionCatalog()
+                cat.mark_rejected(target, f"Council verdict: {reason}")
+                logger.info(f"[COUNCIL VERDICT] ABANDONNER spec {target} — {reason}")
+            except Exception:
+                pass
 
     def _append_council_journal(self, topic: dict, result: dict):
         """Ajoute une entrée au journal persistant des councils (memory/council_journal.md)."""
@@ -1864,6 +1937,92 @@ class AutonomyEngine:
             return
         # Toutes les routines gratuites en cooldown
         logger.info("[AUTONOMY] Post-budget: toutes routines gratuites en cooldown.")
+
+    # ── Mode Sieste (hibernation réparatrice 0-GPU) ──────────────────
+
+    async def enter_nap(self):
+        """Active le mode sieste : décharge Ollama, calme le reptilien, maintenance 0-LLM."""
+        self.is_napping = True
+        self._nap_started_at = time.time()
+        self._nap_tasks_done = []
+        # Calmer le reptilien — reset menace et adrénaline
+        try:
+            from core.reptilian_core import reptile
+            reptile.threat_level = 0.0
+            reptile.adrenaline = 0.0
+            reptile.save()
+            logger.info("[AUTONOMY] Reptilien apaisé (menace=0, adrénaline=0).")
+        except Exception:
+            pass
+        # Décharger tous les modèles Ollama pour libérer la VRAM
+        await self._unload_ollama_models()
+        self._persist_state()
+        await bus.publish("NAP_MODE", {"active": True})
+        await bus.publish("THOUGHT_STREAM", {
+            "agent": "SYSTEM",
+            "content": "Mode sieste activé — GPU libéré, reptilien apaisé. Maintenance 0-LLM uniquement.",
+            "type": "info"
+        })
+        logger.info("[AUTONOMY] Mode sieste activé. VRAM libérée.")
+
+    async def exit_nap(self):
+        """Désactive le mode sieste, génère un résumé des tâches effectuées."""
+        duration = time.time() - self._nap_started_at if self._nap_started_at else 0
+        minutes = int(duration // 60)
+        tasks_done = list(self._nap_tasks_done)
+        self.is_napping = False
+        self._nap_started_at = 0.0
+        self._nap_tasks_done = []
+        self._persist_state()
+        # Résumé
+        if tasks_done:
+            summary = f"Sieste terminée ({minutes}min). Tâches effectuées : {', '.join(tasks_done)}"
+        else:
+            summary = f"Sieste terminée ({minutes}min). Aucune tâche de maintenance effectuée."
+        await bus.publish("NAP_MODE", {"active": False})
+        await bus.publish("THOUGHT_STREAM", {
+            "agent": "SYSTEM",
+            "content": summary,
+            "type": "info"
+        })
+        logger.info(f"[AUTONOMY] {summary}")
+
+    async def _unload_ollama_models(self):
+        """Décharge tous les modèles Ollama pour libérer la VRAM."""
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                resp = await client.get("http://localhost:11434/api/ps", timeout=10)
+                if resp.status_code != 200:
+                    return
+                models = resp.json().get("models", [])
+                for m in models:
+                    name = m.get("name", "")
+                    if name:
+                        await client.post(
+                            "http://localhost:11434/api/generate",
+                            json={"model": name, "keep_alive": "0", "prompt": ""},
+                            timeout=30
+                        )
+                        logger.info(f"SIESTE: Modèle {name} déchargé de la VRAM")
+        except Exception as e:
+            logger.warning(f"SIESTE: Échec déchargement Ollama: {e}")
+
+    async def _execute_nap_routine(self):
+        """Routine de sieste : maintenance 0-LLM uniquement."""
+        # 1. Routines autonomy gratuites (tournantes)
+        await self._execute_post_budget_routine()
+        # 2. Tâches circadiennes si disponibles
+        try:
+            from core.circadian_rhythm import circadian
+            result = await circadian.execute_next_sleep_task()
+            if result and result.get("success"):
+                task_name = result.get("task", "circadian_task")
+                self._nap_tasks_done.append(task_name)
+        except Exception:
+            pass
+
+    # ── Fin Mode Sieste ──────────────────────────────────────────────
 
     async def _execute_neural_compile(self) -> dict:
         """Compile les observations LLM en règles déterministes. 0 LLM."""
@@ -2286,6 +2445,19 @@ class AutonomyEngine:
             await asyncio.sleep(sleep_time)
 
             if orchestrator.kill_switch_active or self.is_processing:
+                continue
+
+            # Mode sieste : maintenance 0-LLM uniquement, sleep rallongé
+            if self.is_napping:
+                self.is_processing = True
+                try:
+                    await self._execute_nap_routine()
+                except Exception as e:
+                    logger.warning(f"[AUTONOMY] Erreur routine sieste: {e}")
+                finally:
+                    self.is_processing = False
+                    self._persist_state()
+                await asyncio.sleep(NAP_SLEEP_INTERVAL)
                 continue
 
             budget_status = self._check_daily_budget()
