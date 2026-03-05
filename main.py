@@ -133,7 +133,7 @@ sys.stdout = _TeeStream(sys.__stdout__, _file_handler)
 sys.stderr = _TeeStream(sys.__stderr__, _file_handler)
 from core.orchestrator import orchestrator
 from core.event_bus.bus import bus
-from core.autonomy_engine import autonomy
+from core.autonomy_engine import autonomy, NAP_COOLDOWN
 from core.router import RouterAgent
 from core.psyche import psyche
 from core.strategic_journal import journal as strat_journal
@@ -513,7 +513,11 @@ async def toggle_nap_mode(request: Request):
     data = await request.json()
     enabled = data.get("enabled", False)
     if enabled:
-        await autonomy.enter_nap()
+        accepted = await autonomy.enter_nap()
+        if not accepted:
+            elapsed = time.time() - autonomy._nap_last_exit if autonomy._nap_last_exit else 0
+            remaining = max(0, int(NAP_COOLDOWN - elapsed))
+            return {"status": "cooldown", "is_napping": False, "cooldown_remaining": remaining}
     else:
         await autonomy.exit_nap()
     return {"status": "ok", "is_napping": autonomy.is_napping}

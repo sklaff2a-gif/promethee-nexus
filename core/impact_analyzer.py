@@ -33,6 +33,9 @@ _ROOT_FILES = ["main.py", "config.py", "guardian.py", "start_nexus.py"]
 _DEGRADED_THRESHOLD = 2  # erreurs → degraded
 _ERROR_THRESHOLD = 5     # erreurs → error
 
+# Fenêtre temporelle pour le comptage des erreurs (en heures)
+_HEALTH_WINDOW_HOURS = 24
+
 # Cache TTL
 _CACHE_TTL = 120  # secondes
 
@@ -444,8 +447,13 @@ class ImpactAnalyzer:
         error_counts = {}
         hallucination_modules = set()
         try:
+            from datetime import timedelta
             from core.autonomy_engine import autonomy
+            cutoff = (datetime.now() - timedelta(hours=_HEALTH_WINDOW_HOURS)).isoformat()
             for entry in getattr(autonomy, "routine_history", []):
+                ts = entry.get("timestamp", "")
+                if ts and ts < cutoff:
+                    continue
                 if entry.get("status") == "error":
                     agent_name = entry.get("agent", "")
                     mid = _AGENT_MODULE_MAP.get(agent_name, "")

@@ -28,7 +28,11 @@ POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
 # Mode sieste : routines autorisées (0-LLM uniquement) et intervalle entre routines
 NAP_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
 NAP_SLEEP_INTERVAL = 300  # 5 min entre routines en sieste
-MAX_NAP_DURATION = 3600  # 1h max avant réveil automatique
+
+# Sieste : périodes renouvelables + cooldown
+NAP_PERIOD_DURATION = 3600    # 60 min par période
+NAP_MAX_RENEWALS = 1          # 1 renouvellement max (= 2h total)
+NAP_COOLDOWN = 300            # 5 min avant de pouvoir re-siester
 
 def _load_resource_costs() -> dict:
     """Charge les coûts par routine depuis config/resource_costs.json."""
@@ -387,6 +391,8 @@ class AutonomyEngine:
         self.is_napping: bool = persisted.get("is_napping", False)
         self._nap_started_at: float = persisted.get("_nap_started_at", 0.0)
         self._nap_tasks_done: list = []
+        self._nap_renewals_used: int = persisted.get("_nap_renewals_used", 0)
+        self._nap_last_exit: float = persisted.get("_nap_last_exit", 0.0)
 
         bus.subscribe("USER_COMMAND", self.reset_timer)
         bus.subscribe("TISSUE_ZONE_DESERT", self._on_tissue_desert)
@@ -479,6 +485,8 @@ class AutonomyEngine:
             "council_adjustments": self._council_adjustments,
             "is_napping": self.is_napping,
             "_nap_started_at": self._nap_started_at,
+            "_nap_renewals_used": self._nap_renewals_used,
+            "_nap_last_exit": self._nap_last_exit,
         }
         AutonomyStatePersistence.save(state)
 
@@ -1952,11 +1960,23 @@ class AutonomyEngine:
 
     # ── Mode Sieste (hibernation réparatrice 0-GPU) ──────────────────
 
-    async def enter_nap(self):
-        """Active le mode sieste : décharge Ollama, calme le reptilien, maintenance 0-LLM."""
+    async def enter_nap(self) -> bool:
+        """Active le mode sieste : décharge Ollama, calme le reptilien, maintenance 0-LLM.
+
+        Returns:
+            True si la sieste est acceptée, False si le cooldown bloque l'entrée.
+        """
+        # Vérifier cooldown
+        if self._nap_last_exit > 0:
+            elapsed = time.time() - self._nap_last_exit
+            if elapsed < NAP_COOLDOWN:
+                remaining = int(NAP_COOLDOWN - elapsed)
+                logger.info(f"[AUTONOMY] Sieste refusée — cooldown {remaining}s restant.")
+                return False
         self.is_napping = True
         self._nap_started_at = time.time()
         self._nap_tasks_done = []
+        self._nap_renewals_used = 0
         # Calmer le reptilien — reset menace et adrénaline
         try:
             from core.reptilian_core import reptile
@@ -1976,6 +1996,7 @@ class AutonomyEngine:
             "type": "info"
         })
         logger.info("[AUTONOMY] Mode sieste activé. VRAM libérée.")
+        return True
 
     async def exit_nap(self):
         """Désactive le mode sieste, génère un résumé des tâches effectuées."""
@@ -1985,6 +2006,8 @@ class AutonomyEngine:
         self.is_napping = False
         self._nap_started_at = 0.0
         self._nap_tasks_done = []
+        self._nap_last_exit = time.time()
+        self._nap_renewals_used = 0
         self._persist_state()
         # Résumé
         if tasks_done:
@@ -2080,6 +2103,38 @@ class AutonomyEngine:
             logger.info(f"[DREAM] {summary}")
         except Exception as e:
             logger.warning(f"[DREAM] Tissue stimulation échouée: {e}")
+
+        # Phase 2.5 — Matériau onirique thalamique (nap_buffer → thèmes du rêve)
+        try:
+            from core.thalamus import thalamus as _thal
+            nap_events = _thal.get_nap_events()
+            if nap_events:
+                from core.thalamus import EVENT_CATEGORIES as _EC
+                # Compter les catégories d'events accumulés pendant la sieste
+                cat_counts: dict = {}
+                for entry in nap_events:
+                    cat = _EC.get(entry.get("event_type", ""), "unknown")
+                    cat_counts[cat] = cat_counts.get(cat, 0) + 1
+                dominant_cat = max(cat_counts, key=cat_counts.get) if cat_counts else None
+                # Moduler le tissue selon le thème onirique dominant
+                if dominant_cat and 'tissue' in dir():
+                    cat_boost_map = {
+                        "urgence": "threat_level",
+                        "cognition": "goals",
+                        "emergence": "creativity",
+                        "motivation": "dopamine_level",
+                    }
+                    field = cat_boost_map.get(dominant_cat)
+                    if field and field in tissue._cognitive_state:
+                        tissue._cognitive_state[field] = min(
+                            tissue._cognitive_state.get(field, 0.5) + 0.1, 1.0
+                        )
+                themes = ", ".join(f"{c}({n})" for c, n in sorted(cat_counts.items(), key=lambda x: -x[1]))
+                summary = f"Rêve thalamique: {len(nap_events)} events digérés, thèmes=[{themes}]"
+                dream_report.append(summary)
+                logger.info(f"[DREAM] {summary}")
+        except Exception as e:
+            logger.debug(f"[DREAM] Thalamus nap integration skipped: {e}")
 
         # Phase 3 — Publier le rêve sur le bus
         if dream_report:
@@ -2517,12 +2572,17 @@ class AutonomyEngine:
 
             # Mode sieste : maintenance 0-LLM uniquement, sleep rallongé
             if self.is_napping:
-                # Auto-wake après MAX_NAP_DURATION
+                # Auto-réveil avec renouvellement
                 nap_elapsed = time.time() - self._nap_started_at if self._nap_started_at else 0
-                if nap_elapsed >= MAX_NAP_DURATION:
-                    logger.info(f"[AUTONOMY] Auto-réveil après {int(nap_elapsed // 60)}min de sieste.")
-                    await self.exit_nap()
-                    continue
+                if nap_elapsed >= NAP_PERIOD_DURATION:
+                    if self._nap_renewals_used < NAP_MAX_RENEWALS:
+                        self._nap_renewals_used += 1
+                        self._nap_started_at = time.time()
+                        logger.info(f"[AUTONOMY] Renouvellement sieste ({self._nap_renewals_used}/{NAP_MAX_RENEWALS})")
+                    else:
+                        logger.info(f"[AUTONOMY] Auto-réveil — {NAP_MAX_RENEWALS + 1} périodes écoulées.")
+                        await self.exit_nap()
+                        continue
                 self.is_processing = True
                 try:
                     await self._execute_nap_routine()

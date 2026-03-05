@@ -4,6 +4,7 @@ import os
 import ast
 import time
 import pytest
+from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
 
@@ -416,10 +417,11 @@ class TestHealthData:
     def test_degraded_threshold(self, analyzer_instance, mock_project, monkeypatch):
         _patch_project_root(monkeypatch, mock_project)
         modules = analyzer_instance._discover_modules()
+        now = datetime.now().isoformat()
         mock_autonomy = MagicMock()
         mock_autonomy.routine_history = [
-            {"agent": "coder", "status": "error"},
-            {"agent": "coder", "status": "error"},
+            {"agent": "coder", "status": "error", "timestamp": now},
+            {"agent": "coder", "status": "error", "timestamp": now},
         ]
         with patch.dict("sys.modules", {
             "core.autonomy_engine": MagicMock(autonomy=mock_autonomy),
@@ -431,9 +433,10 @@ class TestHealthData:
     def test_error_threshold(self, analyzer_instance, mock_project, monkeypatch):
         _patch_project_root(monkeypatch, mock_project)
         modules = analyzer_instance._discover_modules()
+        now = datetime.now().isoformat()
         mock_autonomy = MagicMock()
         mock_autonomy.routine_history = [
-            {"agent": "coder", "status": "error"},
+            {"agent": "coder", "status": "error", "timestamp": now},
         ] * 5
         with patch.dict("sys.modules", {
             "core.autonomy_engine": MagicMock(autonomy=mock_autonomy),
@@ -499,6 +502,37 @@ class TestHealthData:
         health = analyzer_instance._collect_health_data(modules)
         for mid, h in health.items():
             assert h["status"] in ("healthy", "degraded", "error")
+
+    def test_old_errors_ignored(self, analyzer_instance, mock_project, monkeypatch):
+        """Erreurs vieilles de 48h ne comptent pas → healthy."""
+        _patch_project_root(monkeypatch, mock_project)
+        modules = analyzer_instance._discover_modules()
+        old_ts = (datetime.now() - timedelta(hours=48)).isoformat()
+        mock_autonomy = MagicMock()
+        mock_autonomy.routine_history = [
+            {"agent": "coder", "status": "error", "timestamp": old_ts},
+        ] * 5
+        with patch.dict("sys.modules", {
+            "core.autonomy_engine": MagicMock(autonomy=mock_autonomy),
+            "core.reptilian_core": MagicMock(reptile=MagicMock(get_stats=lambda: {"threat_level": 0})),
+        }):
+            health = analyzer_instance._collect_health_data(modules)
+        assert health["Agents.coder_agent"]["status"] == "healthy"
+
+    def test_no_timestamp_still_counted(self, analyzer_instance, mock_project, monkeypatch):
+        """Entrées sans champ timestamp sont comptées normalement."""
+        _patch_project_root(monkeypatch, mock_project)
+        modules = analyzer_instance._discover_modules()
+        mock_autonomy = MagicMock()
+        mock_autonomy.routine_history = [
+            {"agent": "coder", "status": "error"},
+        ] * 5
+        with patch.dict("sys.modules", {
+            "core.autonomy_engine": MagicMock(autonomy=mock_autonomy),
+            "core.reptilian_core": MagicMock(reptile=MagicMock(get_stats=lambda: {"threat_level": 0})),
+        }):
+            health = analyzer_instance._collect_health_data(modules)
+        assert health["Agents.coder_agent"]["status"] == "error"
 
 
 # ===== TestBuildGraphCache =====
