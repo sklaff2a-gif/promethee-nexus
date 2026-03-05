@@ -261,7 +261,7 @@ class TestPipelineIntegration:
              patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=django_code), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            await evo.process_task({"mission": "[MODE VEILLE]"})
+            await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # Vérifier qu'une expérience phase4b a été enregistrée
         all_exp = registry._experiences
@@ -298,7 +298,7 @@ class TestPipelineIntegration:
              patch("core.orchestrator.orchestrator", mock_orch), \
              patch("core.event_bus.bus.bus", mock_bus), \
              patch.dict("sys.modules", {"core.sandbox_engine": MagicMock(sandbox=mock_sandbox)}):
-            await evo.process_task({"mission": "[MODE VEILLE]"})
+            await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         deployed = [e for e in registry._experiences if e["outcome"] == "deployed"]
         assert len(deployed) >= 1
@@ -338,7 +338,7 @@ class TestPipelineIntegration:
              patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
              patch.object(evo, "_generate_code_cloud", side_effect=capture_prompt), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            await evo.process_task({"mission": "[MODE VEILLE]"})
+            await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # Vérifier que le prompt contient l'historique des échecs
         assert len(captured_prompts) >= 1

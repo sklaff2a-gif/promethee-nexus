@@ -26,6 +26,18 @@ _SEARCH_QUERIES = [
     "websocket real-time notification system python",
 ]
 
+# Prompt de synthèse de connaissances — narration simple pour LLM 14B
+_KNOWLEDGE_SYNTHESIS_PROMPT = (
+    "Tu es un analyste de connaissances. Voici des concepts interconnectés :\n"
+    "GRAINES : {seeds}\n"
+    "PONTS (concepts reliant plusieurs domaines) : {bridges}\n"
+    "ANOMALIES (concepts isolés à haute énergie) : {anomalies}\n"
+    "CONTEXTE COGNITIF : {cognitive_ctx}\n"
+    "DÉSIRS DOMINANTS : {desire_narrative}\n\n"
+    "Interprète ces connexions en 2-4 phrases. Quels patterns émergents vois-tu ?\n"
+    "NE génère PAS de code, seulement du texte descriptif. Maximum 200 mots."
+)
+
 # Mots-clés hors-sujet dans les specs — base FORBIDDEN_FRAMEWORKS + spécifiques
 _SPEC_OFFTOPIC_KEYWORDS = FORBIDDEN_FRAMEWORKS | {
     "smart contract", "ethereum",
@@ -220,6 +232,236 @@ class DivineEvolution(BaseAgent):
         except Exception as e:
             logger.warning(f"Impossible de lire {target_file}: {e}")
             return ""
+
+    # ───────────────────────────────────────────────────────────
+    #  KNOWLEDGE SYNTHESIS — méthodes de synthèse de connaissances
+    # ───────────────────────────────────────────────────────────
+
+    def _gather_seeds(self) -> list:
+        """Récolte 4-15 graines depuis 3 sources internes (déterministe)."""
+        seeds = []
+
+        # Source 1 : DesireEngine — drives avec deprivation > 50
+        try:
+            from core.desire_engine import desires
+            for drive in desires.drives.values():
+                if drive.deprivation > 50:
+                    seeds.append(drive.name)
+        except Exception as e:
+            logger.debug(f"gather_seeds desires echoue: {e}")
+
+        # Source 2 : Hippocampus — mots-clés des 5 épisodes récents
+        try:
+            from core.hippocampus import hippocampus
+            episodes = hippocampus.get_session_narrative(n=5)
+            for ep in episodes:
+                summary = ep.get("summary", "")
+                for word in summary.split():
+                    clean = word.strip(".,;:!?()[]\"'").lower()
+                    if len(clean) > 4 and clean not in seeds:
+                        seeds.append(clean)
+        except Exception as e:
+            logger.debug(f"gather_seeds hippocampus echoue: {e}")
+
+        # Source 3 : SynapticNetwork — top 10 nœuds par énergie
+        try:
+            from core.synaptic_network import cortex as synapse_net
+            nodes_by_energy = sorted(
+                synapse_net.nodes.items(),
+                key=lambda kv: kv[1].get("energy", 0),
+                reverse=True
+            )[:10]
+            for node_id, _data in nodes_by_energy:
+                if node_id not in seeds:
+                    seeds.append(node_id)
+        except Exception as e:
+            logger.debug(f"gather_seeds synaptic echoue: {e}")
+
+        return seeds[:15]
+
+    def _cross_reference(self, seeds: list) -> dict:
+        """Croise les graines via cascades synaptiques (déterministe)."""
+        result = {"bridges": [], "clusters": [], "anomalies": []}
+        if len(seeds) < 2:
+            return result
+
+        try:
+            from core.synaptic_network import cortex as synapse_net
+        except Exception:
+            return result
+
+        # Diviser en 2-3 groupes
+        n_groups = min(3, max(2, len(seeds) // 3))
+        chunk_size = max(1, len(seeds) // n_groups)
+        groups = []
+        for i in range(0, len(seeds), chunk_size):
+            group = seeds[i:i + chunk_size]
+            if group:
+                groups.append(group)
+
+        # Lancer une cascade par groupe
+        cascade_results = []
+        for group in groups:
+            try:
+                activated = synapse_net.resonance_cascade(group, cycles=4)
+                cascade_results.append(activated)
+            except Exception as e:
+                logger.debug(f"cascade echouee: {e}")
+                cascade_results.append([])
+
+        # Ponts = concepts activés par 2+ cascades
+        concept_counts = {}
+        for cascade_idx, activated in enumerate(cascade_results):
+            seen_in_cascade = set()
+            for concept, energy in activated:
+                if concept not in seen_in_cascade:
+                    seen_in_cascade.add(concept)
+                    if concept not in concept_counts:
+                        concept_counts[concept] = {"count": 0, "max_energy": 0.0, "clusters": []}
+                    concept_counts[concept]["count"] += 1
+                    concept_counts[concept]["clusters"].append(cascade_idx)
+                    if energy > concept_counts[concept]["max_energy"]:
+                        concept_counts[concept]["max_energy"] = energy
+
+        bridges = [
+            (c, info["max_energy"])
+            for c, info in concept_counts.items()
+            if info["count"] >= 2
+        ]
+        bridges.sort(key=lambda x: x[1], reverse=True)
+        result["bridges"] = bridges[:10]
+
+        # Anomalies = haute énergie (>0.3) dans 1 seul cluster
+        anomalies = [
+            (c, info["max_energy"])
+            for c, info in concept_counts.items()
+            if info["count"] == 1 and info["max_energy"] > 0.3
+        ]
+        anomalies.sort(key=lambda x: x[1], reverse=True)
+        result["anomalies"] = anomalies[:5]
+
+        # Clusters = les groupes eux-mêmes
+        result["clusters"] = groups
+
+        return result
+
+    async def _synthesize_insight(self, seeds: list, cross_result: dict) -> str:
+        """Synthétise un insight via LLM local (1 appel, narration)."""
+        # Collecter contexte
+        cognitive_ctx = ""
+        try:
+            from core.corpus_callosum import callosum
+            cognitive_ctx = callosum.get_cognitive_context()
+        except Exception:
+            pass
+
+        desire_narrative = ""
+        try:
+            from core.desire_engine import desires
+            desire_narrative = desires.get_dominant_narrative(top_n=2)
+        except Exception:
+            pass
+
+        bridges_str = ", ".join(f"{c}({e:.2f})" for c, e in cross_result.get("bridges", []))
+        anomalies_str = ", ".join(f"{c}({e:.2f})" for c, e in cross_result.get("anomalies", []))
+
+        prompt = _KNOWLEDGE_SYNTHESIS_PROMPT.format(
+            seeds=", ".join(seeds[:10]),
+            bridges=bridges_str or "aucun",
+            anomalies=anomalies_str or "aucune",
+            cognitive_ctx=cognitive_ctx or "standard",
+            desire_narrative=desire_narrative or "equilibre"
+        )
+
+        try:
+            response = await self.generate_content(prompt)
+            if response and len(response.strip()) >= 30:
+                return response.strip()[:600]
+        except Exception as e:
+            logger.debug(f"synthesize LLM echoue: {e}")
+
+        return self._deterministic_insight(seeds, cross_result, cognitive_ctx)
+
+    @staticmethod
+    def _deterministic_insight(seeds: list, cross_result: dict, cognitive_ctx: str = "") -> str:
+        """Résumé structuré sans LLM (fallback déterministe)."""
+        bridges = cross_result.get("bridges", [])
+        anomalies = cross_result.get("anomalies", [])
+        bridge_names = ", ".join(c for c, _ in bridges[:5]) if bridges else "aucun"
+        anomaly_names = ", ".join(c for c, _ in anomalies[:3]) if anomalies else "aucune"
+        ctx_part = f" Etat cognitif: {cognitive_ctx}." if cognitive_ctx else ""
+        return (
+            f"Synthese croisee a partir de {len(seeds)} graines. "
+            f"Ponts inter-domaines: {bridge_names}. "
+            f"Anomalies isolees: {anomaly_names}.{ctx_part}"
+        )
+
+    def _crystallize(self, cross_result: dict, insight_text: str):
+        """Renforce les connexions synaptiques, mémorise et publie (déterministe)."""
+        # 1. Renforcement hebbien entre paires de ponts
+        bridges = cross_result.get("bridges", [])
+        if len(bridges) >= 2:
+            try:
+                from core.synaptic_network import cortex as synapse_net
+                bridge_ids = [c for c, _ in bridges[:5]]
+                for i in range(len(bridge_ids) - 1):
+                    synapse_net.hebbian_strengthen(
+                        bridge_ids[i], bridge_ids[i + 1],
+                        success=True, context="knowledge_synthesis"
+                    )
+            except Exception as e:
+                logger.debug(f"crystallize hebbian echoue: {e}")
+
+        # 2. Mémoriser l'insight
+        date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+        self.remember(f"INSIGHT SYNTHESE [{date_str}] {insight_text[:300]}")
+
+        # 3. Publier l'événement
+        try:
+            from core.event_bus import bus
+            loop = asyncio.get_event_loop()
+            event_data = {
+                "bridges": bridges[:10],
+                "anomalies": cross_result.get("anomalies", [])[:5],
+                "insight": insight_text[:300],
+                "timestamp": time.time()
+            }
+            loop.create_task(bus.publish("EVOLUTION_INSIGHT", event_data))
+        except Exception as e:
+            logger.debug(f"crystallize publish echoue: {e}")
+
+    async def _run_knowledge_synthesis(self) -> Dict[str, Any]:
+        """Pipeline de synthèse de connaissances (4 phases)."""
+        self.log_thought("🧠 Phase 1 COLLECTE : récolte des graines...", type="thought")
+        seeds = self._gather_seeds()
+        if len(seeds) < 2:
+            return {"status": "success", "result": "R.A.S — moins de 2 graines disponibles."}
+
+        self.log_thought(f"🔀 Phase 2 CROISEMENT : {len(seeds)} graines...", type="thought")
+        cross_result = self._cross_reference(seeds)
+        if not cross_result["bridges"] and not cross_result["anomalies"]:
+            return {"status": "success", "result": "R.A.S — aucun pont ni anomalie detecte."}
+
+        self.log_thought("💡 Phase 3 SYNTHÈSE : narration LLM...", type="thought")
+        insight = await self._synthesize_insight(seeds, cross_result)
+        if len(insight.strip()) < 30:
+            return {"status": "success", "result": "R.A.S — insight trop court."}
+
+        self.log_thought("💎 Phase 4 CRISTALLISATION : renforcement et mémoire...", type="thought")
+        self._crystallize(cross_result, insight)
+
+        n_bridges = len(cross_result["bridges"])
+        n_anomalies = len(cross_result["anomalies"])
+        return {
+            "status": "success",
+            "result": (
+                f"SYNTHESE CONNAISSANCE TERMINEE.\n"
+                f"Graines: {len(seeds)}\n"
+                f"Ponts: {n_bridges}\n"
+                f"Anomalies: {n_anomalies}\n"
+                f"Insight: {insight[:200]}"
+            )
+        }
 
     @staticmethod
     def _extract_method_context(source_code: str, target_method: str) -> dict | None:
@@ -1307,15 +1549,17 @@ class DivineEvolution(BaseAgent):
 
         # DÉCLENCHEMENT : MODE VEILLE (Automatique ou Manuel)
         if "[MODE VEILLE]" in mission or "veille" in mission.lower():
-            self.log_thought("🧬 Activation du Protocole Darwin (V6 Catalog Protocol)...", type="thought")
+            self.log_thought("🧬 Activation Evolution (mode veille)...", type="thought")
 
             try:
-                # Pipeline V6 par défaut (catalogue pré-défini)
+                if "CATALOG" in mission or "CATALOG" in context:
+                    return await self._run_catalog_pipeline()
                 if "LEGACY" in mission or "legacy" in context:
                     return await self._run_legacy_pipeline()
-                return await self._run_catalog_pipeline()
+                # Défaut : synthèse de connaissances
+                return await self._run_knowledge_synthesis()
             except Exception as e:
-                self.log_thought(f"❌ Erreur critique Protocole Darwin : {e}", type="error")
+                self.log_thought(f"❌ Erreur critique Evolution : {e}", type="error")
                 return {"status": "error", "result": str(e)}
 
         # MODE PAR DÉFAUT

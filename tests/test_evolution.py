@@ -237,7 +237,7 @@ class TestCatalogPipelineV6:
              patch.object(evo, "_read_target_file", return_value="# existing code\npass"), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=valid_code), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert result["status"] == "success"
         assert "CYCLE CATALOG V6" in result["result"]
@@ -259,7 +259,7 @@ class TestCatalogPipelineV6:
         with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="je ne sais pas"), \
              patch.object(evo, "_read_target_file", return_value="# existing code\npass"), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert result["status"] == "success"
         assert "CYCLE CATALOG V6" in result["result"]
@@ -274,7 +274,7 @@ class TestCatalogPipelineV6:
         with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
              patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=bad_code):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert result["status"] == "error"
         assert "ast.parse" in result["result"]
@@ -291,7 +291,7 @@ class TestCatalogPipelineV6:
              patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=""), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert "R.A.S" in result["result"] or "Aucun code" in result["result"]
 
@@ -302,7 +302,7 @@ class TestCatalogPipelineV6:
 
         with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
              patch.object(evo, "_read_target_file", return_value=""):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert "R.A.S" in result["result"]
         assert "introuvable" in result["result"]
@@ -318,7 +318,7 @@ class TestCatalogPipelineV6:
         with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
              patch.object(evo, "_run_grimoire_creation", new_callable=AsyncMock,
                          return_value={"status": "success", "result": "R.A.S — Grimoire complet."}) as mock_grim:
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
             mock_grim.assert_called_once()
         assert "R.A.S" in result["result"]
 
@@ -346,7 +346,7 @@ class TestCatalogPipelineV6:
              patch("core.orchestrator.orchestrator", mock_orch), \
              patch("core.event_bus.bus.bus", mock_bus), \
              patch.dict("sys.modules", {"core.sandbox_engine": MagicMock(sandbox=mock_sandbox)}):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert "CYCLE CATALOG V6" in result["result"]
         pending = cat.get_specs_by_status("pending_deploy")
@@ -373,7 +373,7 @@ class TestCatalogPipelineV6:
         with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
              patch.object(evo, "_read_target_file", return_value="# existing code\npass"), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert "rejected" in result["result"]
 
@@ -407,7 +407,7 @@ class TestCatalogPipelineV6:
         evo = DivineEvolution()
 
         with patch.object(evo, "_run_catalog_pipeline", new_callable=AsyncMock, side_effect=RuntimeError("boom")):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert result["status"] == "error"
         assert "boom" in result["result"]
@@ -427,7 +427,7 @@ class TestGrimoireCreation:
         with patch.object(evo, "_run_grimoire_creation", new_callable=AsyncMock,
                          return_value={"status": "success", "message": "Recette créée"}) as mock_grimoire, \
              patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
             mock_grimoire.assert_called_once()
 
     @pytest.mark.asyncio
@@ -566,7 +566,7 @@ class TestGeminiCodeGeneration:
              patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
              patch.object(evo, "_generate_code_cloud", side_effect=mock_cloud), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert result["status"] == "success"
         assert "CYCLE CATALOG V6" in result["result"]
@@ -587,7 +587,7 @@ class TestGeminiCodeGeneration:
              patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=""), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert result["status"] == "success"
         # Le Coder local doit avoir été appelé en fallback (micro-patch + historique)
@@ -617,7 +617,7 @@ class TestProtectedFilesGuard:
 
         with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
              patch.object(evo, "_read_target_file", return_value="# code existant\npass"):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert "critique" in result.get("result", "").lower() or "warning" in result.get("status", "")
 
@@ -646,7 +646,7 @@ class TestProtectedFilesGuard:
              patch.object(evo, "_read_target_file", return_value="# existing code\npass"), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=valid_code), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # La spec a été traitée (pas de rejet fichier critique)
         assert "critique" not in result.get("result", "").lower()
@@ -676,7 +676,7 @@ class TestProtectedFilesGuard:
              patch.object(evo, "_read_target_file", return_value="# existing code\npass"), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=valid_code), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert "critique" not in result.get("result", "").lower()
 
@@ -761,7 +761,7 @@ class TestAntiHallucinationCatalogPipeline:
              patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=django_code), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # L'Architecte ne doit PAS avoir été appelé
         architect_calls = [c for c in mock_orch.dispatch_task.call_args_list if c[0][0] == "architect"]
@@ -783,7 +783,7 @@ class TestAntiHallucinationCatalogPipeline:
         with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
              patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=pygame_code):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert "R.A.S" in result["result"]
 
@@ -811,7 +811,7 @@ class TestAntiHallucinationCatalogPipeline:
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=valid_code), \
              patch("core.orchestrator.orchestrator", mock_orch), \
              patch("core.event_bus.bus.bus", mock_bus):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # L'Architecte doit avoir été appelé
         architect_calls = [c for c in mock_orch.dispatch_task.call_args_list if c[0][0] == "architect"]
@@ -833,7 +833,7 @@ class TestAntiHallucinationCatalogPipeline:
              patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=non_structural), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         cat = EvolutionCatalog()
         deployed = cat.get_specs_by_status("deployed")
@@ -871,7 +871,7 @@ class TestAntiTruncation:
              patch.object(evo, "_read_target_file", return_value=original_source), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=truncated_code), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # L'Architecte ne doit PAS avoir été appelé
         architect_calls = [c for c in mock_orch.dispatch_task.call_args_list if c[0][0] == "architect"]
@@ -900,7 +900,7 @@ class TestAntiTruncation:
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=new_code), \
              patch("core.orchestrator.orchestrator", mock_orch), \
              patch("core.event_bus.bus.bus", mock_bus):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # L'Architecte DOIT avoir été appelé
         architect_calls = [c for c in mock_orch.dispatch_task.call_args_list if c[0][0] == "architect"]
@@ -955,7 +955,7 @@ class TestPendingDeployPipeline:
              patch("core.orchestrator.orchestrator", mock_orch), \
              patch("core.event_bus.bus.bus", mock_bus), \
              patch.dict("sys.modules", {"core.sandbox_engine": MagicMock(sandbox=mock_sandbox)}):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert "CYCLE CATALOG V6" in result["result"]
         # Au moins une spec doit être en pending_deploy (pas deployed)
@@ -1317,7 +1317,7 @@ class TestMicroModeIntegration:
              patch.object(evo, "_read_target_file", return_value=_SAMPLE_SOURCE), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=mock_method), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # Vérifier que le mode micro a été mentionné dans les logs
         micro_logs = [t for t in thoughts if "micro" in t.lower() or "🔬" in t or "Réassemblage" in t]
@@ -1343,7 +1343,7 @@ class TestMicroModeIntegration:
              patch.object(evo, "_read_target_file", return_value=_SAMPLE_SOURCE), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=valid_code), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # Pas de log micro
         micro_logs = [t for t in thoughts if "🔬" in t]
@@ -1368,7 +1368,7 @@ class TestMicroModeIntegration:
              patch.object(evo, "_read_target_file", return_value=_SAMPLE_SOURCE), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=mock_method), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # Le pipeline ne devrait PAS échouer en anti-troncature (le réassemblage fait un fichier complet)
         assert "Anti-troncature" not in result.get("result", "")
@@ -1417,7 +1417,7 @@ class TestFeedbackLoop:
              patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
              patch.object(evo, "_generate_code_cloud", side_effect=mock_cloud), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # Le retry cloud a été appelé au moins 2 fois
         assert call_count[0] >= 2
@@ -1452,7 +1452,7 @@ class TestFeedbackLoop:
              patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
              patch.object(evo, "_generate_code_cloud", side_effect=mock_cloud), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # Le coder local a été appelé pour le retry syntax
         syntax_fix_calls = [
@@ -1478,7 +1478,7 @@ class TestFeedbackLoop:
              patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=bad_code), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert result["status"] == "error"
         assert "ast.parse error" in result["result"]
@@ -1513,7 +1513,7 @@ class TestFeedbackLoop:
              patch.object(evo, "_read_target_file", return_value="# existing\npass"), \
              patch.object(evo, "_generate_code_cloud", side_effect=mock_cloud), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            await evo.process_task({"mission": "[MODE VEILLE]"})
+            await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # Le prompt de retry doit contenir l'info d'erreur
         assert len(retry_prompts) >= 1
@@ -1573,7 +1573,7 @@ class TestEvolutionPatchMode:
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=None), \
              patch("core.orchestrator.orchestrator", mock_orch), \
              patch("core.event_bus.bus.bus", mock_bus):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # Le premier dispatch au coder doit contenir MICRO_PATCH dans le contexte
         coder_calls = [(a, p) for a, p in dispatch_calls if a == "coder"]
@@ -1621,7 +1621,7 @@ class TestEvolutionPatchMode:
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=None), \
              patch("core.orchestrator.orchestrator", mock_orch), \
              patch("core.event_bus.bus.bus", mock_bus):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # Le résultat ne doit PAS mentionner anti-troncature
         assert "Anti-troncature" not in result.get("result", "")
@@ -1666,7 +1666,7 @@ class TestEvolutionPatchMode:
              patch.object(evo, "_read_target_file", return_value=source_code), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=None), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # Le cycle doit échouer proprement (warning, pas d'exception)
         assert result["status"] == "warning"
@@ -1718,7 +1718,7 @@ class TestEvolutionPatchMode:
              patch("core.orchestrator.orchestrator", mock_orch), \
              patch("core.event_bus.bus.bus", mock_bus), \
              patch.object(ExperienceRegistry, "record", capture_record):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # Au moins une expérience enregistrée avec code_source contenant "local+patch"
         patch_exps = [e for e in recorded_experiences if "local+patch" in (e.code_source or "")]
@@ -1781,7 +1781,7 @@ class TestEvolutionPatchMode:
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=None), \
              patch("core.orchestrator.orchestrator", mock_orch), \
              patch("core.event_bus.bus.bus", mock_bus):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # Le retry doit avoir été appelé avec RETRY dans le contexte
         retry_calls = [(a, p) for a, p in dispatch_calls
@@ -1824,7 +1824,7 @@ class TestEvolutionPatchMode:
              patch.object(evo, "_read_target_file", return_value=source_code), \
              patch.object(evo, "_generate_code_cloud", new_callable=AsyncMock, return_value=None), \
              patch("core.orchestrator.orchestrator", mock_orch):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # Le cycle doit échouer proprement
         assert result["status"] == "warning"
@@ -1889,8 +1889,243 @@ class TestEvolutionPatchMode:
              patch("core.orchestrator.orchestrator", mock_orch), \
              patch("core.event_bus.bus.bus", mock_bus), \
              patch.object(ExperienceRegistry, "record", capture_record):
-            result = await evo.process_task({"mission": "[MODE VEILLE]"})
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         # L'expérience doit contenir "local+patch+retry"
         retry_exps = [e for e in recorded_experiences if "retry" in (e.code_source or "")]
         assert len(retry_exps) >= 1
+
+
+class TestKnowledgeSynthesis:
+    """Tests pour le pipeline de synthèse de connaissances."""
+
+    def _make_evo(self):
+        evo = DivineEvolution()
+        evo.daily_budget_used = 0
+        evo._council_degraded = False
+        return evo
+
+    # --- _gather_seeds ---
+
+    def test_gather_seeds_from_desires(self):
+        """Drives avec deprivation > 50 deviennent des graines."""
+        evo = self._make_evo()
+
+        mock_drive_high = MagicMock(name="CURIOSITE", deprivation=75)
+        mock_drive_high.name = "CURIOSITE"
+        mock_drive_low = MagicMock(name="STABILITE", deprivation=30)
+        mock_drive_low.name = "STABILITE"
+        mock_desires = MagicMock()
+        mock_desires.drives = {"CURIOSITE": mock_drive_high, "STABILITE": mock_drive_low}
+
+        with patch.dict("sys.modules", {"core.desire_engine": MagicMock(desires=mock_desires)}), \
+             patch.dict("sys.modules", {"core.hippocampus": MagicMock(hippocampus=MagicMock(get_session_narrative=MagicMock(return_value=[])))}), \
+             patch.dict("sys.modules", {"core.synaptic_network": MagicMock(cortex=MagicMock(nodes={}))}):
+            seeds = evo._gather_seeds()
+
+        assert "CURIOSITE" in seeds
+        assert "STABILITE" not in seeds
+
+    def test_gather_seeds_from_hippocampus(self):
+        """Mots > 4 chars des épisodes récents deviennent graines."""
+        evo = self._make_evo()
+
+        episodes = [
+            {"summary": "Le module orchestrator a été optimisé", "salience": 0.8},
+            {"summary": "Bug corrigé dans le router", "salience": 0.6},
+        ]
+
+        mock_hippo = MagicMock()
+        mock_hippo.get_session_narrative = MagicMock(return_value=episodes)
+
+        with patch.dict("sys.modules", {"core.desire_engine": MagicMock(desires=MagicMock(drives={}))}), \
+             patch.dict("sys.modules", {"core.hippocampus": MagicMock(hippocampus=mock_hippo)}), \
+             patch.dict("sys.modules", {"core.synaptic_network": MagicMock(cortex=MagicMock(nodes={}))}):
+            seeds = evo._gather_seeds()
+
+        assert "module" in seeds
+        assert "orchestrator" in seeds
+        # Mots courts (<=4 chars) exclus
+        assert "le" not in seeds and "Le" not in seeds
+
+    def test_gather_seeds_from_synaptic(self):
+        """Top noeuds par énergie deviennent graines, max 15."""
+        evo = self._make_evo()
+
+        nodes = {f"concept_{i}": {"energy": 1.0 - i * 0.05} for i in range(20)}
+        mock_cortex = MagicMock()
+        mock_cortex.nodes = nodes
+
+        with patch.dict("sys.modules", {"core.desire_engine": MagicMock(desires=MagicMock(drives={}))}), \
+             patch.dict("sys.modules", {"core.hippocampus": MagicMock(hippocampus=MagicMock(get_session_narrative=MagicMock(return_value=[])))}), \
+             patch.dict("sys.modules", {"core.synaptic_network": MagicMock(cortex=mock_cortex)}):
+            seeds = evo._gather_seeds()
+
+        assert len(seeds) <= 15
+        assert "concept_0" in seeds  # plus haute énergie
+
+    def test_gather_seeds_graceful_degradation(self):
+        """3 sources en erreur → liste vide."""
+        evo = self._make_evo()
+
+        bad_desires = MagicMock()
+        type(bad_desires).drives = property(lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
+        bad_hippo = MagicMock()
+        bad_hippo.get_session_narrative = MagicMock(side_effect=RuntimeError("boom"))
+        bad_cortex = MagicMock()
+        type(bad_cortex).nodes = property(lambda self: (_ for _ in ()).throw(RuntimeError("boom")))
+
+        with patch.dict("sys.modules", {
+            "core.desire_engine": MagicMock(desires=bad_desires),
+            "core.hippocampus": MagicMock(hippocampus=bad_hippo),
+            "core.synaptic_network": MagicMock(cortex=bad_cortex),
+        }):
+            seeds = evo._gather_seeds()
+
+        assert seeds == [] or isinstance(seeds, list)
+
+    # --- _cross_reference ---
+
+    def test_cross_reference_bridges(self):
+        """Concepts activés par 2+ cascades → bridges."""
+        evo = self._make_evo()
+
+        # 6 seeds → 2 groupes de 3 : [alpha,beta,gamma] et [delta,epsilon,zeta]
+        # pont_commun doit apparaître dans les deux groupes
+        def mock_cascade(seed_concepts, cycles=4):
+            if "alpha" in seed_concepts:
+                return [("pont_commun", 0.8), ("alpha_only", 0.5)]
+            elif "delta" in seed_concepts:
+                return [("pont_commun", 0.7), ("delta_only", 0.4)]
+            return []
+
+        mock_cortex = MagicMock()
+        mock_cortex.resonance_cascade = mock_cascade
+
+        with patch.dict("sys.modules", {"core.synaptic_network": MagicMock(cortex=mock_cortex)}):
+            result = evo._cross_reference(["alpha", "beta", "gamma", "delta", "epsilon", "zeta"])
+
+        bridge_names = [c for c, _ in result["bridges"]]
+        assert "pont_commun" in bridge_names
+
+    def test_cross_reference_anomalies(self):
+        """Haute énergie dans 1 seul cluster → anomalie."""
+        evo = self._make_evo()
+
+        # Groupe 1 [alpha,beta,gamma] → anomalie_isolee (haute énergie, 1 seul cluster)
+        # Groupe 2 [delta,epsilon,zeta] → commun seulement
+        def mock_cascade(seed_concepts, cycles=4):
+            if "alpha" in seed_concepts:
+                return [("anomalie_isolee", 0.9), ("commun", 0.2)]
+            elif "delta" in seed_concepts:
+                return [("commun", 0.3)]
+            return []
+
+        mock_cortex = MagicMock()
+        mock_cortex.resonance_cascade = mock_cascade
+
+        with patch.dict("sys.modules", {"core.synaptic_network": MagicMock(cortex=mock_cortex)}):
+            result = evo._cross_reference(["alpha", "beta", "gamma", "delta", "epsilon", "zeta"])
+
+        anomaly_names = [c for c, _ in result["anomalies"]]
+        assert "anomalie_isolee" in anomaly_names
+
+    def test_cross_reference_empty(self):
+        """Réseau vide ou pas de seeds → résultat vide."""
+        evo = self._make_evo()
+        result = evo._cross_reference([])
+        assert result["bridges"] == []
+        assert result["anomalies"] == []
+
+    # --- _synthesize_insight ---
+
+    @pytest.mark.asyncio
+    async def test_synthesize_llm_success(self):
+        """LLM narration réussie → texte utilisé."""
+        evo = self._make_evo()
+
+        llm_response = "Les connexions entre orchestrator et router révèlent un pattern de communication centralisé."
+        cross_result = {"bridges": [("orchestrator", 0.8), ("router", 0.7)], "anomalies": []}
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value=llm_response), \
+             patch.dict("sys.modules", {"core.corpus_callosum": MagicMock(callosum=MagicMock(get_cognitive_context=MagicMock(return_value="flow")))}), \
+             patch.dict("sys.modules", {"core.desire_engine": MagicMock(desires=MagicMock(get_dominant_narrative=MagicMock(return_value="curiosité")))}):
+            result = await evo._synthesize_insight(["orchestrator", "router"], cross_result)
+
+        assert "orchestrator" in result or "connexions" in result
+        assert len(result) >= 30
+
+    @pytest.mark.asyncio
+    async def test_synthesize_fallback(self):
+        """LLM échoue → fallback déterministe."""
+        evo = self._make_evo()
+        cross_result = {"bridges": [("concept_a", 0.5)], "anomalies": [("anomalie_x", 0.4)]}
+
+        with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value=""), \
+             patch.dict("sys.modules", {"core.corpus_callosum": MagicMock(callosum=MagicMock(get_cognitive_context=MagicMock(return_value="")))}), \
+             patch.dict("sys.modules", {"core.desire_engine": MagicMock(desires=MagicMock(get_dominant_narrative=MagicMock(return_value="")))}):
+            result = await evo._synthesize_insight(["test"], cross_result)
+
+        assert "Synthese croisee" in result
+        assert "concept_a" in result
+
+    # --- _crystallize ---
+
+    def test_crystallize_strengthens(self):
+        """hebbian_strengthen appelé entre paires de ponts."""
+        evo = self._make_evo()
+
+        mock_cortex = MagicMock()
+        cross_result = {
+            "bridges": [("concept_a", 0.8), ("concept_b", 0.7), ("concept_c", 0.6)],
+            "anomalies": []
+        }
+
+        mock_bus = MagicMock()
+        mock_bus.publish = AsyncMock()
+
+        with patch.dict("sys.modules", {"core.synaptic_network": MagicMock(cortex=mock_cortex)}), \
+             patch.dict("sys.modules", {"core.event_bus": MagicMock(bus=mock_bus)}), \
+             patch.object(evo, "remember"):
+            evo._crystallize(cross_result, "Un insight de test pour vérifier le renforcement hebbien.")
+
+        # hebbian_strengthen appelé 2 fois (a→b, b→c)
+        assert mock_cortex.hebbian_strengthen.call_count == 2
+        mock_cortex.hebbian_strengthen.assert_any_call(
+            "concept_a", "concept_b", success=True, context="knowledge_synthesis"
+        )
+
+    # --- Pipeline complet ---
+
+    @pytest.mark.asyncio
+    async def test_full_pipeline(self):
+        """MODE VEILLE sans CATALOG → synthèse de connaissances."""
+        evo = self._make_evo()
+
+        # Mock _gather_seeds
+        with patch.object(evo, "_gather_seeds", return_value=["concept_a", "concept_b", "concept_c"]), \
+             patch.object(evo, "_cross_reference", return_value={
+                 "bridges": [("pont_x", 0.8)],
+                 "anomalies": [("anomalie_y", 0.5)],
+                 "clusters": [["concept_a"], ["concept_b", "concept_c"]]
+             }), \
+             patch.object(evo, "_synthesize_insight", new_callable=AsyncMock,
+                         return_value="Insight significatif sur les connexions internes du système."), \
+             patch.object(evo, "_crystallize"):
+            result = await evo.process_task({"mission": "[MODE VEILLE] Croise les connaissances."})
+
+        assert result["status"] == "success"
+        assert "SYNTHESE CONNAISSANCE TERMINEE" in result["result"]
+        assert "Graines: 3" in result["result"]
+        assert "Ponts: 1" in result["result"]
+
+    @pytest.mark.asyncio
+    async def test_routing_catalog_explicit(self):
+        """'CATALOG' dans mission → catalog pipeline."""
+        evo = self._make_evo()
+
+        with patch.object(evo, "_run_catalog_pipeline", new_callable=AsyncMock,
+                         return_value={"status": "success", "result": "CYCLE CATALOG V6"}):
+            result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
+
+        assert "CYCLE CATALOG V6" in result["result"]

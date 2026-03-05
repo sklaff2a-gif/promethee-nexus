@@ -455,7 +455,7 @@ class AutonomyEngine:
         veille_mission = f"[MODE VEILLE] {VEILLE_TOPICS[veille_index]}"
 
         return [
-            {"agent": "evolution", "intent": "EXPANSION_CODE", "mission": "Analyse un fichier aléatoire. Propose une petite optimisation (typage/docstring)."},
+            {"agent": "evolution", "intent": "EXPANSION_CODE", "mission": "[MODE VEILLE] Croise les connaissances internes. Decouvre des patterns et connexions entre domaines."},
             {"agent": "architect", "intent": "AUDIT_STRUCTURE", "mission": "Vérifie qu'aucun fichier temporaire (.tmp, .log) ne traîne à la racine."},
             {"agent": "researcher", "intent": "VEILLE_SILENCIEUSE", "mission": veille_mission},
             {"agent": "researcher", "intent": "DROPZONE_SCAN", "mission": "dropzone: Scanne la dropzone pour de nouveaux fichiers."},
