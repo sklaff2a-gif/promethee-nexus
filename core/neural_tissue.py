@@ -52,7 +52,10 @@ MAX_GRID_SIGNAL = 5.0              # Saturation : signal max par cellule de gril
 TICK_INTERVAL = 2.0
 SAVE_EVERY_N_TICKS = 50
 FOOD_SPAWN_PER_ZONE = 2
+MIN_ZONE_INTENSITY = 0.15          # Plancher signal — aucune zone ne reçoit 0
 PATTERN_TRACK_SIZE = 20
+DAWN_REPOPULATE_COUNT = 5          # Cellules par zone désertée à l'aube
+VIABLE_GENOMES = ["RCGC", "GRCGC", "CCGC", "RCGGC", "GCGC"]  # Génomes sachant capturer
 EXTINCTION_THRESHOLD = 5       # Repeuplement si < 5 cellules
 
 # Seuils efférents (Sprint 5)
@@ -131,7 +134,11 @@ class NeuralCell:
             generate_reward if generate_reward is not None else GENERATE_REWARD,
         )
 
-        cost = MAINTENANCE_COST_BASAL if self.energy < BASAL_ENERGY_THRESHOLD else MAINTENANCE_COST
+        local_signal = grid[self.y][self.x]
+        if local_signal < 0.1 or self.energy < BASAL_ENERGY_THRESHOLD:
+            cost = MAINTENANCE_COST_BASAL
+        else:
+            cost = MAINTENANCE_COST
         self.energy -= cost
         if self.energy <= 0:
             self.alive = False
@@ -371,11 +378,10 @@ class NeuralTissue:
             if not bounds:
                 continue
             x1, y1, x2, y2 = bounds
-            for _ in range(3):  # 3 cellules fraîches par zone désertée
+            for _ in range(DAWN_REPOPULATE_COUNT):
                 if len(self.cells) >= MAX_CELLS:
                     break
-                genome_len = random.randint(3, 8)
-                genome = "".join(random.choice(ALPHABET) for _ in range(genome_len))
+                genome = random.choice(VIABLE_GENOMES)
                 x = random.randint(x1, min(x2 - 1, GRID_SIZE - 1))
                 y = random.randint(y1, min(y2 - 1, GRID_SIZE - 1))
                 self.cells.append(NeuralCell(genome=genome, x=x, y=y))
@@ -491,8 +497,9 @@ class NeuralTissue:
 
         # Phase circadienne : en sommeil, signaux réduits à 25% (métabolisme cérébral ~75%)
         sleep_mode = self._circadian_phase == "sommeil_profond"
+
         for zone_name, (x1, y1, x2, y2) in SIGNAL_ZONES.items():
-            intensity = zone_intensities.get(zone_name, 0.3)
+            intensity = max(MIN_ZONE_INTENSITY, zone_intensities.get(zone_name, 0.3))
             # Nombre de food spawns : base + bonus des goals actifs
             food_count = FOOD_SPAWN_PER_ZONE + self._goal_bonus_zones.get(zone_name, 0)
             if sleep_mode:
