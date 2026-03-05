@@ -67,6 +67,19 @@ THRESHOLD_CREATIVITY_SPIKE = 1.5    # Activité zone creativity > seuil
 PUBLISH_COOLDOWN_TICKS = 10         # Min 10 ticks (20s) entre publications
 THRESHOLD_THREAT_SUBSIDED = 0.5     # Retour au calme zone threat
 
+# --- Saisonnalité ---
+SEASON_ORDER = ["emotion", "desire", "stability", "cognition", "creativity",
+                "memory", "dopamine", "goals", "threat"]
+SEASON_CYCLE_LENGTH = 500        # ticks/saison (~17 min)
+SEASON_FOOD_BONUS = 3            # food supplémentaire saison haute
+SEASON_TRANSITION_BONUS = 1      # demi-bonus zone sortante
+
+# --- Modèle Alpha ---
+ALPHA_ENERGY_THRESHOLD = 390.0   # 3× DIVISION_THRESHOLD
+ALPHA_OUTPUT_THRESHOLD = 500
+EXILE_MUTATION_MULTIPLIER = 2.0
+FORCED_DIVISION_MUTATION_MULTIPLIER = 3.0
+
 # Mapping goal → zone(s) bonusée(s) (Sprint 6 - Pression sélective)
 # Mots-clés dans le titre du goal → zones qui reçoivent un bonus de nourriture
 GOAL_ZONE_MAP = {
@@ -98,6 +111,19 @@ SIGNAL_ZONES = {
     "stability":  (0,  6,  4,  10),
     "creativity": (12, 6,  16, 10),
     "cognition":  (6,  6,  10, 10),   # Matrice grise — néocortex
+}
+
+# Adjacence spatiale entre zones (basée sur la grille 16×16)
+ZONE_ADJACENCY = {
+    "emotion":    ["desire", "stability", "cognition"],
+    "desire":     ["emotion", "cognition", "threat"],
+    "threat":     ["desire", "creativity", "cognition"],
+    "stability":  ["emotion", "cognition", "dopamine"],
+    "cognition":  ["emotion", "desire", "threat", "stability", "creativity", "dopamine", "memory", "goals"],
+    "creativity": ["threat", "cognition", "goals"],
+    "dopamine":   ["stability", "cognition", "memory"],
+    "memory":     ["dopamine", "cognition", "goals"],
+    "goals":      ["memory", "cognition", "creativity"],
 }
 
 
@@ -289,6 +315,9 @@ class NeuralTissue:
         self._circadian_phase: str = "eveil"
         # Boucles de rétroaction (Sprint 7) — suivi historique zone threat
         self._threat_was_high: bool = False  # zone threat était en surcharge
+        # Saisonnalité + Modèle Alpha
+        self._current_season_index: int = 0
+        self.total_exiles: int = 0
 
         self._load()
 
@@ -390,6 +419,95 @@ class NeuralTissue:
             self.total_births += spawned
             logger.info(f"TISSUE: Aube — {spawned} cellules fraîches dans {len(desert_zones)} zones désertées")
 
+    def _get_cell_zone(self, cell: NeuralCell) -> Optional[str]:
+        """Retourne le nom de la zone contenant la cellule (None si inter-zone)."""
+        for zone_name, (x1, y1, x2, y2) in SIGNAL_ZONES.items():
+            if x1 <= cell.x < x2 and y1 <= cell.y < y2:
+                return zone_name
+        return None
+
+    def _enforce_alpha_rule(self):
+        """Identifie les alphas par zone et expulse les challengers."""
+        # Regrouper les alphas par zone
+        zone_alphas: Dict[str, List[NeuralCell]] = {}
+        for cell in self.cells:
+            if not cell.alive:
+                continue
+            is_alpha = (
+                cell.energy > ALPHA_ENERGY_THRESHOLD
+                or (cell.output_count > ALPHA_OUTPUT_THRESHOLD
+                    and cell.energy > DIVISION_THRESHOLD)
+            )
+            if not is_alpha:
+                continue
+            zone = self._get_cell_zone(cell)
+            if zone is None:
+                continue
+            zone_alphas.setdefault(zone, []).append(cell)
+
+        # Appliquer la règle : 1 alpha max par zone
+        for zone_name, alphas in zone_alphas.items():
+            if len(alphas) < 2:
+                continue
+            # Dominant = meilleur output_count
+            alphas.sort(key=lambda c: c.output_count, reverse=True)
+            for challenger in alphas[1:]:
+                self._exile_cell(challenger, zone_name)
+
+    def _exile_cell(self, cell: NeuralCell, from_zone: str):
+        """Expulse une cellule vers une zone adjacente ou force une division."""
+        adjacent = ZONE_ADJACENCY.get(from_zone, [])
+        eff_mutation = self._get_effective_mutation_rate()
+
+        # Chercher la zone adjacente la moins dense
+        best_zone = None
+        best_density = float("inf")
+        for adj_name in adjacent:
+            sig = self._zone_signals.get(adj_name, {})
+            density = sig.get("density", 0.0)
+            if density < best_density:
+                best_density = density
+                best_zone = adj_name
+
+        if best_zone and best_density <= 2.0:
+            # Migration : téléport au centre de la zone cible
+            bounds = SIGNAL_ZONES[best_zone]
+            cx = (bounds[0] + bounds[2]) // 2
+            cy = (bounds[1] + bounds[3]) // 2
+            cell.x = cx
+            cell.y = cy
+            # Mutation amplifiée
+            cell.genome = mutate(cell.genome, eff_mutation * EXILE_MUTATION_MULTIPLIER)
+        else:
+            # Toutes zones denses → division forcée
+            cell.energy /= 2.0
+            # Enfant dans une zone aléatoire différente
+            other_zones = [z for z in SIGNAL_ZONES if z != from_zone]
+            target_zone = random.choice(other_zones) if other_zones else from_zone
+            bounds = SIGNAL_ZONES[target_zone]
+            child_x = random.randint(bounds[0], min(bounds[2] - 1, GRID_SIZE - 1))
+            child_y = random.randint(bounds[1], min(bounds[3] - 1, GRID_SIZE - 1))
+            child = NeuralCell(
+                genome=mutate(cell.genome, eff_mutation * FORCED_DIVISION_MUTATION_MULTIPLIER),
+                x=child_x, y=child_y,
+                energy=cell.energy,
+                generation=cell.generation + 1,
+            )
+            if len(self.cells) < MAX_CELLS:
+                self.cells.append(child)
+                self.total_births += 1
+            # Parent aussi muté
+            cell.genome = mutate(cell.genome, eff_mutation * EXILE_MUTATION_MULTIPLIER)
+
+        self.total_exiles += 1
+
+        # Publier l'événement
+        self._try_publish("TISSUE_ALPHA_EXILE", {
+            "from_zone": from_zone,
+            "cell_genome": cell.genome,
+            "tick": self.tick_count,
+        })
+
     def _get_effective_mutation_rate(self) -> float:
         """Taux de mutation modulé par la phase circadienne."""
         if self._circadian_phase == "crepuscule":
@@ -451,6 +569,9 @@ class NeuralTissue:
         self.cells = [c for c in self.cells if c.alive and c.energy > 0]
         self.total_deaths += before - len(self.cells)
 
+        # 4b. Règle Alpha — 1 alpha max par zone
+        self._enforce_alpha_rule()
+
         # 5. Repeuplement d'urgence si extinction
         if len(self.cells) < EXTINCTION_THRESHOLD:
             self._seed_population()
@@ -495,6 +616,20 @@ class NeuralTissue:
             "cognition":  state["cognition_level"],
         }
 
+        # Saisonnalité : déterminer la saison courante
+        new_season_index = (self.tick_count // SEASON_CYCLE_LENGTH) % len(SEASON_ORDER)
+        if new_season_index != self._current_season_index and self.tick_count > 0:
+            old_zone = SEASON_ORDER[self._current_season_index]
+            new_zone = SEASON_ORDER[new_season_index]
+            self._current_season_index = new_season_index
+            self._try_publish("TISSUE_SEASON_CHANGE", {
+                "from_zone": old_zone,
+                "to_zone": new_zone,
+                "tick": self.tick_count,
+            })
+        current_season_zone = SEASON_ORDER[self._current_season_index]
+        prev_season_zone = SEASON_ORDER[(self._current_season_index - 1) % len(SEASON_ORDER)]
+
         # Phase circadienne : en sommeil, signaux réduits à 25% (métabolisme cérébral ~75%)
         sleep_mode = self._circadian_phase == "sommeil_profond"
 
@@ -502,6 +637,11 @@ class NeuralTissue:
             intensity = max(MIN_ZONE_INTENSITY, zone_intensities.get(zone_name, 0.3))
             # Nombre de food spawns : base + bonus des goals actifs
             food_count = FOOD_SPAWN_PER_ZONE + self._goal_bonus_zones.get(zone_name, 0)
+            # Bonus saisonnalité
+            if zone_name == current_season_zone:
+                food_count += SEASON_FOOD_BONUS
+            elif zone_name == prev_season_zone:
+                food_count += SEASON_TRANSITION_BONUS
             if sleep_mode:
                 food_count = max(1, food_count // 4)
                 intensity *= 0.5
@@ -1048,7 +1188,45 @@ class NeuralTissue:
             )
             ctx += f" | zones actives: {zones_desc}"
 
+        # Saison courante
+        season = self.get_current_season()
+        progress = season["progress"]
+        ctx += f" | saison: {season['zone']} ({progress})"
+
         return ctx
+
+    def get_current_season(self) -> Dict[str, Any]:
+        """Retourne l'état de la saison courante."""
+        idx = self._current_season_index
+        tick_in_season = self.tick_count % SEASON_CYCLE_LENGTH
+        progress_pct = round(tick_in_season / SEASON_CYCLE_LENGTH * 100)
+        return {
+            "zone": SEASON_ORDER[idx],
+            "progress": f"{progress_pct}%",
+            "next_zone": SEASON_ORDER[(idx + 1) % len(SEASON_ORDER)],
+            "tick_in_season": tick_in_season,
+        }
+
+    def _get_alpha_summary(self) -> Dict[str, str]:
+        """Retourne un dict zone → genome des alphas actuels."""
+        alphas = {}
+        for cell in self.cells:
+            if not cell.alive:
+                continue
+            is_alpha = (
+                cell.energy > ALPHA_ENERGY_THRESHOLD
+                or (cell.output_count > ALPHA_OUTPUT_THRESHOLD
+                    and cell.energy > DIVISION_THRESHOLD)
+            )
+            if not is_alpha:
+                continue
+            zone = self._get_cell_zone(cell)
+            if zone is None:
+                continue
+            # Garder le meilleur par zone
+            if zone not in alphas or cell.output_count > alphas[zone][1]:
+                alphas[zone] = (cell.genome, cell.output_count)
+        return {z: genome for z, (genome, _) in alphas.items()}
 
     def get_stats(self) -> Dict[str, Any]:
         """Statistiques complètes du substrat."""
@@ -1059,6 +1237,7 @@ class NeuralTissue:
             "tick_count": self.tick_count,
             "total_births": self.total_births,
             "total_deaths": self.total_deaths,
+            "total_exiles": self.total_exiles,
             "dominant_genome": self.get_dominant_genome(),
             "dominant_patterns": self.dominant_patterns[:5],
             "max_generation": max((c.generation for c in alive), default=0),
@@ -1072,6 +1251,8 @@ class NeuralTissue:
             "grid_size": GRID_SIZE,
             "cognitive_state": dict(self._cognitive_state),
             "tick_ms": round(self._last_tick_ms, 2),
+            "current_season": self.get_current_season(),
+            "alphas": self._get_alpha_summary(),
         }
 
     # --- Persistance ---
@@ -1094,6 +1275,8 @@ class NeuralTissue:
             "goal_bonus_zones": self._goal_bonus_zones,
             "threat_was_high": self._threat_was_high,
             "circadian_phase": self._circadian_phase,
+            "current_season_index": self._current_season_index,
+            "total_exiles": self.total_exiles,
             "top_cells": [
                 {
                     "genome": c.genome, "x": c.x, "y": c.y,
@@ -1133,6 +1316,8 @@ class NeuralTissue:
             self._goal_bonus_zones = data.get("goal_bonus_zones", {})
             self._threat_was_high = data.get("threat_was_high", False)
             self._circadian_phase = data.get("circadian_phase", "eveil")
+            self._current_season_index = data.get("current_season_index", 0)
+            self.total_exiles = data.get("total_exiles", 0)
 
             top_cells = data.get("top_cells", [])
             if top_cells:

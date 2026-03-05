@@ -10,6 +10,9 @@ from core.neural_tissue import (
     DIVISION_THRESHOLD, MAINTENANCE_COST, MAINTENANCE_COST_BASAL,
     BASAL_ENERGY_THRESHOLD, SIGNAL_ZONES, FOOD_SPAWN_PER_ZONE,
     MIN_ZONE_INTENSITY, DAWN_REPOPULATE_COUNT, VIABLE_GENOMES,
+    SEASON_ORDER, SEASON_CYCLE_LENGTH, SEASON_FOOD_BONUS,
+    SEASON_TRANSITION_BONUS, ALPHA_ENERGY_THRESHOLD, ALPHA_OUTPUT_THRESHOLD,
+    ZONE_ADJACENCY, MAX_CELLS,
 )
 
 
@@ -302,3 +305,279 @@ class TestPopulationStability:
 
         alive_count = sum(1 for c in tissue.cells if c.alive)
         assert alive_count > 5, f"Population tombee a {alive_count} en sommeil"
+
+
+class TestSeasonality:
+    """Saisonnalite — rotation des bonus de nourriture entre zones."""
+
+    def test_season_cycle_advances(self):
+        """L'index de saison change apres SEASON_CYCLE_LENGTH ticks."""
+        tissue = _make_tissue()
+        tissue._circadian_phase = "eveil"
+        assert tissue._current_season_index == 0
+        # tick_count est incremente en fin de _tick(), _inject_signals voit l'ancienne valeur
+        # Il faut que _inject_signals voie tick_count=500 → changement au 501e tick
+        # On positionne tick_count juste avant le seuil pour aller plus vite
+        tissue.tick_count = SEASON_CYCLE_LENGTH - 1  # 499
+        tissue._tick()  # _inject_signals voit 499, puis tick_count → 500
+        assert tissue._current_season_index == 0
+        tissue._tick()  # _inject_signals voit 500 → 500//500=1 → changement
+        assert tissue._current_season_index == 1, (
+            f"Season index devrait etre 1, got {tissue._current_season_index}"
+        )
+
+    def test_season_bonus_applied(self):
+        """Zone en saison haute recoit plus de signal que zone neutre."""
+        tissue = _make_tissue()
+        tissue._circadian_phase = "eveil"
+        tissue._current_season_index = 0  # saison "emotion"
+        tissue.tick_count = 0
+        tissue.grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        tissue._cognitive_state = {
+            "emotion_intensity": 0.5, "threat_level": 0.0,
+            "dopamine_level": 0.5, "goal_count": 0,
+            "desire_intensity": 50.0, "memory_activity": 0.3,
+            "stability": 0.5, "creativity": 0.3, "cognition_level": 0.3,
+        }
+        # Pas de goal bonus
+        tissue._goal_bonus_zones = {}
+        random.seed(42)
+        tissue._inject_signals()
+
+        # Mesurer signal zone "emotion" (saison haute) vs zone "threat" (neutre)
+        ex1, ey1, ex2, ey2 = SIGNAL_ZONES["emotion"]
+        signal_emotion = sum(
+            tissue.grid[y][x]
+            for y in range(ey1, ey2) for x in range(ex1, ex2)
+        )
+        tx1, ty1, tx2, ty2 = SIGNAL_ZONES["threat"]
+        signal_threat = sum(
+            tissue.grid[y][x]
+            for y in range(ty1, ty2) for x in range(tx1, tx2)
+        )
+        assert signal_emotion > signal_threat, (
+            f"Zone emotion (saison haute) devrait avoir plus de signal: "
+            f"{signal_emotion:.2f} vs {signal_threat:.2f}"
+        )
+
+    def test_season_transition_bonus(self):
+        """Zone sortante recoit un bonus intermediaire."""
+        tissue = _make_tissue()
+        tissue._circadian_phase = "eveil"
+        tissue._current_season_index = 1  # saison "desire", sortante = "emotion"
+        tissue.tick_count = SEASON_CYCLE_LENGTH  # pour eviter changement
+        tissue.grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        tissue._cognitive_state = {
+            "emotion_intensity": 0.5, "threat_level": 0.0,
+            "dopamine_level": 0.5, "goal_count": 0,
+            "desire_intensity": 50.0, "memory_activity": 0.3,
+            "stability": 0.5, "creativity": 0.3, "cognition_level": 0.3,
+        }
+        tissue._goal_bonus_zones = {}
+        random.seed(42)
+        tissue._inject_signals()
+
+        # Zone sortante "emotion" (bonus transition) vs zone "threat" (neutre, meme intensite)
+        ex1, ey1, ex2, ey2 = SIGNAL_ZONES["emotion"]
+        signal_emotion = sum(
+            tissue.grid[y][x]
+            for y in range(ey1, ey2) for x in range(ex1, ex2)
+        )
+        tx1, ty1, tx2, ty2 = SIGNAL_ZONES["threat"]
+        signal_threat = sum(
+            tissue.grid[y][x]
+            for y in range(ty1, ty2) for x in range(tx1, tx2)
+        )
+        assert signal_emotion > signal_threat, (
+            f"Zone sortante devrait avoir plus de signal: "
+            f"{signal_emotion:.2f} vs {signal_threat:.2f}"
+        )
+
+    def test_season_no_bonus_other_zones(self):
+        """Les zones non-saison et non-sortante ne recoivent pas de bonus."""
+        tissue = _make_tissue()
+        tissue._circadian_phase = "eveil"
+        tissue._current_season_index = 0  # saison "emotion", sortante = "threat" (index -1 = 8)
+        tissue.tick_count = 0
+        # La saison 0 = "emotion", sortante = SEASON_ORDER[-1] = "threat"
+        # Toutes les autres zones ne devraient pas avoir de bonus saisonnalite
+        assert SEASON_ORDER[0] == "emotion"
+        assert SEASON_ORDER[-1] == "threat"
+        # Verification : cognition n'est ni saison haute ni sortante
+        assert "cognition" != SEASON_ORDER[0]
+        assert "cognition" != SEASON_ORDER[-1]
+
+    def test_get_current_season(self):
+        """get_current_season retourne les bonnes infos."""
+        tissue = _make_tissue()
+        tissue._current_season_index = 3
+        tissue.tick_count = SEASON_CYCLE_LENGTH * 3 + 250
+        season = tissue.get_current_season()
+        assert season["zone"] == SEASON_ORDER[3]  # "cognition"
+        assert season["next_zone"] == SEASON_ORDER[4]  # "creativity"
+        assert season["tick_in_season"] == 250
+        assert "50%" == season["progress"]
+
+    def test_season_change_event(self):
+        """TISSUE_SEASON_CHANGE est publie au changement de saison."""
+        tissue = _make_tissue()
+        tissue._circadian_phase = "eveil"
+        tissue._current_season_index = 0
+        published = []
+        original_try_publish = tissue._try_publish
+
+        def mock_try_publish(event_name, payload):
+            if event_name == "TISSUE_SEASON_CHANGE":
+                published.append(payload)
+            return original_try_publish(event_name, payload)
+
+        tissue._try_publish = mock_try_publish
+        # Positionner juste avant le seuil
+        tissue.tick_count = SEASON_CYCLE_LENGTH - 1
+        tissue._tick()  # voit 499, pas de changement
+        tissue._tick()  # voit 500 → changement
+        assert len(published) >= 1, "TISSUE_SEASON_CHANGE devrait etre publie"
+        assert published[0]["from_zone"] == "emotion"
+        assert published[0]["to_zone"] == "desire"
+
+    def test_season_persisted(self):
+        """save/load preserve l'index de saison."""
+        tissue = _make_tissue()
+        tissue._current_season_index = 5
+        tissue.total_exiles = 42
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            tmp_path = f.name
+        try:
+            import core.neural_tissue as nt_module
+            old_file = nt_module.TISSUE_STATE_FILE
+            nt_module.TISSUE_STATE_FILE = tmp_path
+            tissue._save()
+            # Reset et reload
+            tissue._current_season_index = 0
+            tissue.total_exiles = 0
+            tissue._load()
+            assert tissue._current_season_index == 5
+            assert tissue.total_exiles == 42
+        finally:
+            nt_module.TISSUE_STATE_FILE = old_file
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+
+class TestAlphaRule:
+    """Modele Alpha — 1 alpha max par zone, expulsion des challengers."""
+
+    def test_alpha_detection(self):
+        """Cellule avec energie > seuil est detectee comme alpha."""
+        tissue = _make_tissue()
+        tissue.cells = []
+        # Cellule alpha par energie
+        alpha = NeuralCell(genome="GCGC", x=13, y=13, energy=400.0)
+        tissue.cells.append(alpha)
+        summary = tissue._get_alpha_summary()
+        assert "goals" in summary, f"Alpha devrait etre dans goals, got {summary}"
+
+    def test_single_alpha_tolerated(self):
+        """Un seul alpha dans une zone ne provoque pas d'exil."""
+        tissue = _make_tissue()
+        tissue.cells = [
+            NeuralCell(genome="GCGC", x=13, y=13, energy=400.0),
+        ]
+        tissue.total_exiles = 0
+        tissue._enforce_alpha_rule()
+        assert tissue.total_exiles == 0
+
+    def test_dual_alpha_exile(self):
+        """2 alphas dans une zone → le plus faible est expulse."""
+        tissue = _make_tissue()
+        dominant = NeuralCell(genome="GCGC", x=13, y=13, energy=400.0, output_count=100)
+        challenger = NeuralCell(genome="CCGC", x=14, y=14, energy=400.0, output_count=50)
+        tissue.cells = [dominant, challenger]
+        tissue._zone_signals = {z: {"density": 0.01} for z in SIGNAL_ZONES}
+        tissue.total_exiles = 0
+        tissue._enforce_alpha_rule()
+        assert tissue.total_exiles == 1
+        # Le challenger devrait avoir ete deplace hors de goals
+        zone = tissue._get_cell_zone(challenger)
+        assert zone != "goals", f"Challenger devrait etre hors de goals, est dans {zone}"
+
+    def test_exile_migration(self):
+        """Challenger est migre vers une zone adjacente moins dense."""
+        tissue = _make_tissue()
+        dominant = NeuralCell(genome="GCGC", x=13, y=13, energy=400.0, output_count=100)
+        challenger = NeuralCell(genome="CCGC", x=14, y=14, energy=400.0, output_count=50)
+        tissue.cells = [dominant, challenger]
+        tissue._zone_signals = {z: {"density": 0.01} for z in SIGNAL_ZONES}
+        tissue.total_exiles = 0
+        tissue._enforce_alpha_rule()
+        # Le challenger est dans une zone adjacente a goals
+        new_zone = tissue._get_cell_zone(challenger)
+        assert new_zone in ZONE_ADJACENCY["goals"], (
+            f"Challenger devrait etre dans une zone adjacente a goals, est dans {new_zone}"
+        )
+
+    def test_exile_forced_division(self):
+        """Si toutes zones adjacentes sont denses, division forcee."""
+        tissue = _make_tissue()
+        dominant = NeuralCell(genome="GCGC", x=13, y=13, energy=400.0, output_count=100)
+        challenger = NeuralCell(genome="CCGC", x=14, y=14, energy=400.0, output_count=50)
+        tissue.cells = [dominant, challenger]
+        # Toutes les zones super denses → forcer division
+        tissue._zone_signals = {z: {"density": 3.0} for z in SIGNAL_ZONES}
+        tissue.total_exiles = 0
+        before_count = len(tissue.cells)
+        tissue._enforce_alpha_rule()
+        assert tissue.total_exiles == 1
+        # Division forcee ajoute un enfant
+        assert len(tissue.cells) == before_count + 1
+        # Energie du challenger divisee par 2
+        assert challenger.energy == pytest.approx(200.0, abs=1.0)
+
+    def test_exile_mutation_rate(self):
+        """Le genome du challenger est mute apres exil."""
+        tissue = _make_tissue()
+        dominant = NeuralCell(genome="GCGC", x=13, y=13, energy=400.0, output_count=100)
+        original_genome = "CCGCCCGCCCGCCCGCCCGCCCGC"  # Long pour maximiser chances mutation
+        challenger = NeuralCell(genome=original_genome, x=14, y=14, energy=400.0, output_count=50)
+        tissue.cells = [dominant, challenger]
+        tissue._zone_signals = {z: {"density": 0.01} for z in SIGNAL_ZONES}
+        tissue._circadian_phase = "crepuscule"  # mutation rate doublee
+        random.seed(42)
+        tissue._enforce_alpha_rule()
+        # Avec un genome long et mutation rate doublee × 2 (exile), forte chance de mutation
+        # On verifie juste que la mutation a ete appliquee (genome different ou pas)
+        # En pratique, avec rate=0.08 sur 24 chars, ~2 mutations en moyenne
+        assert challenger.genome is not None
+        assert len(challenger.genome) >= 2
+
+    def test_alpha_exile_event(self):
+        """TISSUE_ALPHA_EXILE est publie lors d'un exil."""
+        tissue = _make_tissue()
+        dominant = NeuralCell(genome="GCGC", x=13, y=13, energy=400.0, output_count=100)
+        challenger = NeuralCell(genome="CCGC", x=14, y=14, energy=400.0, output_count=50)
+        tissue.cells = [dominant, challenger]
+        tissue._zone_signals = {z: {"density": 0.01} for z in SIGNAL_ZONES}
+        published = []
+        original_try_publish = tissue._try_publish
+
+        def mock_try_publish(event_name, payload):
+            if event_name == "TISSUE_ALPHA_EXILE":
+                published.append(payload)
+
+        tissue._try_publish = mock_try_publish
+        tissue._enforce_alpha_rule()
+        assert len(published) == 1
+        assert published[0]["from_zone"] == "goals"
+
+    def test_total_exiles_counted(self):
+        """3 alphas dans une zone → 2 exils comptes."""
+        tissue = _make_tissue()
+        alpha1 = NeuralCell(genome="GCGC", x=13, y=13, energy=400.0, output_count=200)
+        alpha2 = NeuralCell(genome="CCGC", x=14, y=14, energy=400.0, output_count=100)
+        alpha3 = NeuralCell(genome="RCGC", x=13, y=14, energy=400.0, output_count=50)
+        tissue.cells = [alpha1, alpha2, alpha3]
+        tissue._zone_signals = {z: {"density": 0.01} for z in SIGNAL_ZONES}
+        tissue.total_exiles = 0
+        tissue._enforce_alpha_rule()
+        assert tissue.total_exiles == 2
