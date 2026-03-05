@@ -240,9 +240,10 @@ class TestNapMode:
     async def test_nap_mode_toggles_sleeping(self, isolate_thalamus):
         t = isolate_thalamus
         assert t._sleeping is False
-        await t._on_nap_mode({"sleeping": True})
+        await t._on_nap_mode({"active": True})
         assert t._sleeping is True
-        await t._on_nap_mode({"sleeping": False})
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            await t._on_nap_mode({"active": False})
         assert t._sleeping is False
 
 
@@ -455,3 +456,164 @@ class TestCategoryHandlers:
         initial = t._scorecard["KNOWLEDGE_GAP_DETECTED"]
         await t._on_goal_complete({})
         assert t._scorecard["KNOWLEDGE_GAP_DETECTED"] > initial
+
+
+# ============================================================
+# 18. TestNapSleepMode (Sprint B)
+# ============================================================
+
+class TestNapSleepMode:
+
+    @pytest.mark.asyncio
+    async def test_enter_sleep_sets_threshold(self, isolate_thalamus):
+        """Entree en sieste => seuil monte a sommeil_profond (0.8)."""
+        t = isolate_thalamus
+        from core.thalamus import PHASE_THRESHOLDS
+        t._threshold = 0.3
+        t._enter_sleep()
+        assert t._sleeping is True
+        assert t._threshold == PHASE_THRESHOLDS["sommeil_profond"]
+
+    @pytest.mark.asyncio
+    async def test_enter_sleep_clears_buffer(self, isolate_thalamus):
+        """Entree en sieste => buffer vide."""
+        t = isolate_thalamus
+        t._nap_buffer = [{"event_type": "X", "data": {}, "timestamp": 0}]
+        t._enter_sleep()
+        assert len(t._nap_buffer) == 0
+
+    @pytest.mark.asyncio
+    async def test_exit_sleep_restores_threshold(self, isolate_thalamus):
+        """Sortie de sieste => seuil revient a pre-nap."""
+        t = isolate_thalamus
+        t._threshold = 0.35
+        t._enter_sleep()
+        assert t._threshold == 0.8
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            await t._exit_sleep()
+        assert t._sleeping is False
+        assert abs(t._threshold - 0.35) < 0.001
+
+    @pytest.mark.asyncio
+    async def test_events_buffered_during_sleep(self, isolate_thalamus):
+        """Events bufferises au lieu de booster la scorecard pendant sieste."""
+        t = isolate_thalamus
+        t._enter_sleep()
+        initial = t._scorecard["KNOWLEDGE_GAP_DETECTED"]
+        await t._on_knowledge_gap({})
+        # Scorecard inchangee
+        assert t._scorecard["KNOWLEDGE_GAP_DETECTED"] == initial
+        # Event dans le buffer
+        assert len(t._nap_buffer) == 1
+        assert t._nap_buffer[0]["event_type"] == "KNOWLEDGE_GAP_DETECTED"
+
+    @pytest.mark.asyncio
+    async def test_buffer_max_size(self, isolate_thalamus):
+        """Buffer ne depasse pas NAP_BUFFER_MAX."""
+        t = isolate_thalamus
+        from core.thalamus import NAP_BUFFER_MAX
+        t._enter_sleep()
+        for i in range(NAP_BUFFER_MAX + 10):
+            await t._on_knowledge_gap({})
+        assert len(t._nap_buffer) == NAP_BUFFER_MAX
+
+    @pytest.mark.asyncio
+    async def test_reptilian_alert_wakes_up(self, isolate_thalamus):
+        """REPTILIAN_ALERT pendant sommeil => reveil force + boost urgence."""
+        t = isolate_thalamus
+        t._threshold = 0.3
+        t._enter_sleep()
+        assert t._sleeping is True
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            await t._on_reptilian_alert({"threat_level": 8.0})
+        assert t._sleeping is False
+        from core.thalamus import EVENT_CATEGORIES
+        for evt, cat in EVENT_CATEGORIES.items():
+            if cat == "urgence":
+                assert t._scorecard[evt] >= 0.9
+
+    @pytest.mark.asyncio
+    async def test_flush_buffer_updates_scorecard(self, isolate_thalamus):
+        """Au reveil, buffer rejoue => saillances augmentent."""
+        t = isolate_thalamus
+        t._enter_sleep()
+        await t._on_council_end({})
+        await t._on_knowledge_gap({})
+        initial_delib = t._scorecard["COUNCIL_END"]
+        initial_cogni = t._scorecard["KNOWLEDGE_GAP_DETECTED"]
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            await t._exit_sleep()
+        assert t._scorecard["COUNCIL_END"] > initial_delib
+        assert t._scorecard["KNOWLEDGE_GAP_DETECTED"] > initial_cogni
+
+    @pytest.mark.asyncio
+    async def test_flush_buffer_attenuation(self, isolate_thalamus):
+        """Events anciens (>60s) recoivent un boost attenue (x0.7)."""
+        import time as time_mod
+        t = isolate_thalamus
+        t._enter_sleep()
+        # Simule un event ancien (120s dans le passe)
+        t._nap_buffer.append({
+            "event_type": "COUNCIL_END",
+            "data": {},
+            "timestamp": time_mod.time() - 120,
+        })
+        initial = t._scorecard["COUNCIL_END"]
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            await t._exit_sleep()
+        boost = t._scorecard["COUNCIL_END"] - initial
+        # Boost attenue = 0.15 * 0.7 = 0.105
+        assert abs(boost - 0.105) < 0.02
+
+    @pytest.mark.asyncio
+    async def test_no_attention_shift_during_sleep(self, isolate_thalamus):
+        """Pas de THALAMUS_ATTENTION_SHIFT publie en mode sommeil."""
+        t = isolate_thalamus
+        from core.thalamus import EVENT_CATEGORIES
+        t._enter_sleep()
+        t._attention_focus = "regulation"
+        for evt, cat in EVENT_CATEGORIES.items():
+            t._scorecard[evt] = 0.95 if cat == "urgence" else 0.01
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock) as mock_pub:
+            await t._update_cycle()
+        shift_calls = [c for c in mock_pub.call_args_list if c[0][0] == "THALAMUS_ATTENTION_SHIFT"]
+        assert len(shift_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_no_salience_published_during_sleep(self, isolate_thalamus):
+        """Pas de THALAMUS_SALIENCE publie en mode sommeil."""
+        t = isolate_thalamus
+        t._enter_sleep()
+        t._scorecard["REPTILIAN_ALERT"] = 0.9
+        t._last_scorecard["REPTILIAN_ALERT"] = 0.5
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock) as mock_pub:
+            await t._update_cycle()
+        sal_calls = [c for c in mock_pub.call_args_list if c[0][0] == "THALAMUS_SALIENCE"]
+        assert len(sal_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_cardiac_continues_during_sleep(self, isolate_thalamus):
+        """Cycle continue meme en sommeil (cycle_count augmente)."""
+        t = isolate_thalamus
+        t._enter_sleep()
+        initial_count = t._cycle_count
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            await t._on_cardiac_beat({"bpm": 55, "emotion": "serenite"})
+        assert t._cycle_count == initial_count + 1
+
+    @pytest.mark.asyncio
+    async def test_nap_mode_active_key(self, isolate_thalamus):
+        """Handler _on_nap_mode lit la cle 'active' (pas 'sleeping')."""
+        t = isolate_thalamus
+        await t._on_nap_mode({"active": True})
+        assert t._sleeping is True
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            await t._on_nap_mode({"active": False})
+        assert t._sleeping is False
+
+    def test_get_stats_nap_buffer_size(self, isolate_thalamus):
+        """get_stats inclut nap_buffer_size."""
+        t = isolate_thalamus
+        t._nap_buffer = [{"x": 1}, {"x": 2}]
+        stats = t.get_stats()
+        assert stats["nap_buffer_size"] == 2

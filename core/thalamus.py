@@ -31,6 +31,7 @@ PHASE_THRESHOLDS = {
     "aube": 0.4,
 }
 MAX_LEARNED_RULES = 20  # Pour Sprint E futur
+NAP_BUFFER_MAX = 50  # Max events bufferises pendant sieste
 
 # --- Categories d'events ---
 
@@ -95,6 +96,8 @@ class Thalamus:
         self._sleeping: bool = False
         # Buffer sieste (Sprint B)
         self._nap_buffer: List[Dict] = []
+        # Seuil pre-sieste (restaure au reveil)
+        self._pre_nap_threshold: Optional[float] = None
         # Categorie dominante
         self._attention_focus: Optional[str] = None
         # Snapshot contexte organes
@@ -190,6 +193,7 @@ class Thalamus:
             "threshold": round(self._threshold, 3),
             "focus": self._attention_focus,
             "sleeping": self._sleeping,
+            "nap_buffer_size": len(self._nap_buffer),
             "cycle_count": self._cycle_count,
             "context": dict(self._context),
             "salient_events": [
@@ -256,11 +260,13 @@ class Thalamus:
         await self._update_cycle()
 
     async def _on_reptilian_alert(self, data: Dict[str, Any]):
-        """REPTILIAN_ALERT : boost immediat urgence a 0.9."""
+        """REPTILIAN_ALERT : boost immediat urgence a 0.9. Urgence = reveil force."""
         self._context["threat_level"] = data.get("threat_level", 5.0)
         for evt, cat in EVENT_CATEGORIES.items():
             if cat == "urgence":
                 self._scorecard[evt] = max(self._scorecard[evt], 0.9)
+        if self._sleeping:
+            await self._exit_sleep()
 
     async def _on_dopamine_surge(self, data: Dict[str, Any]):
         """DOPAMINE_SURGE : met a jour contexte dopamine."""
@@ -272,6 +278,9 @@ class Thalamus:
 
     async def _on_knowledge_gap(self, data: Dict[str, Any]):
         """KNOWLEDGE_GAP_DETECTED : boost cognition."""
+        if self._sleeping:
+            self._buffer_event("KNOWLEDGE_GAP_DETECTED", data)
+            return
         for evt, cat in EVENT_CATEGORIES.items():
             if cat == "cognition":
                 self._scorecard[evt] = min(1.0, self._scorecard[evt] + 0.15)
@@ -289,37 +298,130 @@ class Thalamus:
 
     async def _on_council_end(self, data: Dict[str, Any]):
         """COUNCIL_END : boost deliberation."""
+        if self._sleeping:
+            self._buffer_event("COUNCIL_END", data)
+            return
         for evt, cat in EVENT_CATEGORIES.items():
             if cat == "deliberation":
                 self._scorecard[evt] = min(1.0, self._scorecard[evt] + 0.2)
 
     async def _on_hallucination(self, data: Dict[str, Any]):
         """HALLUCINATION_DETECTED : boost urgence."""
+        if self._sleeping:
+            self._buffer_event("HALLUCINATION_DETECTED", data)
+            return
         for evt, cat in EVENT_CATEGORIES.items():
             if cat == "urgence":
                 self._scorecard[evt] = min(1.0, self._scorecard[evt] + 0.2)
 
     async def _on_tissue_pattern(self, data: Dict[str, Any]):
         """TISSUE_PATTERN_EMERGED : boost emergence."""
+        if self._sleeping:
+            self._buffer_event("TISSUE_PATTERN_EMERGED", data)
+            return
         for evt, cat in EVENT_CATEGORIES.items():
             if cat == "emergence":
                 self._scorecard[evt] = min(1.0, self._scorecard[evt] + 0.15)
 
     async def _on_tissue_creativity(self, data: Dict[str, Any]):
         """TISSUE_CREATIVITY_SPIKE : boost emergence."""
+        if self._sleeping:
+            self._buffer_event("TISSUE_CREATIVITY_SPIKE", data)
+            return
         for evt, cat in EVENT_CATEGORIES.items():
             if cat == "emergence":
                 self._scorecard[evt] = min(1.0, self._scorecard[evt] + 0.15)
 
     async def _on_goal_complete(self, data: Dict[str, Any]):
         """PREFRONTAL_GOAL_COMPLETE : boost cognition."""
+        if self._sleeping:
+            self._buffer_event("PREFRONTAL_GOAL_COMPLETE", data)
+            return
         for evt, cat in EVENT_CATEGORIES.items():
             if cat == "cognition":
                 self._scorecard[evt] = min(1.0, self._scorecard[evt] + 0.15)
 
     async def _on_nap_mode(self, data: Dict[str, Any]):
         """NAP_MODE : bascule mode sieste (Sprint B)."""
-        self._sleeping = data.get("sleeping", not self._sleeping)
+        active = data.get("active", data.get("sleeping", False))
+        if active:
+            self._enter_sleep()
+        else:
+            await self._exit_sleep()
+
+    # ================================================================
+    # MODE SIESTE (Sprint B)
+    # ================================================================
+
+    def _enter_sleep(self):
+        """Entre en mode sieste : seuil monte, buffer vide."""
+        self._sleeping = True
+        self._pre_nap_threshold = self._threshold
+        self._threshold = PHASE_THRESHOLDS["sommeil_profond"]
+        self._nap_buffer.clear()
+        self._nap_sleep_start = time.time()
+        logger.info(
+            f"THALAMUS: Entree en mode sieste "
+            f"(seuil {self._pre_nap_threshold:.2f} -> {self._threshold:.2f})."
+        )
+
+    async def _exit_sleep(self):
+        """Sort du mode sieste : restaure seuil, flush buffer."""
+        if not self._sleeping:
+            return
+        self._sleeping = False
+        buffered_count = len(self._nap_buffer)
+        duration = time.time() - getattr(self, "_nap_sleep_start", time.time())
+        if self._pre_nap_threshold is not None:
+            self._threshold = self._pre_nap_threshold
+            self._pre_nap_threshold = None
+        await self._flush_nap_buffer()
+        logger.info(
+            f"THALAMUS: Reveil apres {duration:.0f}s "
+            f"({buffered_count} events bufferises rejoues)."
+        )
+
+    def _buffer_event(self, event_type: str, data: Dict[str, Any]):
+        """Bufferise un event pendant le sommeil."""
+        if len(self._nap_buffer) < NAP_BUFFER_MAX:
+            self._nap_buffer.append({
+                "event_type": event_type,
+                "data": data,
+                "timestamp": time.time(),
+            })
+
+    async def _flush_nap_buffer(self):
+        """Rejoue le buffer au reveil avec attenuation temporelle."""
+        if not self._nap_buffer:
+            return
+        now = time.time()
+        for entry in self._nap_buffer:
+            evt_type = entry["event_type"]
+            cat = EVENT_CATEGORIES.get(evt_type)
+            if not cat:
+                continue
+            # Attenuation : events plus anciens recoivent 70% du boost
+            age = now - entry.get("timestamp", now)
+            factor = 0.7 if age > 60 else 1.0
+            boost = 0.15 * factor
+            for evt, c in EVENT_CATEGORIES.items():
+                if c == cat:
+                    self._scorecard[evt] = min(1.0, self._scorecard[evt] + boost)
+        # Publication si changements significatifs
+        has_change = any(
+            abs(self._scorecard[k] - self._last_scorecard.get(k, 0.5)) > MIN_SALIENCE_CHANGE
+            for k in self._scorecard
+        )
+        if has_change:
+            filtered = {k: round(v, 3) for k, v in self._scorecard.items() if v > 0.1}
+            await bus.publish("THALAMUS_SALIENCE", {
+                "scorecard": filtered,
+                "threshold": round(self._threshold, 3),
+                "focus": self._attention_focus,
+                "source": "nap_flush",
+            })
+            self._last_scorecard = dict(self._scorecard)
+        self._nap_buffer.clear()
 
     # ================================================================
     # CYCLE DE MISE A JOUR (declenche par CARDIAC_BEAT)
@@ -363,6 +465,12 @@ class Thalamus:
 
         # 6. Focus : categorie avec la plus haute somme de saillances
         self._attention_focus = self._compute_dominant_focus()
+
+        # En mode sommeil : pas de publication (focus gele, bruit supprime)
+        if self._sleeping:
+            if self._cycle_count % SAVE_INTERVAL == 0:
+                self._save()
+            return
 
         # 7. Publication THALAMUS_SALIENCE si changement significatif
         has_change = any(
