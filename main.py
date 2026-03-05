@@ -363,6 +363,11 @@ async def lifespan(app: FastAPI):
     heart_task = asyncio.create_task(heart.start_beating())
     print(f"   💓 COEUR: Moteur cardiaque actif (BPM={heart.bpm:.0f}).")
 
+    # --- THALAMUS (Relais Sensoriel) ---
+    from core.thalamus import thalamus
+    thalamus.init()
+    print("   🔬 THALAMUS: Relais sensoriel actif.")
+
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
 
     # --- CI/CD Pipeline (remplace quality_control_listener) ---
@@ -378,6 +383,7 @@ async def lifespan(app: FastAPI):
     ci_pipeline.stop()
     talk_logger.stop()
     interface_logger.stop()
+    thalamus._save()
     print("🔌 Arrêt.")
     tracemalloc.stop()
 
@@ -586,6 +592,12 @@ async def prefrontal_status():
     """Retourne l'état du cortex préfrontal (goals, stratégies, narratif)."""
     from core.prefrontal import prefrontal
     return prefrontal.get_stats()
+
+@app.get("/api/thalamus/status")
+async def thalamus_status():
+    """Retourne l'etat du thalamus (scorecard, focus, seuil)."""
+    from core.thalamus import thalamus
+    return thalamus.get_stats()
 
 @app.get("/api/inner-voice/status")
 async def inner_voice_status():

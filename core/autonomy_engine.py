@@ -909,6 +909,17 @@ class AutonomyEngine:
             for k in expired_keys:
                 del council_adj[k]
 
+        # --- Filtrage attentionnel thalamique (Couche 15) ---
+        try:
+            from core.thalamus import thalamus
+            for i, (routine, s) in enumerate(scored):
+                bonus = thalamus.compute_attention_bonus(routine["intent"])
+                if bonus != 0.0:
+                    scored[i] = (routine, s + bonus)
+            scored.sort(key=lambda x: x[1], reverse=True)
+        except Exception:
+            pass
+
         if not scored:
             logger.warning("[AUTONOMY] Aucune routine disponible apres filtrage. Cycle avorte.")
             self._persist_state()

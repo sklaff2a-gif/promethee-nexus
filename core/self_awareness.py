@@ -444,6 +444,13 @@ class SelfAwarenessEngine:
         except Exception:
             snapshot["circadian_phase"] = "eveil"
 
+        # Thalamus
+        try:
+            from core.thalamus import thalamus
+            snapshot["thalamus"] = thalamus.get_stats()
+        except Exception:
+            pass
+
         # Neural Tissue
         try:
             from core.neural_tissue import tissue
