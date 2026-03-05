@@ -186,16 +186,17 @@ class TestEventPublishing:
 
     @pytest.mark.asyncio
     async def test_attention_shift_published(self, isolate_thalamus):
-        """Changement de focus => THALAMUS_ATTENTION_SHIFT publie."""
+        """Changement de focus => THALAMUS_ATTENTION_SHIFT publie (apres inertie)."""
         t = isolate_thalamus
-        from core.thalamus import EVENT_CATEGORIES
+        from core.thalamus import EVENT_CATEGORIES, FOCUS_INERTIA_CYCLES
         t._attention_focus = "regulation"
-        # Rend urgence dominante pour forcer un shift
-        for evt, cat in EVENT_CATEGORIES.items():
-            t._scorecard[evt] = 0.95 if cat == "urgence" else 0.01
-        t._last_scorecard = dict(t._scorecard)  # Pas de changement saillance
+        # Rend urgence dominante pour forcer un shift (doit persister FOCUS_INERTIA_CYCLES)
         with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock) as mock_pub:
-            await t._update_cycle()
+            for _ in range(FOCUS_INERTIA_CYCLES):
+                for evt, cat in EVENT_CATEGORIES.items():
+                    t._scorecard[evt] = 0.95 if cat == "urgence" else 0.01
+                t._last_scorecard = dict(t._scorecard)
+                await t._update_cycle()
         shift_calls = [c for c in mock_pub.call_args_list if c[0][0] == "THALAMUS_ATTENTION_SHIFT"]
         assert len(shift_calls) >= 1
 
@@ -617,3 +618,627 @@ class TestNapSleepMode:
         t._nap_buffer = [{"x": 1}, {"x": 2}]
         stats = t.get_stats()
         assert stats["nap_buffer_size"] == 2
+
+
+# ============================================================
+# 19. TestFocusInertia (Sprint C)
+# ============================================================
+
+class TestFocusInertia:
+
+    def test_focus_stable_no_change(self, isolate_thalamus):
+        """Focus identique => pas de shift, candidat reset."""
+        t = isolate_thalamus
+        t._attention_focus = "urgence"
+        result = t._apply_focus_inertia("urgence")
+        assert result == "urgence"
+        assert t._pending_focus is None
+        assert t._pending_focus_count == 0
+
+    def test_focus_shift_rejected_if_too_fast(self, isolate_thalamus):
+        """1 cycle different => rejete, ancien focus maintenu."""
+        t = isolate_thalamus
+        t._attention_focus = "urgence"
+        result = t._apply_focus_inertia("cognition")
+        assert result == "urgence"  # Ancien maintenu
+        assert t._pending_focus == "cognition"
+        assert t._pending_focus_count == 1
+
+    def test_focus_shift_accepted_after_inertia(self, isolate_thalamus):
+        """FOCUS_INERTIA_CYCLES cycles consecutifs => shift accepte."""
+        from core.thalamus import FOCUS_INERTIA_CYCLES
+        t = isolate_thalamus
+        t._attention_focus = "urgence"
+        for i in range(FOCUS_INERTIA_CYCLES - 1):
+            result = t._apply_focus_inertia("cognition")
+            assert result == "urgence"  # Pas encore
+        result = t._apply_focus_inertia("cognition")
+        assert result == "cognition"  # Accepte
+
+    def test_pending_focus_reset_on_new_candidate(self, isolate_thalamus):
+        """Changement de candidat => compteur reset."""
+        t = isolate_thalamus
+        t._attention_focus = "urgence"
+        t._apply_focus_inertia("cognition")
+        assert t._pending_focus_count == 1
+        t._apply_focus_inertia("emergence")  # Nouveau candidat
+        assert t._pending_focus == "emergence"
+        assert t._pending_focus_count == 1  # Reset
+
+    def test_inertia_preserves_old_focus(self, isolate_thalamus):
+        """Pendant l'attente d'inertie, l'ancien focus est maintenu."""
+        t = isolate_thalamus
+        t._attention_focus = "regulation"
+        for _ in range(2):
+            result = t._apply_focus_inertia("emergence")
+            assert result == "regulation"
+        assert t.get_focus() == "regulation"
+
+    @pytest.mark.asyncio
+    async def test_focus_history_appended_on_shift(self, isolate_thalamus):
+        """Shift confirme => entree dans _focus_history."""
+        from core.thalamus import EVENT_CATEGORIES, FOCUS_INERTIA_CYCLES
+        t = isolate_thalamus
+        t._attention_focus = "regulation"
+        # Force urgence dominante pendant FOCUS_INERTIA_CYCLES cycles
+        for evt, cat in EVENT_CATEGORIES.items():
+            t._scorecard[evt] = 0.95 if cat == "urgence" else 0.01
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            for _ in range(FOCUS_INERTIA_CYCLES):
+                await t._update_cycle()
+        assert len(t._focus_history) >= 1
+        assert t._focus_history[-1]["focus"] == "urgence"
+
+
+# ============================================================
+# 20. TestAttentionFatigue (Sprint C)
+# ============================================================
+
+class TestAttentionFatigue:
+
+    @pytest.mark.asyncio
+    async def test_fatigue_increases_with_stable_focus(self, isolate_thalamus):
+        """Fatigue monte quand focus stable."""
+        from core.thalamus import ATTENTION_FATIGUE_RATE
+        t = isolate_thalamus
+        t._attention_focus = "urgence"
+        t._attention_fatigue = 0.0
+        # Force urgence dominante pour garder focus stable
+        from core.thalamus import EVENT_CATEGORIES
+        for evt, cat in EVENT_CATEGORIES.items():
+            t._scorecard[evt] = 0.95 if cat == "urgence" else 0.01
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            await t._update_cycle()
+        assert t._attention_fatigue >= ATTENTION_FATIGUE_RATE
+
+    @pytest.mark.asyncio
+    async def test_fatigue_decreases_on_shift(self, isolate_thalamus):
+        """Shift de focus => fatigue baisse (recovery)."""
+        from core.thalamus import ATTENTION_FATIGUE_RECOVERY, FOCUS_INERTIA_CYCLES, EVENT_CATEGORIES
+        t = isolate_thalamus
+        t._attention_focus = "regulation"
+        t._attention_fatigue = 0.3
+        # Force urgence dominante pendant assez de cycles pour shift
+        for evt, cat in EVENT_CATEGORIES.items():
+            t._scorecard[evt] = 0.95 if cat == "urgence" else 0.01
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            for _ in range(FOCUS_INERTIA_CYCLES):
+                # Maintenir la scorecard car decay la reduit
+                for evt, cat in EVENT_CATEGORIES.items():
+                    t._scorecard[evt] = 0.95 if cat == "urgence" else 0.01
+                await t._update_cycle()
+        # Apres le shift, fatigue doit avoir baisse
+        assert t._attention_fatigue < 0.3
+
+    @pytest.mark.asyncio
+    async def test_fatigue_clamped_max(self, isolate_thalamus):
+        """Fatigue ne depasse pas ATTENTION_FATIGUE_MAX (1.0)."""
+        from core.thalamus import ATTENTION_FATIGUE_MAX
+        t = isolate_thalamus
+        t._attention_fatigue = ATTENTION_FATIGUE_MAX
+        t._attention_focus = "urgence"
+        # Simule focus stable manuellement
+        from core.thalamus import EVENT_CATEGORIES
+        for evt, cat in EVENT_CATEGORIES.items():
+            t._scorecard[evt] = 0.95 if cat == "urgence" else 0.01
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            await t._update_cycle()
+        assert t._attention_fatigue <= ATTENTION_FATIGUE_MAX
+
+    def test_fatigue_attenuates_bonus(self, isolate_thalamus):
+        """Bonus reduit quand fatigue > 0.5."""
+        t = isolate_thalamus
+        t._attention_focus = "urgence"
+        t._scorecard["REPTILIAN_ALERT"] = 0.9
+        t._scorecard["HALLUCINATION_DETECTED"] = 0.8
+        t._scorecard["TISSUE_EXTINCTION_RISK"] = 0.7
+        t._scorecard["OLLAMA_UNRESPONSIVE"] = 0.7
+        # Bonus sans fatigue
+        t._attention_fatigue = 0.0
+        bonus_fresh = t.compute_attention_bonus("SECURITY_SCAN")
+        # Bonus avec fatigue
+        t._attention_fatigue = 0.8
+        bonus_fatigued = t.compute_attention_bonus("SECURITY_SCAN")
+        assert bonus_fatigued < bonus_fresh
+        assert bonus_fatigued > 0  # Pas nul
+
+    def test_fatigue_no_effect_below_threshold(self, isolate_thalamus):
+        """Fatigue < 0.5 => bonus normal."""
+        t = isolate_thalamus
+        t._attention_focus = "urgence"
+        t._scorecard["REPTILIAN_ALERT"] = 0.9
+        t._scorecard["HALLUCINATION_DETECTED"] = 0.8
+        t._scorecard["TISSUE_EXTINCTION_RISK"] = 0.7
+        t._scorecard["OLLAMA_UNRESPONSIVE"] = 0.7
+        t._attention_fatigue = 0.0
+        bonus_zero = t.compute_attention_bonus("SECURITY_SCAN")
+        t._attention_fatigue = 0.4
+        bonus_low = t.compute_attention_bonus("SECURITY_SCAN")
+        assert bonus_zero == bonus_low
+
+
+# ============================================================
+# 21. TestRoutineFeedback (Sprint C)
+# ============================================================
+
+class TestRoutineFeedback:
+
+    @pytest.mark.asyncio
+    async def test_routine_success_boosts_category(self, isolate_thalamus):
+        """Success SECURITY_SCAN => boost urgence."""
+        from core.thalamus import EVENT_CATEGORIES, ROUTINE_FEEDBACK_BOOST
+        t = isolate_thalamus
+        initial = t._scorecard["REPTILIAN_ALERT"]
+        await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "success"})
+        for evt, cat in EVENT_CATEGORIES.items():
+            if cat == "urgence":
+                assert t._scorecard[evt] == pytest.approx(initial + ROUTINE_FEEDBACK_BOOST, abs=0.001)
+
+    @pytest.mark.asyncio
+    async def test_routine_error_reduces_category(self, isolate_thalamus):
+        """Error SECURITY_SCAN => malus urgence."""
+        from core.thalamus import EVENT_CATEGORIES, ROUTINE_FEEDBACK_MALUS
+        t = isolate_thalamus
+        initial = t._scorecard["REPTILIAN_ALERT"]
+        await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "error"})
+        for evt, cat in EVENT_CATEGORIES.items():
+            if cat == "urgence":
+                assert t._scorecard[evt] == pytest.approx(initial - ROUTINE_FEEDBACK_MALUS, abs=0.001)
+
+    @pytest.mark.asyncio
+    async def test_routine_unknown_intent_ignored(self, isolate_thalamus):
+        """Intent inconnu => noop."""
+        t = isolate_thalamus
+        snapshot = dict(t._scorecard)
+        await t._on_routine_complete({"intent": "TOTALLY_UNKNOWN", "status": "success"})
+        assert t._scorecard == snapshot
+
+    @pytest.mark.asyncio
+    async def test_routine_feedback_clamped(self, isolate_thalamus):
+        """Feedback respecte les bornes [0, 1]."""
+        t = isolate_thalamus
+        from core.thalamus import EVENT_CATEGORIES
+        # Scorecard a 0.02 => malus ne descend pas sous 0
+        for evt, cat in EVENT_CATEGORIES.items():
+            if cat == "urgence":
+                t._scorecard[evt] = 0.02
+        await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "error"})
+        for evt, cat in EVENT_CATEGORIES.items():
+            if cat == "urgence":
+                assert t._scorecard[evt] >= 0.0
+
+
+# ============================================================
+# 22. TestGetHealth (Sprint C)
+# ============================================================
+
+class TestGetHealth:
+
+    def test_get_health_keys(self, isolate_thalamus):
+        """Verifie toutes les cles de get_health."""
+        t = isolate_thalamus
+        health = t.get_health()
+        expected_keys = {"attention_fatigue", "focus_stability", "focus", "sleeping", "salient_count", "status", "learned_rules_count"}
+        assert set(health.keys()) == expected_keys
+
+    def test_get_health_fatigued_status(self, isolate_thalamus):
+        """Fatigue > 0.7 => status FATIGUED."""
+        t = isolate_thalamus
+        t._attention_fatigue = 0.8
+        health = t.get_health()
+        assert health["status"] == "FATIGUED"
+
+    def test_get_health_ok_status(self, isolate_thalamus):
+        """Fatigue <= 0.7 => status OK."""
+        t = isolate_thalamus
+        t._attention_fatigue = 0.5
+        health = t.get_health()
+        assert health["status"] == "OK"
+
+
+# ============================================================
+# 23. TestSprintCGetStats
+# ============================================================
+
+class TestSprintCGetStats:
+
+    def test_get_stats_has_sprint_c_fields(self, isolate_thalamus):
+        """get_stats inclut les champs Sprint C."""
+        t = isolate_thalamus
+        stats = t.get_stats()
+        assert "attention_fatigue" in stats
+        assert "focus_duration_cycles" in stats
+        assert "focus_history_size" in stats
+
+
+# ============================================================
+# 24. TestWakeSummary (Sprint D)
+# ============================================================
+
+class TestWakeSummary:
+
+    @pytest.mark.asyncio
+    async def test_wake_summary_published_on_exit_sleep(self, isolate_thalamus):
+        """Buffer non-vide au reveil → THALAMUS_WAKE_SUMMARY publie."""
+        t = isolate_thalamus
+        published = []
+        async def capture(data):
+            published.append(data)
+        from core.event_bus.bus import bus
+        bus.subscribe("THALAMUS_WAKE_SUMMARY", capture)
+        # Entrer en sieste, bufferiser, reveiller
+        t._enter_sleep()
+        t._buffer_event("KNOWLEDGE_GAP_DETECTED", {"topic": "test"})
+        t._buffer_event("COUNCIL_END", {"status": "consensus"})
+        await t._exit_sleep()
+        assert len(published) == 1
+        assert published[0]["event_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_wake_summary_fields(self, isolate_thalamus):
+        """Le resume contient toutes les cles attendues."""
+        t = isolate_thalamus
+        published = []
+        async def capture(data):
+            published.append(data)
+        from core.event_bus.bus import bus
+        bus.subscribe("THALAMUS_WAKE_SUMMARY", capture)
+        t._enter_sleep()
+        t._buffer_event("REPTILIAN_ALERT", {"threat_level": 8})
+        await t._exit_sleep()
+        assert len(published) == 1
+        summary = published[0]
+        expected_keys = {"events_during_nap", "nap_duration", "event_count", "top_category", "category_counts"}
+        assert expected_keys == set(summary.keys())
+        assert summary["top_category"] == "urgence"
+        assert summary["category_counts"]["urgence"] == 1
+        assert isinstance(summary["nap_duration"], float)
+
+    @pytest.mark.asyncio
+    async def test_wake_summary_events_sorted_by_priority(self, isolate_thalamus):
+        """Events tries : urgence avant cognition avant regulation."""
+        t = isolate_thalamus
+        published = []
+        async def capture(data):
+            published.append(data)
+        from core.event_bus.bus import bus
+        bus.subscribe("THALAMUS_WAKE_SUMMARY", capture)
+        t._enter_sleep()
+        # Bufferiser dans le desordre : regulation, urgence, cognition
+        t._buffer_event("CIRCADIAN_PHASE_CHANGE", {"phase": "aube"})
+        t._buffer_event("HALLUCINATION_DETECTED", {"source": "test"})
+        t._buffer_event("KNOWLEDGE_GAP_DETECTED", {"topic": "test"})
+        await t._exit_sleep()
+        events = published[0]["events_during_nap"]
+        categories = [e["category"] for e in events]
+        assert categories == ["urgence", "cognition", "regulation"]
+
+    @pytest.mark.asyncio
+    async def test_wake_summary_not_published_if_buffer_empty(self, isolate_thalamus):
+        """Buffer vide au reveil → pas de publication."""
+        t = isolate_thalamus
+        published = []
+        async def capture(data):
+            published.append(data)
+        from core.event_bus.bus import bus
+        bus.subscribe("THALAMUS_WAKE_SUMMARY", capture)
+        t._enter_sleep()
+        # Pas de buffer
+        await t._exit_sleep()
+        assert len(published) == 0
+
+
+# ============================================================
+# 25. TestLearnedRulesBasic (Sprint E)
+# ============================================================
+
+class TestLearnedRulesBasic:
+
+    def test_initial_no_rules(self, isolate_thalamus):
+        """Pas de regles a l'init."""
+        t = isolate_thalamus
+        assert t._learned_rules == []
+        assert t._intent_observations == {}
+
+    @pytest.mark.asyncio
+    async def test_observe_unknown_intent_ignored(self, isolate_thalamus):
+        """Intent inconnu dans _INTENT_CATEGORY_HINTS → noop."""
+        t = isolate_thalamus
+        await t._on_routine_complete({"intent": "TOTALLY_UNKNOWN", "status": "success"})
+        assert t._learned_rules == []
+        assert t._intent_observations == {}
+
+    @pytest.mark.asyncio
+    async def test_observe_builds_up_successes(self, isolate_thalamus):
+        """2 success → compteur=2, pas de regle."""
+        t = isolate_thalamus
+        await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "success"})
+        await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "success"})
+        assert t._intent_observations["SECURITY_SCAN"]["success"] == 2
+        assert len(t._learned_rules) == 0
+
+    @pytest.mark.asyncio
+    async def test_crystallize_after_threshold(self, isolate_thalamus):
+        """3 success → regle boost creee."""
+        from core.thalamus import RULE_BOOST_WEIGHT
+        t = isolate_thalamus
+        for _ in range(3):
+            await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "success"})
+        assert len(t._learned_rules) == 1
+        rule = t._learned_rules[0]
+        assert rule["intent"] == "SECURITY_SCAN"
+        assert rule["type"] == "boost"
+        assert rule["category"] == "urgence"
+        assert rule["weight"] == RULE_BOOST_WEIGHT
+
+    @pytest.mark.asyncio
+    async def test_crystallize_dampen_on_errors(self, isolate_thalamus):
+        """3 errors → regle dampen creee."""
+        from core.thalamus import RULE_DAMPEN_WEIGHT
+        t = isolate_thalamus
+        for _ in range(3):
+            await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "error"})
+        assert len(t._learned_rules) == 1
+        rule = t._learned_rules[0]
+        assert rule["type"] == "dampen"
+        assert rule["weight"] == RULE_DAMPEN_WEIGHT
+
+    @pytest.mark.asyncio
+    async def test_counters_reset_after_crystallize(self, isolate_thalamus):
+        """Compteurs a 0 apres cristallisation."""
+        t = isolate_thalamus
+        for _ in range(3):
+            await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "success"})
+        obs = t._intent_observations["SECURITY_SCAN"]
+        assert obs["success"] == 0
+        assert obs["error"] == 0
+
+
+# ============================================================
+# 26. TestLearnedRulesReinforcement (Sprint E)
+# ============================================================
+
+class TestLearnedRulesReinforcement:
+
+    @pytest.mark.asyncio
+    async def test_reinforce_same_direction(self, isolate_thalamus):
+        """Regle existante + 3 success supp → weight augmente."""
+        from core.thalamus import RULE_BOOST_WEIGHT, RULE_REINFORCE_STEP
+        t = isolate_thalamus
+        # Cristalliser
+        for _ in range(3):
+            await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "success"})
+        assert t._learned_rules[0]["weight"] == RULE_BOOST_WEIGHT
+        # Renforcer
+        for _ in range(3):
+            await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "success"})
+        assert t._learned_rules[0]["weight"] == pytest.approx(
+            RULE_BOOST_WEIGHT + RULE_REINFORCE_STEP, abs=0.001
+        )
+
+    @pytest.mark.asyncio
+    async def test_contradiction_weakens_rule(self, isolate_thalamus):
+        """Regle boost + 3 errors → weight diminue."""
+        from core.thalamus import RULE_BOOST_WEIGHT, RULE_DECAY_ON_CONTRADICTION
+        t = isolate_thalamus
+        # Cristalliser boost
+        for _ in range(3):
+            await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "success"})
+        initial_weight = t._learned_rules[0]["weight"]
+        # Contredire
+        for _ in range(3):
+            await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "error"})
+        assert t._learned_rules[0]["weight"] == pytest.approx(
+            initial_weight - RULE_DECAY_ON_CONTRADICTION, abs=0.001
+        )
+
+    @pytest.mark.asyncio
+    async def test_contradiction_removes_weak_rule(self, isolate_thalamus):
+        """Contradictions repetees → regle supprimee quand weight < MIN."""
+        from core.thalamus import RULE_MIN_WEIGHT
+        t = isolate_thalamus
+        # Cristalliser boost
+        for _ in range(3):
+            await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "success"})
+        # Forcer un poids tres faible
+        t._learned_rules[0]["weight"] = RULE_MIN_WEIGHT + 0.001
+        # Contredire → suppression
+        for _ in range(3):
+            await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "error"})
+        assert len(t._learned_rules) == 0
+
+
+# ============================================================
+# 27. TestLearnedRulesEviction (Sprint E)
+# ============================================================
+
+class TestLearnedRulesEviction:
+
+    @pytest.mark.asyncio
+    async def test_evict_weakest_when_full(self, isolate_thalamus):
+        """20 regles + nouvelle → la plus faible ejectee."""
+        from core.thalamus import MAX_LEARNED_RULES
+        t = isolate_thalamus
+        # Creer 20 regles manuellement
+        for i in range(MAX_LEARNED_RULES):
+            t._learned_rules.append({
+                "intent": f"FAKE_INTENT_{i}",
+                "category": "urgence",
+                "type": "boost",
+                "weight": 0.05 + i * 0.005,
+            })
+        assert len(t._learned_rules) == MAX_LEARNED_RULES
+        # La plus faible est FAKE_INTENT_0 (weight=0.05)
+        # Cristalliser une nouvelle regle
+        for _ in range(3):
+            await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "success"})
+        assert len(t._learned_rules) == MAX_LEARNED_RULES
+        intents = [r["intent"] for r in t._learned_rules]
+        assert "FAKE_INTENT_0" not in intents
+        assert "SECURITY_SCAN" in intents
+
+
+# ============================================================
+# 28. TestLearnedRulesApplication (Sprint E)
+# ============================================================
+
+class TestLearnedRulesApplication:
+
+    @pytest.mark.asyncio
+    async def test_apply_boost_rule_increases_scorecard(self, isolate_thalamus):
+        """Cycle avec boost rule → saillances urgence augmentent."""
+        from core.thalamus import EVENT_CATEGORIES, RULE_BOOST_WEIGHT, SALIENCE_DECAY
+        t = isolate_thalamus
+        t._learned_rules = [{
+            "intent": "SECURITY_SCAN",
+            "category": "urgence",
+            "type": "boost",
+            "weight": RULE_BOOST_WEIGHT,
+        }]
+        # Fixer scorecard a 0.5 partout
+        for k in t._scorecard:
+            t._scorecard[k] = 0.5
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            await t._update_cycle()
+        # Apres decay (0.5*0.95=0.475) + boost (0.475+0.08=0.555)
+        for evt, cat in EVENT_CATEGORIES.items():
+            if cat == "urgence":
+                expected = 0.5 * SALIENCE_DECAY + RULE_BOOST_WEIGHT
+                assert t._scorecard[evt] >= expected - 0.01
+
+    @pytest.mark.asyncio
+    async def test_apply_dampen_rule_decreases_scorecard(self, isolate_thalamus):
+        """Cycle avec dampen rule → saillances cognition diminuent."""
+        from core.thalamus import EVENT_CATEGORIES, RULE_DAMPEN_WEIGHT, SALIENCE_DECAY
+        t = isolate_thalamus
+        t._learned_rules = [{
+            "intent": "SELF_ANALYSIS",
+            "category": "cognition",
+            "type": "dampen",
+            "weight": RULE_DAMPEN_WEIGHT,
+        }]
+        for k in t._scorecard:
+            t._scorecard[k] = 0.5
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            await t._update_cycle()
+        for evt, cat in EVENT_CATEGORIES.items():
+            if cat == "cognition":
+                expected = 0.5 * SALIENCE_DECAY - RULE_DAMPEN_WEIGHT
+                assert t._scorecard[evt] <= expected + 0.01
+
+    @pytest.mark.asyncio
+    async def test_rules_applied_after_decay(self, isolate_thalamus):
+        """Verifie ordre : decay PUIS rules (pas l'inverse)."""
+        from core.thalamus import SALIENCE_DECAY, RULE_BOOST_WEIGHT
+        t = isolate_thalamus
+        t._learned_rules = [{
+            "intent": "SECURITY_SCAN",
+            "category": "urgence",
+            "type": "boost",
+            "weight": RULE_BOOST_WEIGHT,
+        }]
+        t._scorecard["REPTILIAN_ALERT"] = 0.5
+        t._context["threat_level"] = 0.0  # Pas de bonus urgence
+        t._context["dopamine_level"] = 0.5  # Pas de modulation seuil
+        t._context["bpm"] = 60.0
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            await t._update_cycle()
+        # decay puis boost : 0.5 * 0.95 + 0.08 = 0.555
+        expected = 0.5 * SALIENCE_DECAY + RULE_BOOST_WEIGHT
+        assert abs(t._scorecard["REPTILIAN_ALERT"] - expected) < 0.01
+
+
+# ============================================================
+# 29. TestLearnedRulesPersistence (Sprint E)
+# ============================================================
+
+class TestLearnedRulesPersistence:
+
+    def test_save_load_preserves_rules(self, isolate_thalamus, tmp_path):
+        """Save + reset + load → regles restaurees."""
+        from core import thalamus as mod
+        t = isolate_thalamus
+        t._learned_rules = [{
+            "intent": "SECURITY_SCAN",
+            "category": "urgence",
+            "type": "boost",
+            "weight": 0.08,
+        }]
+        t._intent_observations = {"SECURITY_SCAN": {"success": 1, "error": 0}}
+        t._save()
+
+        # Reset et recharge
+        mod.Thalamus.reset_singleton()
+        t2 = mod.Thalamus.__new__(mod.Thalamus)
+        t2._initialized = False
+        t2.__init__()
+        assert len(t2._learned_rules) == 1
+        assert t2._learned_rules[0]["intent"] == "SECURITY_SCAN"
+        assert t2._learned_rules[0]["weight"] == 0.08
+        assert t2._intent_observations["SECURITY_SCAN"]["success"] == 1
+
+
+# ============================================================
+# 30. TestLearnedRulesGetStats (Sprint E)
+# ============================================================
+
+class TestLearnedRulesGetStats:
+
+    def test_get_stats_includes_rules(self, isolate_thalamus):
+        """get_stats inclut learned_rules_count et learned_rules."""
+        t = isolate_thalamus
+        t._learned_rules = [{
+            "intent": "SECURITY_SCAN",
+            "category": "urgence",
+            "type": "boost",
+            "weight": 0.08,
+        }]
+        stats = t.get_stats()
+        assert "learned_rules_count" in stats
+        assert stats["learned_rules_count"] == 1
+        assert "learned_rules" in stats
+        assert stats["learned_rules"][0]["intent"] == "SECURITY_SCAN"
+
+    def test_get_health_includes_rules_count(self, isolate_thalamus):
+        """get_health inclut learned_rules_count."""
+        t = isolate_thalamus
+        t._learned_rules = [{"x": 1}, {"x": 2}]
+        health = t.get_health()
+        assert "learned_rules_count" in health
+        assert health["learned_rules_count"] == 2
+
+
+# ============================================================
+# 31. TestLearnedRulesContradiction (Sprint E)
+# ============================================================
+
+class TestLearnedRulesContradiction:
+
+    @pytest.mark.asyncio
+    async def test_alternating_prevents_crystallization(self, isolate_thalamus):
+        """Alternance success/error → jamais de cristallisation."""
+        t = isolate_thalamus
+        for _ in range(10):
+            await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "success"})
+            await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "error"})
+        assert len(t._learned_rules) == 0

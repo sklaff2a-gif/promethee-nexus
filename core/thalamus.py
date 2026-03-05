@@ -33,6 +33,23 @@ PHASE_THRESHOLDS = {
 MAX_LEARNED_RULES = 20  # Pour Sprint E futur
 NAP_BUFFER_MAX = 50  # Max events bufferises pendant sieste
 
+# Sprint C — Stabilite focus
+FOCUS_INERTIA_CYCLES = 3      # Nb cycles min avant qu'un shift de focus soit accepte
+ATTENTION_FATIGUE_RATE = 0.01  # Montee fatigue par cycle quand focus stable
+ATTENTION_FATIGUE_MAX = 1.0
+ATTENTION_FATIGUE_RECOVERY = 0.05  # Baisse fatigue par cycle apres un shift
+ROUTINE_FEEDBACK_BOOST = 0.1   # Boost saillance sur routine success
+ROUTINE_FEEDBACK_MALUS = 0.05  # Malus saillance sur routine error
+
+# Sprint E — Learned Rules
+RULE_CRYSTALLIZE_THRESHOLD = 3     # Observations concordantes pour cristalliser
+RULE_BOOST_WEIGHT = 0.08           # Poids initial regle boost (success)
+RULE_DAMPEN_WEIGHT = 0.06          # Poids initial regle dampen (error)
+RULE_REINFORCE_STEP = 0.02         # Renforcement par confirmation supplementaire
+RULE_DECAY_ON_CONTRADICTION = 0.03 # Degradation quand observation contredit la regle
+RULE_MIN_WEIGHT = 0.01             # En-dessous → regle supprimee
+RULE_MAX_WEIGHT = 0.20             # Plafond poids
+
 # --- Categories d'events ---
 
 EVENT_CATEGORIES: Dict[str, str] = {
@@ -113,6 +130,17 @@ class Thalamus:
         self._last_scorecard: Dict[str, float] = dict(self._scorecard)
         self._cycle_count: int = 0
         self._subscribed: bool = False
+        # Sprint C — Stabilite focus
+        self._focus_since_cycle: int = 0
+        self._pending_focus: Optional[str] = None
+        self._pending_focus_count: int = 0
+        # Sprint C — Fatigue attentionnelle
+        self._attention_fatigue: float = 0.0
+        # Sprint C — Historique focus
+        self._focus_history: List[Dict] = []
+        # Sprint E — Learned Rules
+        self._learned_rules: List[Dict[str, Any]] = []
+        self._intent_observations: Dict[str, Dict[str, int]] = {}
 
         self._load()
 
@@ -147,6 +175,13 @@ class Thalamus:
                 self._attention_focus = data.get("attention_focus")
                 self._context.update(data.get("context", {}))
                 self._cycle_count = int(data.get("cycle_count", 0))
+                # Sprint C
+                self._attention_fatigue = float(data.get("attention_fatigue", 0.0))
+                self._focus_since_cycle = int(data.get("focus_since_cycle", 0))
+                self._focus_history = data.get("focus_history", [])
+                # Sprint E
+                self._learned_rules = data.get("learned_rules", [])
+                self._intent_observations = data.get("intent_observations", {})
                 logger.info(f"THALAMUS: Etat restaure (cycles={self._cycle_count}).")
         except Exception as e:
             logger.warning(f"THALAMUS: Echec chargement: {e}")
@@ -160,6 +195,11 @@ class Thalamus:
                 "attention_focus": self._attention_focus,
                 "context": self._context,
                 "cycle_count": self._cycle_count,
+                "attention_fatigue": round(self._attention_fatigue, 4),
+                "focus_since_cycle": self._focus_since_cycle,
+                "focus_history": self._focus_history[-20:],
+                "learned_rules": self._learned_rules,
+                "intent_observations": self._intent_observations,
                 "saved_at": time.time(),
             }
             os.makedirs(os.path.dirname(THALAMUS_STATE_FILE), exist_ok=True)
@@ -199,6 +239,14 @@ class Thalamus:
             "salient_events": [
                 evt for evt, s in self._scorecard.items() if s > self._threshold
             ],
+            "attention_fatigue": round(self._attention_fatigue, 3),
+            "focus_duration_cycles": self._cycle_count - self._focus_since_cycle,
+            "focus_history_size": len(self._focus_history),
+            "learned_rules_count": len(self._learned_rules),
+            "learned_rules": [
+                {"intent": r["intent"], "type": r["type"], "weight": round(r["weight"], 4)}
+                for r in self._learned_rules
+            ],
         }
 
     def compute_attention_bonus(self, intent: str) -> float:
@@ -218,9 +266,29 @@ class Thalamus:
         if intent_cat == self._attention_focus:
             # Bonus proportionnel a la force du focus
             focus_strength = self._compute_category_strength(self._attention_focus)
-            return min(1.5, focus_strength * 0.5)
+            bonus = min(1.5, focus_strength * 0.5)
         else:
-            return -0.3
+            bonus = -0.3
+
+        # Sprint C — Modulation par fatigue attentionnelle
+        if self._attention_fatigue > 0.5:
+            fatigue_factor = 1.0 - (self._attention_fatigue - 0.5)  # [1.0 → 0.5]
+            bonus *= fatigue_factor
+
+        return bonus
+
+    def get_health(self) -> Dict[str, Any]:
+        """Health check thalamique."""
+        focus_duration = self._cycle_count - self._focus_since_cycle
+        return {
+            "attention_fatigue": round(self._attention_fatigue, 3),
+            "focus_stability": focus_duration,
+            "focus": self._attention_focus,
+            "sleeping": self._sleeping,
+            "salient_count": sum(1 for v in self._scorecard.values() if v > self._threshold),
+            "status": "FATIGUED" if self._attention_fatigue > 0.7 else "OK",
+            "learned_rules_count": len(self._learned_rules),
+        }
 
     # ================================================================
     # SOUSCRIPTIONS BUS
@@ -293,8 +361,23 @@ class Thalamus:
             self._threshold = PHASE_THRESHOLDS[phase]
 
     async def _on_routine_complete(self, data: Dict[str, Any]):
-        """AUTONOMY_ROUTINE_COMPLETE : historique routines."""
-        pass  # Comptabilise dans le cycle
+        """AUTONOMY_ROUTINE_COMPLETE : feedback saillance selon succes/echec."""
+        intent = data.get("intent", "")
+        status = data.get("status", "")
+        cat = _INTENT_CATEGORY_HINTS.get(intent)
+        if not cat:
+            return
+        if status == "success":
+            for evt, c in EVENT_CATEGORIES.items():
+                if c == cat:
+                    self._scorecard[evt] = min(1.0, self._scorecard[evt] + ROUTINE_FEEDBACK_BOOST)
+        elif status == "error":
+            for evt, c in EVENT_CATEGORIES.items():
+                if c == cat:
+                    self._scorecard[evt] = max(0.0, self._scorecard[evt] - ROUTINE_FEEDBACK_MALUS)
+
+        # Sprint E — Observation learned rules
+        self._observe_routine_outcome(intent, status)
 
     async def _on_council_end(self, data: Dict[str, Any]):
         """COUNCIL_END : boost deliberation."""
@@ -366,7 +449,7 @@ class Thalamus:
         )
 
     async def _exit_sleep(self):
-        """Sort du mode sieste : restaure seuil, flush buffer."""
+        """Sort du mode sieste : restaure seuil, flush buffer, publie resume."""
         if not self._sleeping:
             return
         self._sleeping = False
@@ -375,11 +458,47 @@ class Thalamus:
         if self._pre_nap_threshold is not None:
             self._threshold = self._pre_nap_threshold
             self._pre_nap_threshold = None
+        # Construire le resume AVANT le flush (le flush clear le buffer)
+        wake_summary = self._build_wake_summary(duration)
         await self._flush_nap_buffer()
+        # Publier le resume au reveil
+        if wake_summary["event_count"] > 0:
+            await bus.publish("THALAMUS_WAKE_SUMMARY", wake_summary)
         logger.info(
             f"THALAMUS: Reveil apres {duration:.0f}s "
             f"({buffered_count} events bufferises rejoues)."
         )
+
+    def _build_wake_summary(self, nap_duration: float) -> Dict[str, Any]:
+        """Construit le resume des events accumules pendant la sieste."""
+        cat_counts: Dict[str, int] = {}
+        events_list = []
+        for entry in self._nap_buffer:
+            evt_type = entry["event_type"]
+            cat = EVENT_CATEGORIES.get(evt_type, "unknown")
+            cat_counts[cat] = cat_counts.get(cat, 0) + 1
+            events_list.append({
+                "event_type": evt_type,
+                "category": cat,
+                "timestamp": entry.get("timestamp", 0),
+            })
+        # Trier par categorie urgence d'abord, puis par timestamp
+        priority_order = [
+            "urgence", "cognition", "deliberation",
+            "emergence", "motivation", "regulation",
+        ]
+        events_list.sort(key=lambda e: (
+            priority_order.index(e["category"]) if e["category"] in priority_order else 99,
+            e["timestamp"],
+        ))
+        top_category = max(cat_counts, key=cat_counts.get) if cat_counts else None
+        return {
+            "events_during_nap": events_list,
+            "nap_duration": round(nap_duration, 1),
+            "event_count": len(self._nap_buffer),
+            "top_category": top_category,
+            "category_counts": cat_counts,
+        }
 
     def _buffer_event(self, event_type: str, data: Dict[str, Any]):
         """Bufferise un event pendant le sommeil."""
@@ -436,6 +555,10 @@ class Thalamus:
         for k in self._scorecard:
             self._scorecard[k] *= SALIENCE_DECAY
 
+        # 1b. Application des regles apprises (Sprint E)
+        if self._learned_rules:
+            self._apply_learned_rules()
+
         # 2. Bonus contextuel urgence (threat_level)
         threat = self._context.get("threat_level", 0.0)
         if threat > 0:
@@ -463,8 +586,30 @@ class Thalamus:
             self._scorecard[k] = max(0.0, min(1.0, self._scorecard[k]))
         self._threshold = max(0.1, min(0.95, self._threshold))
 
-        # 6. Focus : categorie avec la plus haute somme de saillances
-        self._attention_focus = self._compute_dominant_focus()
+        # 6. Focus avec inertie (Sprint C)
+        raw_focus = self._compute_dominant_focus()
+        old_focus_pre = self._attention_focus
+        self._attention_focus = self._apply_focus_inertia(raw_focus)
+
+        # 6b. Fatigue attentionnelle
+        if self._attention_focus == old_focus_pre and self._attention_focus is not None:
+            self._attention_fatigue = min(
+                ATTENTION_FATIGUE_MAX,
+                self._attention_fatigue + ATTENTION_FATIGUE_RATE
+            )
+        else:
+            self._attention_fatigue = max(0.0, self._attention_fatigue - ATTENTION_FATIGUE_RECOVERY)
+
+        # 6c. Historique focus (sur shift confirme)
+        if self._attention_focus != old_focus_pre:
+            self._focus_since_cycle = self._cycle_count
+            self._focus_history.append({
+                "focus": self._attention_focus,
+                "cycle": self._cycle_count,
+                "timestamp": time.time(),
+            })
+            if len(self._focus_history) > 20:
+                self._focus_history = self._focus_history[-20:]
 
         # En mode sommeil : pas de publication (focus gele, bruit supprime)
         if self._sleeping:
@@ -498,6 +643,30 @@ class Thalamus:
         if self._cycle_count % SAVE_INTERVAL == 0:
             self._save()
 
+    def _apply_focus_inertia(self, new_focus: Optional[str]) -> Optional[str]:
+        """Filtre les changements de focus trop rapides (anti-jitter)."""
+        if new_focus == self._attention_focus:
+            # Focus stable → reset candidat
+            self._pending_focus = None
+            self._pending_focus_count = 0
+            return self._attention_focus
+
+        # Nouveau candidat ?
+        if new_focus == self._pending_focus:
+            self._pending_focus_count += 1
+        else:
+            self._pending_focus = new_focus
+            self._pending_focus_count = 1
+
+        # Le candidat doit persister FOCUS_INERTIA_CYCLES cycles
+        if self._pending_focus_count >= FOCUS_INERTIA_CYCLES:
+            self._pending_focus = None
+            self._pending_focus_count = 0
+            return new_focus
+
+        # Pas encore assez stable → garder l'ancien focus
+        return self._attention_focus
+
     def _compute_dominant_focus(self) -> Optional[str]:
         """Categorie avec la plus haute somme de saillances."""
         cat_sums: Dict[str, float] = {}
@@ -515,6 +684,113 @@ class Thalamus:
             if cat == category:
                 total += self._scorecard.get(evt, 0.0)
         return total
+
+    # ================================================================
+    # LEARNED RULES (Sprint E)
+    # ================================================================
+
+    def _observe_routine_outcome(self, intent: str, status: str):
+        """Enregistre observation success/error pour un intent. Appelle cristallisation."""
+        cat = _INTENT_CATEGORY_HINTS.get(intent)
+        if not cat:
+            return
+        if status not in ("success", "error"):
+            return
+
+        if intent not in self._intent_observations:
+            self._intent_observations[intent] = {"success": 0, "error": 0}
+
+        obs = self._intent_observations[intent]
+        obs[status] += 1
+
+        # Contradiction : decremente le compteur oppose
+        opposite = "error" if status == "success" else "success"
+        if obs[opposite] > 0:
+            obs[opposite] -= 1
+
+        self._maybe_crystallize_rule(intent)
+
+    def _maybe_crystallize_rule(self, intent: str):
+        """Si seuil atteint : cree/renforce/degrade regle. Reset compteurs."""
+        obs = self._intent_observations.get(intent)
+        if not obs:
+            return
+
+        cat = _INTENT_CATEGORY_HINTS.get(intent)
+        if not cat:
+            return
+
+        for direction in ("success", "error"):
+            if obs[direction] < RULE_CRYSTALLIZE_THRESHOLD:
+                continue
+
+            rule_type = "boost" if direction == "success" else "dampen"
+            idx = self._find_rule(intent)
+
+            if idx is not None:
+                existing = self._learned_rules[idx]
+                if existing["type"] == rule_type:
+                    # Renforcement
+                    existing["weight"] = min(
+                        RULE_MAX_WEIGHT,
+                        existing["weight"] + RULE_REINFORCE_STEP
+                    )
+                else:
+                    # Contradiction avec regle existante → degradation
+                    existing["weight"] -= RULE_DECAY_ON_CONTRADICTION
+                    if existing["weight"] < RULE_MIN_WEIGHT:
+                        self._learned_rules.pop(idx)
+            else:
+                # Nouvelle regle
+                if len(self._learned_rules) >= MAX_LEARNED_RULES:
+                    self._evict_weakest_rule()
+                weight = RULE_BOOST_WEIGHT if rule_type == "boost" else RULE_DAMPEN_WEIGHT
+                self._learned_rules.append({
+                    "intent": intent,
+                    "category": cat,
+                    "type": rule_type,
+                    "weight": weight,
+                })
+
+            # Reset compteurs apres cristallisation
+            self._intent_observations[intent] = {"success": 0, "error": 0}
+            return
+
+    def _find_rule(self, intent: str) -> Optional[int]:
+        """Retourne l'index de la regle pour un intent, ou None."""
+        for i, rule in enumerate(self._learned_rules):
+            if rule["intent"] == intent:
+                return i
+        return None
+
+    def _evict_weakest_rule(self):
+        """Supprime la regle avec le plus petit poids."""
+        if not self._learned_rules:
+            return
+        min_idx = 0
+        min_weight = self._learned_rules[0]["weight"]
+        for i, rule in enumerate(self._learned_rules[1:], 1):
+            if rule["weight"] < min_weight:
+                min_weight = rule["weight"]
+                min_idx = i
+        self._learned_rules.pop(min_idx)
+
+    def _apply_learned_rules(self):
+        """Applique les regles apprises sur la scorecard."""
+        for rule in self._learned_rules:
+            cat = rule["category"]
+            weight = rule["weight"]
+            for evt, c in EVENT_CATEGORIES.items():
+                if c == cat:
+                    if rule["type"] == "boost":
+                        self._scorecard[evt] = min(1.0, self._scorecard[evt] + weight)
+                    else:
+                        self._scorecard[evt] = max(0.0, self._scorecard[evt] - weight)
+
+    def get_learned_rules(self) -> List[Dict]:
+        """Copie des regles pour API/debug."""
+        import copy
+        return copy.deepcopy(self._learned_rules)
 
 
 # --- Singleton module-level ---
