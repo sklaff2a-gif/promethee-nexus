@@ -60,6 +60,21 @@ THRESHOLDS = {
     "process_mem_warn_mb": 2000,   # 2 Go de RAM Python
 }
 
+# Seuils de sécurité absolus — garde-fou "grenouille bouillie"
+# Toujours critique, même si les percentiles disent le contraire
+ABSOLUTE_SAFETY_LIMITS = {
+    "cpu_absolute_crit": 98,
+    "ram_absolute_crit": 97,
+}
+
+# Seuils adaptatifs basés sur les percentiles glissants 24h
+ADAPTIVE_THRESHOLDS = {
+    "cpu_warn_percentile": 0.85,
+    "cpu_crit_percentile": 0.97,
+    "ram_warn_percentile": 0.80,
+    "ram_crit_percentile": 0.95,
+}
+
 # Cooldowns des réflexes (secondes) — anti-spam
 REFLEX_COOLDOWNS = {
     "ADRENALINE": 60,
@@ -138,6 +153,11 @@ class ReptilianCore:
         self._ollama_ok: bool = True
         self._ollama_ok_streak: int = 0     # Cycles consécutifs OK
         self._ram_critical_logged: float = 0.0
+
+        # --- Trackers adaptatifs (percentiles glissants 24h) ---
+        from core.percentile_tracker import PercentileTracker
+        self._cpu_tracker = PercentileTracker()
+        self._ram_tracker = PercentileTracker()
 
         # --- Flags de réflexes actifs ---
         self._freeze_until: float = 0.0          # timestamp de fin de FREEZE
@@ -227,7 +247,7 @@ class ReptilianCore:
         """Scan rapide de tous les capteurs. Retourne {source: niveau_menace}."""
         threats: Dict[str, float] = {}
 
-        # --- CPU / RAM ---
+        # --- CPU / RAM (3 niveaux : sécurité absolue → adaptatif → cold start) ---
         try:
             import psutil
             cpu = psutil.cpu_percent(interval=0)
@@ -236,25 +256,71 @@ class ReptilianCore:
             self._last_cpu = cpu
             self._last_ram = ram
 
-            if cpu >= THRESHOLDS["cpu_crit"]:
-                threats["cpu"] = 8.0
-            elif cpu >= THRESHOLDS["cpu_warn"]:
-                threats["cpu"] = 4.0
+            # Enregistrer dans les trackers à chaque tick
+            self._cpu_tracker.record(cpu)
+            self._ram_tracker.record(ram)
 
-            if ram >= THRESHOLDS["ram_crit"]:
+            # --- CPU ---
+            if cpu >= ABSOLUTE_SAFETY_LIMITS["cpu_absolute_crit"]:
+                # Niveau 1 : sécurité absolue (grenouille bouillie)
+                threats["cpu"] = 8.0
+            elif self._cpu_tracker.is_ready():
+                # Niveau 2 : adaptatif (percentiles glissants)
+                cpu_pct = self._cpu_tracker.get_percentile_of(cpu)
+                if cpu_pct >= ADAPTIVE_THRESHOLDS["cpu_crit_percentile"]:
+                    threats["cpu"] = 8.0
+                elif cpu_pct >= ADAPTIVE_THRESHOLDS["cpu_warn_percentile"]:
+                    threats["cpu"] = 4.0
+            else:
+                # Niveau 3 : cold start (seuils hardcodés)
+                if cpu >= THRESHOLDS["cpu_crit"]:
+                    threats["cpu"] = 8.0
+                elif cpu >= THRESHOLDS["cpu_warn"]:
+                    threats["cpu"] = 4.0
+
+            # --- RAM ---
+            if ram >= ABSOLUTE_SAFETY_LIMITS["ram_absolute_crit"]:
+                # Niveau 1 : sécurité absolue
                 threats["ram"] = 8.0
                 now = time.time()
-                if now - self._ram_critical_logged > 120:  # Throttle 2 min
+                if now - self._ram_critical_logged > 120:
                     logger.warning(
-                        f"REPTILIEN: RAM CRITIQUE {ram:.0f}% (seuil {THRESHOLDS['ram_crit']}%)"
+                        f"REPTILIEN: RAM CRITIQUE {ram:.0f}% (seuil absolu {ABSOLUTE_SAFETY_LIMITS['ram_absolute_crit']}%)"
                     )
                     self._ram_critical_logged = now
-            elif ram >= THRESHOLDS["ram_warn"]:
-                threats["ram"] = 4.0
-                now = time.time()
-                if now - self._ram_critical_logged > 300:  # Throttle 5 min
-                    logger.info(f"REPTILIEN: RAM élevée {ram:.0f}% (seuil {THRESHOLDS['ram_warn']}%)")
-                    self._ram_critical_logged = now
+            elif self._ram_tracker.is_ready():
+                # Niveau 2 : adaptatif
+                ram_pct = self._ram_tracker.get_percentile_of(ram)
+                if ram_pct >= ADAPTIVE_THRESHOLDS["ram_crit_percentile"]:
+                    threats["ram"] = 8.0
+                    now = time.time()
+                    if now - self._ram_critical_logged > 120:
+                        logger.warning(
+                            f"REPTILIEN: RAM CRITIQUE {ram:.0f}% (percentile {ram_pct:.2f})"
+                        )
+                        self._ram_critical_logged = now
+                elif ram_pct >= ADAPTIVE_THRESHOLDS["ram_warn_percentile"]:
+                    threats["ram"] = 4.0
+                    now = time.time()
+                    if now - self._ram_critical_logged > 300:
+                        logger.info(f"REPTILIEN: RAM élevée {ram:.0f}% (percentile {ram_pct:.2f})")
+                        self._ram_critical_logged = now
+            else:
+                # Niveau 3 : cold start
+                if ram >= THRESHOLDS["ram_crit"]:
+                    threats["ram"] = 8.0
+                    now = time.time()
+                    if now - self._ram_critical_logged > 120:
+                        logger.warning(
+                            f"REPTILIEN: RAM CRITIQUE {ram:.0f}% (seuil {THRESHOLDS['ram_crit']}%)"
+                        )
+                        self._ram_critical_logged = now
+                elif ram >= THRESHOLDS["ram_warn"]:
+                    threats["ram"] = 4.0
+                    now = time.time()
+                    if now - self._ram_critical_logged > 300:
+                        logger.info(f"REPTILIEN: RAM élevée {ram:.0f}% (seuil {THRESHOLDS['ram_warn']}%)")
+                        self._ram_critical_logged = now
 
             # Fuite mémoire Python
             proc = psutil.Process()
@@ -723,6 +789,11 @@ class ReptilianCore:
             "ram_percent": round(self._last_ram, 1),
             "budget_ratio": round(self._last_budget_ratio, 3),
             "ollama_ok": self._ollama_ok,
+            # Trackers adaptatifs
+            "cpu_tracker_ready": self._cpu_tracker.is_ready(),
+            "cpu_tracker_samples": self._cpu_tracker.count(),
+            "ram_tracker_ready": self._ram_tracker.is_ready(),
+            "ram_tracker_samples": self._ram_tracker.count(),
         }
 
     # ============================================================
@@ -743,6 +814,8 @@ class ReptilianCore:
             "shed_until": self._shed_until,
             "shed_max_cost": self._shed_max_cost,
             "beat_counter": self._beat_counter,
+            "cpu_tracker": self._cpu_tracker.to_dict(),
+            "ram_tracker": self._ram_tracker.to_dict(),
             "timestamp": time.time(),
         }
         try:
@@ -777,6 +850,16 @@ class ReptilianCore:
                     self.threat_memories[k] = ThreatMemory(**v)
                 except Exception:
                     pass
+
+            # Restaurer les trackers adaptatifs
+            try:
+                from core.percentile_tracker import PercentileTracker
+                if "cpu_tracker" in state:
+                    self._cpu_tracker = PercentileTracker.from_dict(state["cpu_tracker"])
+                if "ram_tracker" in state:
+                    self._ram_tracker = PercentileTracker.from_dict(state["ram_tracker"])
+            except Exception:
+                pass  # Trackers restent vides — cold start
 
             logger.info(f"REPTILIEN: État chargé (menace={self.threat_level:.1f}, "
                         f"mémoires={len(self.threat_memories)})")

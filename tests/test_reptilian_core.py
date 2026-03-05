@@ -1032,3 +1032,200 @@ class TestRamLogging:
             # Pas de log warning pour RAM (throttled)
             for call in mock_logger.warning.call_args_list:
                 assert "RAM CRITIQUE" not in str(call)
+
+
+# ============================================================
+# Seuils adaptatifs (PercentileTracker)
+# ============================================================
+
+class TestAdaptiveThresholds:
+    """Tests des seuils CPU/RAM adaptatifs basés sur les percentiles glissants."""
+
+    # Helper pour créer les patches communs (skip ollama, autonomy, circadian)
+    def _base_patches(self, cpu=30.0, ram=50.0, proc_mem_mb=500):
+        """Retourne un context manager avec les patches de base."""
+        from contextlib import contextmanager
+
+        @contextmanager
+        def ctx():
+            with patch("psutil.cpu_percent", return_value=cpu), \
+                 patch("psutil.virtual_memory", return_value=MagicMock(percent=ram)), \
+                 patch("psutil.Process", return_value=MagicMock(
+                     memory_info=MagicMock(return_value=MagicMock(rss=proc_mem_mb * 1024 * 1024))
+                 )), \
+                 patch.dict("sys.modules", {
+                     "httpx": MagicMock(),
+                     "core.base_agent": MagicMock(BaseAgent=MagicMock(
+                         get_ollama_health=MagicMock(return_value={"circuit_open": False, "consecutive_timeouts": 0})
+                     )),
+                     "core.autonomy_engine": None,
+                     "core.circadian_rhythm": None,
+                 }):
+                yield
+        return ctx()
+
+    def test_trackers_initialized(self, rept):
+        """Les trackers CPU et RAM existent à l'init."""
+        from core.percentile_tracker import PercentileTracker
+        assert isinstance(rept._cpu_tracker, PercentileTracker)
+        assert isinstance(rept._ram_tracker, PercentileTracker)
+        assert rept._cpu_tracker.count() == 0
+        assert rept._ram_tracker.count() == 0
+
+    @pytest.mark.asyncio
+    async def test_cpu_warn_cold_start(self, rept):
+        """Sans historique, CPU >= 80 → threat 4.0 (seuil hardcodé)."""
+        rept._ollama_ok = True
+        rept._ollama_ok_streak = 20
+        with self._base_patches(cpu=85.0):
+            threats = await rept._sense_threats()
+        assert threats.get("cpu") == 4.0
+
+    @pytest.mark.asyncio
+    async def test_cpu_crit_cold_start(self, rept):
+        """Sans historique, CPU >= 95 → threat 8.0 (seuil hardcodé)."""
+        rept._ollama_ok = True
+        rept._ollama_ok_streak = 20
+        with self._base_patches(cpu=96.0):
+            threats = await rept._sense_threats()
+        assert threats.get("cpu") == 8.0
+
+    @pytest.mark.asyncio
+    async def test_ram_warn_cold_start(self, rept):
+        """Sans historique, RAM >= 75 → threat 4.0 (seuil hardcodé)."""
+        rept._ollama_ok = True
+        rept._ollama_ok_streak = 20
+        with self._base_patches(ram=78.0):
+            threats = await rept._sense_threats()
+        assert threats.get("ram") == 4.0
+
+    @pytest.mark.asyncio
+    async def test_ram_crit_cold_start(self, rept):
+        """Sans historique, RAM >= 90 → threat 8.0 (seuil hardcodé)."""
+        rept._ollama_ok = True
+        rept._ollama_ok_streak = 20
+        with self._base_patches(ram=92.0):
+            threats = await rept._sense_threats()
+        assert threats.get("ram") == 8.0
+
+    @pytest.mark.asyncio
+    async def test_cpu_adaptive_warn(self, rept):
+        """Tracker rempli, CPU au ~P90 → threat 4.0 (warning adaptatif)."""
+        rept._ollama_ok = True
+        rept._ollama_ok_streak = 20
+        # Distribution large 0-99% (360 échantillons)
+        for i in range(360):
+            rept._cpu_tracker.record(float(i % 100))
+        assert rept._cpu_tracker.is_ready()
+
+        # CPU à 90% → ~P92 de la distribution 0-99 → entre P85 (warn) et P97 (crit)
+        with self._base_patches(cpu=90.0):
+            threats = await rept._sense_threats()
+        assert threats.get("cpu") == 4.0
+
+    @pytest.mark.asyncio
+    async def test_cpu_adaptive_no_threat(self, rept):
+        """Tracker rempli, CPU normal → pas de menace."""
+        rept._ollama_ok = True
+        rept._ollama_ok_streak = 20
+        # Remplir avec distribution large
+        for i in range(360):
+            rept._cpu_tracker.record(float(i % 100))
+        assert rept._cpu_tracker.is_ready()
+
+        # CPU à 50% → P50 environ, bien sous P85
+        with self._base_patches(cpu=50.0):
+            threats = await rept._sense_threats()
+        assert "cpu" not in threats
+
+    @pytest.mark.asyncio
+    async def test_ram_adaptive_crit(self, rept):
+        """Tracker rempli, RAM au P96 → threat 8.0 (critique adaptatif)."""
+        rept._ollama_ok = True
+        rept._ollama_ok_streak = 20
+        # Remplir avec des valeurs basses
+        for i in range(360):
+            rept._ram_tracker.record(40.0 + (i % 5))  # 40-44%
+        assert rept._ram_tracker.is_ready()
+
+        # RAM à 80% → devrait être au-dessus du P95 de la distribution 40-44%
+        with self._base_patches(ram=80.0):
+            threats = await rept._sense_threats()
+        assert threats.get("ram") == 8.0
+
+    @pytest.mark.asyncio
+    async def test_cpu_absolute_override(self, rept):
+        """CPU >= 98% → TOUJOURS critique, même si les percentiles disent non."""
+        rept._ollama_ok = True
+        rept._ollama_ok_streak = 20
+        # Remplir le tracker avec du CPU haut (simule un serveur toujours chaud)
+        for i in range(360):
+            rept._cpu_tracker.record(95.0 + (i % 4))  # 95-98%
+        assert rept._cpu_tracker.is_ready()
+
+        # CPU à 98% → sécurité absolue = critique
+        with self._base_patches(cpu=98.0):
+            threats = await rept._sense_threats()
+        assert threats.get("cpu") == 8.0
+
+    @pytest.mark.asyncio
+    async def test_ram_absolute_override(self, rept):
+        """RAM >= 97% → TOUJOURS critique, même si les percentiles disent non."""
+        rept._ollama_ok = True
+        rept._ollama_ok_streak = 20
+        for i in range(360):
+            rept._ram_tracker.record(90.0 + (i % 8))  # 90-97%
+        assert rept._ram_tracker.is_ready()
+
+        # RAM à 97% → sécurité absolue
+        with self._base_patches(ram=97.0):
+            threats = await rept._sense_threats()
+        assert threats.get("ram") == 8.0
+
+    def test_trackers_persisted(self, rept, tmp_path, monkeypatch):
+        """save → load conserve les trackers et is_ready()."""
+        state_file = str(tmp_path / "reptilian_persist.json")
+        monkeypatch.setattr("core.reptilian_core.REPTILIAN_STATE_FILE", state_file)
+
+        # Remplir les trackers
+        for i in range(400):
+            rept._cpu_tracker.record(float(i % 100))
+            rept._ram_tracker.record(50.0 + (i % 20))
+        assert rept._cpu_tracker.is_ready()
+
+        rept.save()
+
+        # Nouveau reptilien qui charge l'état
+        ReptilianCore.reset_singleton()
+        r2 = ReptilianCore()
+        assert r2._cpu_tracker.is_ready()
+        assert r2._cpu_tracker.count() == 400
+        assert r2._ram_tracker.count() == 400
+
+    @pytest.mark.asyncio
+    async def test_record_on_each_sense(self, rept):
+        """Chaque appel à _sense_threats enregistre CPU et RAM dans les trackers."""
+        rept._ollama_ok = True
+        rept._ollama_ok_streak = 20
+        assert rept._cpu_tracker.count() == 0
+        assert rept._ram_tracker.count() == 0
+
+        with self._base_patches(cpu=45.0, ram=60.0):
+            await rept._sense_threats()
+        assert rept._cpu_tracker.count() == 1
+        assert rept._ram_tracker.count() == 1
+
+        with self._base_patches(cpu=50.0, ram=65.0):
+            await rept._sense_threats()
+        assert rept._cpu_tracker.count() == 2
+        assert rept._ram_tracker.count() == 2
+
+    def test_get_stats_includes_tracker_info(self, rept):
+        """get_stats() contient les infos des trackers."""
+        stats = rept.get_stats()
+        assert "cpu_tracker_ready" in stats
+        assert "cpu_tracker_samples" in stats
+        assert "ram_tracker_ready" in stats
+        assert "ram_tracker_samples" in stats
+        assert stats["cpu_tracker_ready"] is False
+        assert stats["cpu_tracker_samples"] == 0
