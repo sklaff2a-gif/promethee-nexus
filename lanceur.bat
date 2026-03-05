@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 title PROMETHEE - Nexus Launcher
 cd /d "C:\MesProjets\PROMETHEE_V11_restructuration2026"
 
@@ -23,6 +24,7 @@ if %errorlevel% neq 0 (
     timeout /t 5 /nobreak >nul
 )
 
+set PYTHONIOENCODING=utf-8
 echo [OK] Demarrage de start_nexus.py...
 echo.
 python start_nexus.py

@@ -809,32 +809,50 @@ class TestTissueHandlersReptilian:
     """Sprint 5 — Grand Câblage : handlers tissue dans reptilian_core."""
 
     @pytest.mark.asyncio
-    async def test_tissue_overload_boosts_threat(self, rept):
-        """Zone surchargée → threat +2.0."""
+    async def test_tissue_overload_sets_floor(self, rept):
+        """Zone surchargée → plancher TISSUE_OVERLOAD_THREAT (max, pas +=)."""
         rept.threat_level = 1.0
         await rept._on_tissue_overload({"zone": "emotion", "activity": 3.0})
+        assert rept.threat_level == 3.0  # max(1.0, 3.0)
+
+    @pytest.mark.asyncio
+    async def test_tissue_overload_no_accumulation(self, rept):
+        """Appels répétés d'overload ne s'accumulent PAS (fix boucle feedback)."""
+        rept.threat_level = 1.0
+        for _ in range(10):
+            await rept._on_tissue_overload({"zone": "goals", "activity": 3.0})
+        # max() idempotent : 10 appels = même résultat qu'un seul
         assert rept.threat_level == 3.0
 
     @pytest.mark.asyncio
-    async def test_tissue_overload_clamped(self, rept):
-        """Threat ne dépasse pas 10."""
+    async def test_tissue_overload_does_not_lower(self, rept):
+        """Si threat déjà au-dessus du plancher, overload ne la baisse pas."""
         rept.threat_level = 9.5
         await rept._on_tissue_overload({"zone": "threat", "activity": 5.0})
-        assert rept.threat_level == 10.0
+        assert rept.threat_level == 9.5  # max(9.5, 3.0) = 9.5
 
     @pytest.mark.asyncio
-    async def test_tissue_extinction_boosts_threat_strongly(self, rept):
-        """Population en danger → threat +4.0."""
+    async def test_tissue_extinction_sets_floor(self, rept):
+        """Population en danger → plancher TISSUE_EXTINCTION_THREAT (max, pas +=)."""
         rept.threat_level = 2.0
         await rept._on_tissue_extinction({"population": 5})
-        assert rept.threat_level == 6.0
+        assert rept.threat_level == 5.0  # max(2.0, 5.0)
 
     @pytest.mark.asyncio
-    async def test_tissue_extinction_clamped(self, rept):
-        """Threat ne dépasse pas 10."""
+    async def test_tissue_extinction_no_accumulation(self, rept):
+        """Appels répétés d'extinction ne s'accumulent PAS (fix boucle feedback)."""
+        rept.threat_level = 0.0
+        for _ in range(10):
+            await rept._on_tissue_extinction({"population": 5})
+        # max() idempotent : reste à 5.0, pas 40.0
+        assert rept.threat_level == 5.0
+
+    @pytest.mark.asyncio
+    async def test_tissue_extinction_does_not_lower(self, rept):
+        """Si threat déjà au-dessus du plancher, extinction ne la baisse pas."""
         rept.threat_level = 8.0
         await rept._on_tissue_extinction({"population": 3})
-        assert rept.threat_level == 10.0
+        assert rept.threat_level == 8.0  # max(8.0, 5.0) = 8.0
 
     @pytest.mark.asyncio
     async def test_tissue_threat_subsided_reduces_threat(self, rept):
@@ -857,3 +875,160 @@ class TestTissueHandlersReptilian:
         rept.adrenaline = 0.5
         await rept._on_tissue_threat_subsided({})
         assert rept.adrenaline == pytest.approx(0.4)
+
+
+# ============================================================
+# Watchdog Ollama adaptatif (Fix post-run 2026-03-03)
+# ============================================================
+
+class TestOllamaAdaptiveCheck:
+    """Le check /api/tags est skippé quand Ollama est stable depuis >=12 cycles."""
+
+    @pytest.mark.asyncio
+    async def test_streak_increments_on_success(self, rept):
+        """Chaque check OK incrémente le streak."""
+        mock_resp = MagicMock(status_code=200)
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        with patch("psutil.cpu_percent", return_value=30.0), \
+             patch("psutil.virtual_memory", return_value=MagicMock(percent=50.0)), \
+             patch("psutil.Process", return_value=MagicMock(memory_info=MagicMock(return_value=MagicMock(rss=500*1024*1024)))), \
+             patch("httpx.AsyncClient", return_value=mock_client), \
+             patch.dict("sys.modules", {"core.base_agent": MagicMock(BaseAgent=MagicMock(get_ollama_health=MagicMock(return_value={"circuit_open": False, "consecutive_timeouts": 0})))}), \
+             patch.dict("sys.modules", {"core.autonomy_engine": None}), \
+             patch.dict("sys.modules", {"core.circadian_rhythm": None}):
+            rept._ollama_ok = False
+            rept._ollama_ok_streak = 0
+            await rept._sense_threats()
+            assert rept._ollama_ok is True
+            assert rept._ollama_ok_streak == 1
+
+    @pytest.mark.asyncio
+    async def test_skip_check_when_streak_high(self, rept):
+        """Quand streak >= 12, le check HTTP est skippé."""
+        rept._ollama_ok = True
+        rept._ollama_ok_streak = 12
+
+        with patch("psutil.cpu_percent", return_value=30.0), \
+             patch("psutil.virtual_memory", return_value=MagicMock(percent=50.0)), \
+             patch("psutil.Process", return_value=MagicMock(memory_info=MagicMock(return_value=MagicMock(rss=500*1024*1024)))), \
+             patch("httpx.AsyncClient") as mock_httpx, \
+             patch.dict("sys.modules", {"core.base_agent": MagicMock(BaseAgent=MagicMock(get_ollama_health=MagicMock(return_value={"circuit_open": False, "consecutive_timeouts": 0})))}), \
+             patch.dict("sys.modules", {"core.autonomy_engine": None}), \
+             patch.dict("sys.modules", {"core.circadian_rhythm": None}):
+            threats = await rept._sense_threats()
+            # httpx ne doit PAS avoir été appelé
+            mock_httpx.assert_not_called()
+            assert "ollama" not in threats
+            assert rept._ollama_ok_streak == 13
+
+    @pytest.mark.asyncio
+    async def test_streak_resets_on_error(self, rept):
+        """Une erreur Ollama reset le streak à 0."""
+        rept._ollama_ok = True
+        rept._ollama_ok_streak = 15
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(side_effect=Exception("connection refused"))
+
+        # Force un check en mettant _ollama_ok à False
+        rept._ollama_ok = False
+
+        with patch("psutil.cpu_percent", return_value=30.0), \
+             patch("psutil.virtual_memory", return_value=MagicMock(percent=50.0)), \
+             patch("psutil.Process", return_value=MagicMock(memory_info=MagicMock(return_value=MagicMock(rss=500*1024*1024)))), \
+             patch("httpx.AsyncClient", return_value=mock_client), \
+             patch.dict("sys.modules", {"core.base_agent": MagicMock(BaseAgent=MagicMock(get_ollama_health=MagicMock(return_value={"circuit_open": False, "consecutive_timeouts": 0})))}), \
+             patch.dict("sys.modules", {"core.autonomy_engine": None}), \
+             patch.dict("sys.modules", {"core.circadian_rhythm": None}):
+            threats = await rept._sense_threats()
+            assert rept._ollama_ok_streak == 0
+            assert rept._ollama_ok is False
+            assert "ollama" in threats
+
+    @pytest.mark.asyncio
+    async def test_check_performed_when_not_ok(self, rept):
+        """Quand _ollama_ok=False, le check est toujours effectué."""
+        rept._ollama_ok = False
+        rept._ollama_ok_streak = 0  # Après erreur, streak est à 0
+
+        mock_resp = MagicMock(status_code=200)
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_resp)
+
+        with patch("psutil.cpu_percent", return_value=30.0), \
+             patch("psutil.virtual_memory", return_value=MagicMock(percent=50.0)), \
+             patch("psutil.Process", return_value=MagicMock(memory_info=MagicMock(return_value=MagicMock(rss=500*1024*1024)))), \
+             patch("httpx.AsyncClient", return_value=mock_client), \
+             patch.dict("sys.modules", {"core.base_agent": MagicMock(BaseAgent=MagicMock(get_ollama_health=MagicMock(return_value={"circuit_open": False, "consecutive_timeouts": 0})))}), \
+             patch.dict("sys.modules", {"core.autonomy_engine": None}), \
+             patch.dict("sys.modules", {"core.circadian_rhythm": None}):
+            await rept._sense_threats()
+            # Le check a été effectué (httpx appelé)
+            mock_client.get.assert_called_once()
+            assert rept._ollama_ok is True
+            assert rept._ollama_ok_streak == 1
+
+    def test_streak_below_threshold_checks(self, rept):
+        """Streak < 12 → le check doit être effectué (pas de skip)."""
+        rept._ollama_ok = True
+        rept._ollama_ok_streak = 11
+        # La condition de skip est: _ollama_ok AND streak >= 12
+        # Avec streak=11 et _ollama_ok=True → pas de skip
+        assert not (rept._ollama_ok and rept._ollama_ok_streak >= 12)
+
+
+# ============================================================
+# Log RAM critique (Fix post-run 2026-03-03)
+# ============================================================
+
+class TestRamLogging:
+    """Log warning quand RAM critique, avec throttle."""
+
+    @pytest.mark.asyncio
+    async def test_ram_critical_logs_warning(self, rept):
+        """RAM >= 90% → log warning."""
+        mock_mem = MagicMock(percent=92.0)
+        with patch("psutil.cpu_percent", return_value=30.0), \
+             patch("psutil.virtual_memory", return_value=mock_mem), \
+             patch("psutil.Process", return_value=MagicMock(memory_info=MagicMock(return_value=MagicMock(rss=500*1024*1024)))), \
+             patch.dict("sys.modules", {"httpx": MagicMock()}), \
+             patch.dict("sys.modules", {"core.base_agent": MagicMock(BaseAgent=MagicMock(get_ollama_health=MagicMock(return_value={"circuit_open": False, "consecutive_timeouts": 0})))}), \
+             patch.dict("sys.modules", {"core.autonomy_engine": None}), \
+             patch.dict("sys.modules", {"core.circadian_rhythm": None}), \
+             patch("core.reptilian_core.logger") as mock_logger:
+            # Forcer le check Ollama à skip pour simplifier
+            rept._ollama_ok = True
+            rept._ollama_ok_streak = 20
+            rept._ram_critical_logged = 0.0
+            await rept._sense_threats()
+            mock_logger.warning.assert_any_call(
+                f"REPTILIEN: RAM CRITIQUE 92% (seuil {THRESHOLDS['ram_crit']}%)"
+            )
+
+    @pytest.mark.asyncio
+    async def test_ram_critical_throttled(self, rept):
+        """Pas de log répété si < 2 min depuis le dernier log critique."""
+        rept._ram_critical_logged = time.time() - 60  # Il y a 60s (< 120s)
+        mock_mem = MagicMock(percent=92.0)
+        with patch("psutil.cpu_percent", return_value=30.0), \
+             patch("psutil.virtual_memory", return_value=mock_mem), \
+             patch("psutil.Process", return_value=MagicMock(memory_info=MagicMock(return_value=MagicMock(rss=500*1024*1024)))), \
+             patch.dict("sys.modules", {"httpx": MagicMock()}), \
+             patch.dict("sys.modules", {"core.base_agent": MagicMock(BaseAgent=MagicMock(get_ollama_health=MagicMock(return_value={"circuit_open": False, "consecutive_timeouts": 0})))}), \
+             patch.dict("sys.modules", {"core.autonomy_engine": None}), \
+             patch.dict("sys.modules", {"core.circadian_rhythm": None}), \
+             patch("core.reptilian_core.logger") as mock_logger:
+            rept._ollama_ok = True
+            rept._ollama_ok_streak = 20
+            await rept._sense_threats()
+            # Pas de log warning pour RAM (throttled)
+            for call in mock_logger.warning.call_args_list:
+                assert "RAM CRITIQUE" not in str(call)

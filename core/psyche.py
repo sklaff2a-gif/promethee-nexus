@@ -463,6 +463,19 @@ class PsycheEngine:
             except Exception:
                 pass
 
+        # Priorite 2.15 : Council data-driven — debat sur metriques reelles
+        if "data_routine_audit" not in recent and "data_evolution_triage" not in recent and "data_drive_balance" not in recent:
+            try:
+                from core.council_analytics import select_data_topic
+                data_topic = select_data_topic(
+                    routine_history=self._get_routine_history(),
+                    recent_subjects=recent,
+                )
+                if data_topic:
+                    return data_topic
+            except Exception:
+                pass
+
         # Priorite 2.2 : DESACTIVE — les councils architecture produisent
         # des hallucinations avec les LLMs locaux 8B-14B (analyse run 2026-03-03).
         # Reactiver quand specs structurees non-LLM disponibles.
@@ -525,6 +538,21 @@ class PsycheEngine:
             "research_query": theme["query"],
             "subject_key": theme_key,
         }
+
+    def _get_routine_history(self) -> list:
+        """Charge routine_history depuis autonomy_state.json."""
+        import json
+        import os
+        state_file = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "memory", "autonomy_state.json"
+        )
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            return state.get("routine_history", [])
+        except Exception:
+            return []
 
     def get_debate_index(self) -> int:
         """Retourne l'index de rotation des débats basé sur l'historique."""

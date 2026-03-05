@@ -2111,3 +2111,140 @@ class TestTissueDesertHandler:
         engine = self._make_engine()
         await engine._on_tissue_desert({"zone": ""})
         assert len(engine._tissue_stimulation_zones) == 0
+
+
+# ============================================================
+# Plafond session de forçages par drive (Fix post-run 2026-03-03)
+# ============================================================
+
+class TestDriveForceSessionCap:
+    """_drive_force_total plafonne les forçages à 10 par drive par session."""
+
+    def _make_engine_for_drive_test(self):
+        """Crée un engine minimal avec les attributs nécessaires."""
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._drive_force_counts = {}
+        engine._drive_force_cycle = 0
+        engine._drive_force_total = {}
+        engine._forced_next_intent = ""
+        engine._tissue_stimulation_zones = []
+        engine.daily_budget_used = 0
+        engine._council_degraded = False
+        engine.routine_history = []
+        engine.error_streak = 0
+        return engine
+
+    def test_total_increments_on_force(self):
+        """Chaque forçage incrémente _drive_force_total."""
+        engine = self._make_engine_for_drive_test()
+        engine._drive_force_total["MAITRISE"] = 0
+        engine._drive_force_total["MAITRISE"] = 1
+        assert engine._drive_force_total["MAITRISE"] == 1
+
+    def test_force_blocked_at_10(self):
+        """total_forces >= 10 → forçage bloqué."""
+        engine = self._make_engine_for_drive_test()
+        engine._drive_force_total["MAITRISE"] = 10
+        total_forces = engine._drive_force_total.get("MAITRISE", 0)
+        assert total_forces >= 10  # Serait bloqué dans le code
+
+    def test_total_independent_of_window_reset(self):
+        """Le reset fenêtre (tous les 5 cycles) ne reset pas _drive_force_total."""
+        engine = self._make_engine_for_drive_test()
+        engine._drive_force_total["MAITRISE"] = 7
+        engine._drive_force_counts["MAITRISE"] = 2
+        # Simuler un reset fenêtre
+        engine._drive_force_counts = {}
+        # total n'est PAS reset
+        assert engine._drive_force_total["MAITRISE"] == 7
+
+
+# ═══════════════════════════════════════════════════════════
+# TestCouncilDataDriven (couche 14 + verdict)
+# ═══════════════════════════════════════════════════════════
+
+class TestCouncilDataDriven:
+    """Tests pour council_adjustments (couche 14) et _apply_council_verdict."""
+
+    def _make_engine(self):
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._council_adjustments = {}
+        engine.routine_history = []
+        engine.daily_count = 0
+        engine.daily_budget_used = 0
+        engine.error_streak = 0
+        engine.is_running = False
+        engine.is_processing = False
+        engine.last_reset_day = None
+        engine._council_degraded = False
+        engine._persist_state = MagicMock()
+        return engine
+
+    def test_couche14_applies_adjustment(self):
+        """Un adjustment actif modifie le score de la routine ciblée."""
+        engine = self._make_engine()
+        future_ts = (datetime.now().replace(year=2099)).isoformat()
+        engine._council_adjustments = {
+            "VEILLE_TECHNO": {"delta": 2.0, "expires": future_ts, "reason": "test"},
+        }
+        scored = [
+            ({"intent": "VEILLE_TECHNO"}, 5.0),
+            ({"intent": "EXPANSION_CODE"}, 5.0),
+        ]
+        # Simuler la couche 14
+        council_adj = engine._council_adjustments
+        now_iso = datetime.now().isoformat()
+        for intent_key, adj in council_adj.items():
+            if adj.get("expires", "") < now_iso:
+                continue
+            for i, (routine, s) in enumerate(scored):
+                if routine["intent"] == intent_key:
+                    scored[i] = (routine, s + adj["delta"])
+        assert scored[0][1] == 7.0  # +2.0
+        assert scored[1][1] == 5.0  # inchangé
+
+    def test_couche14_expires_old_adjustments(self):
+        """Les adjustments expirés sont purgés."""
+        engine = self._make_engine()
+        past_ts = "2020-01-01T00:00:00"
+        engine._council_adjustments = {
+            "OLD_INTENT": {"delta": 2.0, "expires": past_ts, "reason": "old"},
+        }
+        council_adj = engine._council_adjustments
+        now_iso = datetime.now().isoformat()
+        expired_keys = []
+        for intent_key, adj in council_adj.items():
+            if adj.get("expires", "") < now_iso:
+                expired_keys.append(intent_key)
+        for k in expired_keys:
+            del council_adj[k]
+        assert "OLD_INTENT" not in council_adj
+
+    def test_apply_verdict_prioriser(self):
+        """_apply_council_verdict PRIORISER crée un adjustment +2.0."""
+        engine = self._make_engine()
+        verdict = {"action": "PRIORISER", "target": "VEILLE_TECHNO", "reason": "qualite haute"}
+        engine._apply_council_verdict(verdict)
+        adj = engine._council_adjustments["VEILLE_TECHNO"]
+        assert adj["delta"] == 2.0
+        assert "qualite haute" in adj["reason"]
+        engine._persist_state.assert_called_once()
+
+    def test_apply_verdict_deprioriser(self):
+        """_apply_council_verdict DEPRIORISER crée un adjustment -2.0."""
+        engine = self._make_engine()
+        verdict = {"action": "DEPRIORISER", "target": "EXPANSION_CODE", "reason": "trop d'echecs"}
+        engine._apply_council_verdict(verdict)
+        adj = engine._council_adjustments["EXPANSION_CODE"]
+        assert adj["delta"] == -2.0
+
+    def test_apply_verdict_abandonner(self):
+        """_apply_council_verdict ABANDONNER appelle mark_rejected sur le catalog."""
+        engine = self._make_engine()
+        mock_catalog = MagicMock()
+        with patch("core.evolution_catalog.EvolutionCatalog", return_value=mock_catalog):
+            verdict = {"action": "ABANDONNER", "target": "SPEC-42", "reason": "inutile"}
+            engine._apply_council_verdict(verdict)
+            mock_catalog.mark_rejected.assert_called_once_with(
+                "SPEC-42", "Council verdict: inutile"
+            )

@@ -2553,3 +2553,896 @@ Ce fichier est maintenu automatiquement par le moteur d'autonomie et curé manue
 
 **Fichiers cibles** : `core/event_bus/publisher.py`, `core/memory/vector_store.py`, `core/router.py`
 **Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-01 08:36] Le Researcher a repéré de nouveaux skills/plugins pour agents IA. Lesquels serai
+
+**Participants** : researcher, coder, evolution | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **Solution concrète et conforme** :
+  **Pourquoi c'est valide** :
+  - `data_analyst.py` est **listé dans FICHIERS RÉELS DU PROJET** ([core/grimoire/→INEXISTANT]
+  - L'approche utilise **uniquement des fichiers
+  - La variable `LOCAL_ONLY = True` dans `config.py est respectée (aucune communication a
+
+**Fichiers cibles** : `core/grimoire/data_analyst.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-01 09:12] Le Researcher a découvert des innovations en architecture multi-agents. Comment 
+
+**Participants** : researcher, evolution, coder | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  - Ajouter une méthode `set_priority(event, level)` dans `bus.py` pour classer les événements (ex: `HIGH`, `MEDIUM`).
+  - Modifier `orchestrator.py` pour traiter les priorités via `router.py` :
+  - **Justification** : `router.py` reste sync, mais les priorités évitent les goulets d'étranglement via `performance_uti
+  - Utiliser `dr_debug.py` pour des validations **sans modification de l'architecture** :
+  **Action concrète :**
+
+**Fichiers cibles** : `core/capabilities/performance_utils.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-01 09:35] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-01 10:31] Le Researcher a trouvé des méthodes pour améliorer les débats entre agents IA. C
+
+**Participants** : strategist, coder | **Tours** : 3 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : `core/council.py`, `core/router.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-01 14:30] Le Researcher a trouvé des patterns de communication inter-agents innovants. Com
+
+**Participants** : architect, coder, infra | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  - **Méthodes asynchrones** : Les méthodes `publish` et `subscribe` ont été converties en `async def` pour éviter les blo
+  - **Validation centralisée** : `security_agent.validate_event_data(data)` est appelée avant de stocker un événement dans
+  - **Journalisation** : `log_analyst.log_event()` est utilisé pour chaque publication/abonnement, sans dépendances extern
+  **Exemple de code (fichier existant `core/event_bus/bus.py :**
+  - **Méthodes asynchrones** : Conversion des méthodes `publish` et `subscribe` en `async def` pour éviter les blocages (e
+
+**Fichiers cibles** : `Agents/security_agent.py`, `core/event_bus/bus.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-01 15:03] Le Researcher a découvert des avancées en mémoire vectorielle RAG. Comment améli
+
+**Participants** : researcher, architect, coder | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **Validation des points clés :**
+  - `config.py (fichier central de configuration) contient déjà une liste blanche de modèles approuvés (`ALLOWED_MODELS = 
+  - `security_agent.py` peut être modifié pour utiliser cette liste blanche (extrait valide ci-dessous).
+  - `router.py` gère déjà les requêtes vers les agents locaux (ex : `/skills/web_ingestion` via `web_surfer.py`).
+  **Problème technique identifié :** La gestion de la liste blanche dans `config.py présente un risque de vulnérabilité si
+
+**Fichiers cibles** : `core/capabilities/web_surfer.py`, `core/grimoire/data_analyst.py`, `core/memory/vector_store.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-01 16:52] Le Researcher a trouvé des techniques d'optimisation des ressources pour les age
+
+**Participants** : infra, strategist, architect | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  - **Modification** : Remplacer `stream=True` par `stream=False` pour éviter les fuites de mémoire (comme indiqué dans la
+  - **Ajout** : Intégrer un `asyncio.sleep(0.1)` dans la boucle d'agent (cf. `base_agent.py`) pour limiter la charge CPU.
+  - **Validation** : Ajouter une vérification du format JSON via `request.json` dans les routes `/api/execute` (cf. `perfo
+  - **Surveillance** : Éviter de stocker des embeddings inutiles en utilisant les mécanismes de filtrage existants dans `m
+  - **Optimisation** : Utiliser les fonctions de `performance_utils.py`
+
+**Fichiers cibles** : `core/capabilities/error_handler.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-01 17:12] Le Researcher a identifié des techniques de sécurisation pour systèmes IA autono
+
+**Participants** : security, architect, strategist | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : `core/interface_logger.py`, `core/orchestrator.py`, `core/router.py`, `core/utils/validation.py`, `core/validation.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-01 18:26] L'isolement pese. Comment ameliorer nos protocoles de collaboration et d'echange
+
+**Participants** : strategist, writer, researcher | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **Priorisation des compétences :**
+  **Approche concrète :**
+  **Clarification et approfondissement de la priorisation :**
+  * **Impact:**  Mesure de la contribution de la comp
+  - Pour `researcher_agent.py` :
+
+**Fichiers cibles** : `core/grimoire/doc_writer.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-01 18:53] Le Researcher a trouvé des patterns de communication inter-agents innovants. Com
+
+**Participants** : architect, coder, infra | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  - Utilise `asyncio.PriorityQueue` dans `core/event_bus/bus.py pour trier les messages par priorité (1-10).
+  - Modifie `core/event_bus/bus.py pour lever une exception si la priorité est invalide.
+  - Envoie les messages de risque à `Agents/security_agent.py via `core/event_bus/publisher.py
+  - Évite le blocage synchrone en déléguant le traitement à un agent dédié.
+  - Utilise `config.py pour stocker la clé Fernet (générée aléatoirement à la démarrage).
+
+**Fichiers cibles** : `Agents/security_agent.py`, `core/event_bus/bus.py`, `core/event_bus/publisher.py`, `core/grimoire/dr_debug.py`, `core/memory/vector_store.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-01 21:03] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  **Proposition de priorisation des compétences (Version 3.0) :**
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-01 22:17] Le Researcher a trouvé des méthodes pour améliorer les débats entre agents IA. C
+
+**Participants** : strategist, coder, writer | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  **Proposition d'optimisation des protocoles de consensus (fondée sur des fichiers existants) :**
+
+**Fichiers cibles** : `core/council.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-02 13:35] Le Researcher a identifié des stratégies de scalabilité autonome. Comment Promét
+
+**Participants** : evolution, strategist, coder | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **Stratégies d'auto-amélioration concrètes pour Prométhée (alignées avec les fichiers existants) :**
+  - **Action** : Réviser les templates dans `prompt_templates.py pour intégrer des mécanismes de *feedback itératif* (ex :
+  - **Objectif** : Améliorer la qualité des requêtes de l'Agent Rechercheur vers Ollama, réduisant les itérations inutiles
+  - **Action** : Configurer `vector_store.py pour stocker les prompts et réponses fréquentes (ex : requêtes Ollama validée
+  - **Objectif** : Réduire les appels répétitifs vers Ollama et `core/router.py limitant la charge du système.
+
+**Fichiers cibles** : `core/event_bus/bus.py`, `core/evolution_catalog.py`, `core/memory/vector_store.py`, `core/router.py`, `core/sandbox_engine.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-02 17:39] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-1772380339-9ac8`: [CURATION] perimee: 24h (>12h)
+  - `COUNCIL-1772385972-4955`: [CURATION] perimee: 22h (>12h)
+
+---
+
+## [2026-03-02 17:42] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  **Priorisation révisée des compétences des agents (version 4.0) :**
+  **Priorisation révisée des compétences des agents (version 5.0 – Orientée principes) :**
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-02 22:04] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-02 22:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-03-02 22:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-03-02 22:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-03-02 22:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-03-02 22:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-03-02 22:06] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-03-02 22:06] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-03-02 22:06] Test curation
+
+**Participants** : strategist, coder | **Tours** : 1 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-02 22:11] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-02 22:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-03-02 22:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-03-02 22:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-03-02 22:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-03-02 22:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-03-02 22:12] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-03-02 22:12] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-03-02 22:12] Test curation
+
+**Participants** : strategist, coder | **Tours** : 1 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-02 23:36] Le module 'roadmap_curator' (Phase 1 FONDATIONS) est pret a etre implemente. Des
+
+**Participants** : strategist, architect, coder | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **Nouvelle proposition, axée sur la simplification et l'utilisation de fichiers existants :**
+  *   **Délégation de la priorisation à `evolution_agent.py`:**  Ceci est une solution élégante qui permet d'éviter de réi
+  *   **Utilisation de `formatter_agent.py` pour la persistance :** La solution proposée pour la gestion des données est c
+  *   **Définition d'une interface claire pour `orchestrator.py`:**  Ce point est crucial pour garantir la stabilité et la
+  *   **Intégration des tests unitaires avec `base_agent.py`:** L'accen
+
+**Fichiers cibles** : `core/roadmap_curator.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-03 04:14] Le module 'thalamus' (Phase 2 ORGANES MANQUANTS) est pret a etre implemente. Des
+
+**Participants** : strategist, architect, coder | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  **IMPLEMENTAZIONE:**
+  *   **Rimozione dell' `error_handler`:** Gli eventi che non superano la validazione vengono semplicemente ignorati.
+  *   **Rimozione di `infra_agent`:**  La configurazione è stata semplificata rimuovendo `infra_agent` dai percorsi di rou
+  *   **Rimozione della validazione budgétaire:** La validazione è stata rimossa, per via della sua complessità.
+  *   **Utilizzo diret
+
+**Fichiers cibles** : `core/capabilities/performance_utils.py`, `core/event_bus/bus.py`, `core/router.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-03 06:46] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 5 | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-03 09:12] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-1772454946-8ad4`: [CURATION] perimee: 18h (>12h)
+
+---
+
+## [2026-03-03 09:18] Le module 'amygdala' (Phase 2 ORGANES MANQUANTS) est pret a etre implemente. Des
+
+**Participants** : strategist, architect, coder | **Tours** : 5 | **Consensus** : oui
+
+**Propositions clés** :
+  **Ce n'est pas un consensus.** La solution actuelle est trop complexe, viole les règles de citation de fichiers et manqu
+  **Proposition alternative :**
+  **Implémentation de l'amygdale en respectant les contraintes du projet**
+
+**Fichiers cibles** : `core/event_bus/publisher.py`, `core/event_bus/subscriber.py`, `core/patch_engine.py`, `core/router.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-03 12:01] Le module 'roadmap_curator' (Phase 1 FONDATIONS) est pret a etre implemente. Des
+
+**Participants** : strategist, architect, coder | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  **Mon plan d'action, en accord avec celui de Strategist et Architect, est le suivant :**
+  **Je confirme mon engagement total au plan d'action suivant, tel que proposé par Strategist et Architect :**
+
+**Fichiers cibles** : `core/evolution_feedback.py`, `core/memory/vector_store.py`, `core/objectives_engine.py`, `core/performance_utils.py`, `core/router.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-03 14:20] Le module 'hypothalamus' (Phase 2 ORGANES MANQUANTS) est pret a etre implemente.
+
+**Participants** : strategist, architect | **Tours** : 3 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-03 14:46] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-03 14:47] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-03 14:47] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-03 14:47] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-03 14:48] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-03-03 14:48] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-03-03 14:48] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-03-03 14:48] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-03-03 14:48] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-03-03 14:48] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-03-03 14:48] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-03-03 14:48] Test curation
+
+**Participants** : strategist, coder | **Tours** : 1 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-03 14:49] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-03 14:49] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-03-03 14:49] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-03-03 14:49] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-03-03 14:49] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-03-03 14:49] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-03-03 14:49] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-03-03 14:49] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-03-03 14:49] Test curation
+
+**Participants** : strategist, coder | **Tours** : 1 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-03 15:39] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-03 15:40] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-03-03 15:40] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-03-03 15:40] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-03-03 15:40] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-03-03 15:40] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-03-03 15:40] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-03-03 15:40] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-03-03 15:40] Test curation
+
+**Participants** : strategist, coder | **Tours** : 1 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-05 00:22] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- REFACTO
+
+**Participants** : strategist, coder, architect | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  *   **Audit renforcé:**  Intégration d’audits réguliers dans `council.py` via `audit_structure.py`.
+  *   **Métriques ROI:**  Suivi des performances via `code_utils.py`.
+  *   **Rollback robuste:**  Mise en place d’un rollback via `ci_pipeline.py` et `patch_engine.py`.
+  *   **Fallback sécurisé:**  Redirection vers `evolution_feedback.py` en cas de défaillance.
+  *   **Documentation centralisée:** Création de documentation avec `grimoire_wr
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-05 04:03] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-05 04:04] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-03-05 04:04] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-03-05 04:04] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-03-05 04:04] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-03-05 04:04] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-03-05 04:04] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-03-05 04:04] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-03-05 04:04] Test curation
+
+**Participants** : strategist, coder | **Tours** : 1 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-05 12:02] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-05 12:03] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-03-05 12:03] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-03-05 12:03] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-03-05 12:03] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-03-05 12:03] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-03-05 12:03] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-03-05 12:03] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-03-05 12:03] Test curation
+
+**Participants** : strategist, coder | **Tours** : 1 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)

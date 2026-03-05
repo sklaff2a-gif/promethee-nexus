@@ -286,7 +286,9 @@ class TestCouncilForge:
     def test_select_topic_high_curiosite(self):
         for name in self.engine.agents:
             self.engine.agents[name]["curiosite"] = 85.0
-        topic = self.engine.select_council_topic()
+        # Skip data-driven topics pour atteindre la priorité 3 (traits extrêmes)
+        recent = ["data_routine_audit", "data_evolution_triage", "data_drive_balance"]
+        topic = self.engine.select_council_topic(recent_subjects=recent)
         assert "researcher" in topic["participants"]
         # Même en trait extrême, la recherche reste active
         assert topic["needs_research"] is True
@@ -294,7 +296,9 @@ class TestCouncilForge:
     def test_select_topic_high_survie(self):
         for name in self.engine.agents:
             self.engine.agents[name]["survie"] = 85.0
-        topic = self.engine.select_council_topic()
+        # Skip data-driven topics pour atteindre la priorité 3 (traits extrêmes)
+        recent = ["data_routine_audit", "data_evolution_triage", "data_drive_balance"]
+        topic = self.engine.select_council_topic(recent_subjects=recent)
         assert "architect" in topic["participants"]
         # Même en trait extrême, la recherche reste active
         assert topic["needs_research"] is True
@@ -303,21 +307,27 @@ class TestCouncilForge:
         """Curiosité modérée (< 80) → thème de recherche par défaut, pas le sujet curiosité."""
         for name in self.engine.agents:
             self.engine.agents[name]["curiosite"] = 70.0
-        topic = self.engine.select_council_topic()
+        # Skip data-driven topics pour atteindre la priorité 2 (recherche)
+        recent = ["data_routine_audit", "data_evolution_triage", "data_drive_balance"]
+        topic = self.engine.select_council_topic(recent_subjects=recent)
         # Ne doit PAS déclencher le sujet "curiosité élevée"
         assert "curiosité" not in topic["mission"].lower() or "très" in topic["mission"].lower()
         assert topic["needs_research"] is True
 
     def test_select_topic_research_fallback(self):
         """Sans condition critique, on tombe sur un thème de recherche."""
-        topic = self.engine.select_council_topic()
+        # Skip data-driven topics pour atteindre la priorité 2 (recherche)
+        recent = ["data_routine_audit", "data_evolution_triage", "data_drive_balance"]
+        topic = self.engine.select_council_topic(recent_subjects=recent)
         assert len(topic["participants"]) >= 2
         assert topic["needs_research"] is True
         assert topic["research_query"] is not None
 
     def test_research_themes_rotation(self):
         """Chaque debate_index donne un thème différent (rotation)."""
-        topics = [self.engine.select_council_topic(debate_index=i) for i in range(8)]
+        # Skip data-driven topics pour atteindre la priorité 2 (recherche)
+        recent = ["data_routine_audit", "data_evolution_triage", "data_drive_balance"]
+        topics = [self.engine.select_council_topic(debate_index=i, recent_subjects=recent) for i in range(8)]
         queries = [t["research_query"] for t in topics]
         # Au moins 3 queries différentes sur 8
         assert len(set(queries)) >= 3

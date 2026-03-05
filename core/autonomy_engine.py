@@ -28,6 +28,7 @@ POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
 # Mode sieste : routines autorisées (0-LLM uniquement) et intervalle entre routines
 NAP_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
 NAP_SLEEP_INTERVAL = 300  # 5 min entre routines en sieste
+MAX_NAP_DURATION = 3600  # 1h max avant réveil automatique
 
 def _load_resource_costs() -> dict:
     """Charge les coûts par routine depuis config/resource_costs.json."""
@@ -2516,6 +2517,12 @@ class AutonomyEngine:
 
             # Mode sieste : maintenance 0-LLM uniquement, sleep rallongé
             if self.is_napping:
+                # Auto-wake après MAX_NAP_DURATION
+                nap_elapsed = time.time() - self._nap_started_at if self._nap_started_at else 0
+                if nap_elapsed >= MAX_NAP_DURATION:
+                    logger.info(f"[AUTONOMY] Auto-réveil après {int(nap_elapsed // 60)}min de sieste.")
+                    await self.exit_nap()
+                    continue
                 self.is_processing = True
                 try:
                     await self._execute_nap_routine()
