@@ -50,6 +50,26 @@ RULE_DECAY_ON_CONTRADICTION = 0.03 # Degradation quand observation contredit la 
 RULE_MIN_WEIGHT = 0.01             # En-dessous → regle supprimee
 RULE_MAX_WEIGHT = 0.20             # Plafond poids
 
+# Sprint F — Habituation & Novelty
+HABITUATION_WINDOW = 10            # Max timestamps gardes par event
+HABITUATION_THRESHOLD = 5          # Occurrences dans la fenetre → habitue
+HABITUATION_EXTRA_DECAY = 0.07     # Malus supplementaire par cycle (progressif)
+HABITUATION_TIME_WINDOW = 600.0    # Fenetre temporelle 10 min
+NOVELTY_ABSENCE_THRESHOLD = 300.0  # 5 min sans occurrence → "novel"
+NOVELTY_BOOST = 0.15               # Boost ponctuel a l'arrivee d'un event novel
+
+# --- Events sensoriels (pour habituation/novelty) ---
+
+_SENSORY_EVENTS = frozenset({
+    "REPTILIAN_ALERT",
+    "KNOWLEDGE_GAP_DETECTED",
+    "HALLUCINATION_DETECTED",
+    "TISSUE_PATTERN_EMERGED",
+    "TISSUE_CREATIVITY_SPIKE",
+    "PREFRONTAL_GOAL_COMPLETE",
+    "COUNCIL_END",
+})
+
 # --- Categories d'events ---
 
 EVENT_CATEGORIES: Dict[str, str] = {
@@ -142,6 +162,10 @@ class Thalamus:
         self._learned_rules: List[Dict[str, Any]] = []
         self._intent_observations: Dict[str, Dict[str, int]] = {}
 
+        # Sprint F — Habituation & Novelty
+        self._event_timestamps: Dict[str, List[float]] = {evt: [] for evt in _SENSORY_EVENTS}
+        self._event_last_seen: Dict[str, float] = {}
+
         self._load()
 
     @classmethod
@@ -182,6 +206,12 @@ class Thalamus:
                 # Sprint E
                 self._learned_rules = data.get("learned_rules", [])
                 self._intent_observations = data.get("intent_observations", {})
+                # Sprint F
+                saved_ts = data.get("event_timestamps", {})
+                for evt in _SENSORY_EVENTS:
+                    if evt in saved_ts:
+                        self._event_timestamps[evt] = saved_ts[evt]
+                self._event_last_seen = data.get("event_last_seen", {})
                 logger.info(f"THALAMUS: Etat restaure (cycles={self._cycle_count}).")
         except Exception as e:
             logger.warning(f"THALAMUS: Echec chargement: {e}")
@@ -200,6 +230,8 @@ class Thalamus:
                 "focus_history": self._focus_history[-20:],
                 "learned_rules": self._learned_rules,
                 "intent_observations": self._intent_observations,
+                "event_timestamps": {k: v[-HABITUATION_WINDOW:] for k, v in self._event_timestamps.items() if v},
+                "event_last_seen": self._event_last_seen,
                 "saved_at": time.time(),
             }
             os.makedirs(os.path.dirname(THALAMUS_STATE_FILE), exist_ok=True)
@@ -247,6 +279,15 @@ class Thalamus:
                 {"intent": r["intent"], "type": r["type"], "weight": round(r["weight"], 4)}
                 for r in self._learned_rules
             ],
+            "habituated_events": [
+                evt for evt in _SENSORY_EVENTS
+                if self._get_habituation_level(evt) > 0.0
+            ],
+            "novel_events": [
+                evt for evt in _SENSORY_EVENTS
+                if evt not in self._event_last_seen
+                or (time.time() - self._event_last_seen[evt]) >= NOVELTY_ABSENCE_THRESHOLD
+            ],
         }
 
     def compute_attention_bonus(self, intent: str) -> float:
@@ -277,6 +318,10 @@ class Thalamus:
 
         return bonus
 
+    def get_nap_events(self) -> List[Dict[str, Any]]:
+        """Retourne une copie du nap_buffer (events accumules pendant la sieste)."""
+        return list(self._nap_buffer)
+
     def get_health(self) -> Dict[str, Any]:
         """Health check thalamique."""
         focus_duration = self._cycle_count - self._focus_since_cycle
@@ -288,6 +333,10 @@ class Thalamus:
             "salient_count": sum(1 for v in self._scorecard.values() if v > self._threshold),
             "status": "FATIGUED" if self._attention_fatigue > 0.7 else "OK",
             "learned_rules_count": len(self._learned_rules),
+            "habituated_count": sum(
+                1 for evt in _SENSORY_EVENTS
+                if self._get_habituation_level(evt) > 0.0
+            ),
         }
 
     # ================================================================
@@ -329,6 +378,7 @@ class Thalamus:
 
     async def _on_reptilian_alert(self, data: Dict[str, Any]):
         """REPTILIAN_ALERT : boost immediat urgence a 0.9. Urgence = reveil force."""
+        self._record_event("REPTILIAN_ALERT")
         self._context["threat_level"] = data.get("threat_level", 5.0)
         for evt, cat in EVENT_CATEGORIES.items():
             if cat == "urgence":
@@ -346,6 +396,7 @@ class Thalamus:
 
     async def _on_knowledge_gap(self, data: Dict[str, Any]):
         """KNOWLEDGE_GAP_DETECTED : boost cognition."""
+        self._record_event("KNOWLEDGE_GAP_DETECTED")
         if self._sleeping:
             self._buffer_event("KNOWLEDGE_GAP_DETECTED", data)
             return
@@ -377,10 +428,13 @@ class Thalamus:
                     self._scorecard[evt] = max(0.0, self._scorecard[evt] - ROUTINE_FEEDBACK_MALUS)
 
         # Sprint E — Observation learned rules
-        self._observe_routine_outcome(intent, status)
+        rule_info = self._observe_routine_outcome(intent, status)
+        if rule_info:
+            await bus.publish("THALAMUS_RULE_LEARNED", rule_info)
 
     async def _on_council_end(self, data: Dict[str, Any]):
         """COUNCIL_END : boost deliberation."""
+        self._record_event("COUNCIL_END")
         if self._sleeping:
             self._buffer_event("COUNCIL_END", data)
             return
@@ -390,6 +444,7 @@ class Thalamus:
 
     async def _on_hallucination(self, data: Dict[str, Any]):
         """HALLUCINATION_DETECTED : boost urgence."""
+        self._record_event("HALLUCINATION_DETECTED")
         if self._sleeping:
             self._buffer_event("HALLUCINATION_DETECTED", data)
             return
@@ -399,6 +454,7 @@ class Thalamus:
 
     async def _on_tissue_pattern(self, data: Dict[str, Any]):
         """TISSUE_PATTERN_EMERGED : boost emergence."""
+        self._record_event("TISSUE_PATTERN_EMERGED")
         if self._sleeping:
             self._buffer_event("TISSUE_PATTERN_EMERGED", data)
             return
@@ -408,6 +464,7 @@ class Thalamus:
 
     async def _on_tissue_creativity(self, data: Dict[str, Any]):
         """TISSUE_CREATIVITY_SPIKE : boost emergence."""
+        self._record_event("TISSUE_CREATIVITY_SPIKE")
         if self._sleeping:
             self._buffer_event("TISSUE_CREATIVITY_SPIKE", data)
             return
@@ -417,6 +474,7 @@ class Thalamus:
 
     async def _on_goal_complete(self, data: Dict[str, Any]):
         """PREFRONTAL_GOAL_COMPLETE : boost cognition."""
+        self._record_event("PREFRONTAL_GOAL_COMPLETE")
         if self._sleeping:
             self._buffer_event("PREFRONTAL_GOAL_COMPLETE", data)
             return
@@ -559,6 +617,9 @@ class Thalamus:
         if self._learned_rules:
             self._apply_learned_rules()
 
+        # 1c. Habituation extra decay (Sprint F)
+        self._apply_habituation()
+
         # 2. Bonus contextuel urgence (threat_level)
         threat = self._context.get("threat_level", 0.0)
         if threat > 0:
@@ -686,16 +747,75 @@ class Thalamus:
         return total
 
     # ================================================================
+    # HABITUATION & NOVELTY (Sprint F)
+    # ================================================================
+
+    def _record_event(self, event_type: str):
+        """Enregistre un timestamp pour un event sensoriel. Applique novelty boost si absent longtemps."""
+        if event_type not in _SENSORY_EVENTS:
+            return
+
+        now = time.time()
+
+        # Detection novelty AVANT enregistrement
+        last_seen = self._event_last_seen.get(event_type)
+        is_novel = (last_seen is None) or (now - last_seen >= NOVELTY_ABSENCE_THRESHOLD)
+
+        if is_novel and not self._sleeping:
+            # Boost ponctuel sur la categorie de cet event (pas en sieste)
+            cat = EVENT_CATEGORIES.get(event_type)
+            if cat:
+                for evt, c in EVENT_CATEGORIES.items():
+                    if c == cat:
+                        self._scorecard[evt] = min(1.0, self._scorecard[evt] + NOVELTY_BOOST)
+
+        # Enregistrer timestamp (toujours, meme en sieste)
+        self._event_timestamps[event_type].append(now)
+        self._event_last_seen[event_type] = now
+
+        # Elagage fenetre glissante (temps)
+        cutoff = now - HABITUATION_TIME_WINDOW
+        self._event_timestamps[event_type] = [
+            ts for ts in self._event_timestamps[event_type] if ts >= cutoff
+        ][-HABITUATION_WINDOW:]
+
+    def _get_habituation_level(self, event_type: str) -> float:
+        """Retourne le niveau d'habituation [0.0, 1.0] progressif."""
+        if event_type not in _SENSORY_EVENTS:
+            return 0.0
+        now = time.time()
+        cutoff = now - HABITUATION_TIME_WINDOW
+        recent = [ts for ts in self._event_timestamps.get(event_type, []) if ts >= cutoff]
+        count = len(recent)
+        if count < HABITUATION_THRESHOLD:
+            return 0.0
+        # Lineaire de THRESHOLD → WINDOW (0.0 → 1.0)
+        span = HABITUATION_WINDOW - HABITUATION_THRESHOLD
+        if span <= 0:
+            return 1.0
+        return min(1.0, (count - HABITUATION_THRESHOLD) / span)
+
+    def _apply_habituation(self):
+        """Applique extra decay aux events sensoriels habitues."""
+        for event_type in _SENSORY_EVENTS:
+            level = self._get_habituation_level(event_type)
+            if level > 0.0:
+                malus = HABITUATION_EXTRA_DECAY * level
+                if event_type in self._scorecard:
+                    self._scorecard[event_type] = max(0.0, self._scorecard[event_type] - malus)
+
+    # ================================================================
     # LEARNED RULES (Sprint E)
     # ================================================================
 
-    def _observe_routine_outcome(self, intent: str, status: str):
-        """Enregistre observation success/error pour un intent. Appelle cristallisation."""
+    def _observe_routine_outcome(self, intent: str, status: str) -> Optional[Dict[str, Any]]:
+        """Enregistre observation success/error pour un intent. Appelle cristallisation.
+        Retourne les infos de la regle cristallisee (ou None)."""
         cat = _INTENT_CATEGORY_HINTS.get(intent)
         if not cat:
-            return
+            return None
         if status not in ("success", "error"):
-            return
+            return None
 
         if intent not in self._intent_observations:
             self._intent_observations[intent] = {"success": 0, "error": 0}
@@ -708,17 +828,18 @@ class Thalamus:
         if obs[opposite] > 0:
             obs[opposite] -= 1
 
-        self._maybe_crystallize_rule(intent)
+        return self._maybe_crystallize_rule(intent)
 
-    def _maybe_crystallize_rule(self, intent: str):
-        """Si seuil atteint : cree/renforce/degrade regle. Reset compteurs."""
+    def _maybe_crystallize_rule(self, intent: str) -> Optional[Dict[str, Any]]:
+        """Si seuil atteint : cree/renforce/degrade regle. Reset compteurs.
+        Retourne les infos de la regle affectee (ou None)."""
         obs = self._intent_observations.get(intent)
         if not obs:
-            return
+            return None
 
         cat = _INTENT_CATEGORY_HINTS.get(intent)
         if not cat:
-            return
+            return None
 
         for direction in ("success", "error"):
             if obs[direction] < RULE_CRYSTALLIZE_THRESHOLD:
@@ -726,6 +847,7 @@ class Thalamus:
 
             rule_type = "boost" if direction == "success" else "dampen"
             idx = self._find_rule(intent)
+            action = None
 
             if idx is not None:
                 existing = self._learned_rules[idx]
@@ -735,11 +857,15 @@ class Thalamus:
                         RULE_MAX_WEIGHT,
                         existing["weight"] + RULE_REINFORCE_STEP
                     )
+                    action = "reinforced"
                 else:
                     # Contradiction avec regle existante → degradation
                     existing["weight"] -= RULE_DECAY_ON_CONTRADICTION
                     if existing["weight"] < RULE_MIN_WEIGHT:
                         self._learned_rules.pop(idx)
+                        action = "removed"
+                    else:
+                        action = "weakened"
             else:
                 # Nouvelle regle
                 if len(self._learned_rules) >= MAX_LEARNED_RULES:
@@ -751,10 +877,18 @@ class Thalamus:
                     "type": rule_type,
                     "weight": weight,
                 })
+                action = "created"
 
             # Reset compteurs apres cristallisation
             self._intent_observations[intent] = {"success": 0, "error": 0}
-            return
+            return {
+                "intent": intent,
+                "category": cat,
+                "type": rule_type,
+                "action": action,
+                "rules_count": len(self._learned_rules),
+            }
+        return None
 
     def _find_rule(self, intent: str) -> Optional[int]:
         """Retourne l'index de la regle pour un intent, ou None."""
@@ -791,6 +925,41 @@ class Thalamus:
         """Copie des regles pour API/debug."""
         import copy
         return copy.deepcopy(self._learned_rules)
+
+    # ================================================================
+    # MODULATION ZONES TISSUE (Couplage Thalamus→Tissu)
+    # ================================================================
+
+    # Mapping catégorie attention → zones tissue
+    _CATEGORY_ZONE_MAP = {
+        "urgence":      ["threat", "stability"],
+        "motivation":   ["dopamine", "desire"],
+        "cognition":    ["cognition", "memory"],
+        "deliberation": ["goals", "cognition"],
+        "emergence":    ["creativity", "emotion"],
+        "regulation":   ["stability", "memory"],
+    }
+
+    def compute_zone_modulation(self) -> Dict[str, float]:
+        """Calcule un facteur de modulation [0.5, 2.0] par zone tissue.
+
+        Basé sur les forces d'attention par catégorie.
+        Retourne dict {zone_name: factor}.
+        """
+        if not self._scorecard:
+            return {}
+
+        modulation = {}
+        for category, zones in self._CATEGORY_ZONE_MAP.items():
+            strength = self._compute_category_strength(category)
+            # strength [0,1+] → factor [0.7, 1.5]
+            # Focus fort → boost les zones associées
+            factor = 0.7 + min(strength, 1.0) * 0.8
+            for zone in zones:
+                # Si plusieurs catégories ciblent la même zone, prendre le max
+                modulation[zone] = max(modulation.get(zone, 1.0), factor)
+
+        return modulation
 
 
 # --- Singleton module-level ---

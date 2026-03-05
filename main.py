@@ -368,6 +368,11 @@ async def lifespan(app: FastAPI):
     thalamus.init()
     print("   🔬 THALAMUS: Relais sensoriel actif.")
 
+    # --- AMYGDALE (Mémoire Émotionnelle) ---
+    from core.amygdala import amygdala
+    amygdala.init()
+    print("   🫀 AMYGDALE: Mémoire émotionnelle active.")
+
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
 
     # --- CI/CD Pipeline (remplace quality_control_listener) ---
@@ -384,6 +389,7 @@ async def lifespan(app: FastAPI):
     talk_logger.stop()
     interface_logger.stop()
     thalamus._save()
+    amygdala.save()
     print("🔌 Arrêt.")
     tracemalloc.stop()
 
@@ -602,6 +608,12 @@ async def thalamus_status():
     """Retourne l'etat du thalamus (scorecard, focus, seuil)."""
     from core.thalamus import thalamus
     return thalamus.get_stats()
+
+@app.get("/api/amygdala/stats")
+async def amygdala_stats():
+    """Retourne les statistiques de l'amygdale (mémoires émotionnelles)."""
+    from core.amygdala import amygdala
+    return amygdala.get_stats()
 
 @app.get("/api/inner-voice/status")
 async def inner_voice_status():

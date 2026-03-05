@@ -616,6 +616,17 @@ class NeuralTissue:
             "cognition":  state["cognition_level"],
         }
 
+        # Modulation thalamique : focus attentionnel → amplifie/atténue les zones
+        try:
+            from core.thalamus import thalamus as _thal
+            thal_mod = _thal.compute_zone_modulation()
+            if thal_mod:
+                for zone_name in zone_intensities:
+                    factor = thal_mod.get(zone_name, 1.0)
+                    zone_intensities[zone_name] *= factor
+        except Exception:
+            pass
+
         # Saisonnalité : déterminer la saison courante
         new_season_index = (self.tick_count // SEASON_CYCLE_LENGTH) % len(SEASON_ORDER)
         if new_season_index != self._current_season_index and self.tick_count > 0:

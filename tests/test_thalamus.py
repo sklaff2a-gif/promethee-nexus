@@ -838,7 +838,7 @@ class TestGetHealth:
         """Verifie toutes les cles de get_health."""
         t = isolate_thalamus
         health = t.get_health()
-        expected_keys = {"attention_fatigue", "focus_stability", "focus", "sleeping", "salient_count", "status", "learned_rules_count"}
+        expected_keys = {"attention_fatigue", "focus_stability", "focus", "sleeping", "salient_count", "status", "learned_rules_count", "habituated_count"}
         assert set(health.keys()) == expected_keys
 
     def test_get_health_fatigued_status(self, isolate_thalamus):
@@ -1242,3 +1242,306 @@ class TestLearnedRulesContradiction:
             await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "success"})
             await t._on_routine_complete({"intent": "SECURITY_SCAN", "status": "error"})
         assert len(t._learned_rules) == 0
+
+
+# ============================================================
+# 32. TestHabituationBasic (Sprint F)
+# ============================================================
+
+class TestHabituationBasic:
+
+    def test_initial_timestamps_empty(self, isolate_thalamus):
+        """Listes vides pour chaque event sensoriel a l'init."""
+        from core.thalamus import _SENSORY_EVENTS
+        t = isolate_thalamus
+        for evt in _SENSORY_EVENTS:
+            assert t._event_timestamps[evt] == []
+
+    @pytest.mark.asyncio
+    async def test_record_event_adds_timestamp(self, isolate_thalamus):
+        """_on_hallucination → 1 timestamp enregistre."""
+        t = isolate_thalamus
+        await t._on_hallucination({})
+        assert len(t._event_timestamps["HALLUCINATION_DETECTED"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_record_event_updates_last_seen(self, isolate_thalamus):
+        """_event_last_seen renseigne apres handler."""
+        import time
+        t = isolate_thalamus
+        before = time.time()
+        await t._on_tissue_pattern({})
+        after = time.time()
+        assert "TISSUE_PATTERN_EMERGED" in t._event_last_seen
+        assert before <= t._event_last_seen["TISSUE_PATTERN_EMERGED"] <= after
+
+    def test_record_non_sensory_ignored(self, isolate_thalamus):
+        """_record_event('CARDIAC_BEAT') → noop."""
+        t = isolate_thalamus
+        t._record_event("CARDIAC_BEAT")
+        assert "CARDIAC_BEAT" not in t._event_timestamps
+
+    def test_timestamps_pruned_beyond_window(self, isolate_thalamus):
+        """Timestamps > HABITUATION_TIME_WINDOW elagués."""
+        import time
+        from core.thalamus import HABITUATION_TIME_WINDOW
+        t = isolate_thalamus
+        now = time.time()
+        # Ajouter des timestamps anciens
+        t._event_timestamps["COUNCIL_END"] = [now - HABITUATION_TIME_WINDOW - 100, now - HABITUATION_TIME_WINDOW - 50]
+        t._record_event("COUNCIL_END")
+        # Seul le nouveau doit rester
+        assert len(t._event_timestamps["COUNCIL_END"]) == 1
+
+
+# ============================================================
+# 33. TestHabituationDecay (Sprint F)
+# ============================================================
+
+class TestHabituationDecay:
+
+    @pytest.mark.asyncio
+    async def test_no_extra_decay_below_threshold(self, isolate_thalamus):
+        """4 occurrences → _get_habituation_level == 0.0."""
+        import time
+        t = isolate_thalamus
+        now = time.time()
+        t._event_timestamps["REPTILIAN_ALERT"] = [now - i for i in range(4)]
+        assert t._get_habituation_level("REPTILIAN_ALERT") == 0.0
+
+    @pytest.mark.asyncio
+    async def test_extra_decay_above_threshold(self, isolate_thalamus):
+        """7 occurrences → saillance baisse plus qu'avec decay seul."""
+        import time
+        from core.thalamus import SALIENCE_DECAY, HABITUATION_EXTRA_DECAY
+        t = isolate_thalamus
+        now = time.time()
+        # 7 occurrences recentes pour HALLUCINATION_DETECTED
+        t._event_timestamps["HALLUCINATION_DETECTED"] = [now - i * 10 for i in range(7)]
+        t._scorecard["HALLUCINATION_DETECTED"] = 0.8
+        # Event sans habituation pour comparaison
+        t._scorecard["TISSUE_EXTINCTION_RISK"] = 0.8
+        level = t._get_habituation_level("HALLUCINATION_DETECTED")
+        assert level > 0.0
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            await t._update_cycle()
+        # HALLUCINATION doit etre plus basse que TISSUE_EXTINCTION (meme categorie urgence, mais habituation)
+        assert t._scorecard["HALLUCINATION_DETECTED"] < t._scorecard["TISSUE_EXTINCTION_RISK"]
+
+    @pytest.mark.asyncio
+    async def test_habituation_only_affects_individual_event(self, isolate_thalamus):
+        """REPTILIAN_ALERT repete → HALLUCINATION_DETECTED pas penalise en extra."""
+        import time
+        from core.thalamus import SALIENCE_DECAY
+        t = isolate_thalamus
+        now = time.time()
+        # Habituer REPTILIAN_ALERT
+        t._event_timestamps["REPTILIAN_ALERT"] = [now - i * 10 for i in range(8)]
+        # Pas d'habituation sur HALLUCINATION_DETECTED
+        t._event_timestamps["HALLUCINATION_DETECTED"] = []
+        t._scorecard["REPTILIAN_ALERT"] = 0.6
+        t._scorecard["HALLUCINATION_DETECTED"] = 0.6
+        t._context["threat_level"] = 0.0
+        t._context["dopamine_level"] = 0.5
+        t._context["bpm"] = 60.0
+        with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+            await t._update_cycle()
+        # HALLUCINATION ne doit subir que decay standard, REPTILIAN aussi decay + habituation extra
+        hallucination_val = t._scorecard["HALLUCINATION_DETECTED"]
+        reptilian_val = t._scorecard["REPTILIAN_ALERT"]
+        assert reptilian_val < hallucination_val
+
+
+# ============================================================
+# 34. TestNoveltyDetection (Sprint F)
+# ============================================================
+
+class TestNoveltyDetection:
+
+    @pytest.mark.asyncio
+    async def test_first_occurrence_is_novel(self, isolate_thalamus):
+        """Premier event → boost NOVELTY_BOOST applique."""
+        from core.thalamus import NOVELTY_BOOST, EVENT_CATEGORIES
+        t = isolate_thalamus
+        initial = t._scorecard["COUNCIL_END"]
+        await t._on_council_end({})
+        # Council END est dans categorie 'deliberation'
+        assert t._scorecard["COUNCIL_END"] >= initial + NOVELTY_BOOST
+
+    @pytest.mark.asyncio
+    async def test_no_novelty_if_seen_recently(self, isolate_thalamus):
+        """2 appels rapproches → pas de double novelty."""
+        from core.thalamus import NOVELTY_BOOST, EVENT_CATEGORIES
+        t = isolate_thalamus
+        initial = t._scorecard["COUNCIL_END"]
+        await t._on_council_end({})
+        after_first = t._scorecard["COUNCIL_END"]
+        await t._on_council_end({})
+        after_second = t._scorecard["COUNCIL_END"]
+        # Le 2e appel ajoute le boost handler (+0.2) mais PAS novelty en plus
+        # Le premier : novelty (+0.15) + handler (+0.2) = +0.35
+        # Le deuxieme : handler (+0.2) seulement = +0.2 de plus
+        # Donc after_second - after_first < after_first - initial
+        first_delta = after_first - initial
+        second_delta = after_second - after_first
+        assert second_delta < first_delta
+
+    @pytest.mark.asyncio
+    async def test_novelty_after_long_absence(self, isolate_thalamus):
+        """Simuler last_seen ancien → novelty boost au retour."""
+        import time
+        from core.thalamus import NOVELTY_BOOST, NOVELTY_ABSENCE_THRESHOLD, EVENT_CATEGORIES
+        t = isolate_thalamus
+        # Simuler un event vu il y a longtemps
+        t._event_last_seen["TISSUE_PATTERN_EMERGED"] = time.time() - NOVELTY_ABSENCE_THRESHOLD - 10
+        initial = t._scorecard["TISSUE_PATTERN_EMERGED"]
+        await t._on_tissue_pattern({})
+        # Doit avoir le boost novelty + boost handler
+        assert t._scorecard["TISSUE_PATTERN_EMERGED"] >= initial + NOVELTY_BOOST
+
+    @pytest.mark.asyncio
+    async def test_novelty_boost_applies_to_category(self, isolate_thalamus):
+        """Le boost novelty touche tous les events de la categorie."""
+        from core.thalamus import NOVELTY_BOOST, EVENT_CATEGORIES
+        t = isolate_thalamus
+        # TISSUE_PATTERN_EMERGED et TISSUE_CREATIVITY_SPIKE sont dans 'emergence'
+        initial_pattern = t._scorecard["TISSUE_PATTERN_EMERGED"]
+        initial_creativity = t._scorecard["TISSUE_CREATIVITY_SPIKE"]
+        # Appel pattern → novelty boost sur toute la categorie 'emergence'
+        await t._on_tissue_pattern({})
+        assert t._scorecard["TISSUE_CREATIVITY_SPIKE"] >= initial_creativity + NOVELTY_BOOST
+
+
+# ============================================================
+# 35. TestHabituationPersistence (Sprint F)
+# ============================================================
+
+class TestHabituationPersistence:
+
+    def test_save_load_preserves_state(self, isolate_thalamus, tmp_path):
+        """Save + reset + load → timestamps et last_seen restaures."""
+        import time
+        from core import thalamus as mod
+        t = isolate_thalamus
+        now = time.time()
+        t._event_timestamps["COUNCIL_END"] = [now - 10, now - 5, now]
+        t._event_last_seen["COUNCIL_END"] = now
+        t._event_last_seen["REPTILIAN_ALERT"] = now - 100
+        t._save()
+
+        # Reset et recharge
+        mod.Thalamus.reset_singleton()
+        t2 = mod.Thalamus.__new__(mod.Thalamus)
+        t2._initialized = False
+        t2.__init__()
+        assert len(t2._event_timestamps["COUNCIL_END"]) == 3
+        assert t2._event_last_seen["COUNCIL_END"] == now
+        assert t2._event_last_seen["REPTILIAN_ALERT"] == pytest.approx(now - 100)
+
+
+# ============================================================
+# 36. TestHabituationGetStats (Sprint F)
+# ============================================================
+
+class TestHabituationGetStats:
+
+    def test_get_stats_includes_habituation_fields(self, isolate_thalamus):
+        """get_stats inclut habituated_events et novel_events."""
+        t = isolate_thalamus
+        stats = t.get_stats()
+        assert "habituated_events" in stats
+        assert "novel_events" in stats
+        # Au debut, tous les events sont 'novel' (jamais vus)
+        assert len(stats["novel_events"]) > 0
+
+    def test_get_health_includes_habituated_count(self, isolate_thalamus):
+        """get_health inclut habituated_count."""
+        t = isolate_thalamus
+        health = t.get_health()
+        assert "habituated_count" in health
+        assert health["habituated_count"] == 0
+
+
+# ============================================================
+# TestZoneModulation (Couplage Thalamus→Tissu)
+# ============================================================
+
+class TestZoneModulation:
+
+    def test_compute_zone_modulation_empty(self, isolate_thalamus):
+        """Scorecard vide → dict vide."""
+        t = isolate_thalamus
+        t._scorecard = {}
+        result = t.compute_zone_modulation()
+        assert result == {}
+
+    def test_compute_zone_modulation_default(self, isolate_thalamus):
+        """Avec scorecard par défaut (0.5), toutes les zones ont un facteur."""
+        t = isolate_thalamus
+        result = t.compute_zone_modulation()
+        assert isinstance(result, dict)
+        # Doit contenir au moins quelques zones
+        assert len(result) > 0
+
+    def test_compute_zone_modulation_urgence_focused(self, isolate_thalamus):
+        """Urgence forte → threat/stability boostées."""
+        t = isolate_thalamus
+        from core.thalamus import EVENT_CATEGORIES
+        # Mettre tous les events urgence à 1.0
+        for evt, cat in EVENT_CATEGORIES.items():
+            if cat == "urgence":
+                t._scorecard[evt] = 1.0
+            else:
+                t._scorecard[evt] = 0.0
+        result = t.compute_zone_modulation()
+        # threat et stability doivent être boostés
+        assert result.get("threat", 1.0) > 1.0
+        assert result.get("stability", 1.0) > 1.0
+
+    def test_compute_zone_modulation_factors_in_range(self, isolate_thalamus):
+        """Les facteurs doivent être dans [0.7, 1.5]."""
+        t = isolate_thalamus
+        # Mettre des valeurs extrêmes
+        for evt in t._scorecard:
+            t._scorecard[evt] = 1.0
+        result = t.compute_zone_modulation()
+        for zone, factor in result.items():
+            assert 0.7 <= factor <= 1.5, f"{zone}: {factor} hors bornes"
+
+    def test_compute_zone_modulation_low_strength(self, isolate_thalamus):
+        """Attention faible → facteurs proches de 0.7."""
+        t = isolate_thalamus
+        for evt in t._scorecard:
+            t._scorecard[evt] = 0.0
+        result = t.compute_zone_modulation()
+        for zone, factor in result.items():
+            assert factor <= 1.0, f"{zone}: {factor} devrait être ≤1.0 avec attention nulle"
+
+    def test_compute_zone_modulation_multiple_categories_same_zone(self, isolate_thalamus):
+        """Cognition cible par cognition et deliberation → max des deux."""
+        t = isolate_thalamus
+        from core.thalamus import EVENT_CATEGORIES
+        for evt, cat in EVENT_CATEGORIES.items():
+            if cat == "cognition":
+                t._scorecard[evt] = 0.8
+            elif cat == "deliberation":
+                t._scorecard[evt] = 0.3
+            else:
+                t._scorecard[evt] = 0.0
+        result = t.compute_zone_modulation()
+        # cognition est ciblée par "cognition" et "deliberation"
+        # Le max des deux forces s'applique
+        assert "cognition" in result
+
+    def test_compute_zone_modulation_emergence(self, isolate_thalamus):
+        """Émergence forte → creativity et emotion boostées."""
+        t = isolate_thalamus
+        from core.thalamus import EVENT_CATEGORIES
+        for evt, cat in EVENT_CATEGORIES.items():
+            if cat == "emergence":
+                t._scorecard[evt] = 0.9
+            else:
+                t._scorecard[evt] = 0.0
+        result = t.compute_zone_modulation()
+        assert result.get("creativity", 1.0) > 1.0
+        assert result.get("emotion", 1.0) > 1.0

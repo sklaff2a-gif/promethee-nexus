@@ -238,6 +238,12 @@ class ReptilianCore:
             self._beat_counter += 1
             if self._beat_counter % 12 == 0:
                 self.save()
+                # Extinction amygdalienne (~60s)
+                try:
+                    from core.amygdala import amygdala as _amyg
+                    _amyg.tick_extinction()
+                except Exception:
+                    pass
 
     # ============================================================
     # Capteurs de menaces — _sense_threats()
@@ -587,6 +593,16 @@ class ReptilianCore:
         for pattern, severity in threats.items():
             if severity >= THREAT_ALERT:
                 self._condition_threat(pattern, severity, reflex)
+        # Pont vers la nouvelle amygdale
+        try:
+            from core.amygdala import amygdala as _amyg
+            for pattern, severity in threats.items():
+                if severity >= THREAT_ALERT:
+                    _amyg.condition(pattern, valence=-severity / 10.0,
+                                   arousal=min(1.0, severity / 8.0),
+                                   reflex=reflex)
+        except Exception:
+            pass
 
     def _condition_threat(self, pattern: str, severity: float, reflex: str):
         """Renforce l'association pattern → réflexe (conditionnement)."""

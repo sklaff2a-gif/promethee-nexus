@@ -929,6 +929,17 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Biais émotionnel amygdalien (Couche 16) ---
+        try:
+            from core.amygdala import amygdala
+            for i, (routine, s) in enumerate(scored):
+                bias = amygdala.compute_emotional_bias(routine["intent"])
+                if bias != 0.0:
+                    scored[i] = (routine, s + bias)
+            scored.sort(key=lambda x: x[1], reverse=True)
+        except Exception:
+            pass
+
         if not scored:
             logger.warning("[AUTONOMY] Aucune routine disponible apres filtrage. Cycle avorte.")
             self._persist_state()
@@ -2135,6 +2146,27 @@ class AutonomyEngine:
                 logger.info(f"[DREAM] {summary}")
         except Exception as e:
             logger.debug(f"[DREAM] Thalamus nap integration skipped: {e}")
+
+        # Phase 2.6 — Modulation émotionnelle onirique (amygdale)
+        try:
+            from core.amygdala import amygdala as _amyg
+            stats = _amyg.get_stats()
+            neg_count = stats.get("negative_memories", 0)
+            pos_count = stats.get("positive_memories", 0)
+            if neg_count > pos_count and 'tissue' in dir():
+                # Dominance négative → rêve anxieux → booster threat
+                tissue._cognitive_state["threat_level"] = min(
+                    tissue._cognitive_state.get("threat_level", 0.5) + 0.05, 1.0
+                )
+                dream_report.append(f"Rêve anxieux: {neg_count} mémoires négatives dominantes")
+            elif pos_count > neg_count and 'tissue' in dir():
+                # Dominance positive → rêve créatif → booster créativité
+                tissue._cognitive_state["creativity"] = min(
+                    tissue._cognitive_state.get("creativity", 0.5) + 0.05, 1.0
+                )
+                dream_report.append(f"Rêve créatif: {pos_count} mémoires positives dominantes")
+        except Exception as e:
+            logger.debug(f"[DREAM] Amygdala dream integration skipped: {e}")
 
         # Phase 3 — Publier le rêve sur le bus
         if dream_report:

@@ -451,6 +451,13 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Amygdale
+        try:
+            from core.amygdala import amygdala
+            snapshot["amygdala"] = amygdala.get_stats()
+        except Exception:
+            pass
+
         # Neural Tissue
         try:
             from core.neural_tissue import tissue
