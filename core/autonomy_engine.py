@@ -25,6 +25,10 @@ BUDGET_RESERVE_POINTS = 20
 # Routines 0-LLM qui continuent même quand le budget est épuisé
 POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
 
+# Clamping final du score total (après toutes les couches de scoring)
+FINAL_SCORE_CLAMP_MIN = -5.0
+FINAL_SCORE_CLAMP_MAX = 25.0
+
 # Mode sieste : routines autorisées (0-LLM uniquement) et intervalle entre routines
 NAP_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
 NAP_SLEEP_INTERVAL = 300  # 5 min entre routines en sieste
@@ -669,12 +673,21 @@ class AutonomyEngine:
 
     def _build_scoring_breakdown(self, intent: str) -> dict:
         """Construit un breakdown des bonus par couche pour un intent donne.
-        Utilise pour alimenter le cingulate cortex."""
+        Couvre les 20 couches de scoring + couches speciales."""
         breakdown = {}
+        # Couches organ-based (method(intent) → float)
         scoring_methods = [
+            ("objectives", "core.objectives_engine", "objectives", "get_routine_bonus"),
+            ("spreading", "core.spreading_activation", "activation_engine", "compute_routine_affinity"),
+            ("synaptic", "core.synaptic_network", "cortex", "compute_routine_affinity"),
+            ("desire", "core.desire_engine", "desires", "compute_desire_bonus"),
+            ("prefrontal", "core.prefrontal", "prefrontal", "compute_focus_bonus"),
+            ("inner_voice", "core.inner_voice", "voice", "compute_voice_bonus"),
             ("dopamine", "core.dopamine_system", "dopamine", "compute_motivation_bonus"),
             ("callosum", "core.corpus_callosum", "callosum", "compute_resonance_bonus"),
             ("cardiac", "core.cardiac_engine", "heart", "get_somatic_signal"),
+            ("roadmap", "core.roadmap_engine", "roadmap", "compute_roadmap_bonus"),
+            ("tissue", "core.neural_tissue", "tissue", "compute_tissue_bonus"),
             ("thalamus", "core.thalamus", "thalamus", "compute_attention_bonus"),
             ("amygdala", "core.amygdala", "amygdala", "compute_emotional_bias"),
             ("hypothalamus", "core.hypothalamus", "hypothalamus", "compute_homeostasis_bonus"),
@@ -692,6 +705,16 @@ class AutonomyEngine:
                     breakdown[layer_name] = round(bonus, 3)
             except Exception:
                 pass
+        # Adaptive scoring (cache du dernier calcul)
+        cached_adaptive = getattr(self, "_last_adaptive_adjustments", {})
+        adj = cached_adaptive.get(intent, 0.0)
+        if adj != 0.0:
+            breakdown["adaptive"] = round(max(-10.0, min(5.0, adj)), 3)
+        # Council adjustments (data-driven)
+        council_adj = getattr(self, "_council_adjustments", {})
+        delta = council_adj.get(intent, {}).get("delta", 0.0)
+        if delta != 0.0:
+            breakdown["council"] = round(delta, 3)
         return breakdown
 
     def get_status(self) -> dict:
@@ -799,6 +822,7 @@ class AutonomyEngine:
                 intent: max(ADAPTIVE_CLAMP_MIN, min(ADAPTIVE_CLAMP_MAX, val))
                 for intent, val in raw_adjustments.items()
             }
+            self._last_adaptive_adjustments = adaptive_adjustments
             if adaptive_adjustments:
                 for i, (routine, s) in enumerate(scored):
                     adj = adaptive_adjustments.get(routine["intent"], 0.0)
@@ -1008,6 +1032,11 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Clamping final du score total ---
+        # Empêche le score d'exploser quand beaucoup de couches poussent dans la même direction
+        scored = [(r, max(FINAL_SCORE_CLAMP_MIN, min(FINAL_SCORE_CLAMP_MAX, s))) for r, s in scored]
+        scored.sort(key=lambda x: x[1], reverse=True)
+
         if not scored:
             logger.warning("[AUTONOMY] Aucune routine disponible apres filtrage. Cycle avorte.")
             self._persist_state()
@@ -1090,6 +1119,16 @@ class AutonomyEngine:
 
         routine_cost_preview = RESOURCE_COSTS.get(intent, 2)
         print(f"   ✨ AUTONOMY: Routine [{intent}] (score={score:.1f}, coût={routine_cost_preview}pt) -> [{agent.upper()}] ({self.daily_count + 1}/{MAX_DAILY_ROUTINES}, budget: {self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt)")
+
+        # --- Log decomposition scoring ---
+        # Calcul unique, reutilise dans les events AUTONOMY_ROUTINE_COMPLETE
+        try:
+            self._last_scoring_breakdown = self._build_scoring_breakdown(intent)
+            if self._last_scoring_breakdown:
+                parts = [f"{k} {v:+.1f}" for k, v in self._last_scoring_breakdown.items()]
+                print(f"      SCORING: {', '.join(parts)}")
+        except Exception:
+            self._last_scoring_breakdown = {}
 
         # Notification préfrontale pre-routine
         try:
@@ -1454,7 +1493,6 @@ class AutonomyEngine:
         if intent == "COUNCIL_DEBATE" and response:
             participants = response.get("participants", [])
         routine_status = "success" if response and response.get("status") in ("success", "consensus") and quality_score >= 0.3 else "error"
-        scoring_breakdown = self._build_scoring_breakdown(intent)
         await bus.publish("AUTONOMY_ROUTINE_COMPLETE", {
             "intent": intent,
             "agent": agent,
@@ -1462,7 +1500,7 @@ class AutonomyEngine:
             "status": routine_status,
             "quality_score": quality_score,
             "result": result_preview,
-            "scoring_breakdown": scoring_breakdown,
+            "scoring_breakdown": getattr(self, "_last_scoring_breakdown", {}),
         })
         # Publier ROUTINE_FAILED pour les organes qui ecoutent les echecs
         if routine_status == "error":
@@ -1580,7 +1618,6 @@ class AutonomyEngine:
         participants = []
         if intent == "COUNCIL_DEBATE" and response:
             participants = response.get("participants", [])
-        scoring_breakdown_pb = self._build_scoring_breakdown(intent)
         await bus.publish("AUTONOMY_ROUTINE_COMPLETE", {
             "intent": intent,
             "agent": agent,
@@ -1588,7 +1625,7 @@ class AutonomyEngine:
             "status": status,
             "quality_score": quality,
             "result": result_preview,
-            "scoring_breakdown": scoring_breakdown_pb,
+            "scoring_breakdown": getattr(self, "_last_scoring_breakdown", {}),
         })
         # Publier ROUTINE_FAILED pour les organes qui ecoutent les echecs
         if status == "error":
