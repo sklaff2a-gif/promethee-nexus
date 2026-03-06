@@ -29,7 +29,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TISSUE_STATE_FILE = os.path.join(PROJECT_ROOT, "memory", "neural_tissue_state.json")
 
 # --- Constantes ---
-ALPHABET = "ACGTIR"
+ALPHABET = "ACGTIRS"
 
 GRID_SIZE = 16                  # 16x16 = 256 positions
 MAX_CELLS = 500
@@ -137,6 +137,32 @@ INFECTION_DRAIN = 8.0              # Énergie drainée/tick en plus du normal
 IMMUNE_MUTATION_CHANCE = 0.10      # Proba/tick de mutation immunitaire
 IMMUNITY_DECAY_GENERATIONS = 5     # Perte d'une immunité tous les N générations
 
+# --- Épigénétique ---
+HEAT_TOLERANT_CYCLES = 50
+HEAT_TOLERANT_SIGNAL_THRESHOLD = 3.0
+HEAT_TOLERANT_COST_FACTOR = 0.5
+FAMINE_ADAPTED_CYCLES = 30
+FAMINE_ADAPTED_COST_FACTOR = 0.5
+CREATIVE_BURST_OUTPUT_THRESHOLD = 20
+CREATIVE_BURST_BONUS = 0.5
+PANDEMIC_VETERAN_BONUS = 0.5
+EPIGENETIC_INHERITANCE_DECAY = 0.15
+
+# --- Symbiose ---
+WASTE_PER_ACTION = 0.5
+WASTE_DECAY = 0.95
+SYMBIOSIS_ENERGY_FACTOR = 2.0
+MAX_WASTE = 5.0
+
+# --- Apoptose / Nécrose ---
+APOPTOSIS_MIN_AGE = 50
+APOPTOSIS_ENERGY_THRESHOLD = 20.0
+APOPTOSIS_DIVERGENCE_THRESHOLD = 0.6
+APOPTOSIS_ENERGY_REDISTRIBUTION = 0.8
+TOXIC_RESIDUE = 3.0
+TOXIC_DURATION = 5
+SEED_GENOME = "ACGTIR"
+
 # ─────────────────────────────────────────────
 # Cellule Neurale
 # ─────────────────────────────────────────────
@@ -157,9 +183,61 @@ class NeuralCell:
     infected_by: Optional[str] = None        # Motif pathogène actif (None = sain)
     infection_timer: int = 0                 # Ticks restants avant mort
     immune_to: set = field(default_factory=set)  # Motifs immunisés
+    epigenetic_markers: dict = field(default_factory=dict)  # {"name": {"cycles": int, "acquired": bool}}
+
+    def _has_marker(self, name: str) -> bool:
+        """Vérifie si un marqueur épigénétique est acquis."""
+        marker = self.epigenetic_markers.get(name)
+        return marker is not None and marker.get("acquired", False)
+
+    def _update_epigenetics(self, grid):
+        """Met à jour les compteurs épigénétiques et acquiert les marqueurs."""
+        local_signal = grid[self.y][self.x]
+
+        # heat_tolerant: 50 cycles avec signal > 3.0
+        if local_signal > HEAT_TOLERANT_SIGNAL_THRESHOLD:
+            ht = self.epigenetic_markers.setdefault(
+                "heat_tolerant", {"cycles": 0, "acquired": False}
+            )
+            if not ht["acquired"]:
+                ht["cycles"] += 1
+                if ht["cycles"] >= HEAT_TOLERANT_CYCLES:
+                    ht["acquired"] = True
+
+        # famine_adapted: 30 cycles avec energy < 50
+        if self.energy < BASAL_ENERGY_THRESHOLD:
+            fa = self.epigenetic_markers.setdefault(
+                "famine_adapted", {"cycles": 0, "acquired": False}
+            )
+            if not fa["acquired"]:
+                fa["cycles"] += 1
+                if fa["cycles"] >= FAMINE_ADAPTED_CYCLES:
+                    fa["acquired"] = True
+
+        # creative_burst: output_count >= 20
+        if self.output_count >= CREATIVE_BURST_OUTPUT_THRESHOLD:
+            cb = self.epigenetic_markers.setdefault(
+                "creative_burst", {"cycles": 0, "acquired": False}
+            )
+            cb["acquired"] = True
+
+    def should_apoptose(self, neighbors_alive: int) -> str:
+        """Vérifie si la cellule doit s'autodétruire. Retourne la raison ou ''."""
+        # Isolement : 0 voisins vivants + age > 10
+        if neighbors_alive == 0 and self.age > 10:
+            return "isolation"
+        # Sénescence : age > 50 + energy < 20
+        if self.age > APOPTOSIS_MIN_AGE and self.energy < APOPTOSIS_ENERGY_THRESHOLD:
+            return "senescence"
+        # Divergence : distance Hamming vs SEED_GENOME > 0.6 + age > 20
+        if self.age > 20:
+            div = _genome_divergence(self.genome, SEED_GENOME)
+            if div > APOPTOSIS_DIVERGENCE_THRESHOLD:
+                return "divergence"
+        return ""
 
     def tick(self, grid, neighbors, capture_reward=None, generate_reward=None,
-             mutation_rate=None):
+             mutation_rate=None, waste_grid=None):
         """Exécute un cycle du génome."""
         if self.energy <= 0 or not self.alive:
             self.alive = False
@@ -171,13 +249,22 @@ class NeuralCell:
             instruction, grid, neighbors,
             capture_reward if capture_reward is not None else CAPTURE_REWARD,
             generate_reward if generate_reward is not None else GENERATE_REWARD,
+            waste_grid,
         )
+
+        # Épigénétique — mise à jour des compteurs et acquisition
+        self._update_epigenetics(grid)
 
         local_signal = grid[self.y][self.x]
         if local_signal < 0.1 or self.energy < BASAL_ENERGY_THRESHOLD:
             cost = MAINTENANCE_COST_BASAL
         else:
             cost = MAINTENANCE_COST
+        # Modificateurs épigénétiques sur le coût
+        if self._has_marker("heat_tolerant") and local_signal > HEAT_TOLERANT_SIGNAL_THRESHOLD:
+            cost *= HEAT_TOLERANT_COST_FACTOR
+        if self._has_marker("famine_adapted"):
+            cost *= FAMINE_ADAPTED_COST_FACTOR
         self.energy -= cost
         if self.energy <= 0:
             self.alive = False
@@ -186,7 +273,8 @@ class NeuralCell:
 
         return child
 
-    def _execute(self, instruction, grid, neighbors, eff_capture, eff_generate):
+    def _execute(self, instruction, grid, neighbors, eff_capture, eff_generate,
+                 waste_grid=None):
         """Exécute une instruction cognitive."""
         if instruction == 'A':
             # Activate — propager signal vers un voisin
@@ -194,13 +282,20 @@ class NeuralCell:
                 target = random.choice(neighbors)
                 target.energy += self.register * 0.3
             self.energy -= ACTION_COST
+            if waste_grid is not None:
+                waste_grid[self.y][self.x] = min(
+                    waste_grid[self.y][self.x] + WASTE_PER_ACTION, MAX_WASTE
+                )
 
         elif instruction == 'C':
             # Capture — lire signal à cette position
             signal = grid[self.y][self.x]
             if signal > 0.1:
                 self.register = signal
-                self.energy += eff_capture * min(signal, 2.0)
+                reward = eff_capture * min(signal, 2.0)
+                if self._has_marker("pandemic_veteran"):
+                    reward *= (1.0 + PANDEMIC_VETERAN_BONUS)
+                self.energy += reward
                 grid[self.y][self.x] *= 0.5
             else:
                 self.register = 0.0
@@ -209,8 +304,15 @@ class NeuralCell:
             # Generate — produire un pattern (récompensé si signal capté)
             if self.register > 0.1:
                 self.output_count += 1
-                self.energy += eff_generate
+                reward = eff_generate
+                if self._has_marker("creative_burst"):
+                    reward *= (1.0 + CREATIVE_BURST_BONUS)
+                self.energy += reward
             self.energy -= ACTION_COST
+            if waste_grid is not None:
+                waste_grid[self.y][self.x] = min(
+                    waste_grid[self.y][self.x] + WASTE_PER_ACTION, MAX_WASTE
+                )
 
         elif instruction == 'T':
             # Transform — amplifier/atténuer le signal interne
@@ -219,16 +321,34 @@ class NeuralCell:
             else:
                 self.register *= 0.5
             self.energy -= ACTION_COST
+            if waste_grid is not None:
+                waste_grid[self.y][self.x] = min(
+                    waste_grid[self.y][self.x] + WASTE_PER_ACTION, MAX_WASTE
+                )
 
         elif instruction == 'I':
             # Inhibit — supprimer le signal local
             grid[self.y][self.x] *= 0.3
             self.energy -= ACTION_COST
+            if waste_grid is not None:
+                waste_grid[self.y][self.x] = min(
+                    waste_grid[self.y][self.x] + WASTE_PER_ACTION, MAX_WASTE
+                )
 
         elif instruction == 'R':
             # Replicate — division cellulaire
             if self.energy > DIVISION_THRESHOLD:
                 return self._replicate()
+
+        elif instruction == 'S':
+            # Symbiose — consommer le déchet local
+            if waste_grid is not None:
+                waste = waste_grid[self.y][self.x]
+                if waste > 0:
+                    consumed = min(waste, 2.0)
+                    self.energy += consumed * SYMBIOSIS_ENERGY_FACTOR
+                    waste_grid[self.y][self.x] -= consumed
+            self.energy -= ACTION_COST
 
         # Instruction inconnue → NOP (tolérance aux mutations)
         return None
@@ -245,13 +365,36 @@ class NeuralCell:
         child_immunity = set(self.immune_to)
         if child_immunity and (self.generation + 1) % IMMUNITY_DECAY_GENERATIONS == 0:
             child_immunity.pop()
+        # Héritage épigénétique (85% = 1 - EPIGENETIC_INHERITANCE_DECAY)
+        child_markers = {}
+        for name, marker in self.epigenetic_markers.items():
+            if marker.get("acquired"):
+                if random.random() > EPIGENETIC_INHERITANCE_DECAY:
+                    child_markers[name] = {"cycles": 0, "acquired": True}
         return NeuralCell(
             genome=child_genome,
             x=cx, y=cy,
             energy=self.energy,
             generation=self.generation + 1,
             immune_to=child_immunity,
+            epigenetic_markers=child_markers,
         )
+
+
+# ─────────────────────────────────────────────
+# Utilitaires
+# ─────────────────────────────────────────────
+
+def _genome_divergence(genome: str, reference: str) -> float:
+    """Distance de Hamming normalisée entre deux génomes. [0, 1]"""
+    max_len = max(len(genome), len(reference))
+    if max_len == 0:
+        return 0.0
+    mismatches = abs(len(genome) - len(reference))
+    for i in range(min(len(genome), len(reference))):
+        if genome[i] != reference[i]:
+            mismatches += 1
+    return mismatches / max_len
 
 
 # ─────────────────────────────────────────────
@@ -344,6 +487,13 @@ class NeuralTissue:
         self._next_pandemic_tick: int = -1
         self._pandemic_active: bool = False
         self._pandemic_motif: str = ""
+
+        # Biologie avancée — Symbiose + Apoptose/Nécrose
+        self.waste_grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        self.toxic_grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        self.toxic_timer_grid = [[0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        self.total_apoptosis: int = 0
+        self.total_necrosis: int = 0
 
         self._load()
 
@@ -536,6 +686,62 @@ class NeuralTissue:
 
     # --- Pandémie / Système Immunitaire ---
 
+    # --- Apoptose / Nécrose ---
+
+    def _execute_apoptosis(self, cell: NeuralCell, neighbors: List[NeuralCell], reason: str):
+        """Mort propre : redistribue l'énergie aux voisines."""
+        redistribute = cell.energy * APOPTOSIS_ENERGY_REDISTRIBUTION
+        alive_neighbors = [n for n in neighbors if n.alive]
+        if alive_neighbors:
+            share = redistribute / len(alive_neighbors)
+            for n in alive_neighbors:
+                n.energy += share
+        cell.alive = False
+        self.total_apoptosis += 1
+        self._try_publish("TISSUE_APOPTOSIS", {
+            "reason": reason,
+            "x": cell.x, "y": cell.y,
+            "genome": cell.genome,
+            "energy_redistributed": round(redistribute, 1),
+            "tick": self.tick_count,
+        })
+
+    def _execute_necrosis(self, cell: NeuralCell, reason: str):
+        """Mort toxique : laisse un résidu bloquant + waste sur la case."""
+        cell.alive = False
+        self.toxic_grid[cell.y][cell.x] += TOXIC_RESIDUE
+        self.toxic_timer_grid[cell.y][cell.x] = max(
+            self.toxic_timer_grid[cell.y][cell.x], TOXIC_DURATION
+        )
+        # Nécrose produit du waste (nourriture pour cellules S)
+        self.waste_grid[cell.y][cell.x] = min(
+            self.waste_grid[cell.y][cell.x] + TOXIC_RESIDUE, MAX_WASTE
+        )
+        self.total_necrosis += 1
+        self._try_publish("TISSUE_NECROSIS", {
+            "reason": reason,
+            "x": cell.x, "y": cell.y,
+            "genome": cell.genome,
+            "tick": self.tick_count,
+        })
+
+    def _check_symbiosis_emergence(self):
+        """Publie TISSUE_SYMBIOSIS_EMERGED si >10% cellules ont S dans le génome."""
+        alive = [c for c in self.cells if c.alive]
+        if not alive:
+            return
+        s_count = sum(1 for c in alive if 'S' in c.genome)
+        ratio = s_count / len(alive)
+        if ratio > 0.10:
+            self._try_publish("TISSUE_SYMBIOSIS_EMERGED", {
+                "ratio": round(ratio, 3),
+                "s_cells": s_count,
+                "population": len(alive),
+                "tick": self.tick_count,
+            })
+
+    # --- Pandémie / Système Immunitaire ---
+
     def _pandemic_check_timer(self):
         """Vérifie si une pandémie doit se déclencher."""
         # Init le timer au premier appel
@@ -609,17 +815,22 @@ class NeuralTissue:
             if random.random() < IMMUNE_MUTATION_CHANCE:
                 new_genome = self._immune_mutation(cell.genome, cell.infected_by)
                 cell.genome = new_genome
-                # Vérifier si le motif a disparu
+                # Vérifier si le motif a disparu → guérison
                 if cell.infected_by not in cell.genome:
                     cell.immune_to.add(cell.infected_by)
+                    # Acquérir le marqueur épigénétique pandemic_veteran
+                    pv = cell.epigenetic_markers.setdefault(
+                        "pandemic_veteran", {"cycles": 0, "acquired": False}
+                    )
+                    pv["acquired"] = True
                     cell.infected_by = None
                     cell.infection_timer = 0
                     survivors += 1
                     immune_gains += 1
                     continue
-            # Mort si timer épuisé ou énergie épuisée
+            # Mort si timer épuisé ou énergie épuisée → nécrose
             if cell.infection_timer <= 0 or cell.energy <= 0:
-                cell.alive = False
+                self._execute_necrosis(cell, "pandemic")
                 self.total_pandemic_deaths += 1
         self.total_immune_survivors += immune_gains
         if not still_infected or not any(
@@ -700,26 +911,51 @@ class NeuralTissue:
         # 1c. Taux de mutation modulé par le circadien
         eff_mutation = self._get_effective_mutation_rate()
 
-        # 2. Exécuter chaque cellule
+        # 2. Exécuter chaque cellule + check apoptose
         new_cells = []
         for cell in self.cells:
             if not cell.alive:
                 continue
             neighbors = self._get_neighbors(cell)
+
+            # Check apoptose AVANT exécution (réutilise les voisins → 0 surcoût)
+            neighbors_alive = sum(1 for n in neighbors if n.alive)
+            reason = cell.should_apoptose(neighbors_alive)
+            if reason:
+                self._execute_apoptosis(cell, neighbors, reason)
+                continue
+
             child = cell.tick(self.grid, neighbors, eff_capture, eff_generate,
-                              eff_mutation)
+                              eff_mutation, waste_grid=self.waste_grid)
+            # Si la cellule est morte pendant tick → nécrose
+            if not cell.alive:
+                self._execute_necrosis(cell, "energy_depleted")
             if child is not None:
                 new_cells.append(child)
                 self.total_births += 1
 
-        # 3. Ajouter les enfants (si pas surpopulation)
+        # 3. Ajouter les enfants (si pas surpopulation + vérif toxine)
         for child in new_cells:
-            if len(self.cells) < MAX_CELLS:
-                self.cells.append(child)
+            if len(self.cells) >= MAX_CELLS:
+                break
+            # Vérifier toxine sur la case cible
+            if self.toxic_timer_grid[child.y][child.x] > 0:
+                placed = False
+                for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+                    nx = (child.x + dx) % GRID_SIZE
+                    ny = (child.y + dy) % GRID_SIZE
+                    if self.toxic_timer_grid[ny][nx] == 0:
+                        child.x = nx
+                        child.y = ny
+                        placed = True
+                        break
+                if not placed:
+                    continue  # Pas de place → enfant perdu
+            self.cells.append(child)
 
         # 4. Supprimer les morts
         before = len(self.cells)
-        self.cells = [c for c in self.cells if c.alive and c.energy > 0]
+        self.cells = [c for c in self.cells if c.alive]
         self.total_deaths += before - len(self.cells)
 
         # 4b. Règle Alpha — 1 alpha max par zone
@@ -737,11 +973,27 @@ class NeuralTissue:
             for x in range(len(row)):
                 row[x] = min(row[x] * SIGNAL_DECAY, MAX_GRID_SIGNAL)
 
+        # 6b. Decay waste_grid
+        for row in self.waste_grid:
+            for x in range(len(row)):
+                row[x] = min(row[x] * WASTE_DECAY, MAX_WASTE)
+
+        # 6c. Décrémentation toxic_timer, nettoyage toxic_grid
+        for y in range(GRID_SIZE):
+            for x in range(GRID_SIZE):
+                if self.toxic_timer_grid[y][x] > 0:
+                    self.toxic_timer_grid[y][x] -= 1
+                    if self.toxic_timer_grid[y][x] == 0:
+                        self.toxic_grid[y][x] = 0.0
+
         # 7. Mettre à jour les patterns dominants
         self._update_dominant_patterns()
 
         # 8. Publier si pattern émergent significatif
         self._check_emergence()
+
+        # 8b. Check symbiose émergente
+        self._check_symbiosis_emergence()
 
         # 9. Mettre à jour les signaux de zone
         self._update_zone_signals()
@@ -1314,7 +1566,17 @@ class NeuralTissue:
                         if sig.get("activity", 0.0) > 0.5:
                             zone_bonus = max(zone_bonus, 0.2)
 
-        return round(freq_bonus + fitness_bonus + zone_bonus, 3)
+        # Santé tissulaire : ratio apoptose/nécrose favorable → bonus
+        health_bonus = 0.0
+        total_typed = self.total_apoptosis + self.total_necrosis
+        if total_typed > 10:
+            health_ratio = self.total_apoptosis / total_typed
+            if health_ratio > 0.5:
+                health_bonus = 0.2
+            elif health_ratio < 0.3:
+                health_bonus = -0.2
+
+        return round(freq_bonus + fitness_bonus + zone_bonus + health_bonus, 3)
 
     def get_tissue_context(self) -> str:
         """Texte injectable dans le purpose_context."""
@@ -1333,6 +1595,7 @@ class NeuralTissue:
         instruction_names = {
             'A': "propagation", 'C': "perception", 'G': "création",
             'T': "transformation", 'I': "inhibition", 'R': "reproduction",
+            'S': "symbiose",
         }
         desc = "→".join(
             instruction_names.get(ch, "?") for ch in genome[:5]
@@ -1360,7 +1623,33 @@ class NeuralTissue:
         progress = season["progress"]
         ctx += f" | saison: {season['zone']} ({progress})"
 
+        # Marqueurs épigénétiques dominants
+        marker_counts = self._count_markers()
+        if marker_counts:
+            markers_desc = ", ".join(
+                f"{name}:{count}" for name, count in
+                sorted(marker_counts.items(), key=lambda kv: kv[1], reverse=True)[:3]
+            )
+            ctx += f" | marqueurs: {markers_desc}"
+
+        # Ratio apoptose/nécrose
+        total_typed = self.total_apoptosis + self.total_necrosis
+        if total_typed > 0:
+            ratio = self.total_apoptosis / total_typed
+            ctx += f" | santé: {ratio:.0%} apoptose"
+
         return ctx
+
+    def _count_markers(self) -> Dict[str, int]:
+        """Compte les marqueurs épigénétiques acquis par type."""
+        counts: Dict[str, int] = {}
+        for cell in self.cells:
+            if not cell.alive:
+                continue
+            for name, marker in cell.epigenetic_markers.items():
+                if marker.get("acquired"):
+                    counts[name] = counts.get(name, 0) + 1
+        return counts
 
     def get_current_season(self) -> Dict[str, Any]:
         """Retourne l'état de la saison courante."""
@@ -1398,6 +1687,16 @@ class NeuralTissue:
     def get_stats(self) -> Dict[str, Any]:
         """Statistiques complètes du substrat."""
         alive = [c for c in self.cells if c.alive]
+        # Waste total
+        waste_total = sum(
+            self.waste_grid[y][x]
+            for y in range(GRID_SIZE) for x in range(GRID_SIZE)
+        )
+        # Cellules toxiques
+        toxic_cells = sum(
+            1 for y in range(GRID_SIZE) for x in range(GRID_SIZE)
+            if self.toxic_timer_grid[y][x] > 0
+        )
         return {
             "alive_cells": len(alive),
             "max_cells": MAX_CELLS,
@@ -1411,6 +1710,11 @@ class NeuralTissue:
             "infected_count": sum(
                 1 for c in alive if c.infected_by is not None
             ),
+            "total_apoptosis": self.total_apoptosis,
+            "total_necrosis": self.total_necrosis,
+            "toxic_cells": toxic_cells,
+            "waste_total": round(waste_total, 1),
+            "epigenetic_markers": self._count_markers(),
             "dominant_genome": self.get_dominant_genome(),
             "dominant_patterns": self.dominant_patterns[:5],
             "max_generation": max((c.generation for c in alive), default=0),
@@ -1456,12 +1760,19 @@ class NeuralTissue:
             "next_pandemic_tick": self._next_pandemic_tick,
             "pandemic_active": self._pandemic_active,
             "pandemic_motif": self._pandemic_motif,
+            # Biologie avancée
+            "total_apoptosis": self.total_apoptosis,
+            "total_necrosis": self.total_necrosis,
+            "waste_grid": [list(row) for row in self.waste_grid],
+            "toxic_grid": [list(row) for row in self.toxic_grid],
+            "toxic_timer_grid": [list(row) for row in self.toxic_timer_grid],
             "top_cells": [
                 {
                     "genome": c.genome, "x": c.x, "y": c.y,
                     "energy": round(c.energy, 1), "age": c.age,
                     "generation": c.generation, "output_count": c.output_count,
                     "immune_to": list(c.immune_to),
+                    "epigenetic_markers": c.epigenetic_markers,
                 }
                 for c in top_cells
             ],
@@ -1505,6 +1816,19 @@ class NeuralTissue:
             self._pandemic_active = data.get("pandemic_active", False)
             self._pandemic_motif = data.get("pandemic_motif", "")
 
+            # Biologie avancée (rétrocompatible)
+            self.total_apoptosis = data.get("total_apoptosis", 0)
+            self.total_necrosis = data.get("total_necrosis", 0)
+            saved_waste = data.get("waste_grid")
+            if saved_waste and len(saved_waste) == GRID_SIZE:
+                self.waste_grid = [list(row) for row in saved_waste]
+            saved_toxic = data.get("toxic_grid")
+            if saved_toxic and len(saved_toxic) == GRID_SIZE:
+                self.toxic_grid = [list(row) for row in saved_toxic]
+            saved_timer = data.get("toxic_timer_grid")
+            if saved_timer and len(saved_timer) == GRID_SIZE:
+                self.toxic_timer_grid = [list(row) for row in saved_timer]
+
             top_cells = data.get("top_cells", [])
             if top_cells:
                 self.cells = []
@@ -1518,6 +1842,7 @@ class NeuralTissue:
                         generation=cd.get("generation", 0),
                         output_count=cd.get("output_count", 0),
                         immune_to=set(cd.get("immune_to", [])),
+                        epigenetic_markers=cd.get("epigenetic_markers", {}),
                     ))
                 # Compléter avec des mutants des survivants
                 while len(self.cells) < INITIAL_CELLS:

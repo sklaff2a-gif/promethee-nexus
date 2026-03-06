@@ -682,6 +682,8 @@ async def tissue_grid():
     alive = [c for c in neural_tissue.cells if c.alive]
     return {
         "grid": [list(row) for row in neural_tissue.grid],
+        "waste_grid": [list(row) for row in neural_tissue.waste_grid],
+        "toxic_grid": [list(row) for row in neural_tissue.toxic_grid],
         "zone_signals": neural_tissue.get_zone_signals(),
         "cells": [{"x": c.x, "y": c.y, "genome": c.genome,
                     "energy": round(c.energy, 1), "age": c.age,
