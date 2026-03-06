@@ -1545,3 +1545,89 @@ class TestZoneModulation:
         result = t.compute_zone_modulation()
         assert result.get("creativity", 1.0) > 1.0
         assert result.get("emotion", 1.0) > 1.0
+
+
+# ============================================================
+# Habituation Zonale (Sprint G — Écologie cellulaire)
+# ============================================================
+
+class TestZoneHabituation:
+    """Habituation thalamique zonale — réduit la modulation des zones chroniquement surchargées."""
+
+    def test_zone_habituation_initial(self, isolate_thalamus):
+        """Toutes les zones commencent à 1.0 (pas d'habituation)."""
+        t = isolate_thalamus
+        for zone in t._ZONE_NAMES:
+            assert t._zone_habituation.get(zone, 1.0) == 1.0
+
+    def test_zone_habituation_overload_decays(self, isolate_thalamus):
+        """Zone surchargée → facteur diminue."""
+        from core.thalamus import ZONE_HABITUATION_DECAY, ZONE_HABITUATION_OVERLOAD
+        t = isolate_thalamus
+        signals = {"goals": {"activity": ZONE_HABITUATION_OVERLOAD + 1.0}}
+        t._update_zone_habituation(signals)
+        assert t._zone_habituation["goals"] < 1.0
+        assert t._zone_habituation["goals"] == pytest.approx(ZONE_HABITUATION_DECAY)
+
+    def test_zone_habituation_recovery(self, isolate_thalamus):
+        """Zone normale → facteur remonte."""
+        from core.thalamus import ZONE_HABITUATION_RECOVERY, ZONE_HABITUATION_OVERLOAD
+        t = isolate_thalamus
+        t._zone_habituation["goals"] = 0.5
+        signals = {"goals": {"activity": 0.5}}  # Sous le seuil
+        t._update_zone_habituation(signals)
+        assert t._zone_habituation["goals"] > 0.5
+        assert t._zone_habituation["goals"] == pytest.approx(0.5 * ZONE_HABITUATION_RECOVERY)
+
+    def test_zone_habituation_floor(self, isolate_thalamus):
+        """Jamais < ZONE_HABITUATION_MIN."""
+        from core.thalamus import ZONE_HABITUATION_MIN, ZONE_HABITUATION_OVERLOAD
+        t = isolate_thalamus
+        t._zone_habituation["goals"] = ZONE_HABITUATION_MIN
+        signals = {"goals": {"activity": ZONE_HABITUATION_OVERLOAD + 5.0}}
+        t._update_zone_habituation(signals)
+        assert t._zone_habituation["goals"] >= ZONE_HABITUATION_MIN
+
+    def test_zone_habituation_cap(self, isolate_thalamus):
+        """Jamais > 1.0."""
+        from core.thalamus import ZONE_HABITUATION_RECOVERY
+        t = isolate_thalamus
+        t._zone_habituation["goals"] = 1.0
+        signals = {"goals": {"activity": 0.0}}
+        t._update_zone_habituation(signals)
+        assert t._zone_habituation["goals"] <= 1.0
+
+    def test_zone_modulation_includes_habituation(self, isolate_thalamus):
+        """Facteur final = category strength × habituation."""
+        t = isolate_thalamus
+        # Mettre une habituation basse sur goals
+        t._zone_habituation["goals"] = 0.5
+        result = t.compute_zone_modulation()
+        # goals est ciblée par "deliberation" → factor basé sur strength
+        # Avec habituation 0.5, le facteur final devrait être ≤ au facteur sans habituation
+        assert result.get("goals", 1.0) <= 1.0
+
+    def test_zone_habituation_persistence(self, isolate_thalamus, tmp_path):
+        """Save/load roundtrip de _zone_habituation."""
+        from core import thalamus as mod
+        t = isolate_thalamus
+        t._zone_habituation["goals"] = 0.42
+        t._zone_habituation["threat"] = 0.75
+        t._save()
+        # Charger dans un nouveau thalamus
+        mod.Thalamus.reset_singleton()
+        t2 = mod.Thalamus()
+        assert t2._zone_habituation.get("goals") == pytest.approx(0.42, abs=0.001)
+        assert t2._zone_habituation.get("threat") == pytest.approx(0.75, abs=0.001)
+
+    def test_chronic_overload_attenuated(self, isolate_thalamus):
+        """50 cycles de surcharge → modulation proche de ZONE_HABITUATION_MIN."""
+        from core.thalamus import ZONE_HABITUATION_MIN, ZONE_HABITUATION_OVERLOAD
+        t = isolate_thalamus
+        signals = {"goals": {"activity": ZONE_HABITUATION_OVERLOAD + 2.0}}
+        for _ in range(50):
+            t._update_zone_habituation(signals)
+        hab = t._zone_habituation["goals"]
+        # 0.98^50 ≈ 0.36 → devrait être proche du plancher 0.3
+        assert hab <= 0.4
+        assert hab >= ZONE_HABITUATION_MIN

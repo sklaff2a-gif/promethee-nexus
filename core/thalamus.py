@@ -58,6 +58,12 @@ HABITUATION_TIME_WINDOW = 600.0    # Fenetre temporelle 10 min
 NOVELTY_ABSENCE_THRESHOLD = 300.0  # 5 min sans occurrence → "novel"
 NOVELTY_BOOST = 0.15               # Boost ponctuel a l'arrivee d'un event novel
 
+# Sprint G — Habituation zonale (Écologie cellulaire)
+ZONE_HABITUATION_DECAY = 0.98       # Décroissance modulation par cycle (zone surchargée)
+ZONE_HABITUATION_RECOVERY = 1.005   # Récupération quand zone normale
+ZONE_HABITUATION_MIN = 0.3          # Modulation plancher (jamais couper complètement)
+ZONE_HABITUATION_OVERLOAD = 2.5     # Seuil d'activité = surcharge
+
 # --- Events sensoriels (pour habituation/novelty) ---
 
 _SENSORY_EVENTS = frozenset({
@@ -168,6 +174,9 @@ class Thalamus:
         self._event_timestamps: Dict[str, List[float]] = {evt: [] for evt in _SENSORY_EVENTS}
         self._event_last_seen: Dict[str, float] = {}
 
+        # Sprint G — Habituation zonale
+        self._zone_habituation: Dict[str, float] = {}
+
         self._load()
 
     @classmethod
@@ -214,6 +223,8 @@ class Thalamus:
                     if evt in saved_ts:
                         self._event_timestamps[evt] = saved_ts[evt]
                 self._event_last_seen = data.get("event_last_seen", {})
+                # Sprint G
+                self._zone_habituation = data.get("zone_habituation", {})
                 logger.info(f"THALAMUS: Etat restaure (cycles={self._cycle_count}).")
         except Exception as e:
             logger.warning(f"THALAMUS: Echec chargement: {e}")
@@ -234,6 +245,7 @@ class Thalamus:
                 "intent_observations": self._intent_observations,
                 "event_timestamps": {k: v[-HABITUATION_WINDOW:] for k, v in self._event_timestamps.items() if v},
                 "event_last_seen": self._event_last_seen,
+                "zone_habituation": {k: round(v, 4) for k, v in self._zone_habituation.items()},
                 "saved_at": time.time(),
             }
             os.makedirs(os.path.dirname(THALAMUS_STATE_FILE), exist_ok=True)
@@ -942,10 +954,24 @@ class Thalamus:
         "regulation":   ["stability", "memory"],
     }
 
+    _ZONE_NAMES = ["emotion", "threat", "dopamine", "goals", "desire",
+                   "memory", "stability", "creativity", "cognition"]
+
+    def _update_zone_habituation(self, zone_signals: dict):
+        """Habituation progressive pour les zones chroniquement surchargées."""
+        for zone_name in self._ZONE_NAMES:
+            current = self._zone_habituation.get(zone_name, 1.0)
+            activity = zone_signals.get(zone_name, {}).get("activity", 0.0)
+            if activity > ZONE_HABITUATION_OVERLOAD:
+                current *= ZONE_HABITUATION_DECAY
+            else:
+                current *= ZONE_HABITUATION_RECOVERY
+            self._zone_habituation[zone_name] = max(ZONE_HABITUATION_MIN, min(1.0, current))
+
     def compute_zone_modulation(self) -> Dict[str, float]:
         """Calcule un facteur de modulation [0.5, 2.0] par zone tissue.
 
-        Basé sur les forces d'attention par catégorie.
+        Basé sur les forces d'attention par catégorie + habituation zonale.
         Retourne dict {zone_name: factor}.
         """
         if not self._scorecard:
@@ -960,6 +986,11 @@ class Thalamus:
             for zone in zones:
                 # Si plusieurs catégories ciblent la même zone, prendre le max
                 modulation[zone] = max(modulation.get(zone, 1.0), factor)
+
+        # Appliquer l'habituation zonale
+        for zone in modulation:
+            hab = self._zone_habituation.get(zone, 1.0)
+            modulation[zone] *= hab
 
         return modulation
 

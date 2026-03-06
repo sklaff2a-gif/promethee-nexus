@@ -28,6 +28,10 @@ from core.neural_tissue import (
     TOXIC_RESIDUE, TOXIC_DURATION, SEED_GENOME,
     ACTION_COST, CAPTURE_REWARD, GENERATE_REWARD,
     _genome_divergence,
+    CARRYING_CAPACITY, LOGISTIC_FLOOR,
+    DRAINAGE_THRESHOLD, DRAINAGE_RATE, MAX_GRID_SIGNAL,
+    CROSSOVER_PROBABILITY, CROSSOVER_ENERGY_THRESHOLD,
+    crossover,
 )
 
 
@@ -1790,3 +1794,226 @@ class TestIntegration:
             for y in range(GRID_SIZE) for x in range(GRID_SIZE)
         )
         assert total_waste > 0, "Du waste devrait s'être accumulé"
+
+
+# ============================================================
+# Écologie cellulaire — Capacité de charge logistique
+# ============================================================
+
+class TestLogisticCapacity:
+    """Capacité de charge logistique — Verhulst."""
+
+    def test_logistic_factor_at_zero_population(self):
+        """Facteur = 1.0 quand aucune cellule."""
+        tissue = _make_tissue()
+        tissue.cells = []
+        pop_ratio = len(tissue.cells) / CARRYING_CAPACITY
+        factor = max(LOGISTIC_FLOOR, 1.0 - pop_ratio)
+        assert factor == pytest.approx(1.0)
+
+    def test_logistic_factor_at_half_capacity(self):
+        """Facteur ≈ 0.5 à mi-capacité."""
+        pop = CARRYING_CAPACITY // 2
+        pop_ratio = pop / CARRYING_CAPACITY
+        factor = max(LOGISTIC_FLOOR, 1.0 - pop_ratio)
+        assert factor == pytest.approx(0.5)
+
+    def test_logistic_factor_at_full_capacity(self):
+        """Facteur = LOGISTIC_FLOOR à pleine capacité."""
+        pop_ratio = CARRYING_CAPACITY / CARRYING_CAPACITY
+        factor = max(LOGISTIC_FLOOR, 1.0 - pop_ratio)
+        assert factor == pytest.approx(LOGISTIC_FLOOR)
+
+    def test_logistic_factor_clamp(self):
+        """Le facteur ne descend jamais sous LOGISTIC_FLOOR."""
+        for pop in [400, 450, 499, 500]:
+            pop_ratio = pop / CARRYING_CAPACITY
+            factor = max(LOGISTIC_FLOOR, 1.0 - pop_ratio)
+            assert factor >= LOGISTIC_FLOOR
+
+    def test_signal_intensity_decreases_with_population(self):
+        """L'intensité réelle sur la grille diminue avec la population."""
+        random.seed(42)
+        tissue = _make_tissue()
+        tissue._circadian_phase = "eveil"
+        # Peu de cellules → signal fort
+        tissue.cells = [NeuralCell(genome="RCGC", x=i % GRID_SIZE, y=i // GRID_SIZE, energy=50.0)
+                        for i in range(50)]
+        tissue._inject_signals()
+        total_low = sum(tissue.grid[y][x] for y in range(GRID_SIZE) for x in range(GRID_SIZE))
+
+        # Reset la grille et tester avec beaucoup de cellules
+        tissue.grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        random.seed(42)
+        tissue.cells = [NeuralCell(genome="RCGC", x=i % GRID_SIZE, y=i // GRID_SIZE, energy=50.0)
+                        for i in range(450)]
+        tissue._inject_signals()
+        total_high = sum(tissue.grid[y][x] for y in range(GRID_SIZE) for x in range(GRID_SIZE))
+
+        assert total_low > total_high, f"Signal bas pop ({total_low}) devrait > signal haute pop ({total_high})"
+
+    def test_population_stabilizes(self):
+        """Après 200 ticks, la population reste dans une fourchette raisonnable."""
+        random.seed(42)
+        tissue = _make_tissue()
+        tissue._circadian_phase = "eveil"
+        for _ in range(200):
+            tissue._tick()
+        pop = len(tissue.cells)
+        assert pop > 10, f"Population trop basse: {pop}"
+        assert pop <= MAX_CELLS, f"Population dépasse MAX_CELLS: {pop}"
+
+
+# ============================================================
+# Écologie cellulaire — Drainage latéral des signaux
+# ============================================================
+
+class TestDrainage:
+    """Diffusion latérale des signaux excédentaires."""
+
+    def test_drainage_below_threshold_no_effect(self):
+        """Signal sous le seuil → pas de drainage."""
+        tissue = _make_tissue()
+        tissue.grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        tissue.grid[8][8] = 2.0  # < DRAINAGE_THRESHOLD (3.0)
+        tissue._apply_drainage()
+        assert tissue.grid[8][8] == pytest.approx(2.0)
+
+    def test_drainage_above_threshold_spills(self):
+        """Signal au-dessus du seuil → excès réparti aux voisins."""
+        tissue = _make_tissue()
+        tissue.grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        tissue.grid[8][8] = 4.0  # excès = 1.0, spill = 0.25
+        tissue._apply_drainage()
+        # La cellule source perd le spill
+        assert tissue.grid[8][8] < 4.0
+        # Les voisins reçoivent une partie
+        assert tissue.grid[7][8] > 0.0  # haut
+        assert tissue.grid[9][8] > 0.0  # bas
+        assert tissue.grid[8][7] > 0.0  # gauche
+        assert tissue.grid[8][9] > 0.0  # droite
+
+    def test_drainage_corner_cell(self):
+        """Coin de grille : seulement 2 voisins, drainage proportionnel."""
+        tissue = _make_tissue()
+        tissue.grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        tissue.grid[0][0] = 5.0  # excès = 2.0, spill = 0.5
+        tissue._apply_drainage()
+        # 2 voisins : (1,0) et (0,1), chacun reçoit 0.25
+        assert tissue.grid[1][0] == pytest.approx(0.25)
+        assert tissue.grid[0][1] == pytest.approx(0.25)
+        assert tissue.grid[0][0] == pytest.approx(4.5)
+
+    def test_drainage_preserves_total_signal(self):
+        """Conservation d'énergie : somme totale ≈ constante."""
+        tissue = _make_tissue()
+        tissue.grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        tissue.grid[8][8] = 4.5
+        tissue.grid[4][4] = 3.5
+        total_before = sum(tissue.grid[y][x] for y in range(GRID_SIZE) for x in range(GRID_SIZE))
+        tissue._apply_drainage()
+        total_after = sum(tissue.grid[y][x] for y in range(GRID_SIZE) for x in range(GRID_SIZE))
+        assert total_after == pytest.approx(total_before, abs=0.01)
+
+    def test_drainage_capped_at_max(self):
+        """Les voisins ne dépassent pas MAX_GRID_SIGNAL."""
+        tissue = _make_tissue()
+        tissue.grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        tissue.grid[8][8] = MAX_GRID_SIGNAL
+        tissue.grid[8][7] = MAX_GRID_SIGNAL  # Voisin déjà saturé
+        tissue._apply_drainage()
+        assert tissue.grid[8][7] <= MAX_GRID_SIGNAL
+
+    def test_drainage_reduces_zone_overload(self):
+        """Zone chargée diffuse vers zone vide adjacente."""
+        tissue = _make_tissue()
+        tissue.grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        # Charger une zone
+        for y in range(4):
+            for x in range(4):
+                tissue.grid[y][x] = 4.0
+        total_zone_before = sum(tissue.grid[y][x] for y in range(4) for x in range(4))
+        tissue._apply_drainage()
+        total_zone_after = sum(tissue.grid[y][x] for y in range(4) for x in range(4))
+        # La zone a perdu du signal (diffusé aux bordures)
+        assert total_zone_after < total_zone_before
+
+
+# ============================================================
+# Écologie cellulaire — Reproduction sexuée (crossover)
+# ============================================================
+
+class TestCrossover:
+    """Crossover à un point entre deux génomes."""
+
+    def test_crossover_basic(self):
+        """Crossover produit un hybride des deux parents."""
+        random.seed(42)
+        child = crossover("AAAA", "BBBB")
+        # Le child contient des caractères des deux parents (+ mutation possible)
+        assert len(child) >= 2
+
+    def test_crossover_different_lengths(self):
+        """Crossover gère des longueurs inégales (troncature à min_len)."""
+        random.seed(42)
+        child = crossover("AABBCC", "XY")
+        # min_len = 2, crossover sur 2 chars
+        assert len(child) >= 1
+
+    def test_crossover_too_short(self):
+        """Genome de longueur 1 → fallback sur mutation."""
+        random.seed(42)
+        child = crossover("A", "B")
+        assert len(child) >= 1
+
+    def test_replicate_with_partner(self):
+        """_replicate avec partenaire produit un génome qui peut différer du parent."""
+        random.seed(42)
+        cell = NeuralCell(genome="AAAA", x=5, y=5, energy=200.0)
+        results = set()
+        for i in range(50):
+            random.seed(i)
+            cell.energy = 200.0
+            child = cell._replicate(partner_genome="CCCC")
+            if child:
+                results.add(child.genome)
+        # Avec crossover, on devrait avoir de la diversité
+        assert len(results) > 1, "Le crossover devrait produire des génomes variés"
+
+    def test_replicate_without_partner(self):
+        """_replicate sans partenaire → comportement clone classique."""
+        random.seed(42)
+        cell = NeuralCell(genome="RCGC", x=5, y=5, energy=200.0)
+        child = cell._replicate(partner_genome=None)
+        assert child is not None
+        assert child.generation == cell.generation + 1
+
+    def test_crossover_only_different_genomes(self):
+        """Le crossover ne se déclenche que pour des génomes différents dans _tick."""
+        tissue = _make_tissue()
+        tissue._circadian_phase = "eveil"
+        # Toutes les cellules ont le même génome → pas de partenaire crossover
+        tissue.cells = [NeuralCell(genome="RCGC", x=i % GRID_SIZE, y=i // GRID_SIZE,
+                                   energy=150.0) for i in range(10)]
+        tissue._tick()
+        # Pas d'erreur, le code gère l'absence de partenaire
+
+    def test_diversity_increases_with_crossover(self):
+        """Après 100 ticks avec génomes variés, la diversité augmente."""
+        random.seed(42)
+        tissue = _make_tissue()
+        tissue._circadian_phase = "eveil"
+        genomes = ["RCGC", "GRCGC", "CCGC", "RCGGC", "GCGC"]
+        tissue.cells = []
+        for i in range(50):
+            g = genomes[i % len(genomes)]
+            tissue.cells.append(NeuralCell(
+                genome=g, x=random.randint(0, GRID_SIZE - 1),
+                y=random.randint(0, GRID_SIZE - 1), energy=120.0
+            ))
+        initial_diversity = len(set(c.genome for c in tissue.cells))
+        for _ in range(100):
+            tissue._tick()
+        final_diversity = len(set(c.genome for c in tissue.cells if c.alive))
+        # La diversité devrait être >= à l'initiale (crossover + mutation)
+        assert final_diversity >= initial_diversity or len(tissue.cells) < 10

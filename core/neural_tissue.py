@@ -148,6 +148,14 @@ CREATIVE_BURST_BONUS = 0.5
 PANDEMIC_VETERAN_BONUS = 0.5
 EPIGENETIC_INHERITANCE_DECAY = 0.15
 
+# --- Écologie cellulaire ---
+CARRYING_CAPACITY = 500       # K — capacité de charge logistique (Verhulst)
+LOGISTIC_FLOOR = 0.15         # Nourriture minimum même à population max
+DRAINAGE_THRESHOLD = 3.0      # Signal au-dessus duquel l'excès déborde
+DRAINAGE_RATE = 0.25           # 25% de l'excès distribué aux 4 voisins
+CROSSOVER_PROBABILITY = 0.6   # 60% crossover vs clone quand conditions remplies
+CROSSOVER_ENERGY_THRESHOLD = 100.0  # Énergie min pour participer au crossover
+
 # --- Symbiose ---
 WASTE_PER_ACTION = 0.5
 WASTE_DECAY = 0.95
@@ -237,13 +245,14 @@ class NeuralCell:
         return ""
 
     def tick(self, grid, neighbors, capture_reward=None, generate_reward=None,
-             mutation_rate=None, waste_grid=None):
+             mutation_rate=None, waste_grid=None, partner_genome=None):
         """Exécute un cycle du génome."""
         if self.energy <= 0 or not self.alive:
             self.alive = False
             return None
 
         self._eff_mutation_rate = mutation_rate
+        self._partner_genome = partner_genome
         instruction = self.genome[self.pointer]
         child = self._execute(
             instruction, grid, neighbors,
@@ -338,7 +347,7 @@ class NeuralCell:
         elif instruction == 'R':
             # Replicate — division cellulaire
             if self.energy > DIVISION_THRESHOLD:
-                return self._replicate()
+                return self._replicate(partner_genome=getattr(self, '_partner_genome', None))
 
         elif instruction == 'S':
             # Symbiose — consommer le déchet local
@@ -353,11 +362,14 @@ class NeuralCell:
         # Instruction inconnue → NOP (tolérance aux mutations)
         return None
 
-    def _replicate(self):
-        """Division cellulaire avec mutation."""
+    def _replicate(self, partner_genome=None):
+        """Division cellulaire avec mutation (ou crossover si partenaire)."""
         self.energy /= 2
-        eff_rate = getattr(self, '_eff_mutation_rate', None)
-        child_genome = mutate(self.genome, mutation_rate=eff_rate)
+        if partner_genome and random.random() < CROSSOVER_PROBABILITY:
+            child_genome = crossover(self.genome, partner_genome)
+        else:
+            eff_rate = getattr(self, '_eff_mutation_rate', None)
+            child_genome = mutate(self.genome, mutation_rate=eff_rate)
         dx, dy = random.choice([(0, 1), (0, -1), (1, 0), (-1, 0)])
         cx = (self.x + dx) % GRID_SIZE
         cy = (self.y + dy) % GRID_SIZE
@@ -419,6 +431,16 @@ def mutate(genome: str, mutation_rate: float = None) -> str:
         result.pop(pos)
 
     return "".join(result)
+
+
+def crossover(genome_a: str, genome_b: str) -> str:
+    """Crossover à un point : première moitié de A + deuxième moitié de B, puis mutation."""
+    min_len = min(len(genome_a), len(genome_b))
+    if min_len < 2:
+        return mutate(genome_a)  # Fallback clone si genome trop court
+    point = random.randint(1, min_len - 1)
+    child = genome_a[:point] + genome_b[point:min_len]
+    return mutate(child)
 
 
 # ─────────────────────────────────────────────
@@ -902,6 +924,7 @@ class NeuralTissue:
 
         # 1. Injecter les signaux cognitifs
         self._inject_signals()
+        self._apply_drainage()
 
         # 1b. Calculer les rewards effectifs modulés par la dopamine
         dopamine = self._cognitive_state.get("dopamine_level", 0.5)
@@ -925,8 +948,18 @@ class NeuralTissue:
                 self._execute_apoptosis(cell, neighbors, reason)
                 continue
 
+            # Détection partenaire crossover
+            partner_genome = None
+            if cell.energy >= CROSSOVER_ENERGY_THRESHOLD:
+                different_neighbors = [n for n in neighbors if n.alive
+                                       and n.genome != cell.genome
+                                       and n.energy >= CROSSOVER_ENERGY_THRESHOLD]
+                if different_neighbors:
+                    partner_genome = random.choice(different_neighbors).genome
+
             child = cell.tick(self.grid, neighbors, eff_capture, eff_generate,
-                              eff_mutation, waste_grid=self.waste_grid)
+                              eff_mutation, waste_grid=self.waste_grid,
+                              partner_genome=partner_genome)
             # Si la cellule est morte pendant tick → nécrose
             if not cell.alive:
                 self._execute_necrosis(cell, "energy_depleted")
@@ -998,6 +1031,13 @@ class NeuralTissue:
         # 9. Mettre à jour les signaux de zone
         self._update_zone_signals()
 
+        # 9b. Alimenter l'habituation zonale du thalamus
+        try:
+            from core.thalamus import thalamus as _thal
+            _thal._update_zone_habituation(self._zone_signals)
+        except Exception:
+            pass
+
         # 10. Publier les événements de seuil (efférences)
         self._check_thresholds()
 
@@ -1052,8 +1092,14 @@ class NeuralTissue:
         # Phase circadienne : en sommeil, signaux réduits à 25% (métabolisme cérébral ~75%)
         sleep_mode = self._circadian_phase == "sommeil_profond"
 
+        # Capacité de charge logistique (Verhulst)
+        pop_ratio = len(self.cells) / CARRYING_CAPACITY
+        logistic_factor = max(LOGISTIC_FLOOR, 1.0 - pop_ratio)
+
         for zone_name, (x1, y1, x2, y2) in SIGNAL_ZONES.items():
             intensity = max(MIN_ZONE_INTENSITY, zone_intensities.get(zone_name, 0.3))
+            # Modulation logistique — nourriture diminue avec la population
+            intensity *= logistic_factor
             # Nombre de food spawns : base + bonus des goals actifs
             food_count = FOOD_SPAWN_PER_ZONE + self._goal_bonus_zones.get(zone_name, 0)
             # Bonus saisonnalité
@@ -1071,6 +1117,28 @@ class NeuralTissue:
                     self.grid[sy][sx] + intensity * random.uniform(0.5, 1.5),
                     MAX_GRID_SIGNAL
                 )
+
+    def _apply_drainage(self):
+        """Diffusion latérale : l'excès de signal s'écoule vers les voisins."""
+        overflow = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        for y in range(GRID_SIZE):
+            for x in range(GRID_SIZE):
+                excess = self.grid[y][x] - DRAINAGE_THRESHOLD
+                if excess > 0:
+                    spill = excess * DRAINAGE_RATE
+                    self.grid[y][x] -= spill
+                    neighbors = []
+                    if y > 0: neighbors.append((y - 1, x))
+                    if y < GRID_SIZE - 1: neighbors.append((y + 1, x))
+                    if x > 0: neighbors.append((y, x - 1))
+                    if x < GRID_SIZE - 1: neighbors.append((y, x + 1))
+                    per_neighbor = spill / len(neighbors)
+                    for ny, nx in neighbors:
+                        overflow[ny][nx] += per_neighbor
+        # Second pass — appliquer l'overflow (évite les cascades dans le même tick)
+        for y in range(GRID_SIZE):
+            for x in range(GRID_SIZE):
+                self.grid[y][x] = min(self.grid[y][x] + overflow[y][x], MAX_GRID_SIGNAL)
 
     def _get_neighbors(self, cell: NeuralCell) -> List[NeuralCell]:
         """Retourne les cellules adjacentes (rayon 2, wrap-around)."""
