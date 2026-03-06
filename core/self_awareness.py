@@ -532,6 +532,20 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Noyau reptilien (survie)
+        try:
+            from core.reptilian_core import reptile
+            snapshot["reptilian"] = reptile.get_stats()
+        except Exception:
+            pass
+
+        # Hippocampe (memoire episodique)
+        try:
+            from core.hippocampus import hippocampus
+            snapshot["hippocampus"] = hippocampus.get_stats()
+        except Exception:
+            pass
+
         self._snapshots.append(snapshot)
         if len(self._snapshots) > MAX_SNAPSHOTS:
             self._snapshots = self._snapshots[-MAX_SNAPSHOTS:]

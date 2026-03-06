@@ -1426,14 +1426,23 @@ class AutonomyEngine:
         participants = []
         if intent == "COUNCIL_DEBATE" and response:
             participants = response.get("participants", [])
+        routine_status = "success" if response and response.get("status") in ("success", "consensus") and quality_score >= 0.3 else "error"
         await bus.publish("AUTONOMY_ROUTINE_COMPLETE", {
             "intent": intent,
             "agent": agent,
             "participants": participants,
-            "status": "success" if response and response.get("status") in ("success", "consensus") and quality_score >= 0.3 else "error",
+            "status": routine_status,
             "quality_score": quality_score,
             "result": result_preview,
         })
+        # Publier ROUTINE_FAILED pour les organes qui ecoutent les echecs
+        if routine_status == "error":
+            await bus.publish("ROUTINE_FAILED", {
+                "intent": intent,
+                "agent": agent,
+                "reason": failure_type or "unknown",
+                "quality_score": quality_score,
+            })
 
         self.daily_count += 1
         self.total_routines_executed += 1
@@ -1550,6 +1559,14 @@ class AutonomyEngine:
             "quality_score": quality,
             "result": result_preview,
         })
+        # Publier ROUTINE_FAILED pour les organes qui ecoutent les echecs
+        if status == "error":
+            await bus.publish("ROUTINE_FAILED", {
+                "intent": intent,
+                "agent": agent,
+                "reason": "post_budget_error",
+                "quality_score": quality,
+            })
 
         self._persist_state()
 

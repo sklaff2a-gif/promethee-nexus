@@ -92,7 +92,7 @@ class Insula:
             bus.subscribe("CARDIAC_BEAT", self._on_cardiac_beat)
             bus.subscribe("HYPOTHALAMUS_REGULATION", self._on_hypothalamus_regulation)
             bus.subscribe("REPTILIAN_ALERT", self._on_reptilian_alert)
-            bus.subscribe("DOPAMINE_UPDATE", self._on_dopamine_update)
+            bus.subscribe("DOPAMINE_STATE", self._on_dopamine_update)
             bus.subscribe("DOPAMINE_SURGE", self._on_dopamine_update)
             bus.subscribe("DOPAMINE_DIP", self._on_dopamine_dip)
             bus.subscribe("CIRCADIAN_PHASE_CHANGE", self._on_circadian_phase)

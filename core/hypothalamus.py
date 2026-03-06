@@ -130,7 +130,7 @@ class Hypothalamus:
         self._subscribed = True
         try:
             bus.subscribe("CARDIAC_BEAT", self._on_cardiac_beat)
-            bus.subscribe("DOPAMINE_UPDATE", self._on_dopamine_update)
+            bus.subscribe("DOPAMINE_STATE", self._on_dopamine_update)
             bus.subscribe("DOPAMINE_SURGE", self._on_dopamine_update)
             bus.subscribe("DOPAMINE_DIP", self._on_dopamine_update)
             bus.subscribe("REPTILIAN_ALERT", self._on_reptilian_alert)
