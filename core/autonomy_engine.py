@@ -940,6 +940,47 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Regulation homeostatique (Couche 17) ---
+        try:
+            from core.hypothalamus import hypothalamus
+            for i, (routine, s) in enumerate(scored):
+                homeo_bonus = hypothalamus.compute_homeostasis_bonus(routine["intent"])
+                if homeo_bonus != 0.0:
+                    scored[i] = (routine, s + homeo_bonus)
+        except Exception:
+            pass
+
+        # --- Interoception viscérale (Couche 18) ---
+        try:
+            from core.insula import insula
+            for i, (routine, s) in enumerate(scored):
+                intero_bonus = insula.compute_interoception_bonus(routine["intent"])
+                if intero_bonus != 0.0:
+                    scored[i] = (routine, s + intero_bonus)
+        except Exception:
+            pass
+
+        # --- Detection de conflits (Couche 19) ---
+        try:
+            from core.cingulate_cortex import cingulate
+            for i, (routine, s) in enumerate(scored):
+                conflict_bonus = cingulate.compute_conflict_bonus(routine["intent"])
+                if conflict_bonus != 0.0:
+                    scored[i] = (routine, s + conflict_bonus)
+        except Exception:
+            pass
+
+        # --- Habitudes et renforcement (Couche 20) ---
+        try:
+            from core.basal_ganglia import ganglia
+            for i, (routine, s) in enumerate(scored):
+                habit_bonus = ganglia.compute_habit_bonus(routine["intent"])
+                if habit_bonus != 0.0:
+                    scored[i] = (routine, s + habit_bonus)
+            scored.sort(key=lambda x: x[1], reverse=True)
+        except Exception:
+            pass
+
         if not scored:
             logger.warning("[AUTONOMY] Aucune routine disponible apres filtrage. Cycle avorte.")
             self._persist_state()
@@ -1148,6 +1189,46 @@ class AutonomyEngine:
                 tissue_ctx = tissue.get_tissue_context()
                 if tissue_ctx:
                     purpose_ctx += f"\n{tissue_ctx}"
+            except Exception:
+                pass
+            # Homeostasie (hypothalamus)
+            try:
+                from core.hypothalamus import hypothalamus
+                homeo_ctx = hypothalamus.get_homeostasis_context()
+                if homeo_ctx:
+                    purpose_ctx += f"\n{homeo_ctx}"
+            except Exception:
+                pass
+            # Interoception (insula)
+            try:
+                from core.insula import insula
+                body_ctx = insula.get_body_awareness_context()
+                if body_ctx:
+                    purpose_ctx += f"\n{body_ctx}"
+            except Exception:
+                pass
+            # Conflits (cingulate)
+            try:
+                from core.cingulate_cortex import cingulate
+                conflict_ctx = cingulate.get_conflict_context()
+                if conflict_ctx:
+                    purpose_ctx += f"\n{conflict_ctx}"
+            except Exception:
+                pass
+            # Habitudes (basal ganglia)
+            try:
+                from core.basal_ganglia import ganglia
+                habit_ctx = ganglia.get_habit_context()
+                if habit_ctx:
+                    purpose_ctx += f"\n{habit_ctx}"
+            except Exception:
+                pass
+            # Vagabondage mental (DMN)
+            try:
+                from core.default_mode_network import dmn
+                dmn_ctx = dmn.get_dmn_context()
+                if dmn_ctx:
+                    purpose_ctx += f"\n{dmn_ctx}"
             except Exception:
                 pass
             # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)

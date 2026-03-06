@@ -373,6 +373,32 @@ async def lifespan(app: FastAPI):
     amygdala.init()
     print("   🫀 AMYGDALE: Mémoire émotionnelle active.")
 
+    # --- HYPOTHALAMUS (Régulateur Homéostatique) ---
+    from core.hypothalamus import hypothalamus
+    hypothalamus.init()
+    print(f"   🌡️ HYPOTHALAMUS: Régulateur homéostatique actif (stabilité={hypothalamus._compute_stability_score():.2f}).")
+
+    # --- INSULA (Conscience Intéroceptive) ---
+    from core.insula import insula
+    insula.init()
+    print(f"   🫁 INSULA: Conscience intéroceptive active (cohérence={insula._compute_coherence():.2f}).")
+
+    # --- CINGULATE CORTEX (Détecteur de Conflits) ---
+    from core.cingulate_cortex import cingulate
+    cingulate.init()
+    print(f"   ⚡ CINGULATE: Détecteur de conflits actif ({cingulate.total_conflicts} conflits).")
+
+    # --- BASAL GANGLIA (Habitudes & Renforcement) ---
+    from core.basal_ganglia import ganglia
+    ganglia.init()
+    print(f"   🔄 BASAL GANGLIA: {len(ganglia.habits)} habitudes, {ganglia.total_inhibitions} inhibitions.")
+
+    # --- DEFAULT MODE NETWORK (Vagabondage Mental) ---
+    from core.default_mode_network import dmn
+    dmn.init()
+    dmn_task = asyncio.create_task(dmn.start_wandering())
+    print(f"   💭 DMN: Réseau du mode par défaut actif ({dmn.total_wanderings} vagabondages).")
+
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
 
     # --- CI/CD Pipeline (remplace quality_control_listener) ---
@@ -390,6 +416,12 @@ async def lifespan(app: FastAPI):
     interface_logger.stop()
     thalamus._save()
     amygdala.save()
+    hypothalamus._save()
+    insula._save()
+    cingulate._save()
+    ganglia._save()
+    dmn.stop()
+    dmn._save()
     print("🔌 Arrêt.")
     tracemalloc.stop()
 
@@ -608,6 +640,43 @@ async def thalamus_status():
     """Retourne l'etat du thalamus (scorecard, focus, seuil)."""
     from core.thalamus import thalamus
     return thalamus.get_stats()
+
+@app.get("/api/hypothalamus/status")
+async def hypothalamus_status():
+    """Retourne l'etat de l'hypothalamus (homeostasie, erreurs, corrections)."""
+    from core.hypothalamus import hypothalamus
+    return hypothalamus.get_stats()
+
+@app.get("/api/insula/status")
+async def insula_status():
+    """Retourne l'etat de l'insula (corps, marqueurs somatiques, coherence)."""
+    from core.insula import insula
+    return insula.get_stats()
+
+@app.get("/api/cingulate/status")
+async def cingulate_status():
+    """Retourne l'etat du cortex cingulaire (conflits, erreurs, adaptation)."""
+    from core.cingulate_cortex import cingulate
+    return cingulate.get_stats()
+
+@app.get("/api/basal-ganglia/status")
+async def basal_ganglia_status():
+    """Retourne l'etat des ganglions de la base (habitudes, GO/NO-GO)."""
+    from core.basal_ganglia import ganglia
+    return ganglia.get_stats()
+
+@app.get("/api/dmn/status")
+async def dmn_status():
+    """Retourne l'etat du reseau du mode par defaut (vagabondage, insights)."""
+    from core.default_mode_network import dmn
+    return dmn.get_stats()
+
+@app.get("/api/roadmap/candidates")
+async def roadmap_candidates():
+    """Retourne les prochains modules candidats de la roadmap."""
+    from core.roadmap_curator import get_next_candidates, suggest_priority_order
+    candidates = get_next_candidates()
+    return suggest_priority_order(candidates)
 
 @app.get("/api/amygdala/stats")
 async def amygdala_stats():

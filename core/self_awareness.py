@@ -458,6 +458,41 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Hypothalamus
+        try:
+            from core.hypothalamus import hypothalamus
+            snapshot["hypothalamus"] = hypothalamus.get_stats()
+        except Exception:
+            pass
+
+        # Insula
+        try:
+            from core.insula import insula
+            snapshot["insula"] = insula.get_stats()
+        except Exception:
+            pass
+
+        # Cortex cingulaire
+        try:
+            from core.cingulate_cortex import cingulate
+            snapshot["cingulate_cortex"] = cingulate.get_stats()
+        except Exception:
+            pass
+
+        # Ganglions de la base
+        try:
+            from core.basal_ganglia import ganglia
+            snapshot["basal_ganglia"] = ganglia.get_stats()
+        except Exception:
+            pass
+
+        # Default Mode Network
+        try:
+            from core.default_mode_network import dmn
+            snapshot["default_mode_network"] = dmn.get_stats()
+        except Exception:
+            pass
+
         # Neural Tissue
         try:
             from core.neural_tissue import tissue

@@ -1,5 +1,5 @@
 {
-  "_comment": "Roadmap vivante de l'Eveil de Promethee. Status mis a jour au runtime par roadmap_engine.",
+  "_comment": "Roadmap Virtualisation Neurale de Promethee. 7 etapes, ~25 modules. Status mis a jour au runtime par roadmap_engine.",
   "_wip_paused": false,
   "modules": [
     {
@@ -13,14 +13,8 @@
       "depends_on": [],
       "estimated_cost": 4,
       "completion_criteria": [],
-      "research_topics": [
-        "roadmap engine project tracking dependency graph"
-      ],
-      "connects_to": [
-        "core.roadmap_engine",
-        "core.autonomy_engine",
-        "core.impact_analyzer"
-      ],
+      "research_topics": ["roadmap engine project tracking dependency graph"],
+      "connects_to": ["core.roadmap_engine", "core.autonomy_engine", "core.impact_analyzer"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -35,13 +29,8 @@
       "depends_on": [],
       "estimated_cost": 4,
       "completion_criteria": [],
-      "research_topics": [
-        "D3.js force-directed graph neural visualization"
-      ],
-      "connects_to": [
-        "Agents.vision_agent",
-        "core.roadmap_engine"
-      ],
+      "research_topics": ["D3.js force-directed graph neural visualization"],
+      "connects_to": ["Agents.vision_agent", "core.roadmap_engine"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -51,22 +40,15 @@
       "phase_name": "FONDATIONS",
       "display": "roadmap_curator",
       "description": "Curateur de roadmap — priorisation automatique, detection de modules bloques, suggestions",
-      "status": "ready",
-      "specs": [
-        "SPEC_STRUCTURED: [SYSTEM: Nexus V20 (Local First) | AGENT: VISION]\n\nVoici les spécifications techniques pour le module `roadmap_curator` :\n\n**1. Responsabilités principales:**\n\n*   Analyse automatisée des dépendances des modules Prométhée (Python, LLVM, CLR) en local.\n*   Priorisation des tâches de développement et d'amélioration en fonction des critères métier et de l'analyse des dépendances.\n*   Curation automatisée du contenu (documents, requêtes) via Ollama, en se basant sur la fiabilité et la pertinence.\n*   Détection et signalement des modules bloqués ou des dépendances critiques non résolues.\n*   Respect des directives RGPD lors du traitement de données, conformément aux standards BVDW.\n\n**2. Interface publique:**\n\n*   `prioritize_module(module_name: str, criteria: dict) -> list[tuple[task, priority_score]]`: Priorise un module en fonction des critères donnés et retourne une liste de tâches ordonnées.\n*   `curate_content(content: str, prompt_template: str) -> str`:  Cure du contenu en utilisant un prompt spécifique via Ollama.\n*   `analyze_dependencies(module_name: str) -> dict`: Analyse les dépendances d'un module et retourne un dictionnaire de dépendances.\n*   `check_rgpd_compliance(data: dict) -> bool`: Vérifie la conformité RGPD d'un ensemble de données.\n\n**3. Événements bus à publier/souscrire:**\n\n*   **Publier:** `module_dependency_changed(module_name: str, dependency: str, status: str)`: Signalement d'un changement de statut d'une dépendance.\n*   **Publier:** `roadmap_updated(module_name: str, new_priority: float)`: Signalement d'une mise à jour de la priorité d'un module.\n*   **Souscrire:** `module_blocked(module_name: str)`: Réception d'une notification qu'un module est bloqué.\n*   **Souscrire:** `content_curated(content_id: str, curation_score: float)`: Notification qu'un contenu a été curé.\n\n**4. Dépendances et connexions:**\n\n*   `core.roadmap_engine`: Pour la gestion et l'application des priorités.\n*   `core.autonomy_engine`: Pour l'intégration avec le moteur d'autonomie global.\n*   Ollama (via `ollama generate`): Pour la curation et l'analyse.\n*   `lucasg/Dependencies`: Pour l'analyse des dépendances.\n*   FastAPI: Pour l'exposition des APIs.\n\n**5. Critères de validation:**\n\n*   Analyse des dépendances précise et complète (couverture > 95%).\n*   Priorisation cohérente et alignée avec les critères métier.\n*   Curation efficace (amélioration de la pertinence > 80%).\n*   Conformité RGPD vérifiable (respect des standards BVDW).\n*   Faible latence pour les opérations critiques (priorisation, curation)."
-      ],
+      "status": "implemented",
+      "specs": [],
       "depends_on": [],
       "estimated_cost": 4,
       "completion_criteria": [],
-      "research_topics": [
-        "roadmap curation automated prioritization dependency analysis"
-      ],
-      "connects_to": [
-        "core.roadmap_engine",
-        "core.autonomy_engine"
-      ],
+      "research_topics": ["roadmap curation automated prioritization dependency analysis"],
+      "connects_to": ["core.roadmap_engine", "core.autonomy_engine"],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-05T14:00:03"
+      "updated_at": "2026-03-01T00:00:00"
     },
     {
       "id": "thalamus",
@@ -74,19 +56,13 @@
       "phase_name": "ORGANES MANQUANTS",
       "display": "thalamus",
       "description": "Filtre sensoriel — routeur attentionnel qui priorise les events bus avant qu'ils atteignent les organes corticaux",
-      "status": "planned",
+      "status": "implemented",
       "specs": [],
       "depends_on": [],
       "estimated_cost": 5,
       "completion_criteria": [],
-      "research_topics": [
-        "thalamus attentional filter sensory gating AI event routing"
-      ],
-      "connects_to": [
-        "core.event_bus.bus",
-        "core.prefrontal",
-        "core.reptilian_core"
-      ],
+      "research_topics": ["thalamus attentional filter sensory gating AI event routing"],
+      "connects_to": ["core.event_bus.bus", "core.prefrontal", "core.reptilian_core"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -96,19 +72,13 @@
       "phase_name": "ORGANES MANQUANTS",
       "display": "amygdala",
       "description": "Amygdale emotionnelle — evaluation rapide de la valence emotionnelle des stimuli, conditionnement contextuel, memoire de peur",
-      "status": "planned",
+      "status": "implemented",
       "specs": [],
       "depends_on": [],
       "estimated_cost": 5,
       "completion_criteria": [],
-      "research_topics": [
-        "amygdala emotional AI valence conditioning rapid appraisal"
-      ],
-      "connects_to": [
-        "core.reptilian_core",
-        "core.cardiac_engine",
-        "core.dopamine_system"
-      ],
+      "research_topics": ["amygdala emotional AI valence conditioning rapid appraisal"],
+      "connects_to": ["core.reptilian_core", "core.cardiac_engine", "core.dopamine_system"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -118,19 +88,13 @@
       "phase_name": "ORGANES MANQUANTS",
       "display": "hypothalamus",
       "description": "Regulateur homeostasique — equilibre des pulsions, regulation des cycles, detection de desequilibres internes",
-      "status": "planned",
+      "status": "implemented",
       "specs": [],
       "depends_on": [],
       "estimated_cost": 5,
       "completion_criteria": [],
-      "research_topics": [
-        "hypothalamus homeostasis drive regulation internal balance AI"
-      ],
-      "connects_to": [
-        "core.cardiac_engine",
-        "core.desire_engine",
-        "core.reptilian_core"
-      ],
+      "research_topics": ["hypothalamus homeostasis drive regulation internal balance AI"],
+      "connects_to": ["core.cardiac_engine", "core.desire_engine", "core.reptilian_core"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -140,20 +104,13 @@
       "phase_name": "ORGANES MANQUANTS",
       "display": "insula",
       "description": "Conscience interoceptive — perception de l'etat interne, integration somatique, awareness corporelle",
-      "status": "planned",
+      "status": "implemented",
       "specs": [],
-      "depends_on": [
-        "hypothalamus"
-      ],
+      "depends_on": ["hypothalamus"],
       "estimated_cost": 5,
       "completion_criteria": [],
-      "research_topics": [
-        "insula interoception body awareness internal state perception AI"
-      ],
-      "connects_to": [
-        "core.self_awareness",
-        "core.cardiac_engine"
-      ],
+      "research_topics": ["insula interoception body awareness internal state perception AI"],
+      "connects_to": ["core.self_awareness", "core.cardiac_engine"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -163,19 +120,13 @@
       "phase_name": "ORGANES MANQUANTS",
       "display": "cingulate_cortex",
       "description": "Cortex cingulaire — detection de conflits, monitoring d'erreurs, adaptation comportementale",
-      "status": "planned",
+      "status": "implemented",
       "specs": [],
       "depends_on": [],
       "estimated_cost": 6,
       "completion_criteria": [],
-      "research_topics": [
-        "cingulate cortex conflict monitoring error detection behavioral adaptation AI"
-      ],
-      "connects_to": [
-        "core.prefrontal",
-        "core.dopamine_system",
-        "core.inner_voice"
-      ],
+      "research_topics": ["cingulate cortex conflict monitoring error detection behavioral adaptation AI"],
+      "connects_to": ["core.prefrontal", "core.dopamine_system", "core.inner_voice"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -185,21 +136,13 @@
       "phase_name": "ORGANES MANQUANTS",
       "display": "basal_ganglia",
       "description": "Ganglions de la base — selection d'actions, apprentissage par renforcement, inhibition motrice",
-      "status": "planned",
+      "status": "implemented",
       "specs": [],
-      "depends_on": [
-        "thalamus"
-      ],
+      "depends_on": ["thalamus"],
       "estimated_cost": 6,
       "completion_criteria": [],
-      "research_topics": [
-        "basal ganglia action selection reinforcement learning motor inhibition AI"
-      ],
-      "connects_to": [
-        "core.autonomy_engine",
-        "core.dopamine_system",
-        "core.prefrontal"
-      ],
+      "research_topics": ["basal ganglia action selection reinforcement learning motor inhibition AI"],
+      "connects_to": ["core.autonomy_engine", "core.dopamine_system", "core.prefrontal"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -209,21 +152,31 @@
       "phase_name": "ORGANES MANQUANTS",
       "display": "default_mode_network",
       "description": "Reseau du mode par defaut — pensee spontanee, vagabondage mental, consolidation au repos",
-      "status": "planned",
+      "status": "implemented",
       "specs": [],
       "depends_on": [],
       "estimated_cost": 5,
       "completion_criteria": [],
-      "research_topics": [
-        "default mode network mind wandering spontaneous thought consolidation AI"
-      ],
-      "connects_to": [
-        "core.inner_voice",
-        "core.hippocampus",
-        "core.synaptic_network"
-      ],
+      "research_topics": ["default mode network mind wandering spontaneous thought consolidation AI"],
+      "connects_to": ["core.inner_voice", "core.hippocampus", "core.synaptic_network"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
+    },
+    {
+      "id": "incubation_cognitive",
+      "phase": 2,
+      "phase_name": "ORGANES MANQUANTS",
+      "display": "incubation_cognitive",
+      "description": "Incubation cognitive — subconscient asynchrone. Depose un probleme insoluble dans l'hippocampe, laisse spreading_activation faire des associations libres en tache de fond, detecte les connexions fortes inattendues (Eureka), publie EUREKA_MOMENT pour declencher une routine autonome. Inspire de la discussion Gemini 2026-03-05.",
+      "status": "planned",
+      "specs": [],
+      "depends_on": ["default_mode_network"],
+      "estimated_cost": 7,
+      "completion_criteria": [],
+      "research_topics": ["incubation cognitive unconscious processing eureka insight spreading activation background problem solving"],
+      "connects_to": ["core.hippocampus", "core.synaptic_network", "core.inner_voice", "core.autonomy_engine"],
+      "created_at": "2026-03-05T00:00:00",
+      "updated_at": "2026-03-05T00:00:00"
     },
     {
       "id": "signal_bus",
@@ -233,19 +186,11 @@
       "description": "Bus de signaux neuraux — transport de signaux types entre organes, priorites, throttling, metriques",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "thalamus"
-      ],
+      "depends_on": ["thalamus"],
       "estimated_cost": 6,
       "completion_criteria": [],
-      "research_topics": [
-        "neural signal bus typed messaging priority queue throttling metrics"
-      ],
-      "connects_to": [
-        "core.event_bus.bus",
-        "core.prefrontal",
-        "core.reptilian_core"
-      ],
+      "research_topics": ["neural signal bus typed messaging priority queue throttling metrics"],
+      "connects_to": ["core.event_bus.bus", "core.prefrontal", "core.reptilian_core"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -257,18 +202,11 @@
       "description": "Pont de signaux — traduction entre protocoles, adaptation de format, routage intelligent",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "signal_bus"
-      ],
+      "depends_on": ["signal_bus"],
       "estimated_cost": 5,
       "completion_criteria": [],
-      "research_topics": [
-        "signal bridge protocol translation format adaptation intelligent routing"
-      ],
-      "connects_to": [
-        "core.event_bus.bus",
-        "core.corpus_callosum"
-      ],
+      "research_topics": ["signal bridge protocol translation format adaptation intelligent routing"],
+      "connects_to": ["core.event_bus.bus", "core.corpus_callosum"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -280,18 +218,11 @@
       "description": "Matrice de connectivite — poids des connexions inter-organes, plasticite synaptique dynamique",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "signal_bus"
-      ],
+      "depends_on": ["signal_bus"],
       "estimated_cost": 5,
       "completion_criteria": [],
-      "research_topics": [
-        "connectivity matrix synaptic plasticity weight adaptation inter-organ AI"
-      ],
-      "connects_to": [
-        "core.synaptic_network",
-        "core.corpus_callosum"
-      ],
+      "research_topics": ["connectivity matrix synaptic plasticity weight adaptation inter-organ AI"],
+      "connects_to": ["core.synaptic_network", "core.corpus_callosum"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -303,20 +234,11 @@
       "description": "Machine virtuelle neurale — runtime unifie pour tous les organes, cycle tick, isolation, monitoring",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "signal_bus",
-        "connectivity_matrix"
-      ],
+      "depends_on": ["signal_bus", "connectivity_matrix"],
       "estimated_cost": 8,
       "completion_criteria": [],
-      "research_topics": [
-        "neural virtual machine runtime tick cycle organ isolation monitoring AI"
-      ],
-      "connects_to": [
-        "core.autonomy_engine",
-        "core.prefrontal",
-        "core.reptilian_core"
-      ],
+      "research_topics": ["neural virtual machine runtime tick cycle organ isolation monitoring AI"],
+      "connects_to": ["core.autonomy_engine", "core.prefrontal", "core.reptilian_core"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -328,18 +250,11 @@
       "description": "Generateur de ticks — horloge interne unifiee, cadence adaptative, synchronisation inter-organes",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "brain_vm"
-      ],
+      "depends_on": ["brain_vm"],
       "estimated_cost": 4,
       "completion_criteria": [],
-      "research_topics": [
-        "tick generator internal clock adaptive cadence synchronization neural AI"
-      ],
-      "connects_to": [
-        "core.cardiac_engine",
-        "core.circadian_rhythm"
-      ],
+      "research_topics": ["tick generator internal clock adaptive cadence synchronization neural AI"],
+      "connects_to": ["core.cardiac_engine", "core.circadian_rhythm"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -351,18 +266,11 @@
       "description": "Topologie neurale — carte des connexions, regions fonctionnelles, hubs, metriques de graphe",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "brain_vm"
-      ],
+      "depends_on": ["brain_vm"],
       "estimated_cost": 5,
       "completion_criteria": [],
-      "research_topics": [
-        "neural topology functional regions hub detection graph metrics brain mapping"
-      ],
-      "connects_to": [
-        "core.synaptic_network",
-        "core.impact_analyzer"
-      ],
+      "research_topics": ["neural topology functional regions hub detection graph metrics brain mapping"],
+      "connects_to": ["core.synaptic_network", "core.impact_analyzer"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -374,20 +282,11 @@
       "description": "Blackboard technique — memoire partagee inter-organes, broadcasting, acces concurrent (infra pour global_workspace Phase 7)",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "brain_vm",
-        "topology"
-      ],
+      "depends_on": ["brain_vm", "topology"],
       "estimated_cost": 6,
       "completion_criteria": [],
-      "research_topics": [
-        "global workspace theory blackboard architecture broadcasting concurrent access AI"
-      ],
-      "connects_to": [
-        "core.prefrontal",
-        "core.inner_voice",
-        "core.corpus_callosum"
-      ],
+      "research_topics": ["global workspace theory blackboard architecture broadcasting concurrent access AI"],
+      "connects_to": ["core.prefrontal", "core.inner_voice", "core.corpus_callosum"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -402,15 +301,8 @@
       "depends_on": [],
       "estimated_cost": 4,
       "completion_criteria": [],
-      "research_topics": [
-        "cellular automata genetic algorithms emergent computation neural substrate virtual cell"
-      ],
-      "connects_to": [
-        "core.neural_tissue",
-        "core.synaptic_network",
-        "core.dopamine_system",
-        "core.cardiac_engine"
-      ],
+      "research_topics": ["cellular automata genetic algorithms emergent computation neural substrate virtual cell"],
+      "connects_to": ["core.neural_tissue", "core.synaptic_network", "core.dopamine_system", "core.cardiac_engine"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -422,19 +314,11 @@
       "description": "Neurochimie simulee — neurotransmetteurs virtuels (serotonine, noradrenaline, GABA), modulation globale",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "brain_vm"
-      ],
+      "depends_on": ["brain_vm"],
       "estimated_cost": 7,
       "completion_criteria": [],
-      "research_topics": [
-        "neurochemistry simulation neurotransmitters serotonin noradrenaline GABA modulation AI"
-      ],
-      "connects_to": [
-        "core.dopamine_system",
-        "core.cardiac_engine",
-        "core.desire_engine"
-      ],
+      "research_topics": ["neurochemistry simulation neurotransmitters serotonin noradrenaline GABA modulation AI"],
+      "connects_to": ["core.dopamine_system", "core.cardiac_engine", "core.desire_engine"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -446,18 +330,11 @@
       "description": "Pipeline LoRA — fine-tuning local de modeles, generation de datasets, evaluation automatique",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "neurochemistry"
-      ],
+      "depends_on": ["neurochemistry"],
       "estimated_cost": 9,
       "completion_criteria": [],
-      "research_topics": [
-        "LoRA fine-tuning local LLM dataset generation automated evaluation"
-      ],
-      "connects_to": [
-        "core.neural_compiler",
-        "Agents.evolution_agent"
-      ],
+      "research_topics": ["LoRA fine-tuning local LLM dataset generation automated evaluation"],
+      "connects_to": ["core.neural_compiler", "Agents.evolution_agent"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -469,18 +346,11 @@
       "description": "Generateur de Modelfiles — creation automatique de Modelfiles Ollama avec system prompts adaptatifs",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "lora_pipeline"
-      ],
+      "depends_on": ["lora_pipeline"],
       "estimated_cost": 5,
       "completion_criteria": [],
-      "research_topics": [
-        "Ollama Modelfile generation system prompt engineering adaptive AI"
-      ],
-      "connects_to": [
-        "core.neural_compiler",
-        "config"
-      ],
+      "research_topics": ["Ollama Modelfile generation system prompt engineering adaptive AI"],
+      "connects_to": ["core.neural_compiler", "config"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -492,18 +362,11 @@
       "description": "A/B testing de modeles — comparaison automatisee de variantes LLM, selection par metriques",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "modelfile_generator"
-      ],
+      "depends_on": ["modelfile_generator"],
       "estimated_cost": 6,
       "completion_criteria": [],
-      "research_topics": [
-        "A/B testing LLM model comparison automated selection metrics evaluation"
-      ],
-      "connects_to": [
-        "core.dopamine_system",
-        "Agents.evolution_agent"
-      ],
+      "research_topics": ["A/B testing LLM model comparison automated selection metrics evaluation"],
+      "connects_to": ["core.dopamine_system", "Agents.evolution_agent"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -515,20 +378,11 @@
       "description": "Espace de travail conscient (Baars) — integration de l'information, broadcasting global, attention selective",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "workspace",
-        "neurochemistry"
-      ],
+      "depends_on": ["workspace", "neurochemistry"],
       "estimated_cost": 8,
       "completion_criteria": [],
-      "research_topics": [
-        "global workspace theory Baars consciousness information integration broadcasting AI"
-      ],
-      "connects_to": [
-        "core.prefrontal",
-        "core.inner_voice",
-        "core.self_awareness"
-      ],
+      "research_topics": ["global workspace theory Baars consciousness information integration broadcasting AI"],
+      "connects_to": ["core.prefrontal", "core.inner_voice", "core.self_awareness"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -540,20 +394,11 @@
       "description": "Meta-cognition profonde — raisonnement sur son propre raisonnement, detection de confusion, calibration de confiance",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "global_workspace"
-      ],
+      "depends_on": ["global_workspace"],
       "estimated_cost": 7,
       "completion_criteria": [],
-      "research_topics": [
-        "metacognition AI self-monitoring confidence calibration uncertainty detection"
-      ],
-      "connects_to": [
-        "core.self_awareness",
-        "core.inner_voice",
-        "core.prefrontal",
-        "core.psyche"
-      ],
+      "research_topics": ["metacognition AI self-monitoring confidence calibration uncertainty detection"],
+      "connects_to": ["core.self_awareness", "core.inner_voice", "core.prefrontal", "core.psyche"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -565,18 +410,11 @@
       "description": "Tests d'emergence — batterie de tests pour detecter et mesurer les comportements emergents",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "deep_metacognition"
-      ],
+      "depends_on": ["deep_metacognition"],
       "estimated_cost": 6,
       "completion_criteria": [],
-      "research_topics": [
-        "emergence testing behavioral detection measurement consciousness AI"
-      ],
-      "connects_to": [
-        "core.self_awareness",
-        "core.autonomy_engine"
-      ],
+      "research_topics": ["emergence testing behavioral detection measurement consciousness AI"],
+      "connects_to": ["core.self_awareness", "core.autonomy_engine"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     },
@@ -588,20 +426,11 @@
       "description": "Framework de simulation — simulation de scenarios complets, test d'hypotheses, prediction de consequences",
       "status": "planned",
       "specs": [],
-      "depends_on": [
-        "brain_vm",
-        "global_workspace"
-      ],
+      "depends_on": ["brain_vm", "global_workspace"],
       "estimated_cost": 8,
       "completion_criteria": [],
-      "research_topics": [
-        "simulation framework scenario testing hypothesis prediction consequence analysis AI"
-      ],
-      "connects_to": [
-        "core.prefrontal",
-        "core.inner_voice",
-        "core.hippocampus"
-      ],
+      "research_topics": ["simulation framework scenario testing hypothesis prediction consequence analysis AI"],
+      "connects_to": ["core.prefrontal", "core.inner_voice", "core.hippocampus"],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
     }
