@@ -647,6 +647,7 @@ class ReptilianCore:
             bus.subscribe("TISSUE_ZONE_OVERLOAD", self._on_tissue_overload)
             bus.subscribe("TISSUE_EXTINCTION_RISK", self._on_tissue_extinction)
             bus.subscribe("TISSUE_THREAT_SUBSIDED", self._on_tissue_threat_subsided)
+            bus.subscribe("TISSUE_PANDEMIC_START", self._on_tissue_pandemic)
             bus.subscribe("NAP_MODE", self._on_nap_mode)
         except Exception as e:
             logger.warning(f"REPTILIEN: Échec souscription bus: {e}")
@@ -698,6 +699,13 @@ class ReptilianCore:
         self.threat_level = max(0.0, self.threat_level - 1.5)
         self.adrenaline = max(0.0, self.adrenaline - 0.1)
         logger.info(f"REPTILIEN: Tissue calme → threat -1.5 (now {self.threat_level:.1f})")
+
+    async def _on_tissue_pandemic(self, event: dict):
+        """Pandémie tissu déclenchée → plancher de menace."""
+        motif = event.get("motif", "?")
+        infected = event.get("infected_count", 0)
+        self.threat_level = max(self.threat_level, 6.0)
+        logger.warning(f"REPTILIEN: Pandémie tissu (motif={motif}, infectés={infected}) → threat plancher 6.0")
 
     async def _on_nap_mode(self, event: dict):
         """Mode sieste : endort ou réveille le reptilien."""

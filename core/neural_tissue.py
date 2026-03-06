@@ -127,6 +127,16 @@ ZONE_ADJACENCY = {
 }
 
 
+# --- Pandémies / Système Immunitaire ---
+PANDEMIC_MIN_INTERVAL = 2000        # Ticks min entre 2 pandémies (~1h)
+PANDEMIC_MAX_INTERVAL = 5000        # Ticks max entre 2 pandémies (~2h30)
+PANDEMIC_MIN_POPULATION = 100       # Skip si population < seuil
+PANDEMIC_MOTIF_LEN = 2             # Longueur du motif pathogène
+INFECTION_DURATION = 15            # Ticks avant mort forcée
+INFECTION_DRAIN = 8.0              # Énergie drainée/tick en plus du normal
+IMMUNE_MUTATION_CHANCE = 0.10      # Proba/tick de mutation immunitaire
+IMMUNITY_DECAY_GENERATIONS = 5     # Perte d'une immunité tous les N générations
+
 # ─────────────────────────────────────────────
 # Cellule Neurale
 # ─────────────────────────────────────────────
@@ -144,6 +154,9 @@ class NeuralCell:
     generation: int = 0
     register: float = 0.0
     output_count: int = 0
+    infected_by: Optional[str] = None        # Motif pathogène actif (None = sain)
+    infection_timer: int = 0                 # Ticks restants avant mort
+    immune_to: set = field(default_factory=set)  # Motifs immunisés
 
     def tick(self, grid, neighbors, capture_reward=None, generate_reward=None,
              mutation_rate=None):
@@ -228,11 +241,16 @@ class NeuralCell:
         dx, dy = random.choice([(0, 1), (0, -1), (1, 0), (-1, 0)])
         cx = (self.x + dx) % GRID_SIZE
         cy = (self.y + dy) % GRID_SIZE
+        # Héritage immunité avec decay
+        child_immunity = set(self.immune_to)
+        if child_immunity and (self.generation + 1) % IMMUNITY_DECAY_GENERATIONS == 0:
+            child_immunity.pop()
         return NeuralCell(
             genome=child_genome,
             x=cx, y=cy,
             energy=self.energy,
             generation=self.generation + 1,
+            immune_to=child_immunity,
         )
 
 
@@ -318,6 +336,14 @@ class NeuralTissue:
         # Saisonnalité + Modèle Alpha
         self._current_season_index: int = 0
         self.total_exiles: int = 0
+
+        # Pandémie / Système immunitaire
+        self.total_pandemics: int = 0
+        self.total_pandemic_deaths: int = 0
+        self.total_immune_survivors: int = 0
+        self._next_pandemic_tick: int = -1
+        self._pandemic_active: bool = False
+        self._pandemic_motif: str = ""
 
         self._load()
 
@@ -508,6 +534,130 @@ class NeuralTissue:
             "tick": self.tick_count,
         })
 
+    # --- Pandémie / Système Immunitaire ---
+
+    def _pandemic_check_timer(self):
+        """Vérifie si une pandémie doit se déclencher."""
+        # Init le timer au premier appel
+        if self._next_pandemic_tick < 0:
+            self._next_pandemic_tick = self.tick_count + random.randint(
+                PANDEMIC_MIN_INTERVAL, PANDEMIC_MAX_INTERVAL
+            )
+        # Skip si pandémie déjà active
+        if self._pandemic_active:
+            return
+        # Skip en sommeil profond
+        if self._circadian_phase == "sommeil_profond":
+            return
+        # Skip si population trop basse
+        alive_count = sum(1 for c in self.cells if c.alive)
+        if alive_count < PANDEMIC_MIN_POPULATION:
+            return
+        # Trigger si le timer est atteint
+        if self.tick_count >= self._next_pandemic_tick:
+            self._trigger_pandemic()
+
+    def _trigger_pandemic(self):
+        """Déclenche une pandémie ciblant le génome dominant."""
+        if not self.dominant_patterns:
+            return
+        dominant_genome = self.dominant_patterns[0]["genome"]
+        if len(dominant_genome) < PANDEMIC_MOTIF_LEN:
+            return
+        # Extraire un bigramme aléatoire du génome dominant
+        start = random.randint(0, len(dominant_genome) - PANDEMIC_MOTIF_LEN)
+        motif = dominant_genome[start:start + PANDEMIC_MOTIF_LEN]
+
+        self._pandemic_active = True
+        self._pandemic_motif = motif
+        infected_count = 0
+        for cell in self.cells:
+            if not cell.alive:
+                continue
+            if motif in cell.genome and motif not in cell.immune_to:
+                cell.infected_by = motif
+                cell.infection_timer = INFECTION_DURATION
+                infected_count += 1
+
+        self.total_pandemics += 1
+        self._try_publish("TISSUE_PANDEMIC_START", {
+            "motif": motif,
+            "infected_count": infected_count,
+            "population": sum(1 for c in self.cells if c.alive),
+            "tick": self.tick_count,
+        })
+        # Planifier la prochaine pandémie
+        self._next_pandemic_tick = self.tick_count + random.randint(
+            PANDEMIC_MIN_INTERVAL, PANDEMIC_MAX_INTERVAL
+        )
+
+    def _pandemic_tick(self):
+        """Traite les cellules infectées : drain, mutation immunitaire, mort."""
+        if not self._pandemic_active:
+            return
+        survivors = 0
+        immune_gains = 0
+        still_infected = False
+        for cell in self.cells:
+            if not cell.alive or cell.infected_by is None:
+                continue
+            still_infected = True
+            # Drain d'énergie
+            cell.energy -= INFECTION_DRAIN
+            cell.infection_timer -= 1
+            # Chance de mutation immunitaire
+            if random.random() < IMMUNE_MUTATION_CHANCE:
+                new_genome = self._immune_mutation(cell.genome, cell.infected_by)
+                cell.genome = new_genome
+                # Vérifier si le motif a disparu
+                if cell.infected_by not in cell.genome:
+                    cell.immune_to.add(cell.infected_by)
+                    cell.infected_by = None
+                    cell.infection_timer = 0
+                    survivors += 1
+                    immune_gains += 1
+                    continue
+            # Mort si timer épuisé ou énergie épuisée
+            if cell.infection_timer <= 0 or cell.energy <= 0:
+                cell.alive = False
+                self.total_pandemic_deaths += 1
+        self.total_immune_survivors += immune_gains
+        if not still_infected or not any(
+            c.alive and c.infected_by is not None for c in self.cells
+        ):
+            self._pandemic_end(survivors, immune_gains)
+
+    @staticmethod
+    def _immune_mutation(genome: str, motif: str) -> str:
+        """Mutation ciblée : mute 1 nucléotide dans la zone du motif."""
+        idx = genome.find(motif)
+        if idx < 0:
+            return genome
+        # Choisir un offset dans le motif
+        offset = random.randint(0, len(motif) - 1)
+        pos = idx + offset
+        chars = list(genome)
+        # Remplacer par un nucléotide différent
+        old = chars[pos]
+        choices = [c for c in ALPHABET if c != old]
+        chars[pos] = random.choice(choices)
+        return "".join(chars)
+
+    def _pandemic_end(self, survivors: int, immune_gains: int):
+        """Clôture la pandémie courante."""
+        logger.info(
+            f"TISSUE: Pandémie terminée (motif={self._pandemic_motif}, "
+            f"survivants immunisés={immune_gains})"
+        )
+        self._try_publish("TISSUE_PANDEMIC_END", {
+            "motif": self._pandemic_motif,
+            "survivors": survivors,
+            "immune_gains": immune_gains,
+            "tick": self.tick_count,
+        })
+        self._pandemic_active = False
+        self._pandemic_motif = ""
+
     def _get_effective_mutation_rate(self) -> float:
         """Taux de mutation modulé par la phase circadienne."""
         if self._circadian_phase == "crepuscule":
@@ -535,6 +685,9 @@ class NeuralTissue:
     def _tick(self):
         """Un cycle complet : injecter signaux, exécuter cellules, sélection."""
         _t0 = time.perf_counter()
+
+        # 0. Vérifier le timer pandémie
+        self._pandemic_check_timer()
 
         # 1. Injecter les signaux cognitifs
         self._inject_signals()
@@ -571,6 +724,9 @@ class NeuralTissue:
 
         # 4b. Règle Alpha — 1 alpha max par zone
         self._enforce_alpha_rule()
+
+        # 4c. Pandémie tick — drain, mutation immunitaire, mort
+        self._pandemic_tick()
 
         # 5. Repeuplement d'urgence si extinction
         if len(self.cells) < EXTINCTION_THRESHOLD:
@@ -1249,6 +1405,12 @@ class NeuralTissue:
             "total_births": self.total_births,
             "total_deaths": self.total_deaths,
             "total_exiles": self.total_exiles,
+            "total_pandemics": self.total_pandemics,
+            "pandemic_active": self._pandemic_active,
+            "pandemic_motif": self._pandemic_motif,
+            "infected_count": sum(
+                1 for c in alive if c.infected_by is not None
+            ),
             "dominant_genome": self.get_dominant_genome(),
             "dominant_patterns": self.dominant_patterns[:5],
             "max_generation": max((c.generation for c in alive), default=0),
@@ -1288,11 +1450,18 @@ class NeuralTissue:
             "circadian_phase": self._circadian_phase,
             "current_season_index": self._current_season_index,
             "total_exiles": self.total_exiles,
+            "total_pandemics": self.total_pandemics,
+            "total_pandemic_deaths": self.total_pandemic_deaths,
+            "total_immune_survivors": self.total_immune_survivors,
+            "next_pandemic_tick": self._next_pandemic_tick,
+            "pandemic_active": self._pandemic_active,
+            "pandemic_motif": self._pandemic_motif,
             "top_cells": [
                 {
                     "genome": c.genome, "x": c.x, "y": c.y,
                     "energy": round(c.energy, 1), "age": c.age,
                     "generation": c.generation, "output_count": c.output_count,
+                    "immune_to": list(c.immune_to),
                 }
                 for c in top_cells
             ],
@@ -1329,6 +1498,12 @@ class NeuralTissue:
             self._circadian_phase = data.get("circadian_phase", "eveil")
             self._current_season_index = data.get("current_season_index", 0)
             self.total_exiles = data.get("total_exiles", 0)
+            self.total_pandemics = data.get("total_pandemics", 0)
+            self.total_pandemic_deaths = data.get("total_pandemic_deaths", 0)
+            self.total_immune_survivors = data.get("total_immune_survivors", 0)
+            self._next_pandemic_tick = data.get("next_pandemic_tick", -1)
+            self._pandemic_active = data.get("pandemic_active", False)
+            self._pandemic_motif = data.get("pandemic_motif", "")
 
             top_cells = data.get("top_cells", [])
             if top_cells:
@@ -1342,6 +1517,7 @@ class NeuralTissue:
                         age=cd.get("age", 0),
                         generation=cd.get("generation", 0),
                         output_count=cd.get("output_count", 0),
+                        immune_to=set(cd.get("immune_to", [])),
                     ))
                 # Compléter avec des mutants des survivants
                 while len(self.cells) < INITIAL_CELLS:

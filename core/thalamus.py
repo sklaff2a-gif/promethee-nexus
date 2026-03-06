@@ -88,6 +88,8 @@ EVENT_CATEGORIES: Dict[str, str] = {
     "EUREKA_BRIDGE": "emergence",
     "CIRCADIAN_PHASE_CHANGE": "regulation",
     "AUTONOMY_ROUTINE_COMPLETE": "regulation",
+    "TISSUE_PANDEMIC_START": "urgence",
+    "TISSUE_PANDEMIC_END": "emergence",
 }
 
 # Mapping intent → categorie pour compute_attention_bonus

@@ -44,9 +44,9 @@ class TestSingleton:
 
 class TestScorecard:
 
-    def test_initial_scorecard_has_15_entries(self, isolate_thalamus):
+    def test_initial_scorecard_has_17_entries(self, isolate_thalamus):
         t = isolate_thalamus
-        assert len(t._scorecard) == 15
+        assert len(t._scorecard) == 17
 
     def test_initial_scorecard_all_05(self, isolate_thalamus):
         t = isolate_thalamus

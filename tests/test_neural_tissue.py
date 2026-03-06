@@ -13,6 +13,9 @@ from core.neural_tissue import (
     SEASON_ORDER, SEASON_CYCLE_LENGTH, SEASON_FOOD_BONUS,
     SEASON_TRANSITION_BONUS, ALPHA_ENERGY_THRESHOLD, ALPHA_OUTPUT_THRESHOLD,
     ZONE_ADJACENCY, MAX_CELLS,
+    PANDEMIC_MIN_INTERVAL, PANDEMIC_MAX_INTERVAL, PANDEMIC_MIN_POPULATION,
+    PANDEMIC_MOTIF_LEN, INFECTION_DURATION, INFECTION_DRAIN,
+    IMMUNE_MUTATION_CHANCE, IMMUNITY_DECAY_GENERATIONS, ALPHABET,
 )
 
 
@@ -581,3 +584,271 @@ class TestAlphaRule:
         tissue.total_exiles = 0
         tissue._enforce_alpha_rule()
         assert tissue.total_exiles == 2
+
+
+class TestPandemic:
+    """Système immunitaire — pandémies périodiques ciblant le génome dominant."""
+
+    def _make_pandemic_tissue(self, genome="GRCGC", count=150):
+        """Crée un tissue prêt pour les tests pandémie."""
+        tissue = _make_tissue()
+        tissue.cells = [
+            NeuralCell(genome=genome, x=i % GRID_SIZE, y=i // GRID_SIZE, energy=100.0)
+            for i in range(count)
+        ]
+        tissue._update_dominant_patterns()
+        tissue._circadian_phase = "eveil"
+        return tissue
+
+    # 1
+    def test_pandemic_constants(self):
+        """Valeurs des constantes pandémie."""
+        assert PANDEMIC_MIN_INTERVAL == 2000
+        assert PANDEMIC_MAX_INTERVAL == 5000
+        assert PANDEMIC_MIN_POPULATION == 100
+        assert PANDEMIC_MOTIF_LEN == 2
+        assert INFECTION_DURATION == 15
+        assert INFECTION_DRAIN == 8.0
+        assert IMMUNE_MUTATION_CHANCE == 0.10
+        assert IMMUNITY_DECAY_GENERATIONS == 5
+
+    # 2
+    def test_trigger_targets_dominant(self):
+        """Le motif pathogène est un bigramme du génome dominant."""
+        tissue = self._make_pandemic_tissue("GRCGC", 150)
+        random.seed(42)
+        tissue._trigger_pandemic()
+        assert tissue._pandemic_active
+        assert len(tissue._pandemic_motif) == PANDEMIC_MOTIF_LEN
+        assert tissue._pandemic_motif in "GRCGC"
+
+    # 3
+    def test_infection_marks_matching_cells(self):
+        """Seules les cellules contenant le motif sont infectées."""
+        tissue = _make_tissue()
+        # Cellules avec et sans le motif
+        tissue.cells = [
+            NeuralCell(genome="GRCGC", x=0, y=0, energy=100.0),
+            NeuralCell(genome="GRCGC", x=1, y=0, energy=100.0),
+            NeuralCell(genome="AAATT", x=2, y=0, energy=100.0),  # Pas de "GR"
+        ]
+        tissue._update_dominant_patterns()
+        tissue._pandemic_active = False
+        # Forcer le motif
+        tissue.dominant_patterns = [{"genome": "GRCGC", "frequency": 0.67, "avg_fitness": 1.0}]
+        # Monkey-patch pour forcer le motif "GR"
+        old_randint = random.randint
+        random.randint = lambda a, b: 0  # start=0 → motif "GR"
+        try:
+            tissue._trigger_pandemic()
+        finally:
+            random.randint = old_randint
+        infected = [c for c in tissue.cells if c.infected_by is not None]
+        saines = [c for c in tissue.cells if c.infected_by is None]
+        assert len(infected) == 2
+        assert len(saines) == 1
+        assert saines[0].genome == "AAATT"
+
+    # 4
+    def test_infection_timer_initialized(self):
+        """Le timer d'infection est initialisé à INFECTION_DURATION."""
+        tissue = self._make_pandemic_tissue("GRCGC", 150)
+        tissue._trigger_pandemic()
+        for c in tissue.cells:
+            if c.infected_by is not None:
+                assert c.infection_timer == INFECTION_DURATION
+
+    # 5
+    def test_energy_drain_per_tick(self):
+        """Chaque tick draine INFECTION_DRAIN d'énergie aux infectées."""
+        tissue = _make_tissue()
+        cell = NeuralCell(genome="GRCGC", x=0, y=0, energy=200.0)
+        cell.infected_by = "GR"
+        cell.infection_timer = 15
+        tissue.cells = [cell]
+        tissue._pandemic_active = True
+        tissue._pandemic_motif = "GR"
+        initial_energy = cell.energy
+        # Forcer pas de mutation immunitaire
+        with patch("core.neural_tissue.random.random", return_value=0.99):
+            tissue._pandemic_tick()
+        assert cell.energy == pytest.approx(initial_energy - INFECTION_DRAIN, abs=0.01)
+
+    # 6
+    def test_immune_mutation_can_cure(self):
+        """La mutation immunitaire peut éliminer le motif du génome."""
+        # Tester plusieurs fois car la mutation est aléatoire
+        cured = False
+        for seed in range(100):
+            random.seed(seed)
+            result = NeuralTissue._immune_mutation("GRCGC", "GR")
+            if "GR" not in result:
+                cured = True
+                break
+        assert cured, "La mutation immunitaire devrait pouvoir éliminer le motif"
+
+    # 7
+    def test_immune_mutation_preserves_length(self):
+        """La mutation immunitaire conserve la longueur du génome."""
+        for seed in range(20):
+            random.seed(seed)
+            result = NeuralTissue._immune_mutation("GRCGC", "GR")
+            assert len(result) == len("GRCGC")
+
+    # 8
+    def test_cured_cell_gains_immunity(self):
+        """Une cellule guérie gagne l'immunité contre le motif."""
+        tissue = _make_tissue()
+        cell = NeuralCell(genome="GRCGC", x=0, y=0, energy=200.0)
+        cell.infected_by = "GR"
+        cell.infection_timer = 15
+        tissue.cells = [cell]
+        tissue._pandemic_active = True
+        tissue._pandemic_motif = "GR"
+        # Forcer mutation + guérison : mutation qui élimine "GR"
+        def mock_immune_mut(genome, motif):
+            return "AACGC"  # "GR" disparu
+        with patch.object(NeuralTissue, '_immune_mutation', side_effect=mock_immune_mut):
+            with patch("core.neural_tissue.random.random", return_value=0.01):  # < 0.10
+                tissue._pandemic_tick()
+        assert cell.infected_by is None
+        assert "GR" in cell.immune_to
+
+    # 9
+    def test_immunity_prevents_reinfection(self):
+        """Une cellule immune n'est pas réinfectée."""
+        tissue = _make_tissue()
+        immune_cell = NeuralCell(genome="GRCGC", x=0, y=0, energy=100.0,
+                                  immune_to={"GR"})
+        normal_cell = NeuralCell(genome="GRCGC", x=1, y=0, energy=100.0)
+        tissue.cells = [immune_cell, normal_cell]
+        tissue.dominant_patterns = [{"genome": "GRCGC", "frequency": 1.0, "avg_fitness": 1.0}]
+        # Forcer motif "GR"
+        old_randint = random.randint
+        random.randint = lambda a, b: 0
+        try:
+            tissue._trigger_pandemic()
+        finally:
+            random.randint = old_randint
+        assert immune_cell.infected_by is None
+        assert normal_cell.infected_by == "GR"
+
+    # 10
+    def test_immunity_inherited_via_replicate(self):
+        """L'enfant hérite de l'immunité du parent."""
+        parent = NeuralCell(genome="GRCGCR", x=8, y=8, energy=300.0,
+                            generation=1, immune_to={"GR", "CG"})
+        parent._eff_mutation_rate = 0.0  # Pas de mutation
+        child = parent._replicate()
+        assert "GR" in child.immune_to
+        assert "CG" in child.immune_to
+
+    # 11
+    def test_immunity_decays_over_generations(self):
+        """L'immunité perd un élément après N générations."""
+        parent = NeuralCell(genome="GRCGCR", x=8, y=8, energy=300.0,
+                            generation=IMMUNITY_DECAY_GENERATIONS - 1,
+                            immune_to={"GR", "CG"})
+        parent._eff_mutation_rate = 0.0
+        child = parent._replicate()
+        # generation enfant = 5, 5 % 5 == 0 → decay
+        assert len(child.immune_to) == 1
+
+    # 12
+    def test_timer_schedules_within_range(self):
+        """Le prochain timer est dans [MIN, MAX] ticks."""
+        tissue = self._make_pandemic_tissue("GRCGC", 150)
+        tissue._next_pandemic_tick = -1
+        tissue._pandemic_check_timer()
+        expected_min = tissue.tick_count + PANDEMIC_MIN_INTERVAL
+        expected_max = tissue.tick_count + PANDEMIC_MAX_INTERVAL
+        # Le timer a été initialisé (la pandémie n'a pas été déclenchée car tick_count < timer)
+        assert expected_min <= tissue._next_pandemic_tick <= expected_max
+
+    # 13
+    def test_skip_during_sleep(self):
+        """Pas de pandémie en sommeil profond."""
+        tissue = self._make_pandemic_tissue("GRCGC", 150)
+        tissue._circadian_phase = "sommeil_profond"
+        tissue._next_pandemic_tick = tissue.tick_count  # Devrait déclencher
+        tissue._pandemic_check_timer()
+        assert not tissue._pandemic_active
+
+    # 14
+    def test_skip_population_low(self):
+        """Pas de pandémie si population < PANDEMIC_MIN_POPULATION."""
+        tissue = self._make_pandemic_tissue("GRCGC", 50)  # < 100
+        tissue._next_pandemic_tick = tissue.tick_count
+        tissue._pandemic_check_timer()
+        assert not tissue._pandemic_active
+
+    # 15
+    def test_pandemic_start_event(self):
+        """TISSUE_PANDEMIC_START est publié au déclenchement."""
+        tissue = self._make_pandemic_tissue("GRCGC", 150)
+        published = []
+        original = tissue._try_publish
+
+        def mock_publish(event, payload):
+            if event == "TISSUE_PANDEMIC_START":
+                published.append(payload)
+            return original(event, payload)
+
+        tissue._try_publish = mock_publish
+        tissue._trigger_pandemic()
+        assert len(published) == 1
+        assert "motif" in published[0]
+        assert "infected_count" in published[0]
+
+    # 16
+    def test_pandemic_end_event(self):
+        """TISSUE_PANDEMIC_END est publié à la fin de la pandémie."""
+        tissue = _make_tissue()
+        cell = NeuralCell(genome="AAATT", x=0, y=0, energy=200.0)
+        # Pas infectée, mais pandémie active → fin immédiate
+        tissue.cells = [cell]
+        tissue._pandemic_active = True
+        tissue._pandemic_motif = "GR"
+        published = []
+        original = tissue._try_publish
+
+        def mock_publish(event, payload):
+            if event == "TISSUE_PANDEMIC_END":
+                published.append(payload)
+            return original(event, payload)
+
+        tissue._try_publish = mock_publish
+        tissue._pandemic_tick()
+        assert len(published) == 1
+        assert published[0]["motif"] == "GR"
+
+    # 17
+    def test_resistant_cells_survive(self):
+        """Les cellules sans le motif ne sont pas affectées."""
+        tissue = _make_tissue()
+        resistant = NeuralCell(genome="AAATT", x=0, y=0, energy=100.0)
+        vulnerable = NeuralCell(genome="GRCGC", x=1, y=0, energy=100.0)
+        tissue.cells = [resistant, vulnerable]
+        tissue.dominant_patterns = [{"genome": "GRCGC", "frequency": 0.5, "avg_fitness": 1.0}]
+        old_randint = random.randint
+        random.randint = lambda a, b: 0  # motif "GR"
+        try:
+            tissue._trigger_pandemic()
+        finally:
+            random.randint = old_randint
+        assert resistant.infected_by is None
+        assert resistant.alive
+        assert vulnerable.infected_by == "GR"
+
+    # 18
+    def test_multiple_pandemics(self):
+        """Deux pandémies successives sont comptées correctement."""
+        tissue = self._make_pandemic_tissue("GRCGC", 150)
+        tissue._trigger_pandemic()
+        assert tissue.total_pandemics == 1
+        # Terminer la pandémie
+        tissue._pandemic_end(0, 0)
+        assert not tissue._pandemic_active
+        # Deuxième pandémie
+        tissue._trigger_pandemic()
+        assert tissue.total_pandemics == 2

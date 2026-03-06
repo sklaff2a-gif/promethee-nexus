@@ -54,6 +54,8 @@ _APPRAISAL_MAP: Dict[str, tuple] = {
     "COUNCIL_END":              (+0.3, 0.3),
     "TISSUE_PATTERN_EMERGED":   (+0.5, 0.4),
     "TISSUE_EXTINCTION_RISK":   (-0.5, 0.6),
+    "TISSUE_PANDEMIC_START":    (-0.6, 0.8),
+    "TISSUE_PANDEMIC_END":      (+0.4, 0.5),
 }
 
 _DEFAULT_APPRAISAL = (0.0, 0.2)
@@ -121,6 +123,8 @@ class Amygdala:
             bus.subscribe("COUNCIL_END", self._on_council_end)
             bus.subscribe("TISSUE_PATTERN_EMERGED", self._on_tissue_pattern)
             bus.subscribe("TISSUE_EXTINCTION_RISK", self._on_tissue_extinction)
+            bus.subscribe("TISSUE_PANDEMIC_START", self._on_tissue_pandemic_start)
+            bus.subscribe("TISSUE_PANDEMIC_END", self._on_tissue_pandemic_end)
             bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
             logger.info("[AMYGDALA] Bus subscriptions actives.")
         except Exception as e:
@@ -315,6 +319,18 @@ class Amygdala:
         """Risque d'extinction tissu → mémoire négative."""
         self.appraise("TISSUE_EXTINCTION_RISK", {
             "pattern": data.get("zone", "extinction"),
+        })
+
+    async def _on_tissue_pandemic_start(self, data: dict):
+        """Pandémie tissu déclenchée → mémoire négative forte."""
+        self.appraise("TISSUE_PANDEMIC_START", {
+            "pattern": data.get("motif", "pandemic"),
+        })
+
+    async def _on_tissue_pandemic_end(self, data: dict):
+        """Pandémie tissu terminée → mémoire positive (résilience)."""
+        self.appraise("TISSUE_PANDEMIC_END", {
+            "pattern": data.get("motif", "recovery"),
         })
 
     async def _on_routine_complete(self, data: dict):
