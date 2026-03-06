@@ -82,6 +82,7 @@ class DefaultModeNetwork:
         try:
             bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
             bus.subscribe("ROUTINE_FAILED", self._on_routine_failed)
+            bus.subscribe("AUTONOMY_HEARTBEAT", self._on_heartbeat)
         except Exception as e:
             logger.warning(f"[DMN] Souscription echouee: {e}")
 
@@ -95,9 +96,10 @@ class DefaultModeNetwork:
         """Routine echouee → marquer idle."""
         self._mark_idle()
 
-    def _on_routine_started(self):
-        """Routine demarre → desactiver le DMN."""
-        self._deactivate()
+    async def _on_heartbeat(self, event: dict):
+        """Heartbeat autonomie → desactiver si routine en cours."""
+        if event.get("is_processing"):
+            self._deactivate()
 
     # --- Activation / Desactivation ---
 

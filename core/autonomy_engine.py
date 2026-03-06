@@ -667,6 +667,33 @@ class AutonomyEngine:
         if len(self.routine_history) > 40:
             self.routine_history = self.routine_history[-40:]
 
+    def _build_scoring_breakdown(self, intent: str) -> dict:
+        """Construit un breakdown des bonus par couche pour un intent donne.
+        Utilise pour alimenter le cingulate cortex."""
+        breakdown = {}
+        scoring_methods = [
+            ("dopamine", "core.dopamine_system", "dopamine", "compute_motivation_bonus"),
+            ("callosum", "core.corpus_callosum", "callosum", "compute_resonance_bonus"),
+            ("cardiac", "core.cardiac_engine", "heart", "get_somatic_signal"),
+            ("thalamus", "core.thalamus", "thalamus", "compute_attention_bonus"),
+            ("amygdala", "core.amygdala", "amygdala", "compute_emotional_bias"),
+            ("hypothalamus", "core.hypothalamus", "hypothalamus", "compute_homeostasis_bonus"),
+            ("insula", "core.insula", "insula", "compute_interoception_bonus"),
+            ("cingulate", "core.cingulate_cortex", "cingulate", "compute_conflict_bonus"),
+            ("basal_ganglia", "core.basal_ganglia", "ganglia", "compute_habit_bonus"),
+        ]
+        for layer_name, module_path, instance_name, method_name in scoring_methods:
+            try:
+                mod = __import__(module_path, fromlist=[instance_name])
+                organ = getattr(mod, instance_name)
+                method = getattr(organ, method_name)
+                bonus = method(intent)
+                if bonus != 0.0:
+                    breakdown[layer_name] = round(bonus, 3)
+            except Exception:
+                pass
+        return breakdown
+
     def get_status(self) -> dict:
         return {
             "version": "24.0",
@@ -1427,6 +1454,7 @@ class AutonomyEngine:
         if intent == "COUNCIL_DEBATE" and response:
             participants = response.get("participants", [])
         routine_status = "success" if response and response.get("status") in ("success", "consensus") and quality_score >= 0.3 else "error"
+        scoring_breakdown = self._build_scoring_breakdown(intent)
         await bus.publish("AUTONOMY_ROUTINE_COMPLETE", {
             "intent": intent,
             "agent": agent,
@@ -1434,6 +1462,7 @@ class AutonomyEngine:
             "status": routine_status,
             "quality_score": quality_score,
             "result": result_preview,
+            "scoring_breakdown": scoring_breakdown,
         })
         # Publier ROUTINE_FAILED pour les organes qui ecoutent les echecs
         if routine_status == "error":
@@ -1551,6 +1580,7 @@ class AutonomyEngine:
         participants = []
         if intent == "COUNCIL_DEBATE" and response:
             participants = response.get("participants", [])
+        scoring_breakdown_pb = self._build_scoring_breakdown(intent)
         await bus.publish("AUTONOMY_ROUTINE_COMPLETE", {
             "intent": intent,
             "agent": agent,
@@ -1558,6 +1588,7 @@ class AutonomyEngine:
             "status": status,
             "quality_score": quality,
             "result": result_preview,
+            "scoring_breakdown": scoring_breakdown_pb,
         })
         # Publier ROUTINE_FAILED pour les organes qui ecoutent les echecs
         if status == "error":

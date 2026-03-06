@@ -21,7 +21,10 @@ logger = logging.getLogger("amygdala")
 
 # ── Constantes ──────────────────────────────────────────────────────
 
-AMYGDALA_STATE_FILE = "memory/amygdala_state.json"
+AMYGDALA_STATE_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "memory", "amygdala_state.json"
+)
 EXTINCTION_THRESHOLD = 50       # Cycles sans observation → affaiblissement
 EXTINCTION_DECAY = 0.95         # Facteur de décroissance par cycle post-seuil
 MIN_MEMORY_AROUSAL = 0.05       # En-dessous → suppression
@@ -115,7 +118,7 @@ class Amygdala:
             return
         self._subscribed = True
         try:
-            from core.event_bus import bus
+            from core.event_bus.bus import bus
             bus.subscribe("REPTILIAN_ALERT", self._on_reptilian_alert)
             bus.subscribe("HALLUCINATION_DETECTED", self._on_hallucination)
             bus.subscribe("DOPAMINE_SURGE", self._on_dopamine_surge)

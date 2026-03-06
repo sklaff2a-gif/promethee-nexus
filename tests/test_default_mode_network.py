@@ -82,12 +82,21 @@ class TestActivation:
         await d._on_routine_complete({})
         assert d.idle_since is not None
 
-    def test_routine_started_deactivates(self, isolate_dmn):
+    @pytest.mark.asyncio
+    async def test_heartbeat_processing_deactivates(self, isolate_dmn):
         d = isolate_dmn
         d.is_active = True
         d.idle_since = time.time()
-        d._on_routine_started()
+        await d._on_heartbeat({"is_processing": True})
         assert not d.is_active
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_idle_no_deactivate(self, isolate_dmn):
+        d = isolate_dmn
+        d.is_active = True
+        d.idle_since = time.time()
+        await d._on_heartbeat({"is_processing": False})
+        assert d.is_active
 
 
 # ===== TestWandering =====
@@ -285,10 +294,11 @@ class TestBusHandlers:
         await d._on_routine_failed({})
         assert d.idle_since is not None
 
-    def test_started_deactivates(self, isolate_dmn):
+    @pytest.mark.asyncio
+    async def test_heartbeat_processing_deactivates(self, isolate_dmn):
         d = isolate_dmn
         d.is_active = True
-        d._on_routine_started()
+        await d._on_heartbeat({"is_processing": True})
         assert not d.is_active
 
     @pytest.mark.asyncio

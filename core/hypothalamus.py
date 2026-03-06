@@ -174,8 +174,14 @@ class Hypothalamus:
 
     async def _on_routine_complete(self, event: dict):
         """Met a jour l'energie basee sur le budget restant."""
-        budget_used = event.get("budget_used", 0)
-        budget_max = event.get("budget_max", 200)
+        # Lire le budget depuis l'autonomy_engine (import local)
+        try:
+            from core.autonomy_engine import autonomy
+            budget_used = autonomy.daily_budget_used
+            budget_max = 200  # DAILY_BUDGET_POINTS
+        except Exception:
+            budget_used = event.get("budget_used", 0)
+            budget_max = event.get("budget_max", 200)
         if budget_max > 0:
             remaining_ratio = max(0.0, 1.0 - budget_used / budget_max)
             # Energie = proportion du budget restant
