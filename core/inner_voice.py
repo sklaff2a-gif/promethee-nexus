@@ -57,6 +57,17 @@ _EMOTION_VALENCE = {
     "alerte": -0.2,
 }
 
+# Mapping source Inner Voice → categorie thalamique (pour modulation focus)
+_SOURCE_TO_THALAMUS_CATEGORY = {
+    "reptilian":  "urgence",
+    "cardiac":    "regulation",
+    "desire":     "motivation",
+    "synaptic":   "emergence",
+    "prefrontal": "cognition",
+    "prediction": "cognition",
+    "dmn":        "emergence",
+}
+
 # Templates Broca (source, contexte) → template
 _BROCA_TEMPLATES = {
     ("cardiac", "high_intensity"): "{emotion}. {direction}.",
@@ -81,6 +92,13 @@ _BROCA_TEMPLATES = {
     ("dmn", "prospect"):          "Et si {scenario}?",
     ("dmn", "self"):              "{mood}. {competence}.",
     ("dmn", "wander"):            "{concept_a}... {concept_b}... lien?",
+}
+
+_MOOD_PREFIXES = {
+    "dreaming":      ["Je rêve... ", "Dans le brouillard... ", "Une image... "],
+    "tension_high":  ["! ", "Vite. ", "Alerte. "],
+    "entropy_high":  ["Hmm... ", "Et si... ", "Drôle... "],
+    "vitality_low":  ["... ", "(soupir) "],
 }
 
 
@@ -177,6 +195,9 @@ class InnerVoice:
         self._last_heartbeat: Dict = {}
         self._last_reptilian_alert: Dict = {}
 
+        # Profil de coloration tissulaire (entropie, tension, vitalite, is_dreaming)
+        self._color_profile: Tuple[float, float, float, bool] = (0.5, 0.3, 0.5, False)
+
         # Stats
         self.stats: Dict = {
             "total_thoughts": 0,
@@ -235,6 +256,8 @@ class InnerVoice:
             bus.subscribe("HALLUCINATION_DETECTED", self._on_hallucination)
             bus.subscribe("SOLILOQUE_START", self._on_soliloque_start)
             bus.subscribe("SOLILOQUE_COMPLETE", self._on_soliloque_complete)
+            bus.subscribe("DMN_THOUGHT", self._on_dmn_thought)
+            bus.subscribe("DMN_INSIGHT", self._on_dmn_insight)
         except Exception as e:
             logger.warning(f"INNER_VOICE: subscribe failed: {e}")
 
@@ -296,6 +319,14 @@ class InnerVoice:
         self._is_idle = True
         self._idle_since = time.time()
 
+    async def _on_dmn_thought(self, event: dict):
+        """Pensee spontanee du DMN → matiere a reflexion."""
+        self._last_dmn_thought = event
+
+    async def _on_dmn_insight(self, event: dict):
+        """Insight du DMN → enrichit la conscience."""
+        self._last_dmn_thought = event
+
     # ─── Le Cycle de Pensée ───────────────────────────────────────────────
 
     async def _think_cycle(self):
@@ -317,8 +348,13 @@ class InnerVoice:
             return
 
         # 2. COMPÉTIR — trier par saillance, garder MAX_DRAFTS
+        # 2b. Modulation thalamique — amplifier les sources alignées au focus
+        self._modulate_by_thalamus_focus()
         self.workspace.sort(key=lambda e: e.salience, reverse=True)
         candidates = self.workspace[:MAX_DRAFTS]
+
+        # 2c. Coloration tissulaire — profil pour Broca
+        self._color_profile = self._compute_color_profile()
 
         # 3. FORMULER (Broca) — compression prédicative
         for entry in candidates:
@@ -357,6 +393,79 @@ class InnerVoice:
         # 9. Auto-save périodique (toutes les 20 ticks = ~600s)
         if self._tick_count % 20 == 0:
             self.save()
+
+    # ─── MODULATION THALAMIQUE ──────────────────────────────────────────
+
+    def _modulate_by_thalamus_focus(self):
+        """Module la saillance des entries du workspace selon le focus thalamique.
+        Sources alignees au focus : x1.25. Sources opposees : x0.85."""
+        try:
+            from core.thalamus import thalamus
+            focus = thalamus.get_focus()
+        except Exception:
+            return
+        if not focus:
+            return
+        for entry in self.workspace:
+            source_cat = _SOURCE_TO_THALAMUS_CATEGORY.get(entry.source)
+            if not source_cat:
+                continue
+            if source_cat == focus:
+                entry.salience = min(1.0, entry.salience * 1.25)
+            else:
+                entry.salience = entry.salience * 0.85
+
+    # ─── COLORATION TISSULAIRE ───────────────────────────────────────────
+
+    def _compute_color_profile(self) -> Tuple[float, float, float, bool]:
+        """Calcule le profil de coloration depuis le tissu neural.
+        Retourne (entropie, tension, vitalite, is_dreaming)."""
+        try:
+            from core.neural_tissue import tissue
+            signals = tissue.get_zone_signals()
+        except Exception:
+            return (0.5, 0.3, 0.5, False)
+
+        creativity = signals.get("creativity", {})
+        cognition = signals.get("cognition", {})
+        threat = signals.get("threat", {})
+
+        # Entropie = créativité + diversité cognitive
+        entropie = min(1.0, creativity.get("activity", 0.5) * 0.6
+                       + cognition.get("diversity", 0.5) * 0.4)
+
+        # Tension = activité menace amplifiée
+        tension = min(1.0, threat.get("activity", 0.15) * 2.0)
+
+        # Vitalité = moyenne des densités de toutes les zones
+        densities = [z.get("density", 0.5) for z in signals.values()
+                     if isinstance(z, dict)]
+        vitalite = sum(densities) / len(densities) if densities else 0.5
+
+        is_dreaming = False
+
+        # Modulation thalamique
+        try:
+            from core.thalamus import thalamus
+            focus = thalamus.get_focus()
+            if focus == "emergence":
+                entropie = min(1.0, entropie + 0.15)
+            elif focus == "urgence":
+                tension = min(1.0, tension + 0.2)
+        except Exception:
+            pass
+
+        # Mode sieste
+        try:
+            from core.autonomy_engine import autonomy
+            if getattr(autonomy, "is_napping", False):
+                entropie = 0.9
+                tension = 0.1
+                is_dreaming = True
+        except Exception:
+            pass
+
+        return (entropie, tension, vitalite, is_dreaming)
 
     # ─── PERCEVOIR — Les 7 Sources ───────────────────────────────────────
 
@@ -722,9 +831,23 @@ class InnerVoice:
         except (KeyError, ValueError):
             result = f"{source}: signal actif."
 
-        # Tronquer à 120 chars
-        if len(result) > 120:
-            result = result[:117] + "..."
+        # Coloration tissulaire — préfixe humeur
+        entropie, tension, vitalite, is_dreaming = self._color_profile
+        prefix = ""
+        if is_dreaming:
+            prefix = random.choice(_MOOD_PREFIXES["dreaming"])
+        elif tension > 0.6:
+            prefix = random.choice(_MOOD_PREFIXES["tension_high"])
+        elif entropie > 0.7:
+            prefix = random.choice(_MOOD_PREFIXES["entropy_high"])
+        elif vitalite < 0.3:
+            prefix = random.choice(_MOOD_PREFIXES["vitality_low"])
+        result = prefix + result
+
+        # Longueur dynamique (60-140 chars selon profil)
+        max_chars = 60 + int(entropie * 60) + int(vitalite * 20)
+        if len(result) > max_chars:
+            result = result[:max_chars - 3] + "..."
         return result
 
     # ─── WERNICKE — Le Vérificateur ──────────────────────────────────────

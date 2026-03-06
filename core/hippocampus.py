@@ -204,6 +204,7 @@ class Hippocampus:
         bus.subscribe("SANDBOX_TEST_PASS", self._on_sandbox_pass)
         bus.subscribe("SANDBOX_TEST_FAIL", self._on_sandbox_fail)
         bus.subscribe("COUNCIL_PRESIDENT_VERDICT", self._on_president_verdict)
+        bus.subscribe("DMN_INSIGHT", self._on_dmn_insight)
 
     # ─── Capture affective ───────────────────────────────────────────────
 
@@ -637,6 +638,19 @@ class Hippocampus:
             intent="COUNCIL_DEBATE",
             failure_type="hors_sujet",
             detail=f"council={data.get('council_id', '')} | {data.get('feedback', '')[:80]}",
+        )
+
+    def _on_dmn_insight(self, data):
+        """Handler DMN_INSIGHT — insight spontane du mode par defaut."""
+        if not isinstance(data, dict):
+            return
+        text = data.get("text", "")
+        if not text:
+            return
+        self._encode_episode(
+            event_type="dmn_insight",
+            intent="DEFAULT_MODE",
+            detail=text[:200],
         )
 
     # ─── Consolidation en arcs narratifs ─────────────────────────────────

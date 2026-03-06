@@ -649,6 +649,7 @@ class ReptilianCore:
             bus.subscribe("TISSUE_THREAT_SUBSIDED", self._on_tissue_threat_subsided)
             bus.subscribe("TISSUE_PANDEMIC_START", self._on_tissue_pandemic)
             bus.subscribe("NAP_MODE", self._on_nap_mode)
+            bus.subscribe("HYPOTHALAMUS_ALARM", self._on_hypothalamus_alarm)
         except Exception as e:
             logger.warning(f"REPTILIEN: Échec souscription bus: {e}")
 
@@ -719,6 +720,14 @@ class ReptilianCore:
         else:
             self._sleeping = False
             logger.info("REPTILIEN: Réveil — scan repris.")
+
+    async def _on_hypothalamus_alarm(self, event: dict):
+        """Alarme homeostatique → alerte reptilienne moderee."""
+        variable = event.get("variable", "")
+        severity = event.get("severity", 0.5)
+        # Contribuer au threat_level sans eclipser les menaces reelles
+        self.threat_level = min(10.0, self.threat_level + severity * 0.5)
+        logger.info(f"REPTILIEN: Alarme hypothalamique ({variable}, severity={severity:.2f})")
 
     def on_routine_success(self, intent: str = ""):
         """Apaisement après un succès — appelé par AutonomyEngine."""
