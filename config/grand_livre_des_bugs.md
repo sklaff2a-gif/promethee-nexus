@@ -6,23 +6,20 @@
 
 ## CRITIQUES (3) — Bombes à retardement
 
-### C01 — Architecte : troncation [:2000] du code soumis au LLM
-- **Fichier** : `Agents/architect_agent.py:130`
-- **Description** : `full_content[:2000]` tronque le code. L'Architecte valide sur les 2000 premiers chars. Du code dangereux en fin de fichier échappe au jugement LLM. L'analyse heuristique `_analyze_risk()` couvre le texte entier, mais le LLM ne voit qu'un fragment.
-- **Impact** : Code dangereux validé si au-delà de 2000 chars.
-- **Fix proposé** : Augmenter à 4000 ou passer le code complet avec un résumé heuristique.
+### C01 — ~~Architecte : troncation trop agressive~~ **FIXED** (2026-03-07)
+- **Fichier** : `config.py`, `Agents/architect_agent.py`, `Agents/formatter_agent.py`, `Agents/coder_agent.py`
+- **Description** : Troncation hardcodée ([:6000], [:4000]) sans lien avec le num_ctx de l'agent.
+- **Fix** : `Config.get_max_content_chars(agent_name)` — calcul dynamique basé sur AGENT_NUM_CTX (2 chars/token - overhead).
 
-### C02 — Orchestrateur : guard `is_internal_pipeline` fragile
-- **Fichier** : `core/orchestrator.py:137-140`
-- **Description** : Le guard anti-boucle vérifie `context.startswith("EVOLUTION_PIPELINE")`, mais l'autonomy_engine envoie `"PROTOCOLE_AUTONOMIE"` et l'evolution_agent envoie le code Python brut comme context. Aucun ne commence par "EVOLUTION_PIPELINE" au niveau orchestrateur. Le guard fonctionne par accident (le result ne contient pas de code Python structurel).
-- **Impact** : Si un futur changement fait retourner du code Python, la chain reaction V16.3 déclenchera un dispatch doublon vers l'Architecte.
-- **Fix proposé** : Propager explicitement un flag `is_pipeline=True` dans le payload au lieu de parser le context.
+### C02 — ~~Orchestrateur : guard `is_internal_pipeline` fragile~~ **FIXED** (2026-03-07)
+- **Fichier** : `core/orchestrator.py:137-141`
+- **Description** : `startswith()` ne détecte les markers que s'ils sont en début de contexte.
+- **Fix** : Remplacé par `in` (opérateur de sous-chaîne) — robuste quelle que soit la position du marker.
 
-### C03 — Architecte→Formatter : fire-and-forget sans feedback
-- **Fichier** : `Agents/architect_agent.py:196-199`
-- **Description** : `loop.create_task(orchestrator.dispatch_task("formatter", ...))` — l'Architecte retourne immédiatement "ROUTAGE_FORMATTER_OK" sans attendre le résultat du Formatter. Si le Formatter échoue, aucun feedback n'est possible.
-- **Impact** : Échecs silencieux du Formatter invisibles pour le pipeline.
-- **Fix proposé** : Await le dispatch ou ajouter un callback d'erreur.
+### C03 — ~~Formatter→Factory : fire-and-forget sans feedback~~ **FIXED** (2026-03-07)
+- **Fichier** : `Agents/formatter_agent.py` (2 endroits : bypass Evolution + chemin normal)
+- **Description** : `loop.create_task()` → fire-and-forget. Factory pouvait échouer sans que personne ne le sache.
+- **Fix** : `await orchestrator.dispatch_task()` — Factory échoue → Formatter retourne error → Architecte le sait.
 
 ---
 

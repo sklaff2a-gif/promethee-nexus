@@ -155,7 +155,7 @@ class TestEvolutionBypass:
 
         with patch.object(self.f, "log_thought"), \
              patch("core.orchestrator.orchestrator") as mock_orch:
-            mock_orch.dispatch_task = AsyncMock()
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "ok"})
             payload = {
                 "mission": "Déploie ce code.",
                 "context": context,
@@ -164,7 +164,7 @@ class TestEvolutionBypass:
             result = await self.f.process_task(payload)
 
         assert result["status"] == "success"
-        assert "EVOLUTION_BYPASS" in result["result"]
+        assert "EVOLUTION_FACTORY_OK" in result["result"]
 
     @pytest.mark.asyncio
     async def test_evolution_bypass_preserves_full_code(self):
@@ -176,14 +176,13 @@ class TestEvolutionBypass:
 
         with patch.object(self.f, "log_thought"), \
              patch("core.orchestrator.orchestrator") as mock_orch:
-            mock_orch.dispatch_task = AsyncMock()
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "ok"})
             result = await self.f.process_task({
                 "mission": "", "context": context,
                 "evolution_spec_id": "OBS-004",
             })
 
         assert result["status"] == "success"
-        # dispatch_task appelé via create_task → vérifier les args du mock
         mock_orch.dispatch_task.assert_called_once()
         call_args = mock_orch.dispatch_task.call_args
         factory_payload = call_args[0][1]  # 2e arg positionnel
@@ -212,7 +211,7 @@ class TestEvolutionBypass:
 
         with patch.object(self.f, "log_thought"), \
              patch("core.orchestrator.orchestrator") as mock_orch:
-            mock_orch.dispatch_task = AsyncMock()
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "ok"})
             await self.f.process_task({
                 "mission": "", "context": context,
                 "evolution_spec_id": "PERF-003",
@@ -249,7 +248,7 @@ class TestEvolutionBypass:
         with patch.object(self.f, "log_thought"), \
              patch.object(self.f, "generate_content", new=AsyncMock(return_value=good_response)), \
              patch("core.orchestrator.orchestrator") as mock_orch:
-            mock_orch.dispatch_task = AsyncMock()
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "ok"})
             result = await self.f.process_task({
                 "mission": "Nettoie ce code.",
                 "context": context,
@@ -257,7 +256,7 @@ class TestEvolutionBypass:
             })
 
         assert result["status"] == "success"
-        assert "CODE_CLEAN_SENT_TO_FACTORY" in result["result"]
+        assert "FACTORY_OK" in result["result"]
 
 
 class TestSyntaxValidation:
@@ -278,11 +277,13 @@ class TestSyntaxValidation:
 
         with patch.object(self.f, "generate_content", new=AsyncMock(return_value=broken_response)):
             with patch.object(self.f, "log_thought"):
-                payload = {
-                    "mission": "Nettoie ce code.",
-                    "context": f"FICHIER: core/test.py\n```python\n{valid_code}\n```",
-                }
-                result = await self.f.process_task(payload)
+                with patch("core.orchestrator.orchestrator") as mock_orch:
+                    mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "ok"})
+                    payload = {
+                        "mission": "Nettoie ce code.",
+                        "context": f"FICHIER: core/test.py\n```python\n{valid_code}\n```",
+                    }
+                    result = await self.f.process_task(payload)
 
         # Le fallback déterministe doit récupérer le code original valide
         assert result["status"] in ("success", "error")
@@ -299,7 +300,7 @@ class TestSyntaxValidation:
         with patch.object(self.f, "generate_content", new=AsyncMock(return_value=good_response)):
             with patch.object(self.f, "log_thought"):
                 with patch("core.orchestrator.orchestrator") as mock_orch:
-                    mock_orch.dispatch_task = AsyncMock()
+                    mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "ok"})
                     payload = {
                         "mission": "Nettoie ce code.",
                         "context": f"FICHIER: core/test.py\n```python\n{valid_code}\n```",
@@ -308,3 +309,22 @@ class TestSyntaxValidation:
 
         assert result["status"] == "success"
         assert "FACTORY" in result["result"]
+
+    @pytest.mark.asyncio
+    async def test_factory_failure_propagates(self):
+        """C03 — Si Factory échoue, Formatter retourne error (pas success)."""
+        valid_code = "import os\ndef hello():\n    return 42\n"
+        good_response = f"FICHIER: core/test.py\nCODE:\n```python\n{valid_code}\n```"
+
+        with patch.object(self.f, "generate_content", new=AsyncMock(return_value=good_response)):
+            with patch.object(self.f, "log_thought"):
+                with patch("core.orchestrator.orchestrator") as mock_orch:
+                    mock_orch.dispatch_task = AsyncMock(return_value={"status": "error", "result": "PROTECTED_FILE"})
+                    payload = {
+                        "mission": "Nettoie ce code.",
+                        "context": f"FICHIER: core/test.py\n```python\n{valid_code}\n```",
+                    }
+                    result = await self.f.process_task(payload)
+
+        assert result["status"] == "error"
+        assert "FACTORY_ECHEC" in result["result"]

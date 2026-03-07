@@ -102,6 +102,43 @@ class TestValidation:
         assert Orchestrator._contains_python_code(code) is True
 
 
+class TestPipelineGuard:
+    """C02 — Le guard is_internal_pipeline détecte les markers même au milieu du contexte."""
+
+    @pytest.mark.asyncio
+    async def test_pipeline_guard_marker_mid_context(self, orch, mock_agent):
+        """Un marker EVOLUTION_PIPELINE au milieu du contexte active le guard."""
+        mock_agent.process_task = AsyncMock(return_value={
+            "status": "success", "result": "VALIDÉ. Code OK."
+        })
+        await orch.register_agent("architect", mock_agent)
+
+        payload = {
+            "mission": "test",
+            "context": "Prefix quelconque\nEVOLUTION_PIPELINE spec XYZ\nSuite du contexte",
+        }
+        result = await orch.dispatch_task("architect", payload)
+
+        # Le guard bloque la réaction en chaîne (Bridge) → pas de dispatch vers factory
+        assert result["status"] == "success"
+        mock_agent.process_task.assert_called_once()
+        # Pas de second dispatch (factory) car is_internal_pipeline = True
+
+    @pytest.mark.asyncio
+    async def test_pipeline_guard_no_marker(self, orch, mock_agent):
+        """Sans marker de pipeline, le guard est inactif (réactions en chaîne permises)."""
+        mock_agent.process_task = AsyncMock(return_value={
+            "status": "success", "result": "Analyse terminée, pas de code."
+        })
+        await orch.register_agent("architect", mock_agent)
+
+        payload = {"mission": "test", "context": "Du texte sans aucun marker spécial."}
+        result = await orch.dispatch_task("architect", payload)
+
+        assert result["status"] == "success"
+        # Guard inactif → le Bridge POURRAIT déclencher si VALIDÉ, mais ici pas de VALIDÉ
+
+
 class TestExpansionCapitalisteRemoved:
     """Le bypass EXPANSION_CAPITALISTE a été supprimé."""
 

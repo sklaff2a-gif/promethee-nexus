@@ -4,6 +4,7 @@ import asyncio
 import re
 from typing import Dict, Any
 from core.base_agent import BaseAgent
+from config import Config
 
 logger = logging.getLogger("formatter_agent")
 
@@ -134,10 +135,15 @@ class DivineFormatter(BaseAgent):
                     from core.orchestrator import orchestrator
                     factory_payload = {"mission": "Exécute ce code propre.", "context": response}
                     factory_payload["evolution_spec_id"] = evo_spec_id
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(orchestrator.dispatch_task("factory", factory_payload))
-                    self.log_thought(f"✅ Evolution bypass OK [{evo_spec_id}] → Factory ({len(det_code)} chars).", type="success")
-                    return {"status": "success", "result": "EVOLUTION_BYPASS_SENT_TO_FACTORY"}
+                    factory_result = await orchestrator.dispatch_task("factory", factory_payload)
+                    fac_status = factory_result.get("status", "error") if isinstance(factory_result, dict) else "error"
+                    if fac_status == "success":
+                        self.log_thought(f"✅ Evolution bypass OK [{evo_spec_id}] → Factory ({len(det_code)} chars).", type="success")
+                        return {"status": "success", "result": f"EVOLUTION_FACTORY_OK ({factory_result.get('result', '')})"}
+                    else:
+                        fac_detail = factory_result.get("result", "INCONNU") if isinstance(factory_result, dict) else str(factory_result)
+                        self.log_thought(f"❌ Factory échoué [{evo_spec_id}] : {fac_detail}", type="error")
+                        return {"status": "error", "result": f"FACTORY_ECHEC ({fac_detail})"}
                 except Exception as e:
                     return {"status": "error", "result": f"ERREUR RELAIS EVOLUTION: {e}"}
             else:
@@ -153,7 +159,7 @@ class DivineFormatter(BaseAgent):
         # Prompt Standard
         prompt = (
             f"Tu es un compilateur strict. Analyse ce texte brut :\n"
-            f"--- DÉBUT ---\n{full_text[:6000]}...\n--- FIN ---\n"
+            f"--- DÉBUT ---\n{full_text[:Config.get_max_content_chars('formatter')]}...\n--- FIN ---\n"
             f"TA MISSION :\n"
             f"1. Trouve le nom du fichier cible (ex: core/test.py).\n"
             f"   ATTENTION: Ne confonds pas le code (ex: shutil.copy) avec le nom du fichier !\n"
@@ -248,9 +254,14 @@ class DivineFormatter(BaseAgent):
                 if evo_spec_id:
                     factory_payload["evolution_spec_id"] = evo_spec_id
 
-                loop = asyncio.get_running_loop()
-                loop.create_task(orchestrator.dispatch_task("factory", factory_payload))
-                return {"status": "success", "result": "CODE_CLEAN_SENT_TO_FACTORY"}
+                factory_result = await orchestrator.dispatch_task("factory", factory_payload)
+                fac_status = factory_result.get("status", "error") if isinstance(factory_result, dict) else "error"
+                if fac_status == "success":
+                    return {"status": "success", "result": f"FACTORY_OK ({factory_result.get('result', '')})"}
+                else:
+                    fac_detail = factory_result.get("result", "INCONNU") if isinstance(factory_result, dict) else str(factory_result)
+                    self.log_thought(f"⚠️ Factory échoué : {fac_detail}", type="warning")
+                    return {"status": "error", "result": f"FACTORY_ECHEC ({fac_detail})"}
 
             except Exception as e:
                 return {"status": "error", "result": f"ERREUR RELAIS: {e}"}

@@ -77,6 +77,12 @@ class Config:
         "default": 8192,
     }
     
+    @staticmethod
+    def get_max_content_chars(agent_name: str, prompt_overhead: int = 2000) -> int:
+        """Limite de contenu en chars, proportionnelle au num_ctx de l'agent."""
+        num_ctx = Config.AGENT_NUM_CTX.get(agent_name, Config.AGENT_NUM_CTX["default"])
+        return num_ctx * 2 - prompt_overhead
+
     # Matériel du serveur (utilisé par infra_agent pour les seuils d'alerte)
     HARDWARE = {"RAM_GB": 32, "VRAM_GB": 16}
 

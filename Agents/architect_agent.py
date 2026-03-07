@@ -3,6 +3,7 @@ import re
 import asyncio
 from typing import Dict, Any
 from core.base_agent import BaseAgent
+from config import Config
 
 logger = logging.getLogger("architect")
 
@@ -126,7 +127,7 @@ FORMAT DE RÉPONSE :
         {prompt_prefix}
 
         --- PROPOSITION ---
-        {full_content[:6000]}
+        {full_content[:Config.get_max_content_chars("architect")]}
 
         --- JURISPRUDENCE ---
         {jurisprudence if jurisprudence else "R.A.S"}

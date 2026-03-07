@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, Any
 from core.base_agent import BaseAgent
+from config import Config
 from core.prompt_templates import CODE_GENERATION_GUARDRAIL, FORBIDDEN_FRAMEWORKS, get_project_structure
 
 logger = logging.getLogger("coder")
@@ -59,7 +60,8 @@ RÈGLES ABSOLUES :
 
         # 2. INTÉGRER LES LEÇONS AU PROMPT
         # M04: tronquer le context AVANT le guardrail pour que celui-ci reste visible au LLM
-        truncated_context = context[:4000] if context else ""
+        _max_ctx = Config.get_max_content_chars("coder", prompt_overhead=3000)
+        truncated_context = context[:_max_ctx] if context else ""
         context_section = f"\nCONTEXTE SUPPLÉMENTAIRE :\n{truncated_context}\n" if truncated_context else ""
         full_prompt = f"""
         {self.system_instructions}

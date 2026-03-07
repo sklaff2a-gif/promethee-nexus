@@ -136,8 +136,8 @@ class Orchestrator:
             task_context = str(task_payload.get("context", ""))
             is_internal_pipeline = (
                 task_payload.get("is_pipeline", False)
-                or task_context.startswith("DROPZONE_ANALYSIS")
-                or task_context.startswith("EVOLUTION_PIPELINE")
+                or "DROPZONE_ANALYSIS" in task_context
+                or "EVOLUTION_PIPELINE" in task_context
             )
 
             # --- [V17.0] LE PONT D'EXÉCUTION (Architecte -> Factory) ---
