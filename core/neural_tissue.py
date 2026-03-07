@@ -35,7 +35,7 @@ GRID_SIZE = 16                  # 16x16 = 256 positions
 MAX_CELLS = 500
 INITIAL_CELLS = 50
 INITIAL_ENERGY = 100.0
-DIVISION_THRESHOLD = 130.0
+DIVISION_THRESHOLD = 115.0
 MAINTENANCE_COST = 1.0
 MAINTENANCE_COST_BASAL = 0.3       # Coût réduit quand énergie < seuil (hibernation cellulaire)
 BASAL_ENERGY_THRESHOLD = 50.0      # Seuil d'activation du mode basal
@@ -51,7 +51,7 @@ SIGNAL_DECAY = 0.92
 MAX_GRID_SIGNAL = 5.0              # Saturation : signal max par cellule de grille
 TICK_INTERVAL = 2.0
 SAVE_EVERY_N_TICKS = 50
-FOOD_SPAWN_PER_ZONE = 2
+FOOD_SPAWN_PER_ZONE = 3
 MIN_ZONE_INTENSITY = 0.15          # Plancher signal — aucune zone ne reçoit 0
 PATTERN_TRACK_SIZE = 20
 DAWN_REPOPULATE_COUNT = 5          # Cellules par zone désertée à l'aube
@@ -239,7 +239,7 @@ class NeuralCell:
     def should_apoptose(self, neighbors_alive: int) -> str:
         """Vérifie si la cellule doit s'autodétruire. Retourne la raison ou ''."""
         # Isolement : 0 voisins vivants + age > 10
-        if neighbors_alive == 0 and self.age > 10:
+        if neighbors_alive == 0 and self.age > 30:
             return "isolation"
         # Sénescence : age > 50 + energy < 20
         if self.age > APOPTOSIS_MIN_AGE and self.energy < APOPTOSIS_ENERGY_THRESHOLD:
@@ -594,15 +594,24 @@ class NeuralTissue:
     # --- Population ---
 
     def _seed_population(self):
-        """Crée la population initiale avec des génomes aléatoires."""
+        """Crée la population initiale avec des génomes viables, regroupés par cluster."""
         self.cells = []
-        for _ in range(INITIAL_CELLS):
-            genome_len = random.randint(3, 8)
-            genome = "".join(random.choice(ALPHABET) for _ in range(genome_len))
-            x = random.randint(0, GRID_SIZE - 1)
-            y = random.randint(0, GRID_SIZE - 1)
-            self.cells.append(NeuralCell(genome=genome, x=x, y=y))
-        self.total_births += INITIAL_CELLS
+        zones = list(SIGNAL_ZONES.items())
+        n_zones = len(zones)
+        cells_per_zone = INITIAL_CELLS // n_zones
+        remainder = INITIAL_CELLS % n_zones
+        spawned = 0
+        for i, (zone_name, (x1, y1, x2, y2)) in enumerate(zones):
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+            count = cells_per_zone + (1 if i < remainder else 0)
+            for _ in range(count):
+                genome = random.choice(VIABLE_GENOMES)
+                x = max(0, min(GRID_SIZE - 1, cx + random.randint(-2, 2)))
+                y = max(0, min(GRID_SIZE - 1, cy + random.randint(-2, 2)))
+                self.cells.append(NeuralCell(genome=genome, x=x, y=y))
+                spawned += 1
+        self.total_births += spawned
 
     def _dawn_repopulate(self):
         """Aube après sommeil : injecter des cellules fraîches dans les zones désertées."""
