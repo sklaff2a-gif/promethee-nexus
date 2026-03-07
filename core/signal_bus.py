@@ -117,6 +117,7 @@ _DEFAULT_THROTTLES: Dict[str, ThrottleRule] = {
     "CARDIAC_BEAT": ThrottleRule(max_per_window=4, window_seconds=60.0),
     "THOUGHT_STREAM": ThrottleRule(max_per_window=10, window_seconds=60.0),
     "AGENT_STREAM": ThrottleRule(max_per_window=20, window_seconds=60.0),
+    "CHAT_STREAM": ThrottleRule(max_per_window=200, window_seconds=60.0),
     "THALAMUS_SALIENCE": ThrottleRule(max_per_window=4, window_seconds=60.0),
 }
 
@@ -154,6 +155,8 @@ _ORIGIN_MAP: Dict[str, str] = {
     "HALLUCINATION": "coder",
     "COUNCIL": "council",
     "MEMORY": "memory",
+    "CHAT": "chat",
+    "USER_CHAT": "chat",
 }
 
 
