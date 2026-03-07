@@ -274,6 +274,11 @@ async def lifespan(app: FastAPI):
     desires.init()
     print("   💓 DESIRS: Moteur de pulsions primordiales actif.")
 
+    # --- SIGNAL BUS (Bus de Signaux Neuraux) ---
+    from core.signal_bus import signal_bus
+    signal_bus.init()
+    print(f"   📡 SIGNAL BUS: Bus neural actif ({len(signal_bus._throttle_rules)} throttles).")
+
     # --- CORTEX ASSOCIATIF ---
     from core.synaptic_network import cortex
     cortex.init()
@@ -415,6 +420,7 @@ async def lifespan(app: FastAPI):
     talk_logger.stop()
     interface_logger.stop()
     # Persistance de TOUS les organes au shutdown
+    signal_bus.shutdown()
     thalamus._save()
     amygdala.save()
     hypothalamus._save()
@@ -785,6 +791,12 @@ async def soliloque_history():
     """Retourne les 10 dernières sessions de soliloque."""
     from core.soliloque import soliloque
     return soliloque.get_history(n=10)
+
+@app.get("/api/signal-bus/status")
+async def signal_bus_status():
+    """Retourne les metriques du bus de signaux neuraux."""
+    from core.signal_bus import signal_bus
+    return signal_bus.get_metrics()
 
 @app.get("/api/objectives")
 async def api_objectives():
