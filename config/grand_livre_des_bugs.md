@@ -31,23 +31,15 @@
 - **Impact** : 40+ points de budget gaspillés par run (10 refactors × 4pt). Observé dans les logs du 02/03.
 - **Fix proposé** : Compteur de forçage par drive. Si >2 forçages en 5 cycles → cooldown 10 cycles pour ce drive.
 
-### M02 — Payload dispatch sans clé `intent`
-- **Fichier** : `core/autonomy_engine.py:1060-1064`
-- **Description** : Le dispatch standard envoie `{"mission": ..., "context": ...}` SANS la clé `intent`. Le vision_agent vérifie `payload.get("intent")` pour router ROADMAP_RESEARCH/SPEC — ne le trouvera jamais dans le payload.
-- **Impact** : Les routines ROADMAP_RESEARCH et ROADMAP_SPEC tombent dans `_handle_general()` au lieu du handler approprié.
-- **Fix proposé** : Ajouter `"intent": intent` au payload dispatch (one-liner).
+### M02 — ~~Payload dispatch sans clé `intent`~~ **FIXED** (pré-2026-03-07)
+- **Fichier** : `core/autonomy_engine.py`
+- **Fix** : `"intent": intent` est déjà présent dans tous les payloads dispatch.
 
-### M03 — Formatter : troncation [:2000] perd le code
-- **Fichier** : `Agents/formatter_agent.py:156`
-- **Description** : Le path standard tronque le code à 2000 chars. Le LLM produit un fichier incomplet envoyé à la Factory. Le bypass Evolution contourne ce problème, mais le path standard (missions utilisateur) souffre.
-- **Impact** : Code incomplet écrit par la Factory pour les missions non-Evolution.
-- **Fix proposé** : Augmenter la limite ou utiliser le bypass systématiquement.
+### M03 — ~~Formatter : troncation perd le code~~ **FIXED** (2026-03-07, via C01)
+- **Fix** : Résolu par `Config.get_max_content_chars("formatter")` — troncation dynamique (14384 chars au lieu de 6000).
 
-### M04 — Coder : prompt sans limite de taille → guardrail perdu
-- **Fichier** : `Agents/coder_agent.py:82-92`
-- **Description** : Le `context` est injecté tel quel dans le prompt sans limite. Si le context dépasse la fenêtre du LLM (8192 tokens), la fin du prompt est tronquée — y compris le `CODE_GENERATION_GUARDRAIL` placé en fin (biais de récence).
-- **Impact** : Anti-hallucination inefficace quand le contexte est long.
-- **Fix proposé** : Tronquer le contexte AVANT le guardrail suffix, pas après.
+### M04 — ~~Coder : prompt sans limite de taille → guardrail perdu~~ **FIXED** (2026-03-07, via C01)
+- **Fix** : `Config.get_max_content_chars("coder", prompt_overhead=3000)` tronque AVANT le guardrail (29768 chars).
 
 ### M05 — `_contains_python_code()` dupliqué sans sync
 - **Fichier** : `Agents/architect_agent.py:60-64` + `core/orchestrator.py:31-34`
@@ -69,10 +61,8 @@
 - **Description** : `os.path.abspath(target_path)` résout le chemin par rapport au cwd, pas au `project_root`. Si le cwd est un sous-répertoire, le check `startswith(project_root)` pourrait laisser passer un chemin hors du projet.
 - **Fix proposé** : Résoudre avec `os.path.join(self.project_root, target_path)` puis `os.path.abspath()`.
 
-### M09 — `OLLAMA_DOWN` vs `OLLAMA_UNRESPONSIVE` : deux events, un seul écouté
-- **Fichier** : `core/code_smith.py:665` + `core/evolution_catalog.py:408` vs `core/base_agent.py:655`
-- **Description** : `OLLAMA_DOWN` (code_smith, evolution_catalog) et `OLLAMA_UNRESPONSIVE` (base_agent) décrivent le même concept. Seul `OLLAMA_UNRESPONSIVE` a des souscripteurs (reptilian_core). `OLLAMA_DOWN` est orphelin.
-- **Fix proposé** : Renommer `OLLAMA_DOWN` → `OLLAMA_UNRESPONSIVE` dans code_smith et evolution_catalog.
+### M09 — ~~`OLLAMA_DOWN` vs `OLLAMA_UNRESPONSIVE`~~ **FIXED** (pré-2026-03-07)
+- **Fix** : `OLLAMA_UNRESPONSIVE` est déjà utilisé partout (code_smith, evolution_catalog, base_agent).
 
 ### M10 — InfraAgent : import `Config` sans fallback (crash si absent)
 - **Fichier** : `Agents/infra_agent.py:6`
@@ -98,10 +88,8 @@
 - **Description** : Le streak décrémente seulement si ≥5 (par cycle) OU par succès. Un streak de 4 est permanent jusqu'au prochain succès, causant des sleeps prolongés sans fin.
 - **Fix proposé** : Décrémenter aussi à partir de 3 ou ajouter un timer de decay.
 
-### Mo02 — Soliloque : `_get_strategic_mode()` référence un attribut inexistant
-- **Fichier** : `core/soliloque.py:505-511`
-- **Description** : `getattr(autonomy, "strategic_mode", "standard")` — l'attribut `strategic_mode` n'existe PAS dans AutonomyEngine. Retourne toujours "standard". Le thème "aspirations" du soliloque ne sera JAMAIS sélectionné.
-- **Fix proposé** : Utiliser `self_awareness.compute_strategic_mode()`.
+### Mo02 — ~~Soliloque : `_get_strategic_mode()` référence un attribut inexistant~~ **FIXED** (pré-2026-03-07)
+- **Fix** : Utilise déjà `awareness.compute_strategic_mode()` (soliloque.py:523).
 
 ### Mo03 — Soliloque : coût sous-évalué (2pt pour 7 appels LLM)
 - **Fichier** : `config/resource_costs.json:46-49`
@@ -123,10 +111,8 @@
 - **Description** : Même problème que M04 (coder) — le context est injecté sans limite, risquant de pousser les instructions importantes hors de la fenêtre du LLM.
 - **Fix proposé** : Tronquer le contexte avec une limite raisonnable (3000 chars).
 
-### Mo07 — Default cost inconsistant dans `_should_veto` SHED
-- **Fichier** : `core/autonomy_engine.py:1367`
-- **Description** : `RESOURCE_COSTS.get(intent, 3)` utilise un default de 3 alors que partout ailleurs c'est 2. Un intent inconnu est plus facilement bloqué par SHED.
-- **Fix proposé** : Harmoniser à 2.
+### Mo07 — ~~Default cost inconsistant dans `_should_veto` SHED~~ **FIXED** (pré-2026-03-07)
+- **Fix** : Tous les `RESOURCE_COSTS.get(intent, 2)` utilisent déjà le default 2.
 
 ### Mo08 — `_execute_forced_routine()` ne gère pas le fallback DROPZONE_SCAN vide
 - **Fichier** : `core/autonomy_engine.py:1293-1315`
@@ -179,9 +165,8 @@
 - **Fichier** : `Agents/vision_agent.py:93`
 - **Fix** : Documenter pourquoi ou retirer si non nécessaire.
 
-### m09 — Formatter : troncation [:2000] dans le path standard mais pas le bypass
-- **Fichier** : `Agents/formatter_agent.py:119-143 vs 154-167`
-- **Fix** : Harmoniser les deux chemins.
+### m09 — ~~Formatter : troncation dans le path standard~~ **FIXED** (2026-03-07, via C01)
+- **Fix** : Résolu par `Config.get_max_content_chars("formatter")` — troncation dynamique harmonisée.
 
 ### m10 — `SOLILOQUE_COMPLETE` publié via bus mais aucun souscripteur
 - **Fichier** : `core/soliloque.py:179`
@@ -249,14 +234,17 @@
 
 ## PRIORITÉS POUR LE GRAND MÉNAGE
 
-### Sprint 1 — Critiques + Quick wins (estimé : 1 session)
-- [ ] C01 : Augmenter la limite troncation Architecte
-- [ ] C02 : Propager un flag `is_pipeline` explicite
-- [ ] C03 : Await le dispatch Architecte→Formatter
-- [ ] M02 : Ajouter `intent` au payload dispatch (one-liner)
-- [ ] M09 : Unifier `OLLAMA_DOWN` → `OLLAMA_UNRESPONSIVE`
-- [ ] Mo02 : Fix `_get_strategic_mode()` dans soliloque
-- [ ] Mo07 : Harmoniser default cost à 2
+### Sprint 1 — Critiques + Quick wins ✅ TERMINÉ (2026-03-07)
+- [x] C01 : Troncation dynamique `get_max_content_chars()` (architect/formatter/coder)
+- [x] C02 : Guard `in` au lieu de `startswith()`
+- [x] C03 : Await dispatch Formatter→Factory
+- [x] M02 : `intent` déjà dans payload (pré-corrigé)
+- [x] M03 : Résolu par C01
+- [x] M04 : Résolu par C01
+- [x] M09 : `OLLAMA_UNRESPONSIVE` déjà unifié (pré-corrigé)
+- [x] Mo02 : `compute_strategic_mode()` déjà utilisé (pré-corrigé)
+- [x] Mo07 : Default cost déjà à 2 (pré-corrigé)
+- [x] m09 : Résolu par C01
 
 ### Sprint 2 — Boucles et scoring (estimé : 1 session)
 - [ ] M01 : Anti-boucle MAITRISE (compteur forçage + cooldown)
@@ -266,8 +254,8 @@
 - [ ] m16 : Cap cumul repetition+cooldown
 
 ### Sprint 3 — Troncations et guardrails (estimé : 1 session)
-- [ ] M03 : Augmenter/supprimer troncation Formatter
-- [ ] M04 : Tronquer le context AVANT le guardrail dans Coder
+- [x] M03 : Résolu par C01 (Sprint 1)
+- [x] M04 : Résolu par C01 (Sprint 1)
 - [ ] Mo06 : Limite taille context Strategist
 - [ ] M05 : Extraire `_contains_python_code()` en utilitaire
 - [ ] m02 : Ajouter guardrails pour researcher/writer
