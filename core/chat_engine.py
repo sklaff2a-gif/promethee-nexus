@@ -165,7 +165,7 @@ class ChatEngine:
                     "model": CHAT_MODEL,
                     "messages": ollama_messages,
                     "stream": True,
-                    "options": {"temperature": 0.7, "num_ctx": 8192},
+                    "options": {"temperature": 0.7, "num_ctx": 8192, "num_predict": 2048},
                 }
 
                 async with httpx.AsyncClient() as client:
