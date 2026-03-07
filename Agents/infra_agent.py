@@ -46,7 +46,12 @@ RÈGLES : Réponds en français. Base tes analyses sur les métriques réelles. 
 
         # --- MODE EXPERT (Génératif) ---
         current_state = self._get_simple_metrics()
-        task_payload["context"] = f"ÉTAT ACTUEL DU SERVEUR:\n{current_state}\n\n" + task_payload.get("context", "")
+        context = task_payload.get("context", "")
+        try:
+            from core.prompt_templates import AUTONOMY_GUARDRAIL
+        except Exception:
+            AUTONOMY_GUARDRAIL = ""
+        task_payload["context"] = f"ÉTAT ACTUEL DU SERVEUR:\n{current_state}\n\n{context}\n{AUTONOMY_GUARDRAIL}"
         return await super().process_task(task_payload)
 
     async def _perform_health_check(self) -> Dict[str, Any]:

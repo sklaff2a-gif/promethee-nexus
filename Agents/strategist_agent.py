@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, Any
 from core.base_agent import BaseAgent
+from config import Config
 from core.prompt_templates import AUTONOMY_GUARDRAIL
 
 logger = logging.getLogger("strategist")
@@ -57,7 +58,7 @@ Ne sois pas passif. Tes réponses doivent commencer par "ANALYSE :" suivi de "RE
         MISSION : {mission}
 
         CONTEXTE TECHNIQUE / RÉSULTATS PRÉCÉDENTS :
-        {context[:4000]}
+        {context[:Config.get_max_content_chars("strategist")]}
         --------------------------
 
         IMPORTANT : Ne cite QUE des fichiers listés ci-dessus. N'invente PAS de chemins.

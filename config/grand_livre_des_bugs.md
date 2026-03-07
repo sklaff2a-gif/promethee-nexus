@@ -38,10 +38,8 @@
 ### M04 — ~~Coder : prompt sans limite de taille → guardrail perdu~~ **FIXED** (2026-03-07, via C01)
 - **Fix** : `Config.get_max_content_chars("coder", prompt_overhead=3000)` tronque AVANT le guardrail (29768 chars).
 
-### M05 — `_contains_python_code()` dupliqué sans sync
-- **Fichier** : `Agents/architect_agent.py:60-64` + `core/orchestrator.py:31-34`
-- **Description** : La même logique est dupliquée. Le commentaire dit "synchroniser si modifié" — aucune garantie. De plus, `evolution_agent.py:1028` appelle `orchestrator._contains_python_code()` directement (couplage fort).
-- **Fix proposé** : Extraire dans un module utilitaire partagé.
+### M05 — ~~`_contains_python_code()` dupliqué sans sync~~ **FIXED** (pré-2026-03-07)
+- **Fix** : Extrait dans `core/code_utils.contains_python_code()`. Architect et Orchestrator délèguent.
 
 ### M06 — Double chemin dispatch Architect (interne + Bridge orchestrateur)
 - **Fichier** : `Agents/architect_agent.py` + `core/orchestrator.py:142-158`
@@ -97,10 +95,8 @@
 - **Description** : La méthode détecte des patterns d'échec récurrents mais n'est appelée nulle part en production. Seul `get_failure_summary()` est utilisé.
 - **Fix proposé** : Injecter les insights dans le prompt Evolution Phase 3.
 
-### Mo06 — Strategist : prompt sans limite de taille
-- **Fichier** : `Agents/strategist_agent.py:48-63`
-- **Description** : Même problème que M04 (coder) — le context est injecté sans limite, risquant de pousser les instructions importantes hors de la fenêtre du LLM.
-- **Fix proposé** : Tronquer le contexte avec une limite raisonnable (3000 chars).
+### Mo06 — ~~Strategist : prompt sans limite de taille~~ **FIXED** (2026-03-07)
+- **Fix** : `Config.get_max_content_chars("strategist")` — troncation dynamique (22576 chars).
 
 ### Mo07 — ~~Default cost inconsistant dans `_should_veto` SHED~~ **FIXED** (pré-2026-03-07)
 - **Fix** : Tous les `RESOURCE_COSTS.get(intent, 2)` utilisent déjà le default 2.
@@ -124,10 +120,8 @@
 - **Description** : Principalement autour de ExperienceRegistry et bus publish. Le debug est difficile.
 - **Fix** : Remplacer par `except Exception as e: logger.debug(...)` au minimum.
 
-### m02 — Researcher, Writer, Infra : pas de guardrail prompt_templates
-- **Fichiers** : 3 agents
-- **Description** : Ces agents n'utilisent aucun guardrail de `prompt_templates.py`.
-- **Fix** : Injecter au minimum `AUTONOMY_GUARDRAIL` pour le researcher et writer.
+### m02 — ~~Researcher, Writer, Infra : pas de guardrail~~ **FIXED** (2026-03-07)
+- **Fix** : Researcher et Writer avaient déjà `AUTONOMY_GUARDRAIL`. Ajouté pour Infra (injection dans context avant `super().process_task()`).
 
 ### m03 — InfraAgent : `system_instructions` jamais utilisé en mode expert
 - **Fichier** : `Agents/infra_agent.py:44-46`
@@ -243,12 +237,12 @@
 - [x] Mo03 : Coût soliloque 2pt → 5pt
 - [x] m16 : Cap cumul repetition+cooldown à -6.0
 
-### Sprint 3 — Troncations et guardrails (estimé : 1 session)
+### Sprint 3 — Troncations et guardrails ✅ TERMINÉ (2026-03-07)
 - [x] M03 : Résolu par C01 (Sprint 1)
 - [x] M04 : Résolu par C01 (Sprint 1)
-- [ ] Mo06 : Limite taille context Strategist
-- [ ] M05 : Extraire `_contains_python_code()` en utilitaire
-- [ ] m02 : Ajouter guardrails pour researcher/writer
+- [x] Mo06 : `Config.get_max_content_chars("strategist")` — troncation dynamique
+- [x] M05 : Déjà extrait dans `core/code_utils.py` (pré-corrigé)
+- [x] m02 : Guardrails OK (researcher/writer pré-corrigés, infra ajouté)
 
 ### Sprint 4 — Factory et sécurité (estimé : 1 session)
 - [ ] M07 : Fix `_resolve_smart_path` (chemins absolus)
