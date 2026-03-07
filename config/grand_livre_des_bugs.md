@@ -56,10 +56,8 @@
 ### M10 — ~~InfraAgent : import Config sans fallback~~ **FIXED** (pré-2026-03-07)
 - **Fix** : `try/except` avec `Config = None` fallback déjà en place.
 
-### M11 — Specs `failed` verrouillées sans déverrouillage automatique
-- **Fichier** : `core/evolution_catalog.py:1738-1750`
-- **Description** : Après 3 échecs, une spec passe en `failed` et ne revient JAMAIS à `available` automatiquement. Le catalogue se vide progressivement.
-- **Fix proposé** : Déverrouillage automatique après 7 jours si le système a progressé.
+### M11 — ~~Specs `failed` verrouillées sans déverrouillage~~ **FIXED** (pré-2026-03-07)
+- **Fix** : Auto-unlock après 7 jours dans `_select_spec()` — reset attempts/failure_reasons, status → available.
 
 ### M12 — ~~FOCUS_BONUS_PRIMARY = 6.0 domine le scoring~~ **FIXED** (pré-2026-03-07)
 - **Fix** : `FOCUS_BONUS_PRIMARY = 4.0` (réduit de 6.0).
@@ -77,15 +75,11 @@
 ### Mo03 — ~~Soliloque : coût sous-évalué~~ **FIXED** (pré-2026-03-07)
 - **Fix** : `SOLILOQUE_INTERNE: cost=5` (augmenté de 2 à 5pt).
 
-### Mo04 — Roadmap : `neural_tissue` et `vision_agent` mal catégorisés
-- **Fichier** : `config/roadmap.json`
-- **Description** : `neural_tissue` et `vision_agent` sont marqués `in_progress` alors que les fichiers existent et fonctionnent. Doublon conceptuel `workspace` vs `global_workspace`.
-- **Fix proposé** : Mettre à jour les statuts. Fusionner ou clarifier workspace/global_workspace.
+### Mo04 — ~~Roadmap : `neural_tissue` et `vision_agent` mal catégorisés~~ **FIXED** (pré-2026-03-07)
+- **Fix** : Les deux sont maintenant `"status": "implemented"`. `workspace`/`global_workspace` = dépendance incrémentale intentionnelle (Phase 4 → Phase 7).
 
-### Mo05 — `get_learning_insights()` jamais appelé (dead code)
-- **Fichier** : `core/experience_registry.py:134-168`
-- **Description** : La méthode détecte des patterns d'échec récurrents mais n'est appelée nulle part en production. Seul `get_failure_summary()` est utilisé.
-- **Fix proposé** : Injecter les insights dans le prompt Evolution Phase 3.
+### Mo05 — ~~`get_learning_insights()` jamais appelé~~ **FIXED** (pré-2026-03-07)
+- **Fix** : Appelé dans evolution_agent Phase 1 (stuck_specs) et Phase 3 (recurring_alien → alien_warning dans le prompt).
 
 ### Mo06 — ~~Strategist : prompt sans limite de taille~~ **FIXED** (2026-03-07)
 - **Fix** : `Config.get_max_content_chars("strategist")` — troncation dynamique (22576 chars).
@@ -98,10 +92,8 @@
 - **Description** : Quand le loop_breaker force DROPZONE_SCAN et la dropzone est vide, la routine forced ne fait pas le fallback YouTube/veille — résultat inutile.
 - **Fix proposé** : Extraire la logique veille YouTube en méthode partagée.
 
-### Mo09 — Doublon conceptuel workspace/global_workspace dans la roadmap
-- **Fichier** : `config/roadmap.json:262-371`
-- **Description** : `planned.workspace` (Phase 4) et `planned.global_workspace` (Phase 7) couvrent le même concept (broadcasting, blackboard partagé).
-- **Fix proposé** : Fusionner en un seul module avec des phases incrémentales.
+### Mo09 — ~~Doublon workspace/global_workspace~~ **FIXED** (pré-2026-03-07)
+- **Fix** : Pas un doublon — `workspace` (Phase 4) est l'infra technique, `global_workspace` (Phase 7) est la couche conscience. Dépendance incrémentale correcte.
 
 ---
 
@@ -242,10 +234,11 @@
 - [x] M10 : Déjà résolu (try/except fallback, pré-corrigé)
 - [x] M06 : Flag `routed_internally` + vérification dans le Bridge
 
-### Sprint 5 — Catalogue et apprentissage (estimé : 1 session)
-- [ ] M11 : Déverrouillage automatique specs failed (7 jours)
-- [ ] Mo05 : Brancher `get_learning_insights()` dans le pipeline
-- [ ] Mo04 : Mettre à jour roadmap.json
+### Sprint 5 — Catalogue et apprentissage ✅ TERMINÉ (2026-03-07, tous pré-corrigés)
+- [x] M11 : Auto-unlock 7 jours déjà en place
+- [x] Mo05 : `get_learning_insights()` déjà branché (stuck_specs + recurring_alien)
+- [x] Mo04 : Statuts roadmap déjà à jour (implemented)
+- [x] Mo09 : workspace/global_workspace = dépendance incrémentale correcte
 
 ### Sprint 6 — Événements et connexions (estimé : 1 session)
 - [ ] m10-m14 : Connecter les événements orphelins utiles
