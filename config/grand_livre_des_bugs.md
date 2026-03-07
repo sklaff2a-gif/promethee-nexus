@@ -25,11 +25,8 @@
 
 ## MAJEURS (12) — Bugs fonctionnels significatifs
 
-### M01 — Boucle MAITRISE-REFACTOR obsessionnelle
-- **Fichier** : `core/autonomy_engine.py:1152-1172`
-- **Description** : Quand la pulsion MAITRISE a deprivation ≥90, le système force REFACTOR_RANDOM ou EXPANSION_CODE. Si la routine échoue (low_quality), la deprivation ne baisse PAS et le frustration_streak augmente, renforçant le forçage. L'anti-boucle vérifie seulement `best_intent != last_intent`, donc le système ALTERNE entre deux intents forcés sans jamais sortir.
-- **Impact** : 40+ points de budget gaspillés par run (10 refactors × 4pt). Observé dans les logs du 02/03.
-- **Fix proposé** : Compteur de forçage par drive. Si >2 forçages en 5 cycles → cooldown 10 cycles pour ce drive.
+### M01 — ~~Boucle MAITRISE-REFACTOR obsessionnelle~~ **FIXED** (pré-2026-03-07)
+- **Fix** : Compteurs `_drive_force_counts` (fenêtre 5 cycles, max 3 forçages) + `_drive_force_total` (plafond 10/session).
 
 ### M02 — ~~Payload dispatch sans clé `intent`~~ **FIXED** (pré-2026-03-07)
 - **Fichier** : `core/autonomy_engine.py`
@@ -74,27 +71,21 @@
 - **Description** : Après 3 échecs, une spec passe en `failed` et ne revient JAMAIS à `available` automatiquement. Le catalogue se vide progressivement.
 - **Fix proposé** : Déverrouillage automatique après 7 jours si le système a progressé.
 
-### M12 — FOCUS_BONUS_PRIMARY = 6.0 domine le scoring
-- **Fichier** : `core/prefrontal.py:58`
-- **Description** : +6.0 pour le goal #1 est plus grand que desire (max 3.0) + voix (max 2.0) combinés. Quand un goal préfrontal est actif, il écrase toutes les autres couches → tunnel vision.
-- **Fix proposé** : Réduire à 4.0 ou amortir quand le goal stagne.
+### M12 — ~~FOCUS_BONUS_PRIMARY = 6.0 domine le scoring~~ **FIXED** (pré-2026-03-07)
+- **Fix** : `FOCUS_BONUS_PRIMARY = 4.0` (réduit de 6.0).
 
 ---
 
 ## MOYENS (9) — Fonctionnels mais dégradés
 
-### Mo01 — error_streak de 4 ne décrémente jamais spontanément
-- **Fichier** : `core/autonomy_engine.py:2218-2219`
-- **Description** : Le streak décrémente seulement si ≥5 (par cycle) OU par succès. Un streak de 4 est permanent jusqu'au prochain succès, causant des sleeps prolongés sans fin.
-- **Fix proposé** : Décrémenter aussi à partir de 3 ou ajouter un timer de decay.
+### Mo01 — ~~error_streak de 4 ne décrémente jamais~~ **FIXED** (pré-2026-03-07)
+- **Fix** : Decay `-1` par cycle si `error_streak >= 3` (seuil abaissé de 5 à 3).
 
 ### Mo02 — ~~Soliloque : `_get_strategic_mode()` référence un attribut inexistant~~ **FIXED** (pré-2026-03-07)
 - **Fix** : Utilise déjà `awareness.compute_strategic_mode()` (soliloque.py:523).
 
-### Mo03 — Soliloque : coût sous-évalué (2pt pour 7 appels LLM)
-- **Fichier** : `config/resource_costs.json:46-49`
-- **Description** : `SOLILOQUE_INTERNE` coûte 2pt mais génère 4 échanges × 2 appels = ~7 appels LLM. Devrait être 4-6pt.
-- **Fix proposé** : Augmenter à 5pt dans resource_costs.json.
+### Mo03 — ~~Soliloque : coût sous-évalué~~ **FIXED** (pré-2026-03-07)
+- **Fix** : `SOLILOQUE_INTERNE: cost=5` (augmenté de 2 à 5pt).
 
 ### Mo04 — Roadmap : `neural_tissue` et `vision_agent` mal catégorisés
 - **Fichier** : `config/roadmap.json`
@@ -192,9 +183,8 @@
 - **Fichier** : `main.py:356`
 - **Fix** : Déplacer `heart.init()` plus tôt dans la séquence (après psyche et awareness).
 
-### m16 — Repetition penalty + cooldown temporel se cumulent (-8.0)
-- **Fichier** : `core/autonomy_engine.py:243-268`
-- **Fix** : Réduire le cumul max ou ajouter un cap combiné.
+### m16 — ~~Repetition penalty + cooldown se cumulent (-8.0)~~ **FIXED** (pré-2026-03-07)
+- **Fix** : Cap combiné `min(recency_penalty, 6.0)` — pénalité max plafonnée à -6.0.
 
 ### m17 — Soliloque : persistance non atomique
 - **Fichier** : `core/soliloque.py:531-545`
@@ -246,12 +236,12 @@
 - [x] Mo07 : Default cost déjà à 2 (pré-corrigé)
 - [x] m09 : Résolu par C01
 
-### Sprint 2 — Boucles et scoring (estimé : 1 session)
-- [ ] M01 : Anti-boucle MAITRISE (compteur forçage + cooldown)
-- [ ] M12 : Réduire FOCUS_BONUS_PRIMARY (6.0 → 4.0)
-- [ ] Mo01 : Decay error_streak ≥3
-- [ ] Mo03 : Coût soliloque 2pt → 5pt
-- [ ] m16 : Cap cumul repetition+cooldown
+### Sprint 2 — Boucles et scoring ✅ TERMINÉ (2026-03-07, tous pré-corrigés)
+- [x] M01 : Anti-boucle MAITRISE (compteurs forçage + cooldown + plafond session)
+- [x] M12 : `FOCUS_BONUS_PRIMARY = 4.0` (réduit de 6.0)
+- [x] Mo01 : Decay error_streak ≥3 (seuil abaissé de 5 à 3)
+- [x] Mo03 : Coût soliloque 2pt → 5pt
+- [x] m16 : Cap cumul repetition+cooldown à -6.0
 
 ### Sprint 3 — Troncations et guardrails (estimé : 1 session)
 - [x] M03 : Résolu par C01 (Sprint 1)
