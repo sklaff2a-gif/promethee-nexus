@@ -88,6 +88,16 @@ EVENT_IMPACT: Dict[str, Any] = {
     "KNOWLEDGE_GAP_DETECTED":  {"CURIOSITE": +5, "COMPREHENSION": +8},
     "EUREKA_BRIDGE":          {"CURIOSITE": -10, "CREATION": -5, "COMPREHENSION": -10},
     "SOLILOQUE_COMPLETE":     {"CONNEXION": -18, "COMPREHENSION": -5, "STABILITE": -3},
+    "CHAT_RESPONSE":          {"CONNEXION": -12, "COMPREHENSION": -3, "STABILITE": -2},
+}
+
+# --- Seuil de qualité par intent pour considérer un succès ---
+ROUTINE_SUCCESS_THRESHOLD: Dict[str, float] = {
+    "_default": 0.6,
+    "REFACTOR_RANDOM": 0.3,
+    "AUDIT_STRUCTURE": 0.3,
+    "MEMORY_CLEANUP": 0.3,
+    "DROPZONE_SCAN": 0.3,
 }
 
 # --- Affinite pulsion -> routine (pour le scoring) ---
@@ -209,7 +219,10 @@ class DesireEngine:
         intent = event.get("intent", "")
         status = event.get("status", "")
         quality = event.get("quality_score", 0.5)
-        if status == "success" and quality >= 0.6:
+        threshold = ROUTINE_SUCCESS_THRESHOLD.get(
+            intent, ROUTINE_SUCCESS_THRESHOLD["_default"]
+        )
+        if status == "success" and quality >= threshold:
             self.on_event("ROUTINE_SUCCESS", {"intent": intent, "quality": quality})
         else:
             self.on_event("ROUTINE_FAILURE", {"intent": intent, "quality": quality})

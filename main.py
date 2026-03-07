@@ -363,6 +363,10 @@ async def lifespan(app: FastAPI):
     soliloque.init()
     print(f"   🪞 SOLILOQUE: Compagnon intérieur actif ({soliloque.session_count} sessions).")
 
+    # --- CHAT DIRECT (Conversation Humain <-> Promethee) ---
+    from core.chat_engine import chat_engine
+    print(f"   💬 CHAT: Canal direct actif ({len(chat_engine.messages)} messages en memoire).")
+
     # --- CYCLE CIRCADIEN ---
     from core.circadian_rhythm import circadian
     circadian.init()
@@ -438,6 +442,7 @@ async def lifespan(app: FastAPI):
     circadian.save()
     cortex.save()
     desires.save()
+    chat_engine._save()
     hippocampus._save()
     print("🔌 Arrêt.")
     tracemalloc.stop()
@@ -908,6 +913,39 @@ async def mission(request: Request, background_tasks: BackgroundTasks):
         background_tasks.add_task(strategic_feedback_loop, target, msn, result_text)
 
     return {"status": "dispatched", "target": target}
+
+# --- CHAT DIRECT (Conversation Humain <-> Promethee) ---
+
+@app.post("/api/chat", dependencies=[Depends(check_rate_limit), Depends(verify_token)])
+async def chat_message(request: Request, background_tasks: BackgroundTasks):
+    """Message chat direct — reponse streamee via WebSocket (CHAT_STREAM)."""
+    from core.chat_engine import chat_engine
+    data = await request.json()
+    message = data.get("message", "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message vide")
+
+    async def _do_chat():
+        try:
+            await chat_engine.chat(message)
+        except Exception as e:
+            logger.error(f"CHAT: Erreur — {e}")
+
+    background_tasks.add_task(_do_chat)
+    return {"status": "ok", "message": "Chat en cours..."}
+
+@app.get("/api/chat/history", dependencies=[Depends(verify_token)])
+async def chat_history(n: int = Query(default=50, ge=1, le=200)):
+    """Retourne les N derniers messages du chat."""
+    from core.chat_engine import chat_engine
+    return {"messages": chat_engine.get_history(n)}
+
+@app.delete("/api/chat/clear", dependencies=[Depends(verify_token)])
+async def chat_clear():
+    """Efface l'historique de chat."""
+    from core.chat_engine import chat_engine
+    chat_engine.clear_history()
+    return {"status": "ok", "message": "Historique efface"}
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket, token: str = Query(default="")):

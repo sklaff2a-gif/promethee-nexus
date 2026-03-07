@@ -63,6 +63,11 @@
         .dot-active { color: #22c55e !important; text-shadow: 0 0 8px #22c55e; }
         .dot-inactive { color: #374151; }
 
+        /* CHAT DIRECT */
+        .msg-chat-user { color: #00ffff; text-align: right; margin-bottom: 10px; border-right: 2px solid #00ffff; padding-right: 8px; }
+        .msg-chat-bot { color: #ffa500; margin-bottom: 10px; border-left: 2px solid #ffa500; padding-left: 8px; background: #110800; padding-top: 4px; padding-bottom: 4px; }
+        .chat-cursor { display: inline; animation: blink 0.7s step-end infinite; color: #ffa500; font-weight: bold; }
+
         /* STREAMING CURSOR */
         .cursor {
             display: inline;
@@ -98,6 +103,7 @@
             <div class="text-[9px] text-gray-500" id="version-display">--</div>
         </div>
         <div class="flex gap-2 items-center">
+            <button id="btn-chat-toggle" onclick="toggleChatPanel()" class="border border-orange-700 text-orange-400 px-3 py-0 text-[10px] font-bold hover:bg-orange-800 hover:text-white transition h-6">CHAT</button>
             <button id="nap-button" onclick="toggleNapMode()" class="border border-indigo-700 text-indigo-400 px-3 py-0 text-[10px] font-bold hover:bg-indigo-800 hover:text-white transition h-6">SIESTE</button>
             <button id="reboot-button" onclick="triggerReboot()" class="border border-red-900 text-red-700 px-3 py-0 text-[10px] font-bold hover:bg-red-900 hover:text-white transition h-6">REBOOT</button>
         </div>
@@ -131,8 +137,8 @@
         </div>
 
         <div class="col-span-7 flex flex-col gap-1 h-full min-h-0">
-            
-            <div class="cyber-box flex-[2] min-h-0">
+
+            <div class="cyber-box flex-[2] min-h-0" id="flux-panel">
                 <div class="absolute top-0 left-0 right-0 bg-green-900 text-black text-[10px] px-2 font-bold h-6 flex items-center justify-between">
                     <span>FLUX DE PENSÉE & RÉSULTATS</span> <span class="text-[9px] opacity-50">LIVE FEED</span>
                 </div>
@@ -141,14 +147,31 @@
                 </div>
             </div>
 
+            <!-- PANEL CHAT DIRECT (cache par defaut, remplace le flux) -->
+            <div id="chat-panel" class="cyber-box flex-[2] min-h-0 hidden" style="border-color: #663300;">
+                <div class="absolute top-0 left-0 right-0 text-[10px] px-2 font-bold h-6 flex items-center justify-between" style="background: #663300; color: #000;">
+                    <span>CHAT DIRECT — PROMÉTHÉE</span>
+                    <button onclick="toggleChatPanel()" class="text-[9px] hover:text-white" style="color:#ffa500;">FERMER [X]</button>
+                </div>
+                <div id="chat-messages" class="absolute top-6 left-0 right-0 bottom-0 overflow-y-auto p-2 scroll-smooth bg-black">
+                    <div class="text-center text-[10px] mt-4" style="color:#663300;">-- CANAL DIRECT OUVERT --</div>
+                </div>
+            </div>
+
             <div class="cyber-box flex-1 min-h-0">
                 <div class="absolute top-0 left-0 right-0 bg-gray-800 text-white text-[10px] px-2 font-bold h-5 flex items-center">LOGS SYSTÈME</div>
                 <div id="logs-box" class="absolute top-5 left-0 right-0 bottom-0 overflow-y-auto p-1 font-mono bg-[#050505] text-[10px]"></div>
             </div>
 
-            <div class="flex gap-0 shrink-0 h-8">
+            <!-- Input mission (visible quand flux actif) -->
+            <div id="mission-bar" class="flex gap-0 shrink-0 h-8">
                 <input type="text" id="mission-input" class="flex-1 bg-black border border-green-900 p-2 text-white text-xs placeholder-gray-700 focus:outline-none focus:border-green-500" placeholder="Entrez un ordre (ex: Coder: Crée hello.py)..." onkeydown="if(event.key==='Enter') sendMission()">
                 <button onclick="sendMission()" class="bg-green-900 px-4 text-black text-xs font-bold hover:bg-green-500 transition">GO</button>
+            </div>
+            <!-- Input chat (visible quand chat actif) -->
+            <div id="chat-bar" class="flex gap-0 shrink-0 h-8 hidden">
+                <input type="text" id="chat-input" class="flex-1 bg-black p-2 text-white text-xs placeholder-gray-700 focus:outline-none" style="border:1px solid #663300; focus:border-color:#ffa500;" placeholder="Parle a Promethee..." onkeydown="if(event.key==='Enter') sendChat()">
+                <button onclick="sendChat()" class="px-4 text-black text-xs font-bold hover:opacity-80 transition" style="background:#ffa500;">ENVOYER</button>
             </div>
         </div>
 

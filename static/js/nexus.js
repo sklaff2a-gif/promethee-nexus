@@ -12,8 +12,11 @@ function authHeaders() {
 }
 const dialogueBox = document.getElementById('dialogue-box');
 const logsBox = document.getElementById('logs-box');
+const chatMessages = document.getElementById('chat-messages');
 const activeStreams = {};
+const activeChatStreams = {};
 const recentlyStreamed = new Set();
+let chatPanelOpen = false;
 
 // FONCTION: Formater le code pour l'affichage
 function formatMessage(text) {
@@ -258,7 +261,155 @@ ws.onmessage = (event) => {
     else if (type === "IMPACT_UPDATE") {
         if (typeof ImpactView !== 'undefined') ImpactView.handleUpdate(payload);
     }
+    // 17. CHAT_STREAM : streaming tokens du chat direct
+    else if (type === "CHAT_STREAM") {
+        const sid = payload.stream_id;
+
+        if (payload.status === "start") {
+            // Creer la bulle de streaming chat
+            const div = document.createElement('div');
+            div.className = 'msg-chat-bot';
+            div.id = `chat-stream-${sid}`;
+            div.innerHTML = `<span class="font-bold text-xs mb-1 block opacity-50" style="color:#ffa500;">[PROMETHEE]</span><div class="stream-content"></div><span class="chat-cursor">|</span>`;
+            chatMessages.appendChild(div);
+            activeChatStreams[sid] = div;
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        } else if (payload.done) {
+            // Fin du stream
+            const div = activeChatStreams[sid];
+            if (div) {
+                const cursorEl = div.querySelector('.chat-cursor');
+                if (cursorEl) cursorEl.remove();
+                const contentEl = div.querySelector('.stream-content');
+                if (contentEl) {
+                    const raw = contentEl.textContent;
+                    let html = "";
+                    if (raw.includes('```')) {
+                        const parts = raw.split('```');
+                        parts.forEach((part, index) => {
+                            if (index % 2 === 1) html += `<pre>${part}</pre>`;
+                            else html += part.replace(/\n/g, '<br>');
+                        });
+                    } else {
+                        html = raw.replace(/\n/g, '<br>');
+                    }
+                    contentEl.innerHTML = html;
+                }
+                delete activeChatStreams[sid];
+            }
+        } else if (payload.chunk) {
+            // Chunk intermediaire
+            const div = activeChatStreams[sid];
+            if (div) {
+                const contentEl = div.querySelector('.stream-content');
+                if (contentEl) contentEl.textContent += payload.chunk;
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+        }
+    }
+    // 18. CHAT_RESPONSE : log dans les logs systeme
+    else if (type === "CHAT_RESPONSE") {
+        var connBefore = payload.connexion_before ? Math.round(payload.connexion_before) : '?';
+        var connAfter = payload.connexion_after ? Math.round(payload.connexion_after) : '?';
+        addLog("CHAT", `Reponse envoyee (CONNEXION ${connBefore} -> ${connAfter})`, "success");
+    }
 };
+
+// --- CHAT DIRECT ---
+
+function toggleChatPanel() {
+    chatPanelOpen = !chatPanelOpen;
+    const fluxPanel = document.getElementById('flux-panel');
+    const chatPanel = document.getElementById('chat-panel');
+    const missionBar = document.getElementById('mission-bar');
+    const chatBar = document.getElementById('chat-bar');
+    const btn = document.getElementById('btn-chat-toggle');
+
+    if (chatPanelOpen) {
+        fluxPanel.classList.add('hidden');
+        chatPanel.classList.remove('hidden');
+        missionBar.classList.add('hidden');
+        chatBar.classList.remove('hidden');
+        btn.textContent = 'FLUX';
+        btn.className = 'border px-3 py-0 text-[10px] font-bold hover:opacity-80 transition h-6';
+        btn.style.borderColor = '#ffa500';
+        btn.style.color = '#ffa500';
+        btn.style.background = '#1a0a00';
+        document.getElementById('chat-input').focus();
+        // Charger l'historique au premier ouverture
+        loadChatHistory();
+    } else {
+        fluxPanel.classList.remove('hidden');
+        chatPanel.classList.add('hidden');
+        missionBar.classList.remove('hidden');
+        chatBar.classList.add('hidden');
+        btn.textContent = 'CHAT';
+        btn.className = 'border border-orange-700 text-orange-400 px-3 py-0 text-[10px] font-bold hover:bg-orange-800 hover:text-white transition h-6';
+        btn.style.background = '';
+    }
+}
+
+function addChatMessage(sender, text, type) {
+    const div = document.createElement('div');
+    let htmlContent = "";
+    if (text && text.includes('```')) {
+        const parts = text.split('```');
+        parts.forEach((part, index) => {
+            if (index % 2 === 1) htmlContent += `<pre>${part}</pre>`;
+            else htmlContent += part.replace(/\n/g, '<br>');
+        });
+    } else {
+        htmlContent = text ? text.replace(/\n/g, '<br>') : "";
+    }
+
+    if (type === 'user') {
+        div.className = 'msg-chat-user';
+        div.innerHTML = `<div>${htmlContent}</div>`;
+    } else {
+        div.className = 'msg-chat-bot';
+        div.innerHTML = `<span class="font-bold text-xs mb-1 block opacity-50" style="color:#ffa500;">[PROMETHEE]</span><div>${htmlContent}</div>`;
+    }
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function sendChat() {
+    const input = document.getElementById('chat-input');
+    const msg = input.value.trim();
+    if (!msg) return;
+
+    addChatMessage("VOUS", msg, "user");
+    input.value = "";
+
+    fetch('/api/chat', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ message: msg })
+    }).catch(err => addLog("CHAT", "Erreur: " + err, "err"));
+}
+
+function loadChatHistory() {
+    // Ne charger qu'une fois si des messages existent deja
+    if (chatMessages.children.length > 1) return;
+
+    fetch('/api/chat/history', { headers: authHeaders() })
+        .then(r => r.json())
+        .then(data => {
+            if (!data.messages || data.messages.length === 0) return;
+            // Vider le placeholder
+            chatMessages.innerHTML = '';
+            // Afficher les 30 derniers messages
+            const recent = data.messages.slice(-30);
+            recent.forEach(msg => {
+                addChatMessage(
+                    msg.role === 'user' ? 'VOUS' : 'PROMETHEE',
+                    msg.content,
+                    msg.role === 'user' ? 'user' : 'bot'
+                );
+            });
+        })
+        .catch(() => {});
+}
 
 function sendMission() {
     const input = document.getElementById('mission-input');
