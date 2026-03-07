@@ -147,8 +147,10 @@ class Orchestrator:
             if target_slug == "architect" and response.get("status") == "success" and not is_internal_pipeline:
                 res_text = str(response.get("result", ""))
 
-                # Skip si l'Architecte a déjà géré le routage (FORMATÉ_*, SANS_CODE)
-                if self._is_validated(res_text) and "SANS_CODE" not in res_text and "FORMATÉ" not in res_text:
+                # M06: skip si l'Architecte a déjà géré le routage (flag explicite ou prefixes FORMATÉ/SANS_CODE)
+                if response.get("routed_internally"):
+                    pass  # L'Architecte a déjà routé en interne, pas de Bridge
+                elif self._is_validated(res_text) and "SANS_CODE" not in res_text and "FORMATÉ" not in res_text:
                     logger.info("🚀 [BRIDGE] Architecte a validé (sans routage interne). Transfert vers Factory...")
 
                     code_to_apply = task_payload.get("context", "")

@@ -41,28 +41,20 @@
 ### M05 — ~~`_contains_python_code()` dupliqué sans sync~~ **FIXED** (pré-2026-03-07)
 - **Fix** : Extrait dans `core/code_utils.contains_python_code()`. Architect et Orchestrator délèguent.
 
-### M06 — Double chemin dispatch Architect (interne + Bridge orchestrateur)
-- **Fichier** : `Agents/architect_agent.py` + `core/orchestrator.py:142-158`
-- **Description** : L'Architecte a son propre routage vers le Formatter, ET l'orchestrateur a un Bridge Architect→Factory. Si l'Architecte retourne "VALIDE_SANS_CODE", le Bridge pourrait matcher et dispatcher en doublon.
-- **Fix proposé** : Clarifier les responsabilités — le Bridge OU le routage interne, pas les deux.
+### M06 — ~~Double chemin dispatch Architect~~ **FIXED** (2026-03-07)
+- **Fix** : Flag `routed_internally: True` dans les réponses Architect. Bridge vérifie le flag en priorité (plus de string matching fragile).
 
-### M07 — Factory : `_resolve_smart_path` dépend du cwd
-- **Fichier** : `Agents/factory_agent.py:148-162`
-- **Description** : `os.path.exists(potential_path)` avec chemin relatif dépend du répertoire de travail. Si le processus est lancé depuis un autre répertoire, le Smart Path échoue.
-- **Fix proposé** : Utiliser `os.path.join(self.project_root, ...)` pour les chemins.
+### M07 — ~~Factory : `_resolve_smart_path` dépend du cwd~~ **FIXED** (pré-2026-03-07)
+- **Fix** : Utilise déjà `os.path.join(self.project_root, potential_path)` pour les vérifications.
 
-### M08 — Factory : sandboxing `startswith()` contournable
-- **Fichier** : `Agents/factory_agent.py:247`
-- **Description** : `os.path.abspath(target_path)` résout le chemin par rapport au cwd, pas au `project_root`. Si le cwd est un sous-répertoire, le check `startswith(project_root)` pourrait laisser passer un chemin hors du projet.
-- **Fix proposé** : Résoudre avec `os.path.join(self.project_root, target_path)` puis `os.path.abspath()`.
+### M08 — ~~Factory : sandboxing `startswith()` contournable~~ **FIXED** (2026-03-07)
+- **Fix** : `sandbox_prefix` avec trailing `os.sep` — empêche match sur dossier homonyme (ex: `project_EVIL/`).
 
 ### M09 — ~~`OLLAMA_DOWN` vs `OLLAMA_UNRESPONSIVE`~~ **FIXED** (pré-2026-03-07)
 - **Fix** : `OLLAMA_UNRESPONSIVE` est déjà utilisé partout (code_smith, evolution_catalog, base_agent).
 
-### M10 — InfraAgent : import `Config` sans fallback (crash si absent)
-- **Fichier** : `Agents/infra_agent.py:6`
-- **Description** : `from config import Config` au top level sans try/except. Si config.py a une erreur, l'agent ne se charge pas.
-- **Fix proposé** : Import local dans les méthodes qui en ont besoin.
+### M10 — ~~InfraAgent : import Config sans fallback~~ **FIXED** (pré-2026-03-07)
+- **Fix** : `try/except` avec `Config = None` fallback déjà en place.
 
 ### M11 — Specs `failed` verrouillées sans déverrouillage automatique
 - **Fichier** : `core/evolution_catalog.py:1738-1750`
@@ -244,11 +236,11 @@
 - [x] M05 : Déjà extrait dans `core/code_utils.py` (pré-corrigé)
 - [x] m02 : Guardrails OK (researcher/writer pré-corrigés, infra ajouté)
 
-### Sprint 4 — Factory et sécurité (estimé : 1 session)
-- [ ] M07 : Fix `_resolve_smart_path` (chemins absolus)
-- [ ] M08 : Fix sandboxing startswith (resolve vs project_root)
-- [ ] M10 : Import Config avec fallback dans infra_agent
-- [ ] M06 : Clarifier double dispatch Architect
+### Sprint 4 — Factory et sécurité ✅ TERMINÉ (2026-03-07)
+- [x] M07 : Déjà résolu (project_root dans _resolve_smart_path, pré-corrigé)
+- [x] M08 : sandbox_prefix avec trailing os.sep (path traversal fix)
+- [x] M10 : Déjà résolu (try/except fallback, pré-corrigé)
+- [x] M06 : Flag `routed_internally` + vérification dans le Bridge
 
 ### Sprint 5 — Catalogue et apprentissage (estimé : 1 session)
 - [ ] M11 : Déverrouillage automatique specs failed (7 jours)

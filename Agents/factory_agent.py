@@ -247,7 +247,9 @@ class DivineFactory(BaseAgent):
                 full_path = os.path.normpath(os.path.join(self.project_root, target_path))
 
                 # Sandboxing : écriture dans le périmètre projet uniquement
-                if not full_path.startswith(self.project_root):
+                # M08: ajouter os.sep pour éviter match sur un dossier homonyme (ex: project_EVIL/)
+                sandbox_prefix = self.project_root if self.project_root.endswith(os.sep) else self.project_root + os.sep
+                if not (full_path == self.project_root or full_path.startswith(sandbox_prefix)):
                     return {"status": "error", "result": "Écriture hors-projet interdite."}
 
                 os.makedirs(os.path.dirname(full_path), exist_ok=True)

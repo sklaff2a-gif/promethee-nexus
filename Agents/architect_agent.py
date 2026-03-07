@@ -174,7 +174,7 @@ FORMAT DE RÉPONSE :
             if not self._contains_python_code(full_content):
                 trigger_msg += " (Pas de code Python — skip Formatter)."
                 self.log_thought(trigger_msg, type="success")
-                return {"status": "success", "result": "VALIDÉ_SANS_CODE", "details": trigger_msg}
+                return {"status": "success", "result": "VALIDÉ_SANS_CODE", "details": trigger_msg, "routed_internally": True}
 
             trigger_msg += " (Envoi au Formatter)."
             self.log_thought(trigger_msg, type="success")
@@ -197,10 +197,10 @@ FORMAT DE RÉPONSE :
                 fmt_status = formatter_result.get("status", "error") if isinstance(formatter_result, dict) else "error"
                 fmt_detail = formatter_result.get("result", "INCONNU") if isinstance(formatter_result, dict) else str(formatter_result)
                 if fmt_status == "success":
-                    return {"status": "success", "result": f"FORMATÉ_OK ({fmt_detail})", "details": trigger_msg}
+                    return {"status": "success", "result": f"FORMATÉ_OK ({fmt_detail})", "details": trigger_msg, "routed_internally": True}
                 else:
                     self.log_thought(f"⚠️ Formatter échoué : {fmt_detail}", type="warning")
-                    return {"status": "warning", "result": f"FORMATÉ_ECHEC ({fmt_detail})", "details": trigger_msg}
+                    return {"status": "warning", "result": f"FORMATÉ_ECHEC ({fmt_detail})", "details": trigger_msg, "routed_internally": True}
 
             except Exception as e:
                 self.log_thought(f"⚠️ Erreur Technique Relais : {e}", type="error")
