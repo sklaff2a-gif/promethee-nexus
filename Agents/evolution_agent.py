@@ -287,7 +287,8 @@ class DivineEvolution(BaseAgent):
 
         try:
             from core.synaptic_network import cortex as synapse_net
-        except Exception:
+        except Exception as e:
+            logger.debug(f"synaptic_network indisponible: {e}")
             return result
 
         # Diviser en 2-3 groupes
@@ -352,15 +353,15 @@ class DivineEvolution(BaseAgent):
         try:
             from core.corpus_callosum import callosum
             cognitive_ctx = callosum.get_cognitive_context()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"corpus_callosum indisponible: {e}")
 
         desire_narrative = ""
         try:
             from core.desire_engine import desires
             desire_narrative = desires.get_dominant_narrative(top_n=2)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"desire_engine indisponible: {e}")
 
         bridges_str = ", ".join(f"{c}({e:.2f})" for c, e in cross_result.get("bridges", []))
         anomalies_str = ", ".join(f"{c}({e:.2f})" for c, e in cross_result.get("anomalies", []))
@@ -418,7 +419,7 @@ class DivineEvolution(BaseAgent):
 
         # 3. Publier l'événement
         try:
-            from core.event_bus import bus
+            from core.event_bus.bus import bus
             loop = asyncio.get_event_loop()
             event_data = {
                 "bridges": bridges[:10],
@@ -596,7 +597,8 @@ class DivineEvolution(BaseAgent):
             if len(current_recipes) >= 12:
                 return {"status": "success", "result": "R.A.S — Grimoire déjà complet (>= 12 recettes)."}
             existing_slugs = [r["slug"] for r in current_recipes]
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Lecture recettes grimoire: {e}")
             existing_slugs = []
 
         self.log_thought("📜 Grimoire Creation : génération d'une nouvelle recette...", type="info")

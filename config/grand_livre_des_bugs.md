@@ -99,10 +99,8 @@
 
 ## MINEURS (18) — Fonctionnels mais à nettoyer
 
-### m01 — 17 `except Exception: pass` dans evolution_agent.py
-- **Fichier** : `Agents/evolution_agent.py` (17 occurrences)
-- **Description** : Principalement autour de ExperienceRegistry et bus publish. Le debug est difficile.
-- **Fix** : Remplacer par `except Exception as e: logger.debug(...)` au minimum.
+### m01 — ~~`except Exception: pass` dans evolution_agent.py~~ **FIXED** (2026-03-07)
+- **Fix** : 41 `except Exception` total, quasi tous avec `as e`/`as _e`. Les 4 derniers sans variable corrigés avec `logger.debug()`.
 
 ### m02 — ~~Researcher, Writer, Infra : pas de guardrail~~ **FIXED** (2026-03-07)
 - **Fix** : Researcher et Writer avaient déjà `AUTONOMY_GUARDRAIL`. Ajouté pour Infra (injection dans context avant `super().process_task()`).
@@ -137,66 +135,48 @@
 ### m09 — ~~Formatter : troncation dans le path standard~~ **FIXED** (2026-03-07, via C01)
 - **Fix** : Résolu par `Config.get_max_content_chars("formatter")` — troncation dynamique harmonisée.
 
-### m10 — `SOLILOQUE_COMPLETE` publié via bus mais aucun souscripteur
-- **Fichier** : `core/soliloque.py:179`
-- **Fix** : Connecter hippocampus ou cardiac à cet événement.
+### m10-m14 — ~~Événements orphelins~~ **FIXED** (pré-2026-03-07)
+- **Fix** : Ces événements n'existent plus dans le codebase — code refactorisé, événements supprimés ou renommés.
 
-### m11 — `TISSUE_PATTERN_EMERGED` publié mais jamais souscrit
-- **Fichier** : `core/neural_tissue.py:414`
-- **Fix** : Connecter self_awareness pour exploiter les patterns émergents.
-
-### m12 — `SANDBOX_TEST_PASS/FAIL` publiés mais jamais souscrits
-- **Fichier** : `Agents/evolution_agent.py:1103,1120`
-- **Fix** : Connecter dopamine_system (reward sur test pass, penalty sur fail).
-
-### m13 — `NEURAL_COMPILED` publié mais jamais souscrit
-- **Fichier** : `core/neural_compiler.py:813`
-- **Fix** : Connecter hippocampus ou self_awareness.
-
-### m14 — `ROADMAP_MODULE_COMPLETED/STARTED` publiés mais jamais souscrits
-- **Fichier** : `core/roadmap_engine.py:232,234`
-- **Fix** : Connecter hippocampus et dopamine.
-
-### m15 — Cardiac init en dernier (20e) — organes inertes pendant le startup
-- **Fichier** : `main.py:356`
-- **Fix** : Déplacer `heart.init()` plus tôt dans la séquence (après psyche et awareness).
+### m15 — ~~Cardiac init en dernier (20e)~~ **FIXED** (2026-03-07)
+- **Fix** : `heart.init()` déplacé juste après dopamine (position 11 au lieu de 20).
 
 ### m16 — ~~Repetition penalty + cooldown se cumulent (-8.0)~~ **FIXED** (pré-2026-03-07)
 - **Fix** : Cap combiné `min(recency_penalty, 6.0)` — pénalité max plafonnée à -6.0.
 
-### m17 — Soliloque : persistance non atomique
-- **Fichier** : `core/soliloque.py:531-545`
-- **Fix** : Utiliser le pattern tmp + `os.replace()`.
+### m17 — ~~Soliloque : persistance non atomique~~ **FIXED** (pré-2026-03-07)
+- **Fix** : Utilise déjà `tmp + os.replace()` (pattern atomique).
 
-### m18 — Soliloque : pas un vrai singleton (pas de `__new__`)
-- **Fichier** : `core/soliloque.py:562-570`
-- **Fix** : Aligner sur le pattern `__new__` des autres singletons.
+### m18 — ~~Soliloque : pas un vrai singleton~~ **FIXED** (pré-2026-03-07)
+- **Fix** : Pattern `__new__` déjà en place.
 
 ---
 
 ## COSMÉTIQUES (8) — Hygiène du code
 
-### c01 — `import re` inutilisé dans coder_agent.py:3
-### c02 — Import `bus` au top level dans infra_agent.py:5 (les autres importent localement)
-### c03 — Version log "V25.0" dans factory_agent.py:168 (docstring dit V26.0)
-### c04 — Version log "V26.1" dans architect_agent.py:92 (docstring dit V26.2)
-### c05 — `_PROJECT_MODULES` et `_PROJECT_CONTEXT` statiques vs `get_project_structure()` dynamique
-### c06 — `REFLECT_MODEL` hard-codé dans soliloque.py:24 au lieu de Config
-### c07 — `AGENT_NUM_CTX` incomplet dans config.py:69-73 (seuls 2 agents + default)
-### c08 — Status encodé dans les IDs roadmap.json (fragile si le status change)
+### c01 — ~~`import re` inutilisé dans coder_agent.py~~ **FIXED** (pré-2026-03-07)
+### c02 — ~~Import `bus` au top level dans infra_agent.py~~ **FIXED** (pré-2026-03-07)
+### c03 — ~~Version log incohérente factory_agent.py~~ **FIXED** (pré-2026-03-07) — V26.0 cohérent
+### c04 — ~~Version log incohérente architect_agent.py~~ **FIXED** (pré-2026-03-07) — V26.2 cohérent
+### c05 — ~~`_PROJECT_MODULES` statiques~~ **FIXED** (pré-2026-03-07) — supprimés
+### c06 — ~~`REFLECT_MODEL` hard-codé dans soliloque.py~~ **FIXED** (pré-2026-03-07) — vient de Config
+### c07 — ~~`AGENT_NUM_CTX` incomplet~~ **FIXED** (2026-03-07) — ajouté security, infra, factory
+### c08 — ~~Status encodé dans les IDs roadmap.json~~ **FIXED** (pré-2026-03-07) — IDs neutres
 
 ---
 
 ## STATISTIQUES
 
-| Sévérité | Nombre |
-|----------|--------|
-| CRITIQUE | 3 |
-| MAJEUR | 12 |
-| MOYEN | 9 |
-| MINEUR | 18 |
-| COSMÉTIQUE | 8 |
-| **TOTAL** | **50** |
+| Sévérité | Total | Fixed | Reste |
+|----------|-------|-------|-------|
+| CRITIQUE | 3 | 3 | 0 |
+| MAJEUR | 12 | 12 | 0 |
+| MOYEN | 9 | 9 | 0 |
+| MINEUR | 18 | 18 | 0 |
+| COSMÉTIQUE | 8 | 8 | 0 |
+| **TOTAL** | **50** | **50** | **0** |
+
+> **Grand Ménage terminé le 2026-03-07.** 50/50 bugs résolus en 7 sprints.
 
 ---
 
@@ -240,12 +220,13 @@
 - [x] Mo04 : Statuts roadmap déjà à jour (implemented)
 - [x] Mo09 : workspace/global_workspace = dépendance incrémentale correcte
 
-### Sprint 6 — Événements et connexions (estimé : 1 session)
-- [ ] m10-m14 : Connecter les événements orphelins utiles
-- [ ] m12 : SANDBOX_TEST_PASS/FAIL → dopamine
-- [ ] m15 : Déplacer cardiac init plus tôt
+### Sprint 6 — Événements et connexions ✅ TERMINÉ (2026-03-07)
+- [x] m10-m14 : Événements supprimés du codebase (refactorisés)
+- [x] m15 : cardiac init déplacé après dopamine (position 11)
 
-### Sprint 7 — Nettoyage cosmétique (estimé : 30 min)
-- [ ] c01-c08 : Imports inutiles, versions, constantes
-- [ ] m17-m18 : Soliloque singleton + persistance atomique
-- [ ] m01 : Remplacer `except: pass` par `except: logger.debug()`
+### Sprint 7 — Nettoyage cosmétique ✅ TERMINÉ (2026-03-07)
+- [x] c01-c06 : Tous pré-corrigés
+- [x] c07 : AGENT_NUM_CTX complété (security/infra/factory ajoutés)
+- [x] c08 : Pré-corrigé
+- [x] m17-m18 : Soliloque singleton + persistance atomique pré-corrigés
+- [x] m01 : 4 derniers `except Exception:` corrigés avec `logger.debug()`

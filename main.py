@@ -309,6 +309,12 @@ async def lifespan(app: FastAPI):
     dopamine.init()
     print(f"   🧪 DOPAMINE: Systeme de recompense actif (niveau={dopamine.dopamine_level:.2f}).")
 
+    # --- COEUR (Moteur Cardiaque) — m15: initialisé tôt pour que les organes suivants aient le heartbeat ---
+    from core.cardiac_engine import heart
+    heart.init()
+    heart_task = asyncio.create_task(heart.start_beating())
+    print(f"   💓 COEUR: Moteur cardiaque actif (BPM={heart.bpm:.0f}).")
+
     # --- CORPUS CALLOSUM (Resonance Inter-Organes) ---
     from core.corpus_callosum import callosum
     callosum.init()
@@ -356,12 +362,6 @@ async def lifespan(app: FastAPI):
     from core.circadian_rhythm import circadian
     circadian.init()
     print(f"   🌙 CIRCADIEN: phase={circadian.phase}, cycles={circadian._total_sleep_cycles}.")
-
-    # --- COEUR (Moteur Cardiaque) ---
-    from core.cardiac_engine import heart
-    heart.init()
-    heart_task = asyncio.create_task(heart.start_beating())
-    print(f"   💓 COEUR: Moteur cardiaque actif (BPM={heart.bpm:.0f}).")
 
     # --- THALAMUS (Relais Sensoriel) ---
     from core.thalamus import thalamus

@@ -73,6 +73,9 @@ class Config:
         "strategist": 12288,
         "writer": 12288,
         "researcher": 12288,
+        "security": 8192,
+        "infra": 8192,
+        "factory": 8192,
         "formatter": 8192,
         "default": 8192,
     }
