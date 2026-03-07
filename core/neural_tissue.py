@@ -128,13 +128,19 @@ ZONE_ADJACENCY = {
 
 
 # --- Pandémies / Système Immunitaire ---
-PANDEMIC_MIN_INTERVAL = 2000        # Ticks min entre 2 pandémies (~1h)
-PANDEMIC_MAX_INTERVAL = 5000        # Ticks max entre 2 pandémies (~2h30)
+PANDEMIC_MIN_INTERVAL = 36000       # Ticks min entre 2 pandémies (~20h)
+PANDEMIC_MAX_INTERVAL = 54000       # Ticks max entre 2 pandémies (~30h) → moy ~1/jour
 PANDEMIC_MIN_POPULATION = 100       # Skip si population < seuil
 PANDEMIC_MOTIF_LEN = 2             # Longueur du motif pathogène
-INFECTION_DURATION = 15            # Ticks avant mort forcée
-INFECTION_DRAIN = 8.0              # Énergie drainée/tick en plus du normal
-IMMUNE_MUTATION_CHANCE = 0.10      # Proba/tick de mutation immunitaire
+PANDEMIC_INFECTION_RATE = 0.60     # 60% des porteurs du motif (était 100%)
+
+# Sévérité variable (aléatoire par pandémie)
+INFECTION_DURATION_MIN = 10         # Pandémie douce : 20s
+INFECTION_DURATION_MAX = 25         # Pandémie sévère : 50s
+INFECTION_DRAIN_MIN = 3.0           # Drain doux : 3/tick
+INFECTION_DRAIN_MAX = 8.0           # Drain sévère : 8/tick
+
+IMMUNE_MUTATION_CHANCE = 0.15      # Proba/tick de mutation immunitaire (était 0.10)
 IMMUNITY_DECAY_GENERATIONS = 5     # Perte d'une immunité tous les N générations
 
 # --- Épigénétique ---
@@ -515,6 +521,7 @@ class NeuralTissue:
         self._next_pandemic_tick: int = -1
         self._pandemic_active: bool = False
         self._pandemic_motif: str = ""
+        self._pandemic_drain: float = INFECTION_DRAIN_MAX
 
         # Biologie avancée — Symbiose + Apoptose/Nécrose
         self.waste_grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
@@ -792,7 +799,7 @@ class NeuralTissue:
             self._trigger_pandemic()
 
     def _trigger_pandemic(self):
-        """Déclenche une pandémie ciblant le génome dominant."""
+        """Déclenche une pandémie ciblant le génome dominant avec sévérité variable."""
         if not self.dominant_patterns:
             return
         dominant_genome = self.dominant_patterns[0]["genome"]
@@ -802,23 +809,35 @@ class NeuralTissue:
         start = random.randint(0, len(dominant_genome) - PANDEMIC_MOTIF_LEN)
         motif = dominant_genome[start:start + PANDEMIC_MOTIF_LEN]
 
+        # Sévérité aléatoire [0, 1] → détermine drain et durée
+        severity = random.random()
+        self._pandemic_drain = INFECTION_DRAIN_MIN + severity * (INFECTION_DRAIN_MAX - INFECTION_DRAIN_MIN)
+        duration = round(INFECTION_DURATION_MIN + severity * (INFECTION_DURATION_MAX - INFECTION_DURATION_MIN))
+
         self._pandemic_active = True
         self._pandemic_motif = motif
-        infected_count = 0
-        for cell in self.cells:
-            if not cell.alive:
-                continue
-            if motif in cell.genome and motif not in cell.immune_to:
-                cell.infected_by = motif
-                cell.infection_timer = INFECTION_DURATION
-                infected_count += 1
 
+        # Identifier les porteurs vulnérables (motif présent, pas immuns)
+        vulnerable = [c for c in self.cells if c.alive
+                      and motif in c.genome and motif not in c.immune_to]
+        # N'infecter que PANDEMIC_INFECTION_RATE des porteurs
+        max_infected = max(1, int(len(vulnerable) * PANDEMIC_INFECTION_RATE))
+        to_infect = random.sample(vulnerable, min(max_infected, len(vulnerable)))
+
+        for cell in to_infect:
+            cell.infected_by = motif
+            cell.infection_timer = duration
+
+        infected_count = len(to_infect)
         self.total_pandemics += 1
         self._try_publish("TISSUE_PANDEMIC_START", {
             "motif": motif,
             "infected_count": infected_count,
             "population": sum(1 for c in self.cells if c.alive),
             "tick": self.tick_count,
+            "severity": round(severity, 2),
+            "drain_per_tick": round(self._pandemic_drain, 1),
+            "duration": duration,
         })
         # Planifier la prochaine pandémie
         self._next_pandemic_tick = self.tick_count + random.randint(
@@ -836,8 +855,8 @@ class NeuralTissue:
             if not cell.alive or cell.infected_by is None:
                 continue
             still_infected = True
-            # Drain d'énergie
-            cell.energy -= INFECTION_DRAIN
+            # Drain d'énergie (sévérité variable par pandémie)
+            cell.energy -= self._pandemic_drain
             cell.infection_timer -= 1
             # Chance de mutation immunitaire
             if random.random() < IMMUNE_MUTATION_CHANCE:
