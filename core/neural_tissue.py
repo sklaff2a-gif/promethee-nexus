@@ -155,6 +155,7 @@ DRAINAGE_THRESHOLD = 3.0      # Signal au-dessus duquel l'excès déborde
 DRAINAGE_RATE = 0.25           # 25% de l'excès distribué aux 4 voisins
 CROSSOVER_PROBABILITY = 0.6   # 60% crossover vs clone quand conditions remplies
 CROSSOVER_ENERGY_THRESHOLD = 100.0  # Énergie min pour participer au crossover
+COMPETITION_DIVISOR_CAP = 5          # Max compétiteurs comptés (évite division trop brutale)
 
 # --- Symbiose ---
 WASTE_PER_ACTION = 0.5
@@ -245,12 +246,14 @@ class NeuralCell:
         return ""
 
     def tick(self, grid, neighbors, capture_reward=None, generate_reward=None,
-             mutation_rate=None, waste_grid=None, partner_genome=None):
+             mutation_rate=None, waste_grid=None, partner_genome=None,
+             local_density=None):
         """Exécute un cycle du génome."""
         if self.energy <= 0 or not self.alive:
             self.alive = False
             return None
 
+        self._local_density = local_density if local_density is not None else 1
         self._eff_mutation_rate = mutation_rate
         self._partner_genome = partner_genome
         instruction = self.genome[self.pointer]
@@ -304,6 +307,9 @@ class NeuralCell:
                 reward = eff_capture * min(signal, 2.0)
                 if self._has_marker("pandemic_veteran"):
                     reward *= (1.0 + PANDEMIC_VETERAN_BONUS)
+                # Compétition locale : partage de nourriture
+                competitors = min(getattr(self, '_local_density', 1), COMPETITION_DIVISOR_CAP)
+                reward /= max(competitors, 1)
                 self.energy += reward
                 grid[self.y][self.x] *= 0.5
             else:
@@ -934,6 +940,12 @@ class NeuralTissue:
         # 1c. Taux de mutation modulé par le circadien
         eff_mutation = self._get_effective_mutation_rate()
 
+        # 1d. Densité par case (compétition locale)
+        cell_density = [[0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        for cell in self.cells:
+            if cell.alive:
+                cell_density[cell.y][cell.x] += 1
+
         # 2. Exécuter chaque cellule + check apoptose
         new_cells = []
         for cell in self.cells:
@@ -959,7 +971,8 @@ class NeuralTissue:
 
             child = cell.tick(self.grid, neighbors, eff_capture, eff_generate,
                               eff_mutation, waste_grid=self.waste_grid,
-                              partner_genome=partner_genome)
+                              partner_genome=partner_genome,
+                              local_density=cell_density[cell.y][cell.x])
             # Si la cellule est morte pendant tick → nécrose
             if not cell.alive:
                 self._execute_necrosis(cell, "energy_depleted")

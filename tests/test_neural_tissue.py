@@ -31,6 +31,7 @@ from core.neural_tissue import (
     CARRYING_CAPACITY, LOGISTIC_FLOOR,
     DRAINAGE_THRESHOLD, DRAINAGE_RATE, MAX_GRID_SIGNAL,
     CROSSOVER_PROBABILITY, CROSSOVER_ENERGY_THRESHOLD,
+    COMPETITION_DIVISOR_CAP,
     crossover,
 )
 
@@ -2017,3 +2018,80 @@ class TestCrossover:
         final_diversity = len(set(c.genome for c in tissue.cells if c.alive))
         # La diversité devrait être >= à l'initiale (crossover + mutation)
         assert final_diversity >= initial_diversity or len(tissue.cells) < 10
+
+
+class TestLocalCompetition:
+    """Compétition locale — le reward Capture est divisé par la densité locale."""
+
+    def test_competition_single_cell(self):
+        """1 cellule seule → reward plein (÷1)."""
+        cell = NeuralCell(genome="C", x=5, y=5, energy=50.0)
+        grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        grid[5][5] = 2.0
+        cell.tick(grid, [], local_density=1)
+        # reward = CAPTURE_REWARD * min(2.0, 2.0) / 1 = 3.0 * 2.0 = 6.0
+        # energy = 50.0 + 6.0 - MAINTENANCE_COST(1.0) = 55.0
+        assert cell.energy == pytest.approx(55.0, abs=0.01)
+
+    def test_competition_multiple_cells(self):
+        """3 cellules même case → reward ÷3."""
+        cell = NeuralCell(genome="C", x=5, y=5, energy=50.0)
+        grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        grid[5][5] = 2.0
+        cell.tick(grid, [], local_density=3)
+        # reward = CAPTURE_REWARD * min(2.0, 2.0) / 3 = 6.0 / 3 = 2.0
+        # energy = 50.0 + 2.0 - 1.0 = 51.0
+        assert cell.energy == pytest.approx(51.0, abs=0.01)
+
+    def test_competition_capped(self):
+        """10 cellules → reward ÷ COMPETITION_DIVISOR_CAP (pas ÷10)."""
+        cell = NeuralCell(genome="C", x=5, y=5, energy=50.0)
+        grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        grid[5][5] = 2.0
+        cell.tick(grid, [], local_density=10)
+        # competitors = min(10, COMPETITION_DIVISOR_CAP=5) = 5
+        # reward = 6.0 / 5 = 1.2
+        # energy = 50.0 + 1.2 - 1.0 = 50.2
+        assert cell.energy == pytest.approx(50.2, abs=0.01)
+
+    def test_competition_zero_density_safe(self):
+        """Densité 0 → pas de division par zéro (max(0, 1) = 1)."""
+        cell = NeuralCell(genome="C", x=5, y=5, energy=50.0)
+        grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        grid[5][5] = 2.0
+        cell.tick(grid, [], local_density=0)
+        # competitors = min(0, 5) = 0, max(0, 1) = 1 → reward plein
+        # energy = 50.0 + 6.0 - 1.0 = 55.0
+        assert cell.energy == pytest.approx(55.0, abs=0.01)
+
+    def test_dense_zone_cells_gain_less_energy(self):
+        """Cellules en zone dense gagnent moins par tick que cellules isolées."""
+        grid_dense = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        grid_dense[5][5] = 2.0
+        grid_sparse = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        grid_sparse[5][5] = 2.0
+
+        cell_dense = NeuralCell(genome="C", x=5, y=5, energy=50.0)
+        cell_sparse = NeuralCell(genome="C", x=5, y=5, energy=50.0)
+
+        cell_dense.tick(grid_dense, [], local_density=4)
+        cell_sparse.tick(grid_sparse, [], local_density=1)
+
+        assert cell_sparse.energy > cell_dense.energy
+
+    def test_sparse_zone_advantage(self):
+        """Cellule seule en zone vide capture plus qu'une en zone surpeuplée."""
+        grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        grid[0][0] = 1.5
+        grid[8][8] = 1.5
+
+        lone_cell = NeuralCell(genome="C", x=0, y=0, energy=50.0)
+        crowded_cell = NeuralCell(genome="C", x=8, y=8, energy=50.0)
+
+        lone_cell.tick(grid, [], local_density=1)
+        crowded_cell.tick(grid, [], local_density=5)
+
+        energy_gain_lone = lone_cell.energy - 50.0 + MAINTENANCE_COST
+        energy_gain_crowded = crowded_cell.energy - 50.0 + MAINTENANCE_COST
+        assert energy_gain_lone > energy_gain_crowded
+        assert energy_gain_lone == pytest.approx(energy_gain_crowded * 5, abs=0.01)
