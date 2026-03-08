@@ -62,18 +62,144 @@ class TestSystemPrompt:
     def test_build_system_prompt_graceful_without_organs(self):
         """Fonctionne meme si les imports d'organes echouent."""
         engine = ChatEngine()
-        # Forcer les imports a echouer
-        def raise_import(*args, **kwargs):
-            raise ImportError("mock")
-
-        with patch("builtins.__import__", side_effect=raise_import):
-            # Ca va echouer sur TOUT import, donc on utilise une approche plus fine
-            pass
-
-        # Approche: patcher les fonctions internes
         prompt = engine._build_system_prompt()
         assert "Promethee" in prompt
         assert len(prompt) > 50
+
+    def test_build_system_prompt_contains_new_sections(self):
+        """Verifie que les nouvelles sections d'introspection sont presentes."""
+        engine = ChatEngine()
+
+        # Mock InnerVoice
+        mock_voice = MagicMock()
+        mock_voice.get_identity.return_value = {
+            "core_identity": "Je suis un systeme en evolution",
+            "aspiration": "Comprendre et m'ameliorer",
+        }
+        mock_voice.get_stream.return_value = []
+        mock_inner_voice_mod = MagicMock()
+        mock_inner_voice_mod.voice = mock_voice
+
+        # Mock CardiacEngine
+        mock_heart = MagicMock()
+        mock_heart.current_emotion = "curiosite"
+        mock_heart.emotional_intensity = 0.7
+        mock_heart.get_stats.return_value = {"bpm": 72, "coherence": 0.85}
+        mock_heart.get_narrative.return_value = "Je me sens vivant"
+        mock_cardiac_mod = MagicMock()
+        mock_cardiac_mod.heart = mock_heart
+
+        # Mock DopamineSystem
+        mock_dopamine = MagicMock()
+        mock_dopamine.dopamine_level = 65.0
+        mock_dopamine.get_narrative.return_value = "Motivation elevee"
+        mock_dopamine_mod = MagicMock()
+        mock_dopamine_mod.dopamine = mock_dopamine
+
+        # Mock CorpusCallosum
+        mock_callosum = MagicMock()
+        mock_callosum.get_cognitive_context.return_value = "Etat cognitif: flow"
+        mock_callosum_mod = MagicMock()
+        mock_callosum_mod.callosum = mock_callosum
+
+        # Mock ReptilianCore
+        mock_reptile = MagicMock()
+        mock_reptile.get_stats.return_value = {"threat_level": 2.5, "adrenaline": 1.0}
+        mock_reptile_mod = MagicMock()
+        mock_reptile_mod.reptile = mock_reptile
+
+        # Mock SynapticNetwork
+        mock_cortex = MagicMock()
+        mock_cortex.get_stats.return_value = {"total_nodes": 42, "total_synapses": 128}
+        mock_cortex_mod = MagicMock()
+        mock_cortex_mod.cortex = mock_cortex
+
+        # Mock Hippocampus
+        mock_hippo = MagicMock()
+        mock_hippo.get_hippocampus_context.return_value = "Dernier arc: exploration reussie"
+        mock_hippo_mod = MagicMock()
+        mock_hippo_mod.hippocampus = mock_hippo
+
+        # Mock AutonomyEngine
+        mock_autonomy = MagicMock()
+        mock_autonomy.get_status.return_value = {
+            "routine_history": [
+                {"intent": "MEMORY_CLEANUP"},
+                {"intent": "AUDIT_STRUCTURE"},
+                {"intent": "COUNCIL_DEBATE"},
+            ]
+        }
+        mock_autonomy_mod = MagicMock()
+        mock_autonomy_mod.autonomy = mock_autonomy
+
+        # Mock Psyche
+        mock_psyche = MagicMock()
+        mock_psyche.get_system_average.return_value = {
+            "curiosite": 1.5, "prudence": -0.3, "creativite": 0.8
+        }
+        mock_psyche_mod = MagicMock()
+        mock_psyche_mod.psyche = mock_psyche
+
+        with patch.dict("sys.modules", {
+            "core.inner_voice": mock_inner_voice_mod,
+            "core.cardiac_engine": mock_cardiac_mod,
+            "core.self_awareness": MagicMock(),
+            "core.desire_engine": MagicMock(),
+            "core.prefrontal": MagicMock(),
+            "core.dopamine_system": mock_dopamine_mod,
+            "core.corpus_callosum": mock_callosum_mod,
+            "core.reptilian_core": mock_reptile_mod,
+            "core.synaptic_network": mock_cortex_mod,
+            "core.hippocampus": mock_hippo_mod,
+            "core.autonomy_engine": mock_autonomy_mod,
+            "core.psyche": mock_psyche_mod,
+        }):
+            prompt = engine._build_system_prompt()
+
+        assert "[IDENTITE]" in prompt
+        assert "evolution" in prompt
+        assert "[CORPS]" in prompt
+        assert "72 bpm" in prompt
+        assert "[DOPAMINE]" in prompt
+        assert "65.0" in prompt
+        assert "[RESONANCE]" in prompt
+        assert "flow" in prompt
+        assert "[MENACES]" in prompt
+        assert "[TISSU NEURAL]" in prompt
+        assert "42 concepts" in prompt
+        assert "[MEMOIRE]" in prompt
+        assert "[ROUTINES]" in prompt
+        assert "COUNCIL_DEBATE" in prompt
+        assert "[PERSONNALITE]" in prompt
+        assert "curiosite" in prompt
+        assert "etat REEL" in prompt
+
+    def test_build_system_prompt_with_memories(self):
+        """Verifie que les souvenirs RAG sont injectes dans la section MEMOIRE."""
+        engine = ChatEngine()
+        memories = "Souvenir 1 | Souvenir 2 | Souvenir 3"
+
+        # Mock hippocampus pour que la section MEMOIRE existe
+        mock_hippo = MagicMock()
+        mock_hippo.get_hippocampus_context.return_value = "Arc test"
+        mock_hippo_mod = MagicMock()
+        mock_hippo_mod.hippocampus = mock_hippo
+
+        with patch.dict("sys.modules", {
+            "core.hippocampus": mock_hippo_mod,
+        }):
+            prompt = engine._build_system_prompt(memories_text=memories)
+
+        assert "[MEMOIRE]" in prompt
+        assert "Souvenir 1" in prompt
+        assert "Souvenir 3" in prompt
+
+    def test_build_system_prompt_memories_without_hippocampus(self):
+        """Les souvenirs RAG apparaissent meme si hippocampus echoue."""
+        engine = ChatEngine()
+        memories = "Un souvenir important"
+        prompt = engine._build_system_prompt(memories_text=memories)
+        assert "Un souvenir important" in prompt
 
 
 class TestHistory:
@@ -323,3 +449,49 @@ class TestChatAsync:
         assert engine.messages[0]["content"] == "Test message"
         assert engine.messages[1]["role"] == "assistant"
         assert engine.messages[1]["content"] == "Reponse"
+
+
+class TestQueryRelevantMemories:
+    def test_query_relevant_memories_graceful(self):
+        """Ne crashe pas si ChromaDB est indisponible."""
+        engine = ChatEngine()
+        result = engine._query_relevant_memories("test query")
+        # Retourne une chaine vide si ChromaDB echoue
+        assert isinstance(result, str)
+
+    def test_query_relevant_memories_returns_docs(self):
+        """Retourne les documents trouves dans ChromaDB."""
+        engine = ChatEngine()
+        mock_mem = MagicMock()
+        mock_mem.query_documents.return_value = {
+            "documents": [["Souvenir alpha", "Souvenir beta", "Souvenir gamma"]]
+        }
+        mock_class = MagicMock()
+        mock_class.get_instance.return_value = mock_mem
+        mock_module = MagicMock()
+        mock_module.ChromaMemoryManager = mock_class
+
+        with patch.dict("sys.modules", {"core.vector_store": mock_module}):
+            result = engine._query_relevant_memories("question test")
+
+        assert "Souvenir alpha" in result
+        assert "Souvenir beta" in result
+        assert "Souvenir gamma" in result
+
+    def test_query_relevant_memories_truncates_long_docs(self):
+        """Tronque les documents trop longs a 150 chars."""
+        engine = ChatEngine()
+        long_doc = "X" * 300
+        mock_mem = MagicMock()
+        mock_mem.query_documents.return_value = {
+            "documents": [[long_doc]]
+        }
+        mock_class = MagicMock()
+        mock_class.get_instance.return_value = mock_mem
+        mock_module = MagicMock()
+        mock_module.ChromaMemoryManager = mock_class
+
+        with patch.dict("sys.modules", {"core.vector_store": mock_module}):
+            result = engine._query_relevant_memories("test")
+
+        assert len(result) == 150

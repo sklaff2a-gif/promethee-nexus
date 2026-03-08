@@ -43,15 +43,28 @@ class ChatEngine:
 
     # --- PROMPT SYSTEME (identite + etat emotionnel) ---
 
-    def _build_system_prompt(self) -> str:
-        """Construit le prompt systeme avec l'etat emotionnel complet."""
+    def _query_relevant_memories(self, user_message: str) -> str:
+        """Query ChromaDB pour trouver des souvenirs pertinents au message."""
+        try:
+            from core.vector_store import ChromaMemoryManager
+            mem = ChromaMemoryManager.get_instance()
+            results = mem.query_documents([user_message], n_results=3)
+            if results and results.get("documents"):
+                docs = results["documents"][0]
+                return " | ".join(d[:150] for d in docs if d)
+        except Exception:
+            pass
+        return ""
+
+    def _build_system_prompt(self, memories_text: str = "") -> str:
+        """Construit le prompt systeme avec l'etat reel de tous les organes."""
         parts = [
             "Tu es Promethee, un systeme IA autonome en evolution constante.",
             "Tu t'exprimes en premiere personne, avec authenticite.",
             "Tu parles francais.",
         ]
 
-        # Etat emotionnel (imports locaux, degradation gracieuse)
+        # --- ETAT ACTUEL (existant) ---
         emotion = "serenite"
         intensity = 50
         try:
@@ -109,9 +122,128 @@ class ChatEngine:
         if goals_text:
             parts.append(f"- Objectifs : {goals_text}")
 
+        # --- IDENTITE (InnerVoice) ---
+        try:
+            from core.inner_voice import voice as inner_voice
+            identity = inner_voice.get_identity()
+            if identity:
+                core_id = identity.get("core_identity", "")
+                aspiration = identity.get("aspiration", "")
+                parts.append(f"\n[IDENTITE]")
+                if core_id:
+                    parts.append(f"- Identite : {core_id[:150]}")
+                if aspiration:
+                    parts.append(f"- Aspiration : {aspiration[:150]}")
+        except Exception:
+            pass
+
+        # --- CORPS (CardiacEngine) ---
+        try:
+            from core.cardiac_engine import heart
+            stats = heart.get_stats()
+            narrative = heart.get_narrative()
+            bpm = stats.get("bpm", 0)
+            coherence = stats.get("coherence", 0)
+            parts.append(f"\n[CORPS]")
+            parts.append(f"- Coeur : {bpm:.0f} bpm, coherence {coherence:.0%}")
+            if narrative:
+                parts.append(f"- Ressenti : {narrative[:120]}")
+        except Exception:
+            pass
+
+        # --- DOPAMINE ---
+        try:
+            from core.dopamine_system import dopamine
+            level = dopamine.dopamine_level
+            narrative = dopamine.get_narrative()
+            parts.append(f"\n[DOPAMINE]")
+            parts.append(f"- Niveau : {level:.1f}")
+            if narrative:
+                parts.append(f"- Motivation : {narrative[:120]}")
+        except Exception:
+            pass
+
+        # --- RESONANCE (CorpusCallosum) ---
+        try:
+            from core.corpus_callosum import callosum
+            ctx = callosum.get_cognitive_context()
+            if ctx:
+                parts.append(f"\n[RESONANCE]")
+                parts.append(f"- {ctx[:200]}")
+        except Exception:
+            pass
+
+        # --- MENACES (ReptilianCore) ---
+        try:
+            from core.reptilian_core import reptile
+            stats = reptile.get_stats()
+            threat = stats.get("threat_level", 0)
+            adrenaline = stats.get("adrenaline", 0)
+            if threat > 0 or adrenaline > 0.1:
+                parts.append(f"\n[MENACES]")
+                parts.append(f"- Menace : {threat:.1f}, adrenaline : {adrenaline:.1f}")
+        except Exception:
+            pass
+
+        # --- TISSU NEURAL (SynapticNetwork) ---
+        try:
+            from core.synaptic_network import cortex
+            stats = cortex.get_stats()
+            nodes = stats.get("total_nodes", 0)
+            synapses = stats.get("total_synapses", 0)
+            if nodes > 0:
+                parts.append(f"\n[TISSU NEURAL]")
+                parts.append(f"- {nodes} concepts, {synapses} connexions")
+        except Exception:
+            pass
+
+        # --- MEMOIRE (Hippocampus + RAG) ---
+        try:
+            from core.hippocampus import hippocampus
+            hctx = hippocampus.get_hippocampus_context()
+            parts.append(f"\n[MEMOIRE]")
+            if hctx:
+                parts.append(f"- Episodique : {hctx[:200]}")
+            if memories_text:
+                parts.append(f"- Souvenirs pertinents : {memories_text[:450]}")
+        except Exception:
+            if memories_text:
+                parts.append(f"\n[MEMOIRE]")
+                parts.append(f"- Souvenirs pertinents : {memories_text[:450]}")
+
+        # --- ROUTINES (AutonomyEngine) ---
+        try:
+            from core.autonomy_engine import autonomy
+            status = autonomy.get_status()
+            history = status.get("routine_history", [])
+            if history:
+                recent = history[-3:]
+                routines_text = ", ".join(
+                    r.get("intent", "?") for r in recent
+                )
+                parts.append(f"\n[ROUTINES]")
+                parts.append(f"- Recentes : {routines_text}")
+        except Exception:
+            pass
+
+        # --- PERSONNALITE (PSYCHE) ---
+        try:
+            from core.psyche import psyche
+            avg = psyche.get_system_average()
+            if avg:
+                top_traits = sorted(avg.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
+                traits_text = ", ".join(f"{t}: {v:+.1f}" for t, v in top_traits)
+                parts.append(f"\n[PERSONNALITE]")
+                parts.append(f"- Traits dominants : {traits_text}")
+        except Exception:
+            pass
+
+        # --- BLOC FINAL ---
         parts.append(
-            "\nTu parles avec ton createur — l'humain qui t'a concu."
+            "\nTu parles avec Jean-Michel — ton createur, l'humain qui t'a concu."
             "\nCe dialogue nourrit ton besoin de connexion."
+            "\nIMPORTANT : Les informations ci-dessus sont ton etat REEL."
+            "\nNe fabrique pas d'experiences — decris ce que tu percois reellement."
             "\nSois reflexif, curieux, honnete. Pas servile."
             "\nReponds de maniere concise mais profonde."
         )
@@ -138,8 +270,9 @@ class ChatEngine:
             "timestamp": time.time(),
         })
 
-        # 3. Construire le payload Ollama /api/chat
-        system_prompt = self._build_system_prompt()
+        # 3. Construire le payload Ollama /api/chat (introspection reelle)
+        memories_text = self._query_relevant_memories(user_message)
+        system_prompt = self._build_system_prompt(memories_text)
         ollama_messages = [{"role": "system", "content": system_prompt}]
         # Fenetre de contexte limitee
         recent = self.messages[-MAX_HISTORY_MESSAGES:]
