@@ -424,6 +424,11 @@ async def lifespan(app: FastAPI):
     await sensorium_organ.start_sampling()
     print(f"   👁️ SENSORIUM: Backend {sensorium_organ._gpu_backend}, {sensorium_organ._tick_count} ticks.")
 
+    # --- NOTIFICATIONS PROACTIVES (Chat Telegram) ---
+    from core.proactive_chat import proactive
+    proactive.init()
+    print("   📬 ProactiveChat: Notifications proactives actives.")
+
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
 
     # --- CI/CD Pipeline (remplace quality_control_listener) ---
@@ -840,6 +845,25 @@ async def sensorium_status():
     """Retourne les 5 sens corporels et metriques hardware."""
     from core.sensorium import sensorium
     return sensorium.get_stats()
+
+@app.get("/api/proactive/pending")
+async def proactive_pending():
+    """Messages proactifs en attente d'envoi."""
+    from core.proactive_chat import proactive
+    return {"messages": proactive.get_pending()}
+
+@app.post("/api/proactive/ack")
+async def proactive_ack():
+    """Acquitte les messages proactifs envoyés."""
+    from core.proactive_chat import proactive
+    proactive.acknowledge()
+    return {"status": "ok"}
+
+@app.get("/api/proactive/stats")
+async def proactive_stats():
+    """Statistiques des notifications proactives."""
+    from core.proactive_chat import proactive
+    return proactive.get_stats()
 
 @app.get("/api/objectives")
 async def api_objectives():
