@@ -413,6 +413,11 @@ async def lifespan(app: FastAPI):
     incubation_cognitive.init()
     print(f"   🧬 INCUBATION: Subconscient actif ({len(incubation_cognitive._queue)} problèmes).")
 
+    # --- REFLEXE CURIOSITE (Apprentissage Instinctif) ---
+    from core.curiosity_reflex import curiosity as curiosity_reflex
+    curiosity_reflex.init()
+    print(f"   🔍 CURIOSITE: Reflexe actif ({curiosity_reflex._total_queries} queries).")
+
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
 
     # --- CI/CD Pipeline (remplace quality_control_listener) ---
@@ -439,6 +444,7 @@ async def lifespan(app: FastAPI):
     dmn.stop()
     dmn._save()
     incubation_cognitive._save()
+    curiosity_reflex._save()
     reptile.save()
     prefrontal.save()
     inner_voice.save()
@@ -814,6 +820,12 @@ async def signal_bus_status():
     """Retourne les metriques du bus de signaux neuraux."""
     from core.signal_bus import signal_bus
     return signal_bus.get_metrics()
+
+@app.get("/api/curiosity/stats")
+async def curiosity_stats():
+    """Retourne les stats du reflexe de curiosite."""
+    from core.curiosity_reflex import curiosity
+    return curiosity.get_stats()
 
 @app.get("/api/objectives")
 async def api_objectives():

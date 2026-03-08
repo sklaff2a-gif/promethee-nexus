@@ -500,6 +500,13 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Reflexe Curiosite
+        try:
+            from core.curiosity_reflex import curiosity
+            snapshot["curiosity_reflex"] = curiosity.get_stats()
+        except Exception:
+            pass
+
         # Neural Tissue
         try:
             from core.neural_tissue import tissue

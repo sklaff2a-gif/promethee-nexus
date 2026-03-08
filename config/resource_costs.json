@@ -62,5 +62,9 @@
   "ROADMAP_SPEC": {
     "cost": 2,
     "description": "VisionAgent genere specs via 1 appel LLM"
+  },
+  "CURIOSITY_REFLEX": {
+    "cost": 1,
+    "description": "Reflexe curiosite: 1 appel LLM leger + optionnel web search"
   }
 }

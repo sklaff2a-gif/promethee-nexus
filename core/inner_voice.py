@@ -305,7 +305,12 @@ class InnerVoice:
         pass  # Enrichit DMN vagabondage
 
     async def _on_knowledge_gap(self, event: dict):
-        pass  # Enrichit prédictions
+        topic = event.get("topic", "")
+        if topic:
+            try:
+                await bus.publish("CURIOSITY_SPARK", {"topic": topic})
+            except Exception:
+                pass
 
     async def _on_hallucination(self, event: dict):
         pass  # Enrichit prédictions

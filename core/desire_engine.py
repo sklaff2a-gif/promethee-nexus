@@ -89,6 +89,7 @@ EVENT_IMPACT: Dict[str, Any] = {
     "EUREKA_BRIDGE":          {"CURIOSITE": -10, "CREATION": -5, "COMPREHENSION": -10},
     "SOLILOQUE_COMPLETE":     {"CONNEXION": -18, "COMPREHENSION": -5, "STABILITE": -3},
     "CHAT_RESPONSE":          {"CONNEXION": -12, "COMPREHENSION": -3, "STABILITE": -2},
+    "CURIOSITY_SATISFIED":    {"CURIOSITE": -12, "COMPREHENSION": -8},
 }
 
 # --- Seuil de qualité par intent pour considérer un succès ---
@@ -210,6 +211,12 @@ class DesireEngine:
         bus.subscribe("EVOLUTION_FEEDBACK", self._on_evolution_feedback)
         bus.subscribe("EVOLUTION_ROLLED_BACK", self._on_evolution_rolled_back)
         bus.subscribe("INNER_VOICE_BROADCAST", self._on_inner_voice)
+        bus.subscribe("CURIOSITY_LEARNING", self._on_curiosity_learning)
+
+    async def _on_curiosity_learning(self, event: dict):
+        """Un reflexe de curiosite resolu satisfait CURIOSITE et COMPREHENSION."""
+        if event.get("resolved"):
+            self.on_event("CURIOSITY_SATISFIED")
 
     async def _on_inner_voice(self, event: dict):
         """Tick des pulsions au broadcast de la voix intérieure (montée régulière)."""
