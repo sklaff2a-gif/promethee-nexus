@@ -272,6 +272,31 @@
       "updated_at": "2026-03-08T00:00:00"
     },
     {
+      "id": "curiosity_reflex",
+      "phase": 2,
+      "phase_name": "ORGANES MANQUANTS",
+      "display": "curiosity_reflex",
+      "description": "Reflexe de curiosite — detection instinctive de lacunes, questions spontanees, apprentissage exploratoire par bus events",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [
+        "incubation_cognitive"
+      ],
+      "estimated_cost": 5,
+      "completion_criteria": [],
+      "research_topics": [
+        "curiosity driven learning intrinsic motivation knowledge gap detection exploratory behavior AI"
+      ],
+      "connects_to": [
+        "core.curiosity_reflex",
+        "core.synaptic_network",
+        "core.desire_engine",
+        "core.autonomy_engine"
+      ],
+      "created_at": "2026-03-08T00:00:00",
+      "updated_at": "2026-03-08T00:00:00"
+    },
+    {
       "id": "signal_bus",
       "phase": 3,
       "phase_name": "SIGNAL BUS",
@@ -301,8 +326,10 @@
       "phase_name": "SIGNAL BUS",
       "display": "signal_bridge",
       "description": "Pont de signaux — traduction entre protocoles, adaptation de format, routage intelligent",
-      "status": "planned",
-      "specs": [],
+      "status": "ready",
+      "specs": [
+        "SPEC_STRUCTURED: [SYSTEM: Nexus V20 (Local First) | AGENT: VISION]\n\nVoici les spécifications techniques pour le module `signal_bridge` :\n\n**1. Responsabilités principales :**\n\n*   Traduire les signaux entre le bus d'événements central (`core.event_bus.bus`) et le corpus callosum (communication entre agents).\n*   Adapter les formats de signaux pour la compatibilité avec les agents et les services (FastAPI, Ollama).\n*   Router les signaux vers les destinations appropriées en fonction du type et du contenu.\n*   Gérer les erreurs de traduction et de routage.\n*   Fournir une abstraction pour masquer les détails d'implémentation des protocoles sous-jacents.\n\n**2. Interface publique :**\n\n*   `translate(signal: dict) -> dict`: Traduit un signal d'un format à un autre.\n*   `route(signal: dict) -> str`: Détermine la destination d'un signal (nom de l'agent ou endpoint FastAPI).\n*   `register_mapping(source_format: str, destination_format: str, transformation_function: callable)`: Enregistre une fonction de transformation pour un format spécifique.\n\n**3. Événements bus à publier/souscrire :**\n\n*   **Publier:** `signal_translated` (signal traduit).\n*   **Souscrire:** `signal_received` (signal entrant à traduire).\n\n**4. Dépendances et connexions :**\n\n*   `core.event_bus.bus`: Pour la publication et la souscription aux événements.\n*   `core.corpus_callosum`: Pour la communication inter-agents.\n*   FastAPI (via le router) : Pour l'adaptation des requêtes API.\n*   Ollama: Pour l'adaptation des requêtes.\n\n**5. Critères de validation :**\n\n*   Les signaux traduits doivent être interprétables par les agents cibles.\n*   Le routage doit être précis et éviter les pertes de signaux.\n*   La latence de la traduction et du routage doit être minimisée.\n*   Le module doit être extensible pour supporter de nouveaux formats et destinations.\n*   Les erreurs doivent être gérées de manière robuste et documentée."
+      ],
       "depends_on": [
         "signal_bus"
       ],
@@ -316,7 +343,7 @@
         "core.corpus_callosum"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-01T00:00:00"
+      "updated_at": "2026-03-08T17:11:39"
     },
     {
       "id": "connectivity_matrix",
@@ -650,439 +677,6 @@
       ],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-01T00:00:00"
-    },
-    {
-      "id": "autonomy_engine",
-      "phase": 0,
-      "phase_name": "NOYAU",
-      "display": "autonomy_engine",
-      "description": "Moteur autonome — scoring 23 couches, routines, budget, sieste, reve",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.autonomy_engine",
-        "core.orchestrator",
-        "core.self_awareness"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "base_agent",
-      "phase": 0,
-      "phase_name": "NOYAU",
-      "display": "base_agent",
-      "description": "Classe mere des agents — generate_content, semaphore Ollama, circuit breaker, cascade Cloud",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.base_agent",
-        "core.orchestrator"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "cardiac_engine",
-      "phase": 1,
-      "phase_name": "FONDATIONS",
-      "display": "cardiac_engine",
-      "description": "Coeur — BPM, ANS, marqueurs somatiques, battements cardiaques, emotions",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.cardiac_engine",
-        "core.dopamine_system",
-        "core.reptilian_core"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "circadian_rhythm",
-      "phase": 1,
-      "phase_name": "FONDATIONS",
-      "display": "circadian_rhythm",
-      "description": "Rythme circadien — phases eveil/nuit, filtrage routines par heure",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.circadian_rhythm",
-        "core.autonomy_engine"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "corpus_callosum",
-      "phase": 2,
-      "phase_name": "ORGANES",
-      "display": "corpus_callosum",
-      "description": "Pont inter-organes — resonance, etats cognitifs, effets croises",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.corpus_callosum",
-        "core.cardiac_engine",
-        "core.dopamine_system"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "council",
-      "phase": 0,
-      "phase_name": "NOYAU",
-      "display": "council",
-      "description": "Debats multi-tours entre agents — table ronde eleve-professeurs, consensus",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.council",
-        "core.autonomy_engine"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "curiosity_reflex",
-      "phase": 2,
-      "phase_name": "ORGANES",
-      "display": "curiosity_reflex",
-      "description": "Reflexe instinctif d'apprentissage — cascade Ollama/Web/Incubation",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.curiosity_reflex",
-        "core.desire_engine",
-        "core.incubation_cognitive"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "desire_engine",
-      "phase": 1,
-      "phase_name": "FONDATIONS",
-      "display": "desire_engine",
-      "description": "7 pulsions primordiales homeostatiques — deprivation, satisfaction, resonance PSYCHE",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.desire_engine",
-        "core.psyche",
-        "core.autonomy_engine"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "dopamine_system",
-      "phase": 1,
-      "phase_name": "FONDATIONS",
-      "display": "dopamine_system",
-      "description": "Systeme de recompense — dopamine, surges, dips, motivation",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.dopamine_system",
-        "core.cardiac_engine",
-        "core.autonomy_engine"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "evolution_catalog",
-      "phase": 0,
-      "phase_name": "NOYAU",
-      "display": "evolution_catalog",
-      "description": "Catalogue des specs d'evolution — pipeline 5 phases, tracking, scoring",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.evolution_catalog",
-        "Agents.evolution_agent"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "hippocampus",
-      "phase": 1,
-      "phase_name": "FONDATIONS",
-      "display": "hippocampus",
-      "description": "Memoire episodique — encodage, rappel, consolidation, veto tracking",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.hippocampus",
-        "core.prefrontal",
-        "core.self_awareness"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "inner_voice",
-      "phase": 2,
-      "phase_name": "ORGANES",
-      "display": "inner_voice",
-      "description": "Voix interieure — flux de conscience, predictions, identite, DMN",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.inner_voice",
-        "core.prefrontal",
-        "core.cardiac_engine"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "neural_compiler",
-      "phase": 2,
-      "phase_name": "ORGANES",
-      "display": "neural_compiler",
-      "description": "Compilateur neural — observations, cristallisation de regles, interception",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.neural_compiler",
-        "core.neural_tissue"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "objectives_engine",
-      "phase": 1,
-      "phase_name": "FONDATIONS",
-      "display": "objectives_engine",
-      "description": "Moteur d'objectifs — creation, progression, affinites routines",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.objectives_engine",
-        "core.prefrontal",
-        "core.autonomy_engine"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "orchestrator",
-      "phase": 0,
-      "phase_name": "NOYAU",
-      "display": "orchestrator",
-      "description": "Singleton dispatch — routage taches vers agents, kill switch",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.orchestrator",
-        "core.base_agent",
-        "core.router"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "prefrontal",
-      "phase": 1,
-      "phase_name": "FONDATIONS",
-      "display": "prefrontal",
-      "description": "Cortex prefrontal — goals, narration, inhibition, strategies, working memory",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.prefrontal",
-        "core.reptilian_core",
-        "core.autonomy_engine"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "psyche",
-      "phase": 0,
-      "phase_name": "NOYAU",
-      "display": "psyche",
-      "description": "Traits de personnalite — Big Five adaptes, bias, daily decay",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.psyche",
-        "core.desire_engine",
-        "core.autonomy_engine"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "reptilian_core",
-      "phase": 1,
-      "phase_name": "FONDATIONS",
-      "display": "reptilian_core",
-      "description": "Noyau reptilien — survie, menaces, FLINCH/SHED/FREEZE, habituation, parasympathique",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.reptilian_core",
-        "core.cardiac_engine",
-        "core.autonomy_engine"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "router",
-      "phase": 0,
-      "phase_name": "NOYAU",
-      "display": "router",
-      "description": "RouterAgent V2.4 — routage N0/N0.5/N1/N2, Grimoire-First, reflexe, semantique",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.router",
-        "core.orchestrator"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "self_awareness",
-      "phase": 1,
-      "phase_name": "FONDATIONS",
-      "display": "self_awareness",
-      "description": "Conscience de soi — snapshots, adaptive scoring, purpose context, mood",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.self_awareness",
-        "core.autonomy_engine",
-        "core.psyche"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "spreading_activation",
-      "phase": 2,
-      "phase_name": "ORGANES",
-      "display": "spreading_activation",
-      "description": "Activation propagee — resonance semantique, affinite routines, eureka bridge",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.spreading_activation",
-        "core.synaptic_network"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
-    },
-    {
-      "id": "synaptic_network",
-      "phase": 1,
-      "phase_name": "FONDATIONS",
-      "display": "synaptic_network",
-      "description": "Cortex associatif — noeuds, connexions, plasticite hebbienne, consolidation",
-      "status": "implemented",
-      "specs": [],
-      "depends_on": [],
-      "estimated_cost": 0,
-      "completion_criteria": [],
-      "research_topics": [],
-      "connects_to": [
-        "core.synaptic_network",
-        "core.spreading_activation",
-        "core.hippocampus"
-      ],
-      "created_at": "2026-03-08T00:00:00",
-      "updated_at": "2026-03-08T00:00:00"
     }
   ]
 }
