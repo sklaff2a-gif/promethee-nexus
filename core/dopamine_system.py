@@ -215,6 +215,7 @@ class DopamineSystem:
             bus.subscribe("ROADMAP_MODULE_COMPLETED", self._on_roadmap_completed)
             bus.subscribe("TISSUE_PATTERN_EMERGED", self._on_tissue_pattern)
             bus.subscribe("TISSUE_DIVERSITY_DROP", self._on_tissue_diversity_drop)
+            bus.subscribe("BASAL_GANGLIA_HABIT_FORMED", self._on_habit_formed)
         except Exception as e:
             logger.warning(f"DOPAMINE: Echec souscription bus: {e}")
 
@@ -547,6 +548,13 @@ class DopamineSystem:
         """Diversité tissu en chute → dip pour favoriser exploration."""
         self.dopamine_level = max(0.0, self.dopamine_level - 0.1)
         logger.debug("DOPAMINE: Tissue diversity drop → dip -0.1")
+
+    async def _on_habit_formed(self, event: dict):
+        """Habitude consolidée → micro-surge récompense renforcement."""
+        strength = event.get("strength", 0.5)
+        boost = min(0.08, strength * 0.1)
+        self.dopamine_level = min(MAX_DOPAMINE, self.dopamine_level + boost)
+        logger.debug(f"DOPAMINE: Habit formed reward +{boost:.3f}")
 
 
 # --- Singleton ---

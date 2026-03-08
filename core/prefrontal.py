@@ -233,6 +233,7 @@ class PrefrontalCortex:
         bus.subscribe("ROADMAP_MODULE_COMPLETED", self._on_roadmap_completed)
         bus.subscribe("TISSUE_PATTERN_EMERGED", self._on_tissue_pattern)
         bus.subscribe("TISSUE_CREATIVITY_SPIKE", self._on_tissue_creativity_spike)
+        bus.subscribe("THALAMUS_SALIENCE", self._on_thalamus_salience)
 
     async def _on_inner_voice(self, data: dict):
         """Intègre la pensée broadcast dans le narrative_log."""
@@ -262,6 +263,13 @@ class PrefrontalCortex:
     async def _on_knowledge_gap(self, data: dict):
         """Crée un goal pour combler une lacune de connaissance."""
         self._recent_events.append("KNOWLEDGE_GAP_DETECTED")
+        # Consultation thalamus (optionnelle)
+        try:
+            from core.thalamus import thalamus as _thal
+            if not _thal.is_salient("KNOWLEDGE_GAP_DETECTED"):
+                return
+        except Exception:
+            pass
         topic = data.get("topic", data.get("gap", "inconnu"))
         # Vérifier qu'on n'a pas déjà un goal similaire
         for g in self.goals:
@@ -290,6 +298,13 @@ class PrefrontalCortex:
     async def _on_eureka_bridge(self, data: dict):
         """Crée un goal pour explorer un pont créatif."""
         self._recent_events.append("EUREKA_BRIDGE")
+        # Consultation thalamus (optionnelle)
+        try:
+            from core.thalamus import thalamus as _thal
+            if not _thal.is_salient("EUREKA_BRIDGE"):
+                return
+        except Exception:
+            pass
         concept_a = data.get("node_a", data.get("source", "?"))
         concept_b = data.get("node_b", data.get("target", "?"))
         bridge_title = f"Explorer: {concept_a} <-> {concept_b}"
@@ -319,6 +334,13 @@ class PrefrontalCortex:
     async def _on_council_end(self, data: dict):
         """Crée un goal si le council a atteint un consensus actionnable."""
         self._recent_events.append("COUNCIL_END")
+        # Consultation thalamus (optionnelle)
+        try:
+            from core.thalamus import thalamus as _thal
+            if not _thal.is_salient("COUNCIL_END"):
+                return
+        except Exception:
+            pass
         consensus = data.get("final_summary", "")
         status = data.get("status", "")
         if status not in ("consensus", "max_rounds"):
@@ -418,6 +440,19 @@ class PrefrontalCortex:
         activity = data.get("activity", 0.0)
         self._narrate("hypothesis", f"Pic créatif substrat (activité={activity:.2f}). Potentiel d'innovation.")
         self._recent_events.append("TISSUE_CREATIVITY_SPIKE")
+
+    async def _on_thalamus_salience(self, data: dict):
+        """Signal saillant du thalamus → narration attentionnelle."""
+        if not isinstance(data, dict):
+            return
+        focus = data.get("focus", "")
+        scorecard = data.get("scorecard", {})
+        if scorecard:
+            top = max(scorecard, key=scorecard.get)
+            top_val = scorecard[top]
+            if top_val >= 0.7:
+                self._narrate("observation", f"Attention thalamique: {top} (saillance={top_val:.2f}), focus={focus}")
+                self._recent_events.append("THALAMUS_SALIENCE")
 
     # ─── 1. GOALS (dlPFC) ────────────────────────────────────────────
 

@@ -869,6 +869,12 @@ class Council:
             "max_rounds": self.max_rounds
         })
 
+        # Signaler la question au CuriosityReflex
+        await bus.publish("COUNCIL_QUESTION", {
+            "council_id": self.council_id,
+            "topic": self.mission,
+        })
+
         rounds_used = 0
         consensus_reached = False
         aborted = False

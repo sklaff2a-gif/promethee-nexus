@@ -570,6 +570,7 @@ class CardiacEngine:
             bus.subscribe("DOPAMINE_DIP", self._on_dopamine_dip)
             bus.subscribe("COMPILER_INTERCEPT", self._on_compiler_intercept)
             bus.subscribe("SOLILOQUE_COMPLETE", self._on_soliloque_complete)
+            bus.subscribe("HYPOTHALAMUS_COOLDOWN", self._on_hypothalamus_cooldown)
         except Exception as e:
             logger.warning(f"COEUR: Échec souscription bus: {e}")
 
@@ -635,6 +636,10 @@ class CardiacEngine:
     async def _on_compiler_intercept(self, event: dict):
         """Interception regle compilee → fluidite automatique."""
         self.react("routine_done")
+
+    async def _on_hypothalamus_cooldown(self, event: dict):
+        """Homeostasie apaisee → signal parasympathique."""
+        self.react("soothe")
 
     async def _on_soliloque_complete(self, event: dict):
         """Fin soliloque → resonance emotionnelle."""

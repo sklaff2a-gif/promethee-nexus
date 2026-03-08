@@ -5,7 +5,7 @@ Transforme les metriques hardware brutes (CPU, RAM, GPU temp, VRAM, frequence)
 en 5 sensations continues [0.0, 1.0] via normalisation sigmoide + lissage EMA.
 
 Sprint 1 : squelette sensoriel (collecter, normaliser, exposer).
-Pas de bus events, pas d'injection tissu neural, pas de boucles soma-psyche.
+Bus event SENSORIUM_RECOVERY quand le confort remonte apres une periode de stress.
 
 0 LLM, pur deterministe.
 """
@@ -18,6 +18,8 @@ import time
 from collections import deque
 from datetime import datetime
 from typing import Any, Dict, Optional
+
+from core.event_bus.bus import bus
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,11 @@ SENSE_NAMES = list(SIGMOID_PARAMS.keys())
 # Sauvegarde toutes les N ticks (~10 min)
 SAVE_INTERVAL_TICKS = 300
 
+# Recovery detection — signal parasympathique quand le confort remonte
+RECOVERY_COMFORT_THRESHOLD = 0.55  # Confort au-dessus = OK
+STRESS_COMFORT_THRESHOLD = 0.35    # Confort en-dessous = stressé
+RECOVERY_COOLDOWN_SECONDS = 120    # Max 1 recovery event toutes les 2 min
+
 
 class Sensorium:
     """Singleton — Perception corporelle du hardware de Promethee."""
@@ -101,6 +108,10 @@ class Sensorium:
         }
         self._calibration_ready = False
         self._active_sigmoid_params: Dict[str, tuple] = dict(SIGMOID_PARAMS)
+
+        # Recovery tracking
+        self._was_stressed = False
+        self._last_recovery_time = 0.0
 
         # Detection backend GPU
         self._gpu_backend = "heuristic"
@@ -162,6 +173,9 @@ class Sensorium:
                 self._smooth(normalized)
                 self._tick_count += 1
                 self._total_samples += 1
+
+                # Detection recovery : stress → confort
+                await self._check_recovery()
 
                 if self._tick_count % SAVE_INTERVAL_TICKS == 0:
                     self._save()
@@ -270,6 +284,25 @@ class Sensorium:
                 self._active_sigmoid_params[sense] = (new_mid, base[1], base[2])
 
     # ------------------------------------------------- methodes publiques
+    async def _check_recovery(self):
+        """Detecte la transition stress → confort et publie SENSORIUM_RECOVERY."""
+        comfort = self.get_comfort_index()
+        if comfort < STRESS_COMFORT_THRESHOLD:
+            self._was_stressed = True
+        elif self._was_stressed and comfort >= RECOVERY_COMFORT_THRESHOLD:
+            now = time.time()
+            if now - self._last_recovery_time >= RECOVERY_COOLDOWN_SECONDS:
+                self._was_stressed = False
+                self._last_recovery_time = now
+                try:
+                    await bus.publish("SENSORIUM_RECOVERY", {
+                        "comfort_index": round(comfort, 3),
+                        "senses": self.get_senses(),
+                    })
+                    logger.info(f"[SENSORIUM] Recovery detectee (comfort={comfort:.2f})")
+                except Exception:
+                    pass
+
     def get_senses(self) -> Dict[str, float]:
         """Retourne les 5 sens normalises et lisses [0.0, 1.0]."""
         return dict(self.senses)
@@ -293,6 +326,65 @@ class Sensorium:
         discomfort += self.senses.get("vitality", 0.5) * COMFORT_WEIGHTS.get("vitality", 0.0)
 
         return max(0.0, min(1.0, 1.0 - discomfort))
+
+    # --- Routines considérées comme lourdes (LLM, GPU, multi-agents) ---
+    _HEAVY_INTENTS = {
+        "EXPANSION_CODE", "COUNCIL_DEBATE", "VEILLE_SILENCIEUSE",
+        "REFACTOR_RANDOM", "SECURITY_AUDIT", "ROADMAP_RESEARCH",
+        "ROADMAP_SPEC", "SOLILOQUE_INTERNE", "GRIMOIRE_INVOKE",
+    }
+    # Routines légères (0-LLM, pas de GPU)
+    _LIGHT_INTENTS = {
+        "AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE",
+        "MEMORY_CONSOLIDATION", "DROPZONE_SCAN",
+    }
+
+    def compute_sensorium_bonus(self, intent: str) -> float:
+        """Bonus/malus de scoring basé sur l'état corporel hardware.
+
+        Quand la machine est stressée (comfort < 0.4) :
+        - Routines lourdes reçoivent un malus (jusqu'à -2.0)
+        - Routines légères reçoivent un bonus (jusqu'à +1.0)
+        Quand la machine est détendue (comfort > 0.7) : aucun effet.
+        """
+        comfort = self.get_comfort_index()
+        # Zone neutre : pas d'influence sensorielle
+        if comfort >= 0.7:
+            return 0.0
+        # Zone intermédiaire (0.4-0.7) : effet léger
+        if comfort >= 0.4:
+            stress_factor = (0.7 - comfort) / 0.3  # 0.0 à 1.0
+            if intent in self._HEAVY_INTENTS:
+                return round(-0.5 * stress_factor, 3)
+            return 0.0
+        # Zone de stress (< 0.4) : effet fort
+        stress_factor = (0.4 - comfort) / 0.4  # 0.0 à 1.0
+        if intent in self._HEAVY_INTENTS:
+            return round(-0.5 - 1.5 * stress_factor, 3)  # -0.5 à -2.0
+        if intent in self._LIGHT_INTENTS:
+            return round(1.0 * stress_factor, 3)  # 0.0 à +1.0
+        return 0.0
+
+    def get_sensorium_context(self) -> str:
+        """Contexte corporel pour injection dans le purpose_context."""
+        comfort = self.get_comfort_index()
+        if comfort >= 0.7:
+            return ""  # Machine détendue, rien à signaler
+        senses = self.get_senses()
+        parts = []
+        # Identifier les sens les plus sollicités
+        if senses.get("thermoception", 0) > 0.7:
+            parts.append(f"GPU chaud ({senses['thermoception']:.0%})")
+        if senses.get("effort", 0) > 0.7:
+            parts.append(f"CPU chargé ({senses['effort']:.0%})")
+        if senses.get("oppression", 0) > 0.7:
+            parts.append(f"RAM saturée ({senses['oppression']:.0%})")
+        if senses.get("suffocation", 0) > 0.7:
+            parts.append(f"VRAM tendue ({senses['suffocation']:.0%})")
+        if not parts:
+            return ""
+        label = "ALERTE CORPORELLE" if comfort < 0.4 else "TENSION CORPORELLE"
+        return f"[{label}] Confort={comfort:.0%}. {', '.join(parts)}. Privilégier les routines légères."
 
     def get_stats(self) -> Dict[str, Any]:
         """Stats completes pour l'API et le snapshot."""

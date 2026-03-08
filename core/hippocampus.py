@@ -203,6 +203,7 @@ class Hippocampus:
         bus.subscribe("ROADMAP_MODULE_STARTED", self._on_roadmap_started)
         bus.subscribe("SANDBOX_TEST_PASS", self._on_sandbox_pass)
         bus.subscribe("SANDBOX_TEST_FAIL", self._on_sandbox_fail)
+        bus.subscribe("EVOLUTION_INSIGHT", self._on_evolution_insight)
         bus.subscribe("COUNCIL_PRESIDENT_VERDICT", self._on_president_verdict)
         bus.subscribe("DMN_INSIGHT", self._on_dmn_insight)
 
@@ -601,6 +602,19 @@ class Hippocampus:
             event_type="roadmap_start",
             intent=data.get("module_id", ""),
             detail=f"phase={data.get('phase', '?')}",
+        )
+
+    def _on_evolution_insight(self, data):
+        """Handler EVOLUTION_INSIGHT — insight d'auto-amelioration."""
+        if not isinstance(data, dict):
+            return
+        spec_id = data.get("spec_id", "")
+        insight = str(data.get("insight", ""))[:100]
+        self._encode_episode(
+            event_type="evolution_insight",
+            intent="EXPANSION_CODE",
+            agent="evolution",
+            detail=f"spec={spec_id} | {insight}",
         )
 
     def _on_sandbox_pass(self, data):

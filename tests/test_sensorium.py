@@ -542,3 +542,119 @@ class TestStats:
             assert "midpoint" in cal
             assert "samples" in cal
             assert "calibrated" in cal
+
+
+# ============================================================
+# TestComputeSensoriumBonus
+# ============================================================
+
+class TestComputeSensoriumBonus:
+    """Tests pour compute_sensorium_bonus() — Couche 23 scoring."""
+
+    def test_relaxed_no_bonus(self, isolate):
+        """Comfort >= 0.7 → aucun bonus/malus."""
+        isolate.senses = {s: 0.1 for s in SENSE_NAMES}
+        assert isolate.get_comfort_index() >= 0.7
+        assert isolate.compute_sensorium_bonus("EXPANSION_CODE") == 0.0
+        assert isolate.compute_sensorium_bonus("AUDIT_STRUCTURE") == 0.0
+        assert isolate.compute_sensorium_bonus("MEMORY_CLEANUP") == 0.0
+
+    def test_moderate_stress_light_penalty(self, isolate):
+        """Comfort 0.4-0.7 → malus leger sur routines lourdes."""
+        isolate.senses = {s: 0.6 for s in SENSE_NAMES}
+        comfort = isolate.get_comfort_index()
+        assert 0.2 <= comfort < 0.7
+        bonus = isolate.compute_sensorium_bonus("EXPANSION_CODE")
+        assert bonus < 0.0
+
+    def test_moderate_stress_no_boost_light(self, isolate):
+        """Comfort 0.4-0.7 → pas de bonus pour routines legeres."""
+        isolate.senses = {s: 0.55 for s in SENSE_NAMES}
+        comfort = isolate.get_comfort_index()
+        if 0.4 <= comfort < 0.7:
+            assert isolate.compute_sensorium_bonus("AUDIT_STRUCTURE") == 0.0
+
+    def test_heavy_stress_strong_penalty(self, isolate):
+        """Comfort < 0.4 → malus fort sur routines lourdes."""
+        isolate.senses = {s: 0.9 for s in SENSE_NAMES}
+        comfort = isolate.get_comfort_index()
+        assert comfort < 0.4
+        bonus = isolate.compute_sensorium_bonus("COUNCIL_DEBATE")
+        assert bonus <= -0.5
+
+    def test_heavy_stress_boosts_light(self, isolate):
+        """Comfort < 0.4 → bonus pour routines legeres."""
+        isolate.senses = {s: 0.9 for s in SENSE_NAMES}
+        bonus = isolate.compute_sensorium_bonus("MEMORY_CLEANUP")
+        assert bonus > 0.0
+        assert bonus <= 1.0
+
+    def test_unknown_intent_zero(self, isolate):
+        """Intent inconnu → 0.0 meme en stress."""
+        isolate.senses = {s: 0.9 for s in SENSE_NAMES}
+        assert isolate.compute_sensorium_bonus("UNKNOWN_ROUTINE") == 0.0
+
+    def test_all_heavy_penalized(self, isolate):
+        """Tous les intents lourds sont penalises en stress."""
+        isolate.senses = {s: 0.95 for s in SENSE_NAMES}
+        for intent in Sensorium._HEAVY_INTENTS:
+            assert isolate.compute_sensorium_bonus(intent) < 0.0, f"{intent} devrait etre penalise"
+
+    def test_all_light_boosted(self, isolate):
+        """Tous les intents legers sont boostes en stress fort."""
+        isolate.senses = {s: 0.95 for s in SENSE_NAMES}
+        for intent in Sensorium._LIGHT_INTENTS:
+            assert isolate.compute_sensorium_bonus(intent) > 0.0, f"{intent} devrait etre booste"
+
+    def test_penalty_capped_at_minus_2(self, isolate):
+        """Le malus ne descend pas sous -2.0."""
+        isolate.senses = {s: 1.0 for s in SENSE_NAMES}
+        bonus = isolate.compute_sensorium_bonus("EXPANSION_CODE")
+        assert bonus >= -2.0
+
+    def test_bonus_capped_at_plus_1(self, isolate):
+        """Le bonus ne depasse pas +1.0."""
+        isolate.senses = {s: 1.0 for s in SENSE_NAMES}
+        bonus = isolate.compute_sensorium_bonus("MEMORY_CLEANUP")
+        assert bonus <= 1.0
+
+
+# ============================================================
+# TestGetSensoriumContext
+# ============================================================
+
+class TestGetSensoriumContext:
+    """Tests pour get_sensorium_context() — injection purpose_context."""
+
+    def test_relaxed_empty(self, isolate):
+        """Machine detendue → pas de contexte."""
+        isolate.senses = {s: 0.1 for s in SENSE_NAMES}
+        assert isolate.get_sensorium_context() == ""
+
+    def test_stressed_alert(self, isolate):
+        """Machine stresse → contexte ALERTE CORPORELLE."""
+        isolate.senses = {s: 0.9 for s in SENSE_NAMES}
+        ctx = isolate.get_sensorium_context()
+        assert "ALERTE CORPORELLE" in ctx
+        assert "GPU chaud" in ctx
+
+    def test_mentions_only_high_senses(self, isolate):
+        """Seuls les sens > 0.7 sont mentionnes."""
+        isolate.senses = {s: 0.3 for s in SENSE_NAMES}
+        isolate.senses["thermoception"] = 0.9
+        ctx = isolate.get_sensorium_context()
+        if ctx:
+            assert "GPU chaud" in ctx
+            assert "CPU" not in ctx
+
+    def test_comfort_percentage(self, isolate):
+        """Le contexte inclut le pourcentage de confort."""
+        isolate.senses = {s: 0.9 for s in SENSE_NAMES}
+        ctx = isolate.get_sensorium_context()
+        assert "Confort=" in ctx
+
+    def test_recommends_light_routines(self, isolate):
+        """Le contexte recommande les routines legeres."""
+        isolate.senses = {s: 0.9 for s in SENSE_NAMES}
+        ctx = isolate.get_sensorium_context()
+        assert "légères" in ctx

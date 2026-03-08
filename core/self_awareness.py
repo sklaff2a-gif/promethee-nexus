@@ -567,6 +567,13 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Signal Bus (routage deterministe)
+        try:
+            from core.signal_bus import signal_bus
+            snapshot["signal_bus"] = signal_bus.get_stats()
+        except Exception:
+            pass
+
         self._snapshots.append(snapshot)
         if len(self._snapshots) > MAX_SNAPSHOTS:
             self._snapshots = self._snapshots[-MAX_SNAPSHOTS:]

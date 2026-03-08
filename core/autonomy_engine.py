@@ -673,7 +673,7 @@ class AutonomyEngine:
 
     def _build_scoring_breakdown(self, intent: str) -> dict:
         """Construit un breakdown des bonus par couche pour un intent donne.
-        Couvre les 20 couches de scoring + couches speciales."""
+        Couvre les 23 couches de scoring + couches speciales."""
         breakdown = {}
         # Couches organ-based (method(intent) → float)
         scoring_methods = [
@@ -696,6 +696,7 @@ class AutonomyEngine:
             ("basal_ganglia", "core.basal_ganglia", "ganglia", "compute_habit_bonus"),
             ("incubation", "core.incubation_cognitive", "incubation", "compute_eureka_bonus"),
             ("curiosity", "core.curiosity_reflex", "curiosity", "compute_curiosity_bonus"),
+            ("sensorium", "core.sensorium", "sensorium", "compute_sensorium_bonus"),
         ]
         for layer_name, module_path, instance_name, method_name in scoring_methods:
             try:
@@ -1054,6 +1055,16 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Perception corporelle hardware (Couche 23) ---
+        try:
+            from core.sensorium import sensorium
+            for i, (routine, s) in enumerate(scored):
+                sens_bonus = sensorium.compute_sensorium_bonus(routine["intent"])
+                if sens_bonus != 0.0:
+                    scored[i] = (routine, s + sens_bonus)
+        except Exception:
+            pass
+
         # --- Clamping final du score total ---
         # Empêche le score d'exploser quand beaucoup de couches poussent dans la même direction
         scored = [(r, max(FINAL_SCORE_CLAMP_MIN, min(FINAL_SCORE_CLAMP_MAX, s))) for r, s in scored]
@@ -1335,6 +1346,14 @@ class AutonomyEngine:
                     purpose_ctx += f"\n{curio_ctx}"
             except Exception:
                 pass
+            # Perception corporelle hardware (sensorium)
+            try:
+                from core.sensorium import sensorium
+                sens_ctx = sensorium.get_sensorium_context()
+                if sens_ctx:
+                    purpose_ctx += f"\n{sens_ctx}"
+            except Exception:
+                pass
             # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)
             raw_mission = selected["mission"]
             # Retirer le préfixe [MODE VEILLE] déjà présent dans certaines missions
@@ -1505,6 +1524,16 @@ class AutonomyEngine:
                             hippocampus.record_council_forced(self.error_streak)
                         except Exception:
                             pass
+                    # Publier l'action pour incubation cognitive
+                    try:
+                        await bus.publish("LOOP_BREAKER_ACTION", {
+                            "action": loop_action,
+                            "intent": intent,
+                            "error_streak": self.error_streak,
+                            "context": loop_response,
+                        })
+                    except Exception:
+                        pass
                     # Enregistrer le loop breaker dans l'hippocampe
                     try:
                         from core.hippocampus import hippocampus as _hippo
