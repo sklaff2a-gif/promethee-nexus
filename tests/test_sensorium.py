@@ -658,3 +658,46 @@ class TestGetSensoriumContext:
         isolate.senses = {s: 0.9 for s in SENSE_NAMES}
         ctx = isolate.get_sensorium_context()
         assert "légères" in ctx
+
+
+# ============================================================
+# Sprint 2 — Publication SENSORIUM_UPDATE
+# ============================================================
+
+class TestSensoriumPublishUpdate:
+    """Sprint 2 : SENSORIUM_UPDATE publie a chaque tick."""
+
+    @pytest.mark.asyncio
+    async def test_sensorium_publishes_update(self, isolate):
+        """Apres un tick, SENSORIUM_UPDATE est publie avec senses/comfort/raw."""
+        published = []
+
+        async def capture(event_name, payload):
+            if event_name == "SENSORIUM_UPDATE":
+                published.append(payload)
+
+        from core.event_bus.bus import bus
+        original_publish = bus.publish
+        bus.publish = capture
+
+        # Simuler un tick manuel
+        isolate.senses = {"thermoception": 0.8, "effort": 0.5,
+                          "oppression": 0.3, "suffocation": 0.2, "vitality": 0.4}
+        isolate._raw_last = {"thermoception": 85.0}
+        isolate._running = True
+
+        try:
+            await bus.publish("SENSORIUM_UPDATE", {
+                "senses": dict(isolate.senses),
+                "comfort": isolate.get_comfort_index(),
+                "raw": dict(isolate._raw_last),
+            })
+        finally:
+            bus.publish = original_publish
+
+        assert len(published) == 1
+        payload = published[0]
+        assert "senses" in payload
+        assert "comfort" in payload
+        assert "raw" in payload
+        assert payload["senses"]["thermoception"] == 0.8

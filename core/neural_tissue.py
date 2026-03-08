@@ -111,20 +111,24 @@ SIGNAL_ZONES = {
     "memory":     (6,  12, 10, 16),
     "stability":  (0,  6,  4,  10),
     "creativity": (12, 6,  16, 10),
-    "cognition":  (6,  6,  10, 10),   # Matrice grise — néocortex
+    "cognition":      (6,  6,  10, 10),   # Matrice grise — néocortex
+    "thermoception":  (4,  0,  6,  4),    # Gap entre emotion et desire — chaleur GPU
+    "soma":           (10, 0,  12, 4),    # Gap entre desire et threat — effort CPU
 }
 
 # Adjacence spatiale entre zones (basée sur la grille 16×16)
 ZONE_ADJACENCY = {
-    "emotion":    ["desire", "stability", "cognition"],
-    "desire":     ["emotion", "cognition", "threat"],
-    "threat":     ["desire", "creativity", "cognition"],
-    "stability":  ["emotion", "cognition", "dopamine"],
-    "cognition":  ["emotion", "desire", "threat", "stability", "creativity", "dopamine", "memory", "goals"],
-    "creativity": ["threat", "cognition", "goals"],
-    "dopamine":   ["stability", "cognition", "memory"],
-    "memory":     ["dopamine", "cognition", "goals"],
-    "goals":      ["memory", "cognition", "creativity"],
+    "emotion":        ["desire", "stability", "cognition", "thermoception"],
+    "desire":         ["emotion", "cognition", "threat", "thermoception", "soma"],
+    "threat":         ["desire", "creativity", "cognition", "soma"],
+    "stability":      ["emotion", "cognition", "dopamine"],
+    "cognition":      ["emotion", "desire", "threat", "stability", "creativity", "dopamine", "memory", "goals", "thermoception", "soma"],
+    "creativity":     ["threat", "cognition", "goals"],
+    "dopamine":       ["stability", "cognition", "memory"],
+    "memory":         ["dopamine", "cognition", "goals"],
+    "goals":          ["memory", "cognition", "creativity"],
+    "thermoception":  ["emotion", "desire", "cognition"],
+    "soma":           ["desire", "threat", "cognition"],
 }
 
 
@@ -497,6 +501,11 @@ class NeuralTissue:
             "stability": 0.7,
             "creativity": 0.3,
             "cognition_level": 0.3,
+            # Sensorium hardware (Sprint 2 Sensorium)
+            "thermal_stress": 0.0,
+            "somatic_load": 0.0,
+            "suffocation": 0.0,
+            "vitality_level": 0.5,
         }
 
         self._last_tick_ms: float = 0.0
@@ -567,8 +576,10 @@ class NeuralTissue:
             bus.subscribe("EVOLUTION_FEEDBACK", self._on_evolution_feedback)
             bus.subscribe("EXPERIENCE_RECORDED", self._on_experience_recorded)
             bus.subscribe("SOLILOQUE_EXCHANGE", self._on_soliloque_exchange)
+            # Sensorium hardware (Sprint 2 Sensorium)
+            bus.subscribe("SENSORIUM_UPDATE", self._on_sensorium_update)
             self._subscribed = True
-            logger.info("TISSUE: Substrat cellulaire neuronal actif (20 canaux).")
+            logger.info("TISSUE: Substrat cellulaire neuronal actif (21 canaux).")
         except Exception as e:
             logger.warning(f"TISSUE: Erreur init bus: {e}")
 
@@ -961,13 +972,16 @@ class NeuralTissue:
         self._inject_signals()
         self._apply_drainage()
 
-        # 1b. Calculer les rewards effectifs modulés par la dopamine
-        dopamine = self._cognitive_state.get("dopamine_level", 0.5)
-        eff_capture = CAPTURE_REWARD * (0.5 + dopamine)   # 1.5 à 4.5
-        eff_generate = GENERATE_REWARD * (0.5 + dopamine)  # 1.0 à 3.0
+        # 1b. Modulation substrat par hardware (Sprint 3 Sensorium)
+        substrate = self._get_substrate_modulation()
 
-        # 1c. Taux de mutation modulé par le circadien
-        eff_mutation = self._get_effective_mutation_rate()
+        # 1b2. Calculer les rewards effectifs modulés par la dopamine
+        dopamine = self._cognitive_state.get("dopamine_level", 0.5)
+        eff_capture = CAPTURE_REWARD * (0.5 + dopamine) * substrate["reward_boost"]
+        eff_generate = GENERATE_REWARD * (0.5 + dopamine) * substrate["reward_boost"]
+
+        # 1c. Taux de mutation modulé par le circadien + chaleur hardware
+        eff_mutation = self._get_effective_mutation_rate() * substrate["mutation_factor"]
 
         # 1d. Densité par case (compétition locale)
         cell_density = [[0] * GRID_SIZE for _ in range(GRID_SIZE)]
@@ -1010,8 +1024,9 @@ class NeuralTissue:
                 self.total_births += 1
 
         # 3. Ajouter les enfants (si pas surpopulation + vérif toxine)
+        eff_max_cells = int(MAX_CELLS * substrate["pop_cap_factor"])
         for child in new_cells:
-            if len(self.cells) >= MAX_CELLS:
+            if len(self.cells) >= eff_max_cells:
                 break
             # Vérifier toxine sur la case cible
             if self.toxic_timer_grid[child.y][child.x] > 0:
@@ -1103,7 +1118,9 @@ class NeuralTissue:
             "memory":     state["memory_activity"],
             "stability":  state["stability"],
             "creativity": state["creativity"],
-            "cognition":  state["cognition_level"],
+            "cognition":      state["cognition_level"],
+            "thermoception":  state["thermal_stress"],
+            "soma":           state["somatic_load"],
         }
 
         # Modulation thalamique : focus attentionnel → amplifie/atténue les zones
@@ -1299,6 +1316,11 @@ class NeuralTissue:
         s["stability"] = max(0.0, min(float(s.get("stability", 0.7)), 1.0))
         s["creativity"] = max(0.0, min(float(s.get("creativity", 0.3)), 1.0))
         s["cognition_level"] = max(0.0, min(float(s.get("cognition_level", 0.3)), 1.0))
+        # Sensorium hardware
+        s["thermal_stress"] = max(0.0, min(float(s.get("thermal_stress", 0.0)), 1.0))
+        s["somatic_load"] = max(0.0, min(float(s.get("somatic_load", 0.0)), 1.0))
+        s["suffocation"] = max(0.0, min(float(s.get("suffocation", 0.0)), 1.0))
+        s["vitality_level"] = max(0.0, min(float(s.get("vitality_level", 0.5)), 1.0))
 
     # --- Efférences de seuil (Sprint 5) ---
 
@@ -1640,6 +1662,44 @@ class NeuralTissue:
         self._cognitive_state["memory_activity"] = min(
             self._cognitive_state["memory_activity"] + 0.05, 1.0
         )
+
+    # --- Sensorium handler (Sprint 2 Sensorium) ---
+
+    async def _on_sensorium_update(self, event):
+        """Hardware sensorium → cognitive_state thermoception/soma."""
+        senses = event.get("senses", {})
+        self._cognitive_state["thermal_stress"] = senses.get("thermoception", 0.0)
+        self._cognitive_state["somatic_load"] = senses.get("effort", 0.0)
+        self._cognitive_state["suffocation"] = senses.get("suffocation", 0.0)
+        # Vitality inversee : haute valeur sensorium = basse freq = mauvais
+        self._cognitive_state["vitality_level"] = 1.0 - senses.get("vitality", 0.5)
+
+    # --- Substrat dynamique (Sprint 3 Sensorium) ---
+
+    def _get_substrate_modulation(self) -> dict:
+        """Module les parametres du substrat selon le hardware sensorium.
+
+        - mutation_factor [1.0, 2.5] : chaleur = plus de mutations (stress evolutif)
+        - tick_slowdown [1.0, 2.0] : CPU charge = ralentit le tick
+        - pop_cap_factor [0.6, 1.0] : RAM comprimee = reduit MAX_CELLS
+        - reward_boost [0.7, 1.0] : vitalite basse = recompenses reduites
+        """
+        try:
+            from core.sensorium import sensorium as _sensor
+            senses = _sensor.get_senses()
+            return {
+                "mutation_factor": 1.0 + senses.get("thermoception", 0) * 1.5,
+                "tick_slowdown": 1.0 + senses.get("effort", 0) * 1.0,
+                "pop_cap_factor": max(0.6, 1.0 - senses.get("oppression", 0) * 0.4),
+                "reward_boost": max(0.7, 1.0 - senses.get("vitality", 0) * 0.3),
+            }
+        except Exception:
+            return {
+                "mutation_factor": 1.0,
+                "tick_slowdown": 1.0,
+                "pop_cap_factor": 1.0,
+                "reward_boost": 1.0,
+            }
 
     # --- API publique ---
 

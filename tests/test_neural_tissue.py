@@ -114,6 +114,8 @@ class TestMinZoneIntensity:
             "dopamine_level": 0.0, "goal_count": 0.0,
             "desire_intensity": 0.0, "memory_activity": 0.0,
             "stability": 0.0, "creativity": 0.0, "cognition_level": 0.0,
+            "thermal_stress": 0.0, "somatic_load": 0.0,
+            "suffocation": 0.0, "vitality_level": 0.5,
         }
         random.seed(42)
         tissue._inject_signals()
@@ -136,6 +138,8 @@ class TestMinZoneIntensity:
             "dopamine_level": 0.0, "goal_count": 10,
             "desire_intensity": 0.0, "memory_activity": 0.0,
             "stability": 0.0, "creativity": 0.0, "cognition_level": 0.0,
+            "thermal_stress": 0.0, "somatic_load": 0.0,
+            "suffocation": 0.0, "vitality_level": 0.5,
         }
         random.seed(42)
         tissue._inject_signals()
@@ -360,6 +364,8 @@ class TestSeasonality:
             "dopamine_level": 0.5, "goal_count": 0,
             "desire_intensity": 50.0, "memory_activity": 0.3,
             "stability": 0.5, "creativity": 0.3, "cognition_level": 0.3,
+            "thermal_stress": 0.0, "somatic_load": 0.0,
+            "suffocation": 0.0, "vitality_level": 0.5,
         }
         # Pas de goal bonus
         tissue._goal_bonus_zones = {}
@@ -394,6 +400,8 @@ class TestSeasonality:
             "dopamine_level": 0.5, "goal_count": 0,
             "desire_intensity": 50.0, "memory_activity": 0.3,
             "stability": 0.5, "creativity": 0.3, "cognition_level": 0.3,
+            "thermal_stress": 0.0, "somatic_load": 0.0,
+            "suffocation": 0.0, "vitality_level": 0.5,
         }
         tissue._goal_bonus_zones = {}
         random.seed(42)
@@ -2154,3 +2162,160 @@ class TestLocalCompetition:
         energy_gain_crowded = crowded_cell.energy - 50.0 + MAINTENANCE_COST
         assert energy_gain_lone > energy_gain_crowded
         assert energy_gain_lone == pytest.approx(energy_gain_crowded * 5, abs=0.01)
+
+
+# ============================================================
+# Sprint 2 Sensorium — Zones thermoception/soma + cognitive_state
+# ============================================================
+
+class TestSensoriumTissueIntegration:
+    """Sprint 2 Sensorium : injection zones hardware dans le tissu neural."""
+
+    def test_tissue_receives_sensorium(self):
+        """SENSORIUM_UPDATE met a jour cognitive_state."""
+        tissue = _make_tissue()
+        import asyncio
+        event = {
+            "senses": {
+                "thermoception": 0.9,
+                "effort": 0.7,
+                "oppression": 0.3,
+                "suffocation": 0.6,
+                "vitality": 0.4,
+            },
+            "comfort": 0.3,
+            "raw": {},
+        }
+        asyncio.get_event_loop().run_until_complete(
+            tissue._on_sensorium_update(event)
+        )
+        assert tissue._cognitive_state["thermal_stress"] == 0.9
+        assert tissue._cognitive_state["somatic_load"] == 0.7
+        assert tissue._cognitive_state["suffocation"] == 0.6
+        # Vitality inversee : 1.0 - 0.4 = 0.6
+        assert tissue._cognitive_state["vitality_level"] == pytest.approx(0.6, abs=0.01)
+
+    def test_thermoception_zone_exists(self):
+        """Zone thermoception est definie dans SIGNAL_ZONES."""
+        assert "thermoception" in SIGNAL_ZONES
+        x1, y1, x2, y2 = SIGNAL_ZONES["thermoception"]
+        assert x2 > x1 and y2 > y1
+
+    def test_soma_zone_exists(self):
+        """Zone soma est definie dans SIGNAL_ZONES."""
+        assert "soma" in SIGNAL_ZONES
+        x1, y1, x2, y2 = SIGNAL_ZONES["soma"]
+        assert x2 > x1 and y2 > y1
+
+    def test_thermoception_zone_signal(self):
+        """Thermal stress eleve injecte du signal dans zone thermoception."""
+        tissue = _make_tissue()
+        tissue._cognitive_state["thermal_stress"] = 0.9
+        tissue._inject_signals()
+        # Verifier qu'il y a du signal dans la zone thermoception
+        x1, y1, x2, y2 = SIGNAL_ZONES["thermoception"]
+        total_signal = 0.0
+        for gy in range(y1, y2):
+            for gx in range(x1, x2):
+                total_signal += tissue.grid[gy][gx]
+        assert total_signal > 0.0
+
+    def test_soma_zone_signal(self):
+        """Somatic load eleve injecte du signal dans zone soma."""
+        tissue = _make_tissue()
+        tissue._cognitive_state["somatic_load"] = 0.8
+        tissue._inject_signals()
+        x1, y1, x2, y2 = SIGNAL_ZONES["soma"]
+        total_signal = 0.0
+        for gy in range(y1, y2):
+            for gx in range(x1, x2):
+                total_signal += tissue.grid[gy][gx]
+        assert total_signal > 0.0
+
+    def test_zone_adjacency_thermoception(self):
+        """Thermoception est adjacent a emotion, desire, cognition."""
+        assert "thermoception" in ZONE_ADJACENCY
+        adj = ZONE_ADJACENCY["thermoception"]
+        assert "emotion" in adj
+        assert "desire" in adj
+        assert "cognition" in adj
+
+    def test_zone_adjacency_soma(self):
+        """Soma est adjacent a desire, threat, cognition."""
+        assert "soma" in ZONE_ADJACENCY
+        adj = ZONE_ADJACENCY["soma"]
+        assert "desire" in adj
+        assert "threat" in adj
+        assert "cognition" in adj
+
+    def test_adjacency_bidirectional(self):
+        """Les adjacences thermoception/soma sont bidirectionnelles."""
+        for zone_name in ("thermoception", "soma"):
+            for adj in ZONE_ADJACENCY[zone_name]:
+                assert zone_name in ZONE_ADJACENCY[adj], (
+                    f"{zone_name} dans adj de {adj} mais pas reciproque"
+                )
+
+
+# ============================================================
+# Sprint 3 Sensorium — Substrat Dynamique
+# ============================================================
+
+class TestSubstrateDynamic:
+    """Sprint 3 Sensorium : le hardware module le substrat tissulaire."""
+
+    def test_thermoception_increases_mutations(self):
+        """Thermoception 0.8 → mutation_factor ~2.2."""
+        tissue = _make_tissue()
+        from unittest.mock import MagicMock
+        mock_sensor = MagicMock()
+        mock_sensor.get_senses.return_value = {
+            "thermoception": 0.8, "effort": 0, "oppression": 0,
+            "suffocation": 0, "vitality": 0,
+        }
+        import sys
+        mock_mod = MagicMock()
+        mock_mod.sensorium = mock_sensor
+        with patch.dict("sys.modules", {"core.sensorium": mock_mod}):
+            result = tissue._get_substrate_modulation()
+        assert result["mutation_factor"] == pytest.approx(2.2, abs=0.01)
+
+    def test_effort_slows_tick(self):
+        """Effort 1.0 → tick_slowdown 2.0."""
+        tissue = _make_tissue()
+        from unittest.mock import MagicMock
+        mock_sensor = MagicMock()
+        mock_sensor.get_senses.return_value = {
+            "thermoception": 0, "effort": 1.0, "oppression": 0,
+            "suffocation": 0, "vitality": 0,
+        }
+        mock_mod = MagicMock()
+        mock_mod.sensorium = mock_sensor
+        with patch.dict("sys.modules", {"core.sensorium": mock_mod}):
+            result = tissue._get_substrate_modulation()
+        assert result["tick_slowdown"] == pytest.approx(2.0, abs=0.01)
+
+    def test_oppression_reduces_pop_cap(self):
+        """Oppression 1.0 → pop_cap_factor 0.6."""
+        tissue = _make_tissue()
+        from unittest.mock import MagicMock
+        mock_sensor = MagicMock()
+        mock_sensor.get_senses.return_value = {
+            "thermoception": 0, "effort": 0, "oppression": 1.0,
+            "suffocation": 0, "vitality": 0,
+        }
+        mock_mod = MagicMock()
+        mock_mod.sensorium = mock_sensor
+        with patch.dict("sys.modules", {"core.sensorium": mock_mod}):
+            result = tissue._get_substrate_modulation()
+        assert result["pop_cap_factor"] == pytest.approx(0.6, abs=0.01)
+
+    def test_substrate_graceful_without_sensorium(self):
+        """Sensorium absent → facteurs par defaut (1.0)."""
+        tissue = _make_tissue()
+        with patch.dict("sys.modules", {"core.sensorium": None}):
+            result = tissue._get_substrate_modulation()
+        assert result["mutation_factor"] == 1.0
+        assert result["tick_slowdown"] == 1.0
+        assert result["pop_cap_factor"] == 1.0
+        assert result["reward_boost"] == 1.0

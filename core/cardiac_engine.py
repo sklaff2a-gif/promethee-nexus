@@ -571,11 +571,29 @@ class CardiacEngine:
             bus.subscribe("COMPILER_INTERCEPT", self._on_compiler_intercept)
             bus.subscribe("SOLILOQUE_COMPLETE", self._on_soliloque_complete)
             bus.subscribe("HYPOTHALAMUS_COOLDOWN", self._on_hypothalamus_cooldown)
+            # Sensorium hardware (Sprint 4 Sensorium)
+            bus.subscribe("SENSORIUM_THERMAL_ALERT", self._on_sensorium_thermal_alert)
+            bus.subscribe("SENSORIUM_THERMAL_CRITICAL", self._on_sensorium_thermal_critical)
+            bus.subscribe("SENSORIUM_SUFFOCATION", self._on_sensorium_suffocation)
         except Exception as e:
             logger.warning(f"COEUR: Échec souscription bus: {e}")
 
     # _on_dopamine_surge retiré : le pont dopamine→cardiac passe par
     # corpus_callosum Bridge #7 (heart.react("eureka")) pour éviter le double-comptage.
+
+    # --- Sensorium handlers (Sprint 4 Sensorium) ---
+
+    async def _on_sensorium_thermal_alert(self, event: dict):
+        """Alerte thermique hardware → demi-alerte cardiaque."""
+        self.react("adrenaline")
+
+    async def _on_sensorium_thermal_critical(self, event: dict):
+        """Surchauffe critique → alerte pleine."""
+        self.react("threat")
+
+    async def _on_sensorium_suffocation(self, event: dict):
+        """VRAM saturee → determination a reduire la charge."""
+        self.react("veto")
 
     async def _on_dopamine_dip(self, event: dict):
         """Creux dopaminique → deception (failure)."""

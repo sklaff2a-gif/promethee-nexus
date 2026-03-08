@@ -43,6 +43,11 @@ EMA_ALPHAS = {
     "vitality": 0.3,        # Equilibre
 }
 
+# --- Anti-oscillation (Sprint 5 Sensorium) ---
+OSCILLATION_AMPLITUDE_THRESHOLD = 0.2   # Amplitude min pour detecter
+OSCILLATION_PERIOD_THRESHOLD = 20       # Ticks max pour considerer comme oscillation
+OSCILLATION_DAMPING = 0.5               # Facteur d'amortissement EMA alpha
+
 # --- Parametres sigmoide : (midpoint, k, inverted) ---
 # inverted=True signifie que haute valeur brute = bas sens normalise
 SIGMOID_PARAMS = {
@@ -113,6 +118,14 @@ class Sensorium:
         self._was_stressed = False
         self._last_recovery_time = 0.0
 
+        # Anti-oscillation (Sprint 5 Sensorium)
+        self._oscillation_damped: Dict[str, bool] = {s: False for s in SENSE_NAMES}
+
+        # Thermal alerts (Sprint 6 Sensorium)
+        self._thermal_alert_fired = False
+        self._thermal_critical_fired = False
+        self._suffocation_fired = False
+
         # Detection backend GPU
         self._gpu_backend = "heuristic"
         self._gpu_name = ""
@@ -176,6 +189,19 @@ class Sensorium:
 
                 # Detection recovery : stress → confort
                 await self._check_recovery()
+
+                # Publier SENSORIUM_UPDATE a chaque tick (2s)
+                try:
+                    await bus.publish("SENSORIUM_UPDATE", {
+                        "senses": dict(self.senses),
+                        "comfort": self.get_comfort_index(),
+                        "raw": dict(self._raw_last),
+                    })
+                except Exception:
+                    pass
+
+                # Alertes thermiques ciblees (Sprint 6 Sensorium)
+                self._check_thermal_alerts()
 
                 if self._tick_count % SAVE_INTERVAL_TICKS == 0:
                     self._save()
@@ -250,9 +276,17 @@ class Sensorium:
 
     # -------------------------------------------------------------- lissage
     def _smooth(self, normalized: Dict[str, float]):
-        """Lissage EMA. Met a jour self.senses."""
+        """Lissage EMA avec amortissement anti-oscillation (Sprint 5)."""
         for sense, value in normalized.items():
             alpha = EMA_ALPHAS.get(sense, 0.3)
+            # Anti-oscillation : si oscillation detectee, doubler le lissage
+            if self._detect_oscillation(sense):
+                alpha *= OSCILLATION_DAMPING
+                if not self._oscillation_damped.get(sense):
+                    self._oscillation_damped[sense] = True
+                    logger.warning(f"[SENSORIUM] Oscillation detectee sur {sense}, amortissement actif")
+            else:
+                self._oscillation_damped[sense] = False
             prev = self.senses.get(sense, 0.5)
             self.senses[sense] = prev + alpha * (value - prev)
 
@@ -283,6 +317,28 @@ class Sensorium:
             if base:
                 self._active_sigmoid_params[sense] = (new_mid, base[1], base[2])
 
+    # ------------------------------------------------ anti-oscillation
+    def _detect_oscillation(self, sense: str) -> bool:
+        """Detecte si un sens oscille rapidement (signe d'instabilite).
+
+        Verifie les changements de direction dans les derniers N ticks.
+        Si >= 60% des ticks sont des inversions ET l'amplitude >= seuil → oscillation.
+        """
+        buf = self._calibration_buffers.get(sense)
+        if not buf or len(buf) < OSCILLATION_PERIOD_THRESHOLD:
+            return False
+        recent = list(buf)[-OSCILLATION_PERIOD_THRESHOLD:]
+        # Compter les changements de direction
+        direction_changes = sum(
+            1 for i in range(2, len(recent))
+            if (recent[i] - recent[i-1]) * (recent[i-1] - recent[i-2]) < 0
+        )
+        amplitude = max(recent) - min(recent)
+        return (
+            direction_changes >= OSCILLATION_PERIOD_THRESHOLD * 0.6
+            and amplitude >= OSCILLATION_AMPLITUDE_THRESHOLD
+        )
+
     # ------------------------------------------------- methodes publiques
     async def _check_recovery(self):
         """Detecte la transition stress → confort et publie SENSORIUM_RECOVERY."""
@@ -302,6 +358,47 @@ class Sensorium:
                     logger.info(f"[SENSORIUM] Recovery detectee (comfort={comfort:.2f})")
                 except Exception:
                     pass
+
+    def _check_thermal_alerts(self):
+        """Publie des events quand les seuils thermiques sont franchis."""
+        thermo = self.senses.get("thermoception", 0)
+        suffo = self.senses.get("suffocation", 0)
+
+        if thermo > 0.85 and not self._thermal_critical_fired:
+            self._fire_event("SENSORIUM_THERMAL_CRITICAL", {
+                "value": thermo,
+                "raw": self._raw_last.get("thermoception", 0),
+            })
+            self._thermal_critical_fired = True
+            self._thermal_alert_fired = True
+        elif thermo > 0.65 and not self._thermal_alert_fired:
+            self._fire_event("SENSORIUM_THERMAL_ALERT", {
+                "value": thermo,
+                "raw": self._raw_last.get("thermoception", 0),
+            })
+            self._thermal_alert_fired = True
+        elif thermo < 0.5:
+            self._thermal_alert_fired = False
+            self._thermal_critical_fired = False
+
+        if suffo > 0.85 and not self._suffocation_fired:
+            self._fire_event("SENSORIUM_SUFFOCATION", {
+                "value": suffo,
+                "raw": self._raw_last.get("suffocation", 0),
+            })
+            self._suffocation_fired = True
+        elif suffo < 0.6:
+            self._suffocation_fired = False
+
+    @staticmethod
+    def _fire_event(event_name: str, payload: dict):
+        """Fire-and-forget async publish (pas de boucle = skip)."""
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            loop.create_task(bus.publish(event_name, payload))
+        except RuntimeError:
+            pass
 
     def get_senses(self) -> Dict[str, float]:
         """Retourne les 5 sens normalises et lisses [0.0, 1.0]."""
@@ -351,19 +448,33 @@ class Sensorium:
         # Zone neutre : pas d'influence sensorielle
         if comfort >= 0.7:
             return 0.0
+
+        # Modulation par audace PSYCHE (Sprint 4 Sensorium)
+        audace_mod = self._get_audace_modulation()
+
         # Zone intermédiaire (0.4-0.7) : effet léger
         if comfort >= 0.4:
-            stress_factor = (0.7 - comfort) / 0.3  # 0.0 à 1.0
+            stress_factor = (0.7 - comfort) / 0.3 * audace_mod
             if intent in self._HEAVY_INTENTS:
                 return round(-0.5 * stress_factor, 3)
             return 0.0
         # Zone de stress (< 0.4) : effet fort
-        stress_factor = (0.4 - comfort) / 0.4  # 0.0 à 1.0
+        stress_factor = (0.4 - comfort) / 0.4 * audace_mod
         if intent in self._HEAVY_INTENTS:
             return round(-0.5 - 1.5 * stress_factor, 3)  # -0.5 à -2.0
         if intent in self._LIGHT_INTENTS:
             return round(1.0 * stress_factor, 3)  # 0.0 à +1.0
         return 0.0
+
+    def _get_audace_modulation(self) -> float:
+        """Si audace haute → accepter plus de stress hardware (reduire sensibilite)."""
+        try:
+            from core.psyche import psyche
+            avg = psyche.get_system_average()
+            audace = avg.get("audace", 50.0)
+            return 1.0 - (audace - 50.0) / 50.0 * 0.15
+        except Exception:
+            return 1.0
 
     def get_sensorium_context(self) -> str:
         """Contexte corporel pour injection dans le purpose_context."""

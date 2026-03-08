@@ -159,6 +159,7 @@ class SynapticNetwork:
         self._mutations_since_save: int = 0
         self._subscribed = False
         self._last_dream_time: float = time.time()  # Pour decay incrémental entre dreams
+        self._last_routine_node: str = ""  # Dernier noeud routine (pour associations sensorium)
         self._load()
 
     # --- Init & Reset ---
@@ -180,6 +181,7 @@ class SynapticNetwork:
         self._mutations_since_save = 0
         self._subscribed = False
         self._last_dream_time = time.time()
+        self._last_routine_node = ""
         self._initialized = False
 
     @classmethod
@@ -730,6 +732,8 @@ class SynapticNetwork:
             bus.subscribe("PREFRONTAL_GOAL_COMPLETE", self._on_goal_complete)
             bus.subscribe("PREFRONTAL_GOAL_ABANDONED", self._on_goal_abandoned)
             bus.subscribe("CARDIAC_EMOTION_CHANGE", self._on_cardiac_emotion_change)
+            # Sensorium hardware (Sprint 2 Sensorium)
+            bus.subscribe("SENSORIUM_UPDATE", self._on_sensorium_update)
         except Exception as e:
             logger.warning(f"SYNAPSE: Impossible de souscrire aux evenements: {e}")
 
@@ -991,6 +995,9 @@ class SynapticNetwork:
             intent_nid = self.ensure_node(
                 intent, "event", 0.6, ["autonomy"]
             )
+            # Tracker pour associations sensorium
+            if intent_nid:
+                self._last_routine_node = intent_nid
 
             # Extraire concepts du resultat (limite differenciee selon richesse)
             _ROUTINE_CONCEPT_LIMITS = {
@@ -1204,6 +1211,34 @@ class SynapticNetwork:
 
         except Exception as e:
             logger.warning(f"SYNAPSE: Erreur _on_cardiac_emotion_change: {e}")
+
+    async def _on_sensorium_update(self, event: dict):
+        """Hardware sensorium → nodes affect + associations Hebbiennes.
+
+        Ne cree des noeuds que quand un sens est intense (> 0.7) pour eviter le spam.
+        """
+        try:
+            comfort = event.get("comfort", 0.5)
+            senses = event.get("senses", {})
+
+            for sense_name, value in senses.items():
+                if value > 0.7:
+                    node_id = self.ensure_node(
+                        f"hardware_{sense_name}",
+                        node_type="affect",
+                        semantic_weight=value,
+                    )
+                    if not node_id:
+                        continue
+                    # Associer au dernier contexte connu (routine en cours)
+                    if self._last_routine_node and self._last_routine_node in self.nodes:
+                        self.hebbian_strengthen(
+                            self._last_routine_node, node_id,
+                            success=True,
+                            context="sensorium",
+                        )
+        except Exception as e:
+            logger.warning(f"SYNAPSE: Erreur _on_sensorium_update: {e}")
 
     def _extract_and_ensure(self, text: str, node_type: str = "memory",
                             functional_systems: Optional[List[str]] = None,

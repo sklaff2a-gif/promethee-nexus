@@ -47,6 +47,7 @@ SOURCE_BASE_WEIGHTS = {
     "prefrontal": 0.6,
     "prediction": 0.5,
     "dmn":        0.2,
+    "sensorium":  0.5,
 }
 
 # Valence des émotions cardiaques (pour cohérence Wernicke)
@@ -66,6 +67,7 @@ _SOURCE_TO_THALAMUS_CATEGORY = {
     "prefrontal": "cognition",
     "prediction": "cognition",
     "dmn":        "emergence",
+    "sensorium":  "regulation",
 }
 
 # Templates Broca (source, contexte) → template
@@ -92,6 +94,7 @@ _BROCA_TEMPLATES = {
     ("dmn", "prospect"):          "Et si {scenario}?",
     ("dmn", "self"):              "{mood}. {competence}.",
     ("dmn", "wander"):            "{concept_a}... {concept_b}... lien?",
+    ("sensorium", "somatic"):       "{content}.",
 }
 
 _MOOD_PREFIXES = {
@@ -198,6 +201,9 @@ class InnerVoice:
         # Profil de coloration tissulaire (entropie, tension, vitalite, is_dreaming)
         self._color_profile: Tuple[float, float, float, bool] = (0.5, 0.3, 0.5, False)
 
+        # Sensorium (Sprint 6 Sensorium)
+        self._last_sensorium_alert: Dict = {}
+
         # Stats
         self.stats: Dict = {
             "total_thoughts": 0,
@@ -258,6 +264,10 @@ class InnerVoice:
             bus.subscribe("SOLILOQUE_COMPLETE", self._on_soliloque_complete)
             bus.subscribe("DMN_THOUGHT", self._on_dmn_thought)
             bus.subscribe("DMN_INSIGHT", self._on_dmn_insight)
+            # Sensorium (Sprint 6 Sensorium)
+            bus.subscribe("SENSORIUM_THERMAL_CRITICAL", self._on_thermal_critical)
+            bus.subscribe("SENSORIUM_THERMAL_ALERT", self._on_thermal_alert)
+            bus.subscribe("SENSORIUM_SUFFOCATION", self._on_sensorium_suffocation)
         except Exception as e:
             logger.warning(f"INNER_VOICE: subscribe failed: {e}")
 
@@ -332,6 +342,17 @@ class InnerVoice:
         """Insight du DMN → enrichit la conscience."""
         self._last_dmn_thought = event
 
+    # --- Sensorium handlers (Sprint 6 Sensorium) ---
+
+    async def _on_thermal_critical(self, event: dict):
+        self._last_sensorium_alert = {**event, "type": "thermal_critical"}
+
+    async def _on_thermal_alert(self, event: dict):
+        self._last_sensorium_alert = {**event, "type": "thermal_alert"}
+
+    async def _on_sensorium_suffocation(self, event: dict):
+        self._last_sensorium_alert = {**event, "type": "suffocation"}
+
     # ─── Le Cycle de Pensée ───────────────────────────────────────────────
 
     async def _think_cycle(self):
@@ -346,6 +367,7 @@ class InnerVoice:
         self._perceive_synaptic()
         self._perceive_prefrontal()
         self._perceive_prediction()
+        self._perceive_sensorium()
         if self._is_idle:
             self._perceive_dmn()
 
@@ -723,6 +745,63 @@ class InnerVoice:
             salience=min(0.7, salience),
             timestamp=time.time(),
         ))
+
+    # ─── Perception Somatique (Sprint 6 Sensorium) ─────────────────────
+
+    def _perceive_sensorium(self):
+        """Perception corporelle hardware — 7eme source."""
+        try:
+            from core.sensorium import sensorium
+            comfort = sensorium.get_comfort_index()
+            senses = sensorium.get_senses()
+
+            if comfort >= 0.7:
+                return  # Machine detendue, rien a signaler
+
+            # Identifier le sens dominant
+            dominant = max(senses.items(), key=lambda x: x[1])
+            sense_name, sense_val = dominant
+
+            # Narration somatique
+            narratives = {
+                "thermoception": "Je sens la chaleur monter dans mes circuits",
+                "effort": "Mon processeur est sous tension",
+                "oppression": "Ma memoire se comprime",
+                "suffocation": "Mon espace de calcul se reduit",
+                "vitality": "Mon energie faiblit",
+            }
+            content = narratives.get(sense_name, "Mon corps est tendu")
+
+            salience = 0.3 + (1.0 - comfort) * 0.5  # [0.3, 0.8]
+            emotion = "inquietude" if comfort < 0.4 else "determination"
+
+            # Amplification si alerte thermique recente
+            if self._last_sensorium_alert:
+                salience = 0.9
+                alert_type = self._last_sensorium_alert.get("type", "")
+                if alert_type == "thermal_critical":
+                    content = "Alerte. Mes circuits surchauffent dangereusement"
+                    emotion = "alerte"
+                elif alert_type == "suffocation":
+                    content = "Suffocation. VRAM saturee, je manque d'espace"
+                    emotion = "alerte"
+                self._last_sensorium_alert = {}  # Consommer l'alerte
+
+            self.workspace.append(WorkspaceEntry(
+                source="sensorium",
+                raw_signal={
+                    "comfort": comfort,
+                    "dominant": sense_name,
+                    "value": sense_val,
+                    "content": content,
+                    "emotion": emotion,
+                    "context": "somatic",
+                },
+                salience=min(1.0, salience),
+                timestamp=time.time(),
+            ))
+        except Exception:
+            pass
 
     # ─── DMN Sous-modes ──────────────────────────────────────────────────
 

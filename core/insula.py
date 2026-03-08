@@ -97,10 +97,24 @@ class Insula:
             bus.subscribe("DOPAMINE_DIP", self._on_dopamine_dip)
             bus.subscribe("CIRCADIAN_PHASE_CHANGE", self._on_circadian_phase)
             bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
+            # Sensorium hardware (Sprint 4 Sensorium)
+            bus.subscribe("SENSORIUM_UPDATE", self._on_sensorium_update)
         except Exception as e:
             logger.warning(f"[INSULA] Souscription echouee: {e}")
 
     # --- Handlers bus ---
+
+    async def _on_sensorium_update(self, event: dict):
+        """Hardware sensorium → body_state fatigue/stress/energy."""
+        comfort = event.get("comfort", 0.7)
+        senses = event.get("senses", {})
+        effort = senses.get("effort", 0)
+        vitality = senses.get("vitality", 0.5)
+        stress_hw = 1.0 - comfort
+        # Blending EMA : 70-80% ancien + 20-30% nouveau
+        self.body_state["fatigue"] = min(1.0, self.body_state["fatigue"] * 0.7 + effort * 0.3)
+        self.body_state["stress"] = min(1.0, self.body_state["stress"] * 0.8 + stress_hw * 0.2)
+        self.body_state["energy"] = min(1.0, self.body_state["energy"] * 0.8 + (1.0 - vitality) * 0.2)
 
     async def _on_cardiac_beat(self, event: dict):
         """Met a jour arousal depuis BPM."""

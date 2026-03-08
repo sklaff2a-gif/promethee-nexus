@@ -90,6 +90,8 @@ EVENT_IMPACT: Dict[str, Any] = {
     "SOLILOQUE_COMPLETE":     {"CONNEXION": -18, "COMPREHENSION": -5, "STABILITE": -3},
     "CHAT_RESPONSE":          {"CONNEXION": -12, "COMPREHENSION": -3, "STABILITE": -2},
     "CURIOSITY_SATISFIED":    {"CURIOSITE": -12, "COMPREHENSION": -8},
+    # Sensorium hardware (Sprint 4 Sensorium)
+    "HARDWARE_CRISIS":        {"STABILITE": +15, "CURIOSITE": -5, "CREATION": -5},
 }
 
 # --- Seuil de qualité par intent pour considérer un succès ---
@@ -212,6 +214,13 @@ class DesireEngine:
         bus.subscribe("EVOLUTION_ROLLED_BACK", self._on_evolution_rolled_back)
         bus.subscribe("INNER_VOICE_BROADCAST", self._on_inner_voice)
         bus.subscribe("CURIOSITY_LEARNING", self._on_curiosity_learning)
+        # Sensorium hardware (Sprint 4 Sensorium)
+        bus.subscribe("SENSORIUM_THERMAL_CRITICAL", self._on_hardware_crisis)
+        bus.subscribe("SENSORIUM_SUFFOCATION", self._on_hardware_crisis)
+
+    async def _on_hardware_crisis(self, event: dict):
+        """Hardware en crise → STABILITE monte, CURIOSITE et CREATION baissent."""
+        self.on_event("HARDWARE_CRISIS", {})
 
     async def _on_curiosity_learning(self, event: dict):
         """Un reflexe de curiosite resolu satisfait CURIOSITE et COMPREHENSION."""

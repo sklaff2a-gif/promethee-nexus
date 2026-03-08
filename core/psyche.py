@@ -304,6 +304,27 @@ class PsycheEngine:
         bus.subscribe("CI_PIPELINE_RESULT", self._on_ci_result)
         bus.subscribe("AUTONOMY_HEARTBEAT", self._on_heartbeat)
         bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
+        # Sensorium hardware (Sprint 4 Sensorium)
+        bus.subscribe("SENSORIUM_UPDATE", self._on_sensorium_update)
+
+    async def _on_sensorium_update(self, event: dict):
+        """Hardware stress → modulation survie/audace."""
+        comfort = event.get("comfort", 0.7)
+        if comfort >= 0.6:
+            return
+        # Throttle : max 1 modulation par 30s
+        import time
+        now = time.time()
+        if now - getattr(self, '_last_soma_modulation', 0) < 30:
+            return
+        self._last_soma_modulation = now
+        # Stress hardware → survie monte, audace baisse
+        stress_factor = (0.6 - comfort) / 0.6
+        deltas = {
+            "survie": 0.3 * stress_factor,
+            "audace": -0.15 * stress_factor,
+        }
+        self.apply_deltas("_system", deltas, event="SENSORIUM_STRESS")
 
     async def _on_council_end(self, event: dict):
         participants = event.get("participants", [])

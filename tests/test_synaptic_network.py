@@ -1614,3 +1614,73 @@ class TestPurgeNoiseNodes:
         report = network.purge_noise_nodes()
         assert report["purged_nodes"] == 0
         assert report["purged_synapses"] == 0
+
+
+# ============================================================
+# Sprint 2 Sensorium — Associations hardware
+# ============================================================
+
+class TestSensoriumSynaptic:
+    """Sprint 2 Sensorium : noeuds hardware et associations."""
+
+    @pytest.mark.asyncio
+    async def test_creates_hardware_nodes(self, network):
+        """Sens > 0.7 cree un noeud hardware_thermoception."""
+        event = {
+            "senses": {"thermoception": 0.9, "effort": 0.3},
+            "comfort": 0.4,
+            "raw": {},
+        }
+        await network._on_sensorium_update(event)
+        nid = _make_node_id("hardware_thermoception")
+        assert nid in network.nodes
+        assert network.nodes[nid]["node_type"] == "affect"
+
+    @pytest.mark.asyncio
+    async def test_no_node_below_threshold(self, network):
+        """Sens <= 0.7 ne cree pas de noeud."""
+        event = {
+            "senses": {"thermoception": 0.5, "effort": 0.3},
+            "comfort": 0.7,
+            "raw": {},
+        }
+        await network._on_sensorium_update(event)
+        nid = _make_node_id("hardware_thermoception")
+        assert nid not in network.nodes
+
+    @pytest.mark.asyncio
+    async def test_hebbian_with_routine(self, network):
+        """Sens eleve pendant routine active → association Hebbienne."""
+        # Creer un noeud routine en premier
+        routine_nid = network.ensure_node("EXPANSION_CODE", "event", 0.6)
+        network._last_routine_node = routine_nid
+
+        event = {
+            "senses": {"thermoception": 0.85},
+            "comfort": 0.3,
+            "raw": {},
+        }
+        # Patcher _publish_delta pour eviter RuntimeError (pas de running loop dans tests)
+        with patch.object(network, '_publish_delta'):
+            await network._on_sensorium_update(event)
+
+        hw_nid = _make_node_id("hardware_thermoception")
+        assert hw_nid in network.nodes
+        # Verifier la synapse
+        key = _synapse_key(routine_nid, hw_nid)
+        assert key in network.synapses
+
+    @pytest.mark.asyncio
+    async def test_no_hebbian_without_routine(self, network):
+        """Sans routine active, pas d'association Hebbienne."""
+        network._last_routine_node = ""
+        event = {
+            "senses": {"thermoception": 0.9},
+            "comfort": 0.3,
+            "raw": {},
+        }
+        await network._on_sensorium_update(event)
+        hw_nid = _make_node_id("hardware_thermoception")
+        assert hw_nid in network.nodes
+        # Pas de synapse
+        assert len(network.synapses) == 0

@@ -275,7 +275,7 @@ class TestBroca:
         assert len(result) > 0
 
     def test_formulate_max_120_chars(self, voice):
-        """Toute formulation est tronquée à 120 caractères."""
+        """Formulation tronquée dynamiquement (profil neutre → max ~100 chars, <120)."""
         from core.inner_voice import WorkspaceEntry
         entry = WorkspaceEntry(
             source="dmn",
@@ -1288,3 +1288,176 @@ class TestGrimoireSuggestion:
         ])
         suggestion = voice.get_grimoire_suggestion()
         assert suggestion == "code_reviewer"
+
+
+# ============================================================
+# GROUPE : Coloration tissulaire (Sprint D)
+# ============================================================
+
+
+class TestTissueColoration:
+    """Tests pour la coloration tissulaire de la voix intérieure."""
+
+    def _make_entry(self, source="cardiac", context="beat"):
+        from core.inner_voice import WorkspaceEntry
+        return WorkspaceEntry(
+            source=source,
+            raw_signal={"context": context, "bpm": 72, "emotion": "calme",
+                        "direction": "Stable"},
+            salience=0.5, timestamp=1,
+        )
+
+    def test_neutral_profile_no_prefix(self, voice):
+        """Profil neutre (0.5, 0.3, 0.5) → pas de préfixe ajouté."""
+        voice._color_profile = (0.5, 0.3, 0.5, False)
+        entry = self._make_entry()
+        result = voice._formulate(entry)
+        from core.inner_voice import _MOOD_PREFIXES
+        all_prefixes = [p for prefs in _MOOD_PREFIXES.values() for p in prefs]
+        assert not any(result.startswith(p) for p in all_prefixes)
+
+    def test_entropy_high_prefix(self, voice):
+        """Entropie haute (>0.7) → préfixe entropy_high."""
+        voice._color_profile = (0.8, 0.2, 0.5, False)
+        entry = self._make_entry()
+        result = voice._formulate(entry)
+        from core.inner_voice import _MOOD_PREFIXES
+        assert any(result.startswith(p) for p in _MOOD_PREFIXES["entropy_high"])
+
+    def test_tension_high_prefix(self, voice):
+        """Tension haute (>0.6) → préfixe tension_high."""
+        voice._color_profile = (0.3, 0.8, 0.5, False)
+        entry = self._make_entry()
+        result = voice._formulate(entry)
+        from core.inner_voice import _MOOD_PREFIXES
+        assert any(result.startswith(p) for p in _MOOD_PREFIXES["tension_high"])
+
+    def test_vitality_low_prefix(self, voice):
+        """Vitalité basse (<0.3) → préfixe vitality_low."""
+        voice._color_profile = (0.3, 0.2, 0.2, False)
+        entry = self._make_entry()
+        result = voice._formulate(entry)
+        from core.inner_voice import _MOOD_PREFIXES
+        assert any(result.startswith(p) for p in _MOOD_PREFIXES["vitality_low"])
+
+    def test_dreaming_prefix(self, voice):
+        """Mode rêve → préfixe dreaming (prioritaire sur les autres)."""
+        voice._color_profile = (0.9, 0.1, 0.5, True)
+        entry = self._make_entry()
+        result = voice._formulate(entry)
+        from core.inner_voice import _MOOD_PREFIXES
+        assert any(result.startswith(p) for p in _MOOD_PREFIXES["dreaming"])
+
+    def test_dynamic_length_short(self, voice):
+        """Profil faible entropie+vitalité → max ~68, tronqué."""
+        voice._color_profile = (0.1, 0.0, 0.1, False)
+        # max_chars = 60 + int(0.1*60) + int(0.1*20) = 60+6+2 = 68
+        from core.inner_voice import WorkspaceEntry
+        entry = WorkspaceEntry(
+            source="dmn",
+            raw_signal={"context": "retrospect", "count": 10,
+                        "intent": "A" * 50, "pattern": "B" * 50},
+            salience=0.3, timestamp=1,
+        )
+        result = voice._formulate(entry)
+        assert len(result) <= 68
+
+    def test_dynamic_length_long(self, voice):
+        """Profil haute entropie+vitalité → max ~132, pas tronqué à 120."""
+        voice._color_profile = (0.9, 0.0, 0.9, False)
+        # max_chars = 60 + int(0.9*60) + int(0.9*20) = 60+54+18 = 132
+        from core.inner_voice import WorkspaceEntry
+        # Un texte de ~125 chars ne serait pas tronqué avec le profil haut
+        entry = WorkspaceEntry(
+            source="dmn",
+            raw_signal={"context": "retrospect", "count": 10,
+                        "intent": "analyse", "pattern": "X" * 100},
+            salience=0.3, timestamp=1,
+        )
+        result = voice._formulate(entry)
+        # Le max est 132, la pensée peut dépasser 120
+        assert len(result) <= 132
+
+    def test_compute_color_profile_fallback(self, voice):
+        """Si tissue lève une exception → profil neutre retourné."""
+        import sys
+        mock_tissue_mod = MagicMock()
+        mock_tissue_mod.tissue.get_zone_signals.side_effect = RuntimeError("no tissue")
+        with patch.dict("sys.modules", {"core.neural_tissue": mock_tissue_mod}):
+            profile = voice._compute_color_profile()
+        assert profile == (0.5, 0.3, 0.5, False)
+
+
+# ============================================================
+# Sprint 6 Sensorium — Perception somatique
+# ============================================================
+
+class TestSensoriumPerception:
+    """Sprint 6 Sensorium : la voix interieure verbalise les sensations hardware."""
+
+    def test_perceive_sensorium_stressed(self, voice):
+        """Comfort 0.3 → WorkspaceEntry avec source=sensorium."""
+        mock_sensorium = MagicMock()
+        mock_sensorium.get_comfort_index.return_value = 0.3
+        mock_sensorium.get_senses.return_value = {
+            "thermoception": 0.9, "effort": 0.5,
+            "oppression": 0.3, "suffocation": 0.2, "vitality": 0.4,
+        }
+        with patch.dict("sys.modules", {"core.sensorium": MagicMock(sensorium=mock_sensorium)}):
+            voice._perceive_sensorium()
+
+        sensorium_entries = [e for e in voice.workspace if e.source == "sensorium"]
+        assert len(sensorium_entries) == 1
+        entry = sensorium_entries[0]
+        assert entry.raw_signal["dominant"] == "thermoception"
+        assert "chaleur" in entry.raw_signal["content"]
+        assert entry.raw_signal["emotion"] == "inquietude"
+        assert entry.salience >= 0.5
+
+    def test_perceive_sensorium_relaxed(self, voice):
+        """Comfort 0.8 → pas d'entree sensorium."""
+        mock_sensorium = MagicMock()
+        mock_sensorium.get_comfort_index.return_value = 0.8
+        mock_sensorium.get_senses.return_value = {
+            "thermoception": 0.2, "effort": 0.1,
+            "oppression": 0.1, "suffocation": 0.1, "vitality": 0.2,
+        }
+        with patch.dict("sys.modules", {"core.sensorium": MagicMock(sensorium=mock_sensorium)}):
+            voice._perceive_sensorium()
+
+        sensorium_entries = [e for e in voice.workspace if e.source == "sensorium"]
+        assert len(sensorium_entries) == 0
+
+    def test_thermal_critical_amplifies(self, voice):
+        """Event THERMAL_CRITICAL → salience boostee a 0.9."""
+        voice._last_sensorium_alert = {"type": "thermal_critical", "value": 0.95}
+        mock_sensorium = MagicMock()
+        mock_sensorium.get_comfort_index.return_value = 0.2
+        mock_sensorium.get_senses.return_value = {
+            "thermoception": 0.95, "effort": 0.3,
+            "oppression": 0.2, "suffocation": 0.1, "vitality": 0.3,
+        }
+        with patch.dict("sys.modules", {"core.sensorium": MagicMock(sensorium=mock_sensorium)}):
+            voice._perceive_sensorium()
+
+        sensorium_entries = [e for e in voice.workspace if e.source == "sensorium"]
+        assert len(sensorium_entries) == 1
+        assert sensorium_entries[0].salience == 0.9
+        assert "surchauffent" in sensorium_entries[0].raw_signal["content"]
+        # Alerte consommee
+        assert voice._last_sensorium_alert == {}
+
+    def test_perceive_sensorium_dominant_sense(self, voice):
+        """Effort max → narration 'processeur sous tension'."""
+        mock_sensorium = MagicMock()
+        mock_sensorium.get_comfort_index.return_value = 0.4
+        mock_sensorium.get_senses.return_value = {
+            "thermoception": 0.3, "effort": 0.8,
+            "oppression": 0.2, "suffocation": 0.1, "vitality": 0.2,
+        }
+        with patch.dict("sys.modules", {"core.sensorium": MagicMock(sensorium=mock_sensorium)}):
+            voice._perceive_sensorium()
+
+        sensorium_entries = [e for e in voice.workspace if e.source == "sensorium"]
+        assert len(sensorium_entries) == 1
+        assert "processeur" in sensorium_entries[0].raw_signal["content"]
