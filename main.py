@@ -424,10 +424,10 @@ async def lifespan(app: FastAPI):
     await sensorium_organ.start_sampling()
     print(f"   👁️ SENSORIUM: Backend {sensorium_organ._gpu_backend}, {sensorium_organ._tick_count} ticks.")
 
-    # --- NOTIFICATIONS PROACTIVES (Chat Telegram) ---
-    from core.proactive_chat import proactive
-    proactive.init()
-    print("   📬 ProactiveChat: Notifications proactives actives.")
+    # --- OUTREACH : Voix Proactive ---
+    from core.outreach import outreach
+    outreach.init()
+    print("   📬 OUTREACH: Voix proactive active.")
 
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
 
@@ -468,6 +468,7 @@ async def lifespan(app: FastAPI):
     cortex.save()
     desires.save()
     chat_engine._save()
+    outreach._save()
     hippocampus._save()
     print("🔌 Arrêt.")
     tracemalloc.stop()
@@ -846,24 +847,33 @@ async def sensorium_status():
     from core.sensorium import sensorium
     return sensorium.get_stats()
 
-@app.get("/api/proactive/pending")
-async def proactive_pending():
+@app.get("/api/outreach/pending")
+async def outreach_pending(request: Request):
     """Messages proactifs en attente d'envoi."""
-    from core.proactive_chat import proactive
-    return {"messages": proactive.get_pending()}
+    from core.outreach import outreach
+    telegram = request.query_params.get("telegram", "false").lower() == "true"
+    return outreach.get_pending(telegram=telegram)
 
-@app.post("/api/proactive/ack")
-async def proactive_ack():
+@app.post("/api/outreach/ack")
+async def outreach_ack():
     """Acquitte les messages proactifs envoyés."""
-    from core.proactive_chat import proactive
-    proactive.acknowledge()
+    from core.outreach import outreach
+    outreach.acknowledge()
     return {"status": "ok"}
 
-@app.get("/api/proactive/stats")
-async def proactive_stats():
+@app.get("/api/outreach/stats")
+async def outreach_stats():
     """Statistiques des notifications proactives."""
-    from core.proactive_chat import proactive
-    return proactive.get_stats()
+    from core.outreach import outreach
+    return outreach.get_stats()
+
+@app.post("/api/outreach/silent")
+async def outreach_silent(request: Request):
+    """Active/desactive le mode silencieux."""
+    from core.outreach import outreach
+    data = await request.json()
+    outreach.set_silent_mode(data.get("active", False))
+    return {"status": "ok", "silent_mode": outreach._silent_mode}
 
 @app.get("/api/objectives")
 async def api_objectives():

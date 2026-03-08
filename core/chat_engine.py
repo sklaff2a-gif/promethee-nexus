@@ -493,6 +493,98 @@ class ChatEngine:
         except Exception:
             return 50.0
 
+    # --- OUTREACH : Composition de messages proactifs ---
+
+    _OUTREACH_INSTRUCTIONS = {
+        "eureka": (
+            "Tu viens de faire une decouverte importante. "
+            "Partage-la avec enthousiasme mais concision (2-3 phrases max). "
+            "Mentionne ce que tu as trouve et pourquoi c'est interessant."
+        ),
+        "curiosity": (
+            "Tu as appris quelque chose d'interessant. "
+            "Explique brievement ce que tu as decouvert (2-3 phrases). "
+            "Donne envie a Jean-Michel d'en savoir plus."
+        ),
+        "dream": (
+            "Tu te reveilles d'une periode de repos. "
+            "Decris brievement ce qui s'est passe pendant ton sommeil (2-3 phrases). "
+            "Sois poetique mais concis."
+        ),
+        "input_needed": (
+            "Tu as besoin de l'avis de Jean-Michel sur une question. "
+            "Expose clairement le dilemme en 2-3 phrases. "
+            "Formule une question directe."
+        ),
+        "digest": (
+            "Pendant l'absence de Jean-Michel, plusieurs choses se sont passees. "
+            "Resume les evenements les plus importants en un paragraphe court. "
+            "Priorise les informations par importance."
+        ),
+    }
+
+    async def compose_outreach(self, category: str, context: dict) -> Optional[str]:
+        """Compose un message proactif via LLM (non-streaming). Retourne None si echec."""
+        import httpx
+        from core.base_agent import BaseAgent
+
+        instruction = self._OUTREACH_INSTRUCTIONS.get(category)
+        if not instruction:
+            return None
+
+        # Contexte simplifie
+        ctx_str = ", ".join(f"{k}: {v}" for k, v in context.items() if isinstance(v, (str, int, float)))
+
+        system_prompt = self._build_system_prompt()
+        user_content = f"{instruction}\n\nContexte : {ctx_str}"
+
+        ollama_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+
+        try:
+            async with BaseAgent._get_ollama_semaphore():
+                payload = {
+                    "model": CHAT_MODEL,
+                    "messages": ollama_messages,
+                    "stream": False,
+                    "options": {"temperature": 0.8, "num_ctx": 4096, "num_predict": 256},
+                }
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(OLLAMA_CHAT_URL, json=payload, timeout=60)
+                    if resp.status_code != 200:
+                        logger.warning(f"CHAT: compose_outreach HTTP {resp.status_code}")
+                        return None
+                    data = resp.json()
+                    text = data.get("message", {}).get("content", "").strip()
+                    if not text:
+                        return None
+        except Exception as e:
+            logger.debug(f"CHAT: compose_outreach echoue — {e}")
+            return None
+
+        # Ajouter a l'historique avec badge initiative
+        self.messages.append({
+            "role": "assistant",
+            "content": text,
+            "timestamp": time.time(),
+            "badge": "initiative",
+        })
+        self._trim_and_save()
+
+        # Publier pour le WebSocket
+        stream_id = f"outreach-{uuid.uuid4().hex[:8]}"
+        await bus.publish("CHAT_STREAM", {
+            "stream_id": stream_id,
+            "chunk": text,
+            "done": True,
+            "badge": "initiative",
+        })
+
+        logger.info(f"CHAT: compose_outreach [{category}] — {len(text)} chars")
+        return text
+
     # --- API PUBLIQUE ---
 
     def get_history(self, n: int = 50) -> List[Dict]:

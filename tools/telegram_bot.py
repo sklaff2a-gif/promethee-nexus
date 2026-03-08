@@ -386,9 +386,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ═══════════════════════════════════════════════════════════════════
 
 async def check_proactive_messages(context: ContextTypes.DEFAULT_TYPE):
-    """Poll l'API pour les messages proactifs et les envoie."""
+    """Poll l'API Outreach pour les messages proactifs et les envoie."""
     try:
-        data = await api_get("/api/proactive/pending")
+        data = await api_get("/api/outreach/pending?telegram=true")
         if not data or not data.get("messages"):
             return
         for msg in data["messages"]:
@@ -400,10 +400,10 @@ async def check_proactive_messages(context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown",
                 )
         # Acquitter les messages envoyés
-        await api_post("/api/proactive/ack", {})
+        await api_post("/api/outreach/ack", {})
         log.info("Messages proactifs envoyes: %d", len(data["messages"]))
     except Exception as e:
-        log.debug("Proactive check failed: %s", e)
+        log.debug("Outreach check failed: %s", e)
 
 
 # ═══════════════════════════════════════════════════════════════════
