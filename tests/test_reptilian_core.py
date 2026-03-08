@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from core.reptilian_core import (
+    ADAPTIVE_THRESHOLDS,
     ADRENALINE_DECAY,
     HABITUATION_DECAY_PER_TICK,
     HABITUATION_FLOOR,
@@ -1572,3 +1573,80 @@ class TestHypothalamusAlarmPlancher:
         await rept._on_hypothalamus_alarm({"variable": "energy", "severity": 5.0})
         # floor = min(3.0, 5.0 * 2.0) = 3.0
         assert rept.threat_level == 3.0
+
+
+# ============================================================
+# Planchers absolus adaptatifs (anti faux-positifs RAM/CPU)
+# ============================================================
+
+class TestAdaptiveFloors:
+    """Les seuils adaptatifs ne déclenchent que si la valeur est aussi au-dessus du plancher absolu."""
+
+    def _make_mock_psutil(self, cpu_val: float, ram_val: float) -> MagicMock:
+        """Crée un mock psutil complet pour _sense_threats."""
+        mock = MagicMock()
+        mock.cpu_percent.return_value = cpu_val
+        mock.virtual_memory.return_value = MagicMock(percent=ram_val)
+        mock.sensors_temperatures = MagicMock(side_effect=AttributeError)
+        mock.Process.return_value.memory_info.return_value.rss = 500 * 1024 * 1024  # 500MB
+        return mock
+
+    @pytest.mark.asyncio
+    async def test_ram_below_floor_no_threat(self, rept):
+        """RAM à P95 mais valeur 65% (< floor 70%) → pas de threat."""
+        rept._ram_tracker.is_ready = MagicMock(return_value=True)
+        rept._ram_tracker.get_percentile_of = MagicMock(return_value=0.96)
+        rept._ram_tracker.record = MagicMock()
+        rept._cpu_tracker.is_ready = MagicMock(return_value=False)
+        rept._cpu_tracker.record = MagicMock()
+
+        mock_psutil = self._make_mock_psutil(30.0, 65.0)
+        with patch.dict("sys.modules", {"psutil": mock_psutil}):
+            threats = await rept._sense_threats()
+
+        assert threats.get("ram", 0) == 0, "RAM 65% sous le floor 70% ne doit PAS déclencher de threat"
+
+    @pytest.mark.asyncio
+    async def test_ram_above_floor_triggers(self, rept):
+        """RAM à P95 et valeur 82% (> floor 80%) → threat 8.0."""
+        rept._ram_tracker.is_ready = MagicMock(return_value=True)
+        rept._ram_tracker.get_percentile_of = MagicMock(return_value=0.96)
+        rept._ram_tracker.record = MagicMock()
+        rept._cpu_tracker.is_ready = MagicMock(return_value=False)
+        rept._cpu_tracker.record = MagicMock()
+
+        mock_psutil = self._make_mock_psutil(30.0, 82.0)
+        with patch.dict("sys.modules", {"psutil": mock_psutil}):
+            threats = await rept._sense_threats()
+
+        assert threats.get("ram", 0) == 8.0, "RAM 82% au-dessus du floor 80% DOIT déclencher threat crit"
+
+    @pytest.mark.asyncio
+    async def test_cpu_below_floor_no_threat(self, rept):
+        """CPU à P97 mais valeur 50% (< floor 60%) → pas de threat."""
+        rept._cpu_tracker.is_ready = MagicMock(return_value=True)
+        rept._cpu_tracker.get_percentile_of = MagicMock(return_value=0.98)
+        rept._cpu_tracker.record = MagicMock()
+        rept._ram_tracker.is_ready = MagicMock(return_value=False)
+        rept._ram_tracker.record = MagicMock()
+
+        mock_psutil = self._make_mock_psutil(50.0, 40.0)
+        with patch.dict("sys.modules", {"psutil": mock_psutil}):
+            threats = await rept._sense_threats()
+
+        assert threats.get("cpu", 0) == 0, "CPU 50% sous le floor 60% ne doit PAS déclencher de threat"
+
+    @pytest.mark.asyncio
+    async def test_cpu_above_floor_triggers(self, rept):
+        """CPU à P97 et valeur 90% (> floor 85%) → threat 8.0."""
+        rept._cpu_tracker.is_ready = MagicMock(return_value=True)
+        rept._cpu_tracker.get_percentile_of = MagicMock(return_value=0.98)
+        rept._cpu_tracker.record = MagicMock()
+        rept._ram_tracker.is_ready = MagicMock(return_value=False)
+        rept._ram_tracker.record = MagicMock()
+
+        mock_psutil = self._make_mock_psutil(90.0, 40.0)
+        with patch.dict("sys.modules", {"psutil": mock_psutil}):
+            threats = await rept._sense_threats()
+
+        assert threats.get("cpu", 0) == 8.0, "CPU 90% au-dessus du floor 85% DOIT déclencher threat crit"

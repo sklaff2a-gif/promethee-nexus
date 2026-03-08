@@ -73,6 +73,11 @@ ADAPTIVE_THRESHOLDS = {
     "cpu_crit_percentile": 0.97,
     "ram_warn_percentile": 0.80,
     "ram_crit_percentile": 0.95,
+    # Planchers absolus — en dessous, les percentiles adaptatifs sont ignorés
+    "cpu_warn_floor": 60,    # pas d'alerte CPU warn sous 60%
+    "cpu_crit_floor": 85,    # pas d'alerte CPU crit sous 85%
+    "ram_warn_floor": 70,    # pas d'alerte RAM warn sous 70%
+    "ram_crit_floor": 80,    # pas d'alerte RAM crit sous 80%
 }
 
 # Cooldowns des réflexes (secondes) — anti-spam
@@ -287,11 +292,11 @@ class ReptilianCore:
                 # Niveau 1 : sécurité absolue (grenouille bouillie)
                 threats["cpu"] = 8.0
             elif self._cpu_tracker.is_ready():
-                # Niveau 2 : adaptatif (percentiles glissants)
+                # Niveau 2 : adaptatif (percentiles glissants) + planchers absolus
                 cpu_pct = self._cpu_tracker.get_percentile_of(cpu)
-                if cpu_pct >= ADAPTIVE_THRESHOLDS["cpu_crit_percentile"]:
+                if cpu_pct >= ADAPTIVE_THRESHOLDS["cpu_crit_percentile"] and cpu >= ADAPTIVE_THRESHOLDS["cpu_crit_floor"]:
                     threats["cpu"] = 8.0
-                elif cpu_pct >= ADAPTIVE_THRESHOLDS["cpu_warn_percentile"]:
+                elif cpu_pct >= ADAPTIVE_THRESHOLDS["cpu_warn_percentile"] and cpu >= ADAPTIVE_THRESHOLDS["cpu_warn_floor"]:
                     threats["cpu"] = 4.0
             else:
                 # Niveau 3 : cold start (seuils hardcodés)
@@ -311,9 +316,9 @@ class ReptilianCore:
                     )
                     self._ram_critical_logged = now
             elif self._ram_tracker.is_ready():
-                # Niveau 2 : adaptatif
+                # Niveau 2 : adaptatif + planchers absolus
                 ram_pct = self._ram_tracker.get_percentile_of(ram)
-                if ram_pct >= ADAPTIVE_THRESHOLDS["ram_crit_percentile"]:
+                if ram_pct >= ADAPTIVE_THRESHOLDS["ram_crit_percentile"] and ram >= ADAPTIVE_THRESHOLDS["ram_crit_floor"]:
                     threats["ram"] = 8.0
                     now = time.time()
                     if now - self._ram_critical_logged > 120:
@@ -321,7 +326,7 @@ class ReptilianCore:
                             f"REPTILIEN: RAM CRITIQUE {ram:.0f}% (percentile {ram_pct:.2f})"
                         )
                         self._ram_critical_logged = now
-                elif ram_pct >= ADAPTIVE_THRESHOLDS["ram_warn_percentile"]:
+                elif ram_pct >= ADAPTIVE_THRESHOLDS["ram_warn_percentile"] and ram >= ADAPTIVE_THRESHOLDS["ram_warn_floor"]:
                     threats["ram"] = 4.0
                     now = time.time()
                     if now - self._ram_critical_logged > 300:
