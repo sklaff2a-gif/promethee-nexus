@@ -493,6 +493,13 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Incubation Cognitive
+        try:
+            from core.incubation_cognitive import incubation
+            snapshot["incubation"] = incubation.get_stats()
+        except Exception:
+            pass
+
         # Neural Tissue
         try:
             from core.neural_tissue import tissue

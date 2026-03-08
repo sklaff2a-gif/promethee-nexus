@@ -694,6 +694,7 @@ class AutonomyEngine:
             ("insula", "core.insula", "insula", "compute_interoception_bonus"),
             ("cingulate", "core.cingulate_cortex", "cingulate", "compute_conflict_bonus"),
             ("basal_ganglia", "core.basal_ganglia", "ganglia", "compute_habit_bonus"),
+            ("incubation", "core.incubation_cognitive", "incubation", "compute_eureka_bonus"),
         ]
         for layer_name, module_path, instance_name, method_name in scoring_methods:
             try:
@@ -1032,6 +1033,16 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Bonus incubation cognitive (Couche 21) ---
+        try:
+            from core.incubation_cognitive import incubation
+            for i, (routine, s) in enumerate(scored):
+                bonus = incubation.compute_eureka_bonus(routine["intent"])
+                if bonus != 0.0:
+                    scored[i] = (routine, s + bonus)
+        except Exception:
+            pass
+
         # --- Clamping final du score total ---
         # Empêche le score d'exploser quand beaucoup de couches poussent dans la même direction
         scored = [(r, max(FINAL_SCORE_CLAMP_MIN, min(FINAL_SCORE_CLAMP_MAX, s))) for r, s in scored]
@@ -1295,6 +1306,14 @@ class AutonomyEngine:
                 dmn_ctx = dmn.get_dmn_context()
                 if dmn_ctx:
                     purpose_ctx += f"\n{dmn_ctx}"
+            except Exception:
+                pass
+            # Incubation cognitive (subconscient asynchrone)
+            try:
+                from core.incubation_cognitive import incubation
+                incub_ctx = incubation.get_incubation_context()
+                if incub_ctx:
+                    purpose_ctx += f"\n{incub_ctx}"
             except Exception:
                 pass
             # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)

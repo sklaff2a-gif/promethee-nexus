@@ -408,6 +408,11 @@ async def lifespan(app: FastAPI):
     dmn_task = asyncio.create_task(dmn.start_wandering())
     print(f"   💭 DMN: Réseau du mode par défaut actif ({dmn.total_wanderings} vagabondages).")
 
+    # --- INCUBATION COGNITIVE (Subconscient Asynchrone) ---
+    from core.incubation_cognitive import incubation as incubation_cognitive
+    incubation_cognitive.init()
+    print(f"   🧬 INCUBATION: Subconscient actif ({len(incubation_cognitive._queue)} problèmes).")
+
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
 
     # --- CI/CD Pipeline (remplace quality_control_listener) ---
@@ -433,6 +438,7 @@ async def lifespan(app: FastAPI):
     ganglia._save()
     dmn.stop()
     dmn._save()
+    incubation_cognitive._save()
     reptile.save()
     prefrontal.save()
     inner_voice.save()
@@ -692,6 +698,12 @@ async def dmn_status():
     """Retourne l'etat du reseau du mode par defaut (vagabondage, insights)."""
     from core.default_mode_network import dmn
     return dmn.get_stats()
+
+@app.get("/api/incubation/stats")
+async def incubation_stats():
+    """Retourne l'etat de l'incubation cognitive (problemes, eurekas)."""
+    from core.incubation_cognitive import incubation
+    return incubation.get_stats()
 
 @app.get("/api/roadmap/candidates")
 async def roadmap_candidates():

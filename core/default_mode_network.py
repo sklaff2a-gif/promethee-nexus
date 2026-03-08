@@ -213,6 +213,13 @@ class DefaultModeNetwork:
         if self.total_wanderings % 5 == 0:
             self._save()
 
+        # Hook incubation cognitive (subconscient asynchrone)
+        try:
+            from core.incubation_cognitive import incubation
+            await incubation._on_dmn_wander_cycle()
+        except Exception:
+            pass
+
     # --- Association libre ---
 
     def _generate_free_associations(self) -> List[dict]:
@@ -240,12 +247,12 @@ class DefaultModeNetwork:
         if not associations:
             try:
                 from core.hippocampus import hippocampus
-                episodes = hippocampus.get_recent_episodes(CONSOLIDATION_BATCH_SIZE)
+                episodes = hippocampus.get_session_narrative(CONSOLIDATION_BATCH_SIZE)
                 for i, ep in enumerate(episodes):
                     if i + 1 < len(episodes):
                         associations.append({
-                            "from": ep.get("intent", f"ep_{i}"),
-                            "to": episodes[i + 1].get("intent", f"ep_{i+1}"),
+                            "from": ep.get("summary", f"ep_{i}"),
+                            "to": episodes[i + 1].get("summary", f"ep_{i+1}"),
                             "type": "episodic_link",
                         })
             except Exception:
@@ -259,7 +266,8 @@ class DefaultModeNetwork:
         try:
             from core.hippocampus import hippocampus
             if hasattr(hippocampus, 'consolidate'):
-                count = hippocampus.consolidate(CONSOLIDATION_BATCH_SIZE)
+                hippocampus.consolidate()
+                count = 1
                 self.consolidation_count += count
         except Exception:
             pass

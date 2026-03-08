@@ -168,7 +168,7 @@
       "phase_name": "ORGANES MANQUANTS",
       "display": "incubation_cognitive",
       "description": "Incubation cognitive — subconscient asynchrone. Depose un probleme insoluble dans l'hippocampe, laisse spreading_activation faire des associations libres en tache de fond, detecte les connexions fortes inattendues (Eureka), publie EUREKA_MOMENT pour declencher une routine autonome. Inspire de la discussion Gemini 2026-03-05.",
-      "status": "planned",
+      "status": "implemented",
       "specs": [],
       "depends_on": ["default_mode_network"],
       "estimated_cost": 7,
