@@ -51,6 +51,7 @@ SIGNAL_DECAY = 0.92
 MAX_GRID_SIGNAL = 5.0              # Saturation : signal max par cellule de grille
 TICK_INTERVAL = 2.0
 SAVE_EVERY_N_TICKS = 50
+SAVE_TOP_CELLS = 150                # Cellules sauvegardées au reboot (diversité génétique)
 FOOD_SPAWN_PER_ZONE = 3
 MIN_ZONE_INTENSITY = 0.15          # Plancher signal — aucune zone ne reçoit 0
 PATTERN_TRACK_SIZE = 20
@@ -1849,7 +1850,7 @@ class NeuralTissue:
             [c for c in self.cells if c.alive],
             key=lambda c: c.output_count,
             reverse=True,
-        )[:50]
+        )[:SAVE_TOP_CELLS]
 
         data = {
             "tick_count": self.tick_count,
