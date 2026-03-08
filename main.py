@@ -418,6 +418,12 @@ async def lifespan(app: FastAPI):
     curiosity_reflex.init()
     print(f"   🔍 CURIOSITE: Reflexe actif ({curiosity_reflex._total_queries} queries).")
 
+    # --- SENSORIUM (Perception Corporelle Hardware) ---
+    from core.sensorium import sensorium as sensorium_organ
+    sensorium_organ.init()
+    await sensorium_organ.start_sampling()
+    print(f"   👁️ SENSORIUM: Backend {sensorium_organ._gpu_backend}, {sensorium_organ._tick_count} ticks.")
+
     print("   🧠 Autonomie & Gouvernance : ACTIVES.")
 
     # --- CI/CD Pipeline (remplace quality_control_listener) ---
@@ -445,6 +451,8 @@ async def lifespan(app: FastAPI):
     dmn._save()
     incubation_cognitive._save()
     curiosity_reflex._save()
+    sensorium_organ.stop()
+    sensorium_organ._save()
     reptile.save()
     prefrontal.save()
     inner_voice.save()
@@ -826,6 +834,12 @@ async def curiosity_stats():
     """Retourne les stats du reflexe de curiosite."""
     from core.curiosity_reflex import curiosity
     return curiosity.get_stats()
+
+@app.get("/api/sensorium/status")
+async def sensorium_status():
+    """Retourne les 5 sens corporels et metriques hardware."""
+    from core.sensorium import sensorium
+    return sensorium.get_stats()
 
 @app.get("/api/objectives")
 async def api_objectives():

@@ -507,6 +507,13 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Sensorium (perception corporelle hardware)
+        try:
+            from core.sensorium import sensorium
+            snapshot["sensorium"] = sensorium.get_stats()
+        except Exception:
+            pass
+
         # Neural Tissue
         try:
             from core.neural_tissue import tissue

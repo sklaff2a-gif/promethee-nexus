@@ -249,6 +249,29 @@
       "updated_at": "2026-03-05T00:00:00"
     },
     {
+      "id": "sensorium",
+      "phase": 2,
+      "phase_name": "ORGANES MANQUANTS",
+      "display": "sensorium",
+      "description": "Perception corporelle du hardware — 5 sens interoceptifs (thermoception, effort, oppression, suffocation, vitalite) via sigmoide + EMA",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 5,
+      "completion_criteria": [],
+      "research_topics": [
+        "sensorium interoception hardware sensing GPU temperature body awareness AI"
+      ],
+      "connects_to": [
+        "core.sensorium",
+        "core.insula",
+        "core.reptilian_core",
+        "core.self_awareness"
+      ],
+      "created_at": "2026-03-08T00:00:00",
+      "updated_at": "2026-03-08T00:00:00"
+    },
+    {
       "id": "signal_bus",
       "phase": 3,
       "phase_name": "SIGNAL BUS",
