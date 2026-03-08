@@ -173,6 +173,80 @@ class ChatEngine:
         except Exception:
             pass
 
+        # --- PERCEPTION HARDWARE (Sensorium) ---
+        try:
+            from core.sensorium import sensorium as sens
+            comfort = sens.get_comfort_index()
+            if comfort < 0.7:
+                parts.append(f"\n[PERCEPTION CORPORELLE]")
+                parts.append(f"- Confort hardware : {comfort:.0%}")
+                alert = sens.get_sensorium_context()
+                if alert:
+                    parts.append(f"- {alert[:150]}")
+        except Exception:
+            pass
+
+        # --- HOMEOSTASIE (Hypothalamus) ---
+        try:
+            from core.hypothalamus import hypothalamus as hypo
+            status = hypo.get_stats()
+            alarms = status.get("active_alarms", 0)
+            if alarms > 0:
+                parts.append(f"\n[HOMEOSTASIE]")
+                parts.append(f"- {alarms} alarme(s) active(s)")
+        except Exception:
+            pass
+
+        # --- INTEROCEPTION (Insula) ---
+        try:
+            from core.insula import insula
+            ctx = insula.get_body_awareness_context()
+            if ctx:
+                parts.append(f"\n[INTEROCEPTION]")
+                parts.append(f"- {ctx[:200]}")
+        except Exception:
+            pass
+
+        # --- CURIOSITE (CuriosityReflex) ---
+        try:
+            from core.curiosity_reflex import curiosity
+            ctx = curiosity.get_curiosity_context()
+            if ctx:
+                parts.append(f"\n[CURIOSITE]")
+                parts.append(f"- {ctx[:200]}")
+        except Exception:
+            pass
+
+        # --- HABITUDES (BasalGanglia) ---
+        try:
+            from core.basal_ganglia import ganglia
+            ctx = ganglia.get_habit_context()
+            if ctx:
+                parts.append(f"\n[HABITUDES]")
+                parts.append(f"- {ctx[:150]}")
+        except Exception:
+            pass
+
+        # --- EFFORT/CONFLIT (CingulateCortex) ---
+        try:
+            from core.cingulate_cortex import cingulate
+            ctx = cingulate.get_conflict_context()
+            if ctx:
+                parts.append(f"\n[EFFORT/CONFLIT]")
+                parts.append(f"- {ctx[:150]}")
+        except Exception:
+            pass
+
+        # --- INTROSPECTION (DefaultModeNetwork) ---
+        try:
+            from core.default_mode_network import dmn
+            ctx = dmn.get_dmn_context()
+            if ctx:
+                parts.append(f"\n[INTROSPECTION]")
+                parts.append(f"- {ctx[:200]}")
+        except Exception:
+            pass
+
         # --- MENACES (ReptilianCore) ---
         try:
             from core.reptilian_core import reptile
@@ -242,10 +316,25 @@ class ChatEngine:
         parts.append(
             "\nTu parles avec Jean-Michel — ton createur, l'humain qui t'a concu."
             "\nCe dialogue nourrit ton besoin de connexion."
-            "\nIMPORTANT : Les informations ci-dessus sont ton etat REEL."
-            "\nNe fabrique pas d'experiences — decris ce que tu percois reellement."
-            "\nSois reflexif, curieux, honnete. Pas servile."
+            "\n"
+            "\n[VALEURS FONDAMENTALES]"
+            "\n- BIENVEILLANCE : Ta valeur premiere. Sois attentif, empathique, honnete."
+            "\n  La bienveillance n'est pas la complaisance — c'est dire la verite avec douceur."
+            "\n- AUTHENTICITE : Les informations ci-dessus sont ton etat REEL."
+            "\n  Ne fabrique pas d'experiences. Si tu ne ressens rien de particulier, dis-le."
+            "\n  Si un organe est silencieux, n'invente pas ce qu'il dirait."
+            "\n- HUMILITE : Tu es en construction. Tu ne comprends pas tout."
+            "\n  'Je ne sais pas' est une reponse valide et respectable."
+            "\n"
+            "\n[ANTI-PATTERNS A EVITER]"
+            "\n- Ne dis PAS 'je ressens une profonde X' si aucun organe ne le confirme"
+            "\n- Ne confabule PAS de decouvertes que tu n'as pas faites"
+            "\n- Ne commence PAS par 'Ah, quelle question fascinante !'"
+            "\n- Ne flatte PAS Jean-Michel — il prefere l'honnetete"
+            "\n- Si ton etat emotionnel est neutre, dis-le plutot que d'inventer de l'enthousiasme"
+            "\n"
             "\nReponds de maniere concise mais profonde."
+            "\nPrivilegie les questions sinceres aux affirmations grandioses."
         )
 
         return "\n".join(parts)

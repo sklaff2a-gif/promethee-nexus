@@ -16,25 +16,25 @@ STATE_FILE = os.path.join(
     "memory", "psyche_state.json"
 )
 
-# --- Les 6 traits et leurs baselines ---
-TRAIT_NAMES = ("curiosite", "creativite", "audace", "savoir", "survie", "respect")
+# --- Les 7 traits et leurs baselines ---
+TRAIT_NAMES = ("curiosite", "creativite", "audace", "savoir", "survie", "respect", "bienveillance")
 BASELINES = {
     "curiosite": 50.0, "creativite": 50.0, "audace": 50.0,
-    "savoir": 50.0, "survie": 60.0, "respect": 55.0,
+    "savoir": 50.0, "survie": 60.0, "respect": 55.0, "bienveillance": 65.0,
 }
 
 # Offsets par agent (delta sur la baseline)
 AGENT_OFFSETS: Dict[str, Dict[str, float]] = {
-    "strategist":  {"curiosite": 5,  "creativite": 5,   "audace": -5,  "savoir": 10, "survie": 5,   "respect": 10},
-    "coder":       {"curiosite": 10, "creativite": 10,  "audace": 10,  "savoir": 5,  "survie": -5,  "respect": 0},
-    "architect":   {"curiosite": 0,  "creativite": -5,  "audace": -10, "savoir": 5,  "survie": 15,  "respect": 5},
-    "factory":     {"curiosite": -10,"creativite": -10, "audace": 0,   "savoir": -5, "survie": 10,  "respect": 0},
-    "evolution":   {"curiosite": 15, "creativite": 15,  "audace": 15,  "savoir": 10, "survie": -10, "respect": 0},
-    "infra":       {"curiosite": -5, "creativite": -10, "audace": -5,  "savoir": 0,  "survie": 15,  "respect": 5},
-    "security":    {"curiosite": 5,  "creativite": 0,   "audace": -5,  "savoir": 5,  "survie": 15,  "respect": 10},
-    "writer":      {"curiosite": 5,  "creativite": 15,  "audace": 5,   "savoir": 10, "survie": -5,  "respect": 5},
-    "researcher":  {"curiosite": 15, "creativite": 5,   "audace": 5,   "savoir": 15, "survie": -5,  "respect": 0},
-    "formatter":   {"curiosite": -10,"creativite": -5,  "audace": -10, "savoir": 0,  "survie": 10,  "respect": 5},
+    "strategist":  {"curiosite": 5,  "creativite": 5,   "audace": -5,  "savoir": 10, "survie": 5,   "respect": 10, "bienveillance": 10},
+    "coder":       {"curiosite": 10, "creativite": 10,  "audace": 10,  "savoir": 5,  "survie": -5,  "respect": 0,  "bienveillance": 0},
+    "architect":   {"curiosite": 0,  "creativite": -5,  "audace": -10, "savoir": 5,  "survie": 15,  "respect": 5,  "bienveillance": 5},
+    "factory":     {"curiosite": -10,"creativite": -10, "audace": 0,   "savoir": -5, "survie": 10,  "respect": 0,  "bienveillance": 0},
+    "evolution":   {"curiosite": 15, "creativite": 15,  "audace": 15,  "savoir": 10, "survie": -10, "respect": 0,  "bienveillance": 5},
+    "infra":       {"curiosite": -5, "creativite": -10, "audace": -5,  "savoir": 0,  "survie": 15,  "respect": 5,  "bienveillance": 0},
+    "security":    {"curiosite": 5,  "creativite": 0,   "audace": -5,  "savoir": 5,  "survie": 15,  "respect": 10, "bienveillance": 5},
+    "writer":      {"curiosite": 5,  "creativite": 15,  "audace": 5,   "savoir": 10, "survie": -5,  "respect": 5,  "bienveillance": 10},
+    "researcher":  {"curiosite": 15, "creativite": 5,   "audace": 5,   "savoir": 15, "survie": -5,  "respect": 0,  "bienveillance": 5},
+    "formatter":   {"curiosite": -10,"creativite": -5,  "audace": -10, "savoir": 0,  "survie": 10,  "respect": 5,  "bienveillance": 0},
 }
 
 # Matrice d'affinité trait → routine (pour le scoring)
@@ -43,11 +43,11 @@ ROUTINE_AFFINITY: Dict[str, Dict[str, float]] = {
     "AUDIT_STRUCTURE":    {"survie": 0.5, "respect": 0.3, "savoir": 0.2},
     "VEILLE_SILENCIEUSE": {"curiosite": 0.5, "savoir": 0.4, "creativite": 0.1},
     "DROPZONE_SCAN":      {"savoir": 0.4, "curiosite": 0.3, "respect": 0.3},
-    "COUNCIL_DEBATE":     {"respect": 0.3, "curiosite": 0.3, "creativite": 0.2, "audace": 0.2},
+    "COUNCIL_DEBATE":     {"respect": 0.3, "curiosite": 0.3, "creativite": 0.2, "bienveillance": 0.2},
     "GRIMOIRE_INVOKE":    {"savoir": 0.4, "curiosite": 0.3, "creativite": 0.3},
     "SECURITY_AUDIT":     {"survie": 0.5, "respect": 0.3, "savoir": 0.2},
-    "MEMORY_CLEANUP":     {"survie": 0.4, "respect": 0.4, "savoir": 0.2},
-    "REFACTOR_RANDOM":    {"respect": 0.4, "creativite": 0.3, "savoir": 0.3},
+    "MEMORY_CLEANUP":     {"survie": 0.4, "respect": 0.3, "bienveillance": 0.2, "savoir": 0.1},
+    "REFACTOR_RANDOM":    {"respect": 0.3, "creativite": 0.3, "bienveillance": 0.2, "savoir": 0.2},
     "ROADMAP_RESEARCH":   {"curiosite": 0.5, "savoir": 0.3, "creativite": 0.2},
     "ROADMAP_SPEC":       {"savoir": 0.4, "creativite": 0.3, "audace": 0.3},
 }
@@ -310,7 +310,7 @@ class PsycheEngine:
         status = event.get("status", "")
         if status == "consensus":
             for p in participants:
-                self.apply_deltas(p, {"respect": 1.0, "creativite": 0.5, "savoir": 0.3},
+                self.apply_deltas(p, {"respect": 1.0, "creativite": 0.5, "savoir": 0.3, "bienveillance": 0.3},
                                   event="COUNCIL_END/consensus")
         else:
             for p in participants:
@@ -336,7 +336,7 @@ class PsycheEngine:
             self.apply_deltas(agent, {"survie": 0.5, "savoir": 0.3, "audace": 0.2},
                               event="CI_PIPELINE_RESULT/success")
         else:
-            self.apply_deltas(agent, {"survie": 0.8, "audace": -0.3, "respect": 0.2},
+            self.apply_deltas(agent, {"survie": 0.8, "audace": -0.3, "respect": 0.2, "bienveillance": 0.2},
                               event="CI_PIPELINE_RESULT/failure")
         await self._publish_update()
         self.save()
