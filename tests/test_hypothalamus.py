@@ -31,6 +31,7 @@ def isolate_hypothalamus(tmp_path, monkeypatch):
     h._last_regulation = 0.0
     h._alarm_last_fired = {}
     h._alarm_repeat_count = {}
+    h._alarm_sustained_count = {}
     h._subscribed = False
     mod.hypothalamus = h
     yield h
@@ -205,8 +206,11 @@ class TestHypothalamusRegulation:
     async def test_alarm_on_high_deviation(self, isolate_hypothalamus):
         h = isolate_hypothalamus
         h.current_values["stress"] = 1.0  # error > ALARM_THRESHOLD
+        # L'alarme nécessite ALARM_SUSTAINED_CYCLES cycles consécutifs
+        from core.hypothalamus import ALARM_SUSTAINED_CYCLES
         with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock) as mock_pub:
-            await h.regulate()
+            for _ in range(ALARM_SUSTAINED_CYCLES):
+                await h.regulate()
         alarm_calls = [c for c in mock_pub.call_args_list if c[0][0] == "HYPOTHALAMUS_ALARM"]
         assert len(alarm_calls) >= 1
         assert h.alarms_triggered > 0
@@ -451,9 +455,12 @@ class TestAlarmCooldown:
 
     @pytest.mark.asyncio
     async def test_alarm_fires_first_time(self, isolate_hypothalamus):
-        """Première alarme émise normalement."""
+        """Première alarme émise après ALARM_SUSTAINED_CYCLES cycles."""
+        from core.hypothalamus import ALARM_SUSTAINED_CYCLES
         h = isolate_hypothalamus
         h.current_values["stress"] = 1.0  # error > ALARM_THRESHOLD
+        # Pré-seed : il ne reste plus qu'un cycle pour déclencher
+        h._alarm_sustained_count["stress"] = ALARM_SUSTAINED_CYCLES - 1
         with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock) as mock_pub:
             await h.regulate()
         alarm_calls = [c for c in mock_pub.call_args_list if c[0][0] == "HYPOTHALAMUS_ALARM"]
@@ -464,11 +471,13 @@ class TestAlarmCooldown:
     @pytest.mark.asyncio
     async def test_alarm_blocked_during_cooldown(self, isolate_hypothalamus):
         """Alarme supprimée si <120s depuis la dernière."""
+        from core.hypothalamus import ALARM_SUSTAINED_CYCLES
         h = isolate_hypothalamus
         h.current_values["stress"] = 1.0
+        h._alarm_sustained_count["stress"] = ALARM_SUSTAINED_CYCLES - 1
         with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock):
             await h.regulate()
-        # Deuxième appel immédiat → cooldown bloque
+        # Deuxième appel immédiat → cooldown bloque (sustained déjà atteint)
         with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock) as mock_pub:
             await h.regulate()
         alarm_calls = [c for c in mock_pub.call_args_list if c[0][0] == "HYPOTHALAMUS_ALARM"]
@@ -478,8 +487,10 @@ class TestAlarmCooldown:
     @pytest.mark.asyncio
     async def test_alarm_fires_after_cooldown(self, isolate_hypothalamus):
         """Alarme ré-émise après expiration du cooldown."""
+        from core.hypothalamus import ALARM_SUSTAINED_CYCLES
         h = isolate_hypothalamus
         h.current_values["stress"] = 1.0
+        h._alarm_sustained_count["stress"] = ALARM_SUSTAINED_CYCLES - 1
         with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock):
             await h.regulate()
         # Simuler cooldown expiré
@@ -493,8 +504,10 @@ class TestAlarmCooldown:
     @pytest.mark.asyncio
     async def test_severity_degrades_on_repeat(self, isolate_hypothalamus):
         """2ème alarme a une severity réduite."""
+        from core.hypothalamus import ALARM_SUSTAINED_CYCLES
         h = isolate_hypothalamus
         h.current_values["stress"] = 1.0
+        h._alarm_sustained_count["stress"] = ALARM_SUSTAINED_CYCLES - 1
         with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock):
             await h.regulate()
         # Simuler cooldown expiré pour permettre la 2ème alarme
@@ -510,12 +523,13 @@ class TestAlarmCooldown:
     @pytest.mark.asyncio
     async def test_severity_floor(self, isolate_hypothalamus):
         """Après N répétitions, severity ne descend pas sous le floor."""
-        from core.hypothalamus import ALARM_SEVERITY_FLOOR
+        from core.hypothalamus import ALARM_SEVERITY_FLOOR, ALARM_SUSTAINED_CYCLES
         h = isolate_hypothalamus
         h.current_values["stress"] = 1.0
-        # Simuler 20 répétitions passées
+        # Simuler 20 répétitions passées + sustained déjà atteint
         h._alarm_repeat_count["stress"] = 20
         h._alarm_last_fired["stress"] = time.time() - 200
+        h._alarm_sustained_count["stress"] = ALARM_SUSTAINED_CYCLES - 1
         with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock) as mock_pub:
             await h.regulate()
         alarm_calls = [c for c in mock_pub.call_args_list if c[0][0] == "HYPOTHALAMUS_ALARM"]
@@ -525,9 +539,11 @@ class TestAlarmCooldown:
 
     @pytest.mark.asyncio
     async def test_reset_on_recovery(self, isolate_hypothalamus):
-        """Variable revenue sous le seuil → compteur reset."""
+        """Variable revenue sous le seuil → compteurs reset."""
+        from core.hypothalamus import ALARM_SUSTAINED_CYCLES
         h = isolate_hypothalamus
         h.current_values["stress"] = 1.0
+        h._alarm_sustained_count["stress"] = ALARM_SUSTAINED_CYCLES - 1
         with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock):
             await h.regulate()
         assert h._alarm_repeat_count.get("stress", 0) == 1
@@ -536,13 +552,17 @@ class TestAlarmCooldown:
         with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock):
             await h.regulate()
         assert "stress" not in h._alarm_repeat_count
+        assert "stress" not in h._alarm_sustained_count
 
     @pytest.mark.asyncio
     async def test_independent_per_variable(self, isolate_hypothalamus):
         """Cooldown energy n'affecte pas stress."""
+        from core.hypothalamus import ALARM_SUSTAINED_CYCLES
         h = isolate_hypothalamus
         h.current_values["energy"] = 0.0  # error > threshold
         h.current_values["stress"] = 1.0  # error > threshold
+        h._alarm_sustained_count["energy"] = ALARM_SUSTAINED_CYCLES - 1
+        h._alarm_sustained_count["stress"] = ALARM_SUSTAINED_CYCLES - 1
         with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock):
             await h.regulate()
         # energy en cooldown, mais on reset le cooldown de stress seulement

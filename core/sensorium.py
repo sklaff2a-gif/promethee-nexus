@@ -47,6 +47,7 @@ EMA_ALPHAS = {
 OSCILLATION_AMPLITUDE_THRESHOLD = 0.2   # Amplitude min pour detecter
 OSCILLATION_PERIOD_THRESHOLD = 20       # Ticks max pour considerer comme oscillation
 OSCILLATION_DAMPING = 0.5               # Facteur d'amortissement EMA alpha
+OSCILLATION_HYSTERESIS_TICKS = 10       # Rester amorti N ticks apres fin oscillation
 
 # --- Parametres sigmoide : (midpoint, k, inverted) ---
 # inverted=True signifie que haute valeur brute = bas sens normalise
@@ -118,8 +119,9 @@ class Sensorium:
         self._was_stressed = False
         self._last_recovery_time = 0.0
 
-        # Anti-oscillation (Sprint 5 Sensorium)
+        # Anti-oscillation (Sprint 5 Sensorium) + hysteresis
         self._oscillation_damped: Dict[str, bool] = {s: False for s in SENSE_NAMES}
+        self._oscillation_damped_remaining: Dict[str, int] = {s: 0 for s in SENSE_NAMES}
 
         # Thermal alerts (Sprint 6 Sensorium)
         self._thermal_alert_fired = False
@@ -276,15 +278,23 @@ class Sensorium:
 
     # -------------------------------------------------------------- lissage
     def _smooth(self, normalized: Dict[str, float]):
-        """Lissage EMA avec amortissement anti-oscillation (Sprint 5)."""
+        """Lissage EMA avec amortissement anti-oscillation + hysteresis."""
         for sense, value in normalized.items():
             alpha = EMA_ALPHAS.get(sense, 0.3)
-            # Anti-oscillation : si oscillation detectee, doubler le lissage
+            # Anti-oscillation avec hysteresis : rester amorti N ticks apres fin oscillation
             if self._detect_oscillation(sense):
                 alpha *= OSCILLATION_DAMPING
+                self._oscillation_damped_remaining[sense] = OSCILLATION_HYSTERESIS_TICKS
                 if not self._oscillation_damped.get(sense):
                     self._oscillation_damped[sense] = True
                     logger.warning(f"[SENSORIUM] Oscillation detectee sur {sense}, amortissement actif")
+            elif self._oscillation_damped_remaining.get(sense, 0) > 0:
+                # Hysteresis : continuer a amortir pendant le decompte
+                alpha *= OSCILLATION_DAMPING
+                self._oscillation_damped_remaining[sense] -= 1
+                if self._oscillation_damped_remaining[sense] <= 0:
+                    self._oscillation_damped[sense] = False
+                    logger.info(f"[SENSORIUM] Hysteresis terminee sur {sense}, amortissement desactive")
             else:
                 self._oscillation_damped[sense] = False
             prev = self.senses.get(sense, 0.5)

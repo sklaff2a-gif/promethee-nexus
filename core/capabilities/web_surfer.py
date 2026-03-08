@@ -85,6 +85,26 @@ class WebSurfer:
             "total_all_time": quota.get("total", 0),
         }
 
+    @staticmethod
+    def _filter_ddg_relevance(query: str, results: list) -> list:
+        """Filtre les résultats DDG par chevauchement de mots-clés avec la requête.
+        Élimine les résultats hors-sujet (ex: clubs de judo pour une requête IA)."""
+        # Extraire les mots significatifs de la requête (>= 3 chars, minuscules)
+        query_words = {w.lower() for w in query.split() if len(w) >= 3}
+        if not query_words:
+            return results  # Requête trop courte, pas de filtre
+
+        filtered = []
+        for r in results:
+            text = f"{r.get('title', '')} {r.get('body', '')}".lower()
+            # Compter combien de mots de la requête apparaissent dans le résultat
+            overlap = sum(1 for w in query_words if w in text)
+            ratio = overlap / len(query_words) if query_words else 0
+            # Garder si au moins 30% des mots-clés de la requête sont présents
+            if ratio >= 0.3:
+                filtered.append(r)
+        return filtered
+
     def search(self, query: str, max_results=5):
         """Tente Google via SerpApi (si quota OK), sinon bascule sur DuckDuckGo."""
 
@@ -122,12 +142,21 @@ class WebSurfer:
 
         # 2. FALLBACK DUCKDUCKGO (Gratuit, illimité)
         try:
-            ddg_results = DDGS().text(query, max_results=max_results)
+            ddg_results = DDGS().text(query, max_results=max_results + 3)  # sur-fetch pour filtrer
             if not ddg_results:
                 return "Aucun résultat trouvé (ni Google, ni DDG)."
 
+            # Pré-filtrage : vérifier pertinence avant d'envoyer au LLM
+            filtered = self._filter_ddg_relevance(query, ddg_results)
+            if not filtered:
+                # Aucun résultat pertinent → retourner quand même les bruts mais signaler
+                summary = "⚠️ Résultats DDG peu pertinents pour la requête :\n"
+                for r in ddg_results[:max_results]:
+                    summary += f"- [DDG?] {r['title']}\n  LIEN: {r['href']}\n  INFO: {r['body']}\n\n"
+                return summary
+
             summary = ""
-            for r in ddg_results:
+            for r in filtered[:max_results]:
                 summary += f"- [DDG] {r['title']}\n  LIEN: {r['href']}\n  INFO: {r['body']}\n\n"
             return summary
 

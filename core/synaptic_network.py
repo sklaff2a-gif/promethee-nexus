@@ -160,6 +160,8 @@ class SynapticNetwork:
         self._subscribed = False
         self._last_dream_time: float = time.time()  # Pour decay incrémental entre dreams
         self._last_routine_node: str = ""  # Dernier noeud routine (pour associations sensorium)
+        self._suppress_deltas: bool = False  # Batch mode : supprime les deltas individuels
+        self._pending_deltas: List[dict] = []  # Deltas accumules en mode batch
         self._load()
 
     # --- Init & Reset ---
@@ -233,13 +235,32 @@ class SynapticNetwork:
     # --- Publication delta temps reel ---
 
     def _publish_delta(self, change_type: str, data: dict):
-        """Publie un delta SYNAPTIC_UPDATE via le bus (non-bloquant)."""
+        """Publie un delta SYNAPTIC_UPDATE via le bus (non-bloquant).
+        Si _suppress_deltas est actif, accumule dans _pending_deltas."""
+        if self._suppress_deltas:
+            self._pending_deltas.append({"change": change_type, **data})
+            return
         try:
             loop = asyncio.get_running_loop()
             from core.event_bus.bus import bus
             loop.create_task(bus.publish("SYNAPTIC_UPDATE", {"change": change_type, **data}))
         except RuntimeError:
             pass  # Pas de boucle asyncio (tests)
+
+    async def _flush_deltas(self):
+        """Publie tous les deltas accumules en un seul SYNAPTIC_BATCH."""
+        if not self._pending_deltas:
+            return
+        batch = self._pending_deltas[:]
+        self._pending_deltas = []
+        try:
+            from core.event_bus.bus import bus
+            await bus.publish("SYNAPTIC_BATCH", {
+                "count": len(batch),
+                "deltas": batch[:20],  # Limiter le payload (resume)
+            })
+        except Exception:
+            pass
 
     # --- Capture d'affect ---
 
@@ -1053,7 +1074,7 @@ class SynapticNetwork:
             logger.warning(f"SYNAPSE: Erreur _on_routine_complete: {e}")
 
     async def _on_council_end(self, event: dict):
-        """Council termine : concepts du debat."""
+        """Council termine : concepts du debat (batch mode pour eviter flood bus)."""
         try:
             topic = event.get("topic", event.get("council_id", ""))
             status = event.get("status", "")
@@ -1061,6 +1082,10 @@ class SynapticNetwork:
 
             if not topic:
                 return
+
+            # Activer batch mode — accumule les deltas au lieu de les publier un par un
+            self._suppress_deltas = True
+            self._pending_deltas = []
 
             topic_nid = self.ensure_node(topic, "event", 0.7, ["council"])
             concept_nids = self._extract_and_ensure(
@@ -1071,7 +1096,13 @@ class SynapticNetwork:
             for cnid in concept_nids:
                 self.hebbian_strengthen(topic_nid, cnid, success=success,
                                         context=f"council:{topic[:50]}")
+
+            # Flush : publier un seul evenement SYNAPTIC_BATCH
+            self._suppress_deltas = False
+            await self._flush_deltas()
         except Exception as e:
+            self._suppress_deltas = False
+            self._pending_deltas = []
             logger.warning(f"SYNAPSE: Erreur _on_council_end: {e}")
 
     async def _on_eureka_bridge(self, event: dict):

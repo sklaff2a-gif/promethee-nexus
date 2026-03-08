@@ -83,7 +83,8 @@ class TestShouldTrigger:
         """Configure l'etat pour que _should_trigger retourne True."""
         isolate._processing = False
         isolate._daily_queries = 0
-        isolate._daily_date = "2026-03-08"
+        from datetime import date
+        isolate._daily_date = date.today().isoformat()
         isolate._last_query_time = 0.0
         isolate._topic_cooldowns = {}
         isolate._history = []
@@ -550,7 +551,8 @@ class TestPersistence:
 
         isolate._total_queries = 5
         isolate._daily_queries = 3
-        isolate._daily_date = "2026-03-08"
+        from datetime import date
+        isolate._daily_date = date.today().isoformat()
         q = CuriosityQuery(id="abc123", topic="test", asked_at=1000.0, resolved=True)
         isolate._history = [q]
         isolate._save()

@@ -150,6 +150,30 @@ class StrategicJournal:
             text = text[:max_chars].rstrip() + "\n[...tronqué]"
         return text
 
+    def get_by_subject(self, subject_key: str) -> Optional[dict]:
+        """Cherche la dernière entrée Council dont le sujet contient subject_key.
+        Retourne {"summary": ..., "status": ...} ou None."""
+        if not subject_key or not self._entries:
+            return None
+        key_lower = subject_key.lower()
+        # Parcourir en ordre inverse (plus récent d'abord)
+        for entry in reversed(self._entries):
+            if "Council" not in entry:
+                continue
+            entry_lower = entry.lower()
+            if key_lower not in entry_lower:
+                continue
+            # Extraire le verdict et la conclusion
+            status = ""
+            conclusion = ""
+            for line in entry.split("\n"):
+                if line.startswith("**Verdict**:"):
+                    status = line.split(":", 1)[1].strip()
+                elif line.startswith("**Conclusion**:"):
+                    conclusion = line.split(":", 1)[1].strip()
+            return {"summary": conclusion, "status": status}
+        return None
+
     def get_full_journal(self) -> str:
         """Retourne le journal complet en markdown."""
         if not self._entries:

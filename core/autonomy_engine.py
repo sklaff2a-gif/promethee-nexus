@@ -1882,6 +1882,26 @@ class AutonomyEngine:
                 if not best_slug:
                     best_slug = slugs[self.total_routines_executed % len(slugs)]
 
+            # Guard : dr_debug n'a de sens que s'il y a des erreurs recentes
+            if best_slug == "dr_debug":
+                recent_errors = [
+                    h for h in self.routine_history[-10:]
+                    if h.get("status") == "error" or h.get("quality", 1.0) < 0.4
+                ]
+                if not recent_errors:
+                    # Pas d'erreur → passer au slug suivant
+                    remaining = [s for s in slugs if s != "dr_debug"]
+                    if remaining:
+                        # LRU parmi les restants
+                        recent_grimoire = [
+                            h.get("grimoire_slug") for h in self.routine_history
+                            if h.get("intent") == "GRIMOIRE_INVOKE" and h.get("grimoire_slug")
+                        ]
+                        best_slug = next((s for s in remaining if s not in recent_grimoire), remaining[0])
+                        print(f"   🛡️ dr_debug skippé (pas d'erreur récente) → {best_slug}")
+                    else:
+                        return {"status": "skipped", "result": "dr_debug sans contexte d'erreur, aucun autre agent disponible."}
+
             # Trouver la description pour construire la mission
             entry = next((e for e in grimoire_index if e["slug"] == best_slug), None)
             description = entry.get("description", "Agent spécialisé") if entry else "Agent spécialisé"
@@ -2008,6 +2028,19 @@ class AutonomyEngine:
             journal_context = strat_journal.get_recent_context(3)
             if journal_context:
                 mission += "\n\nMÉMOIRE DES DÉBATS PRÉCÉDENTS :\n" + journal_context
+
+            # Mémoire du Président : si ce sujet a déjà été débattu, injecter les conclusions
+            subject_key = topic.get("subject_key", "")
+            if subject_key and hasattr(strat_journal, "get_by_subject"):
+                previous = strat_journal.get_by_subject(subject_key)
+                if previous:
+                    prev_summary = previous.get("summary", previous.get("conclusion", ""))[:500]
+                    prev_status = previous.get("status", "inconnu")
+                    mission += (
+                        f"\n\n⚠️ ATTENTION — Ce sujet a DÉJÀ été débattu (statut: {prev_status}).\n"
+                        f"Conclusions précédentes : {prev_summary}\n"
+                        f"NE PAS répéter les mêmes arguments. Soit approfondir, soit proposer un angle nouveau."
+                    )
         except Exception as e:
             logger.warning(f"[COUNCIL] Journal stratégique indisponible: {e}")
 

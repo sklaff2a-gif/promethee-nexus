@@ -37,6 +37,7 @@ ALARM_THRESHOLD = 0.7
 ALARM_COOLDOWN_SECONDS = 120   # Re-alarme même variable après 2 min minimum
 ALARM_SEVERITY_DECAY = 0.15    # Réduction severity à chaque ré-alarme successive
 ALARM_SEVERITY_FLOOR = 0.3     # Severity minimum (ne descend pas en dessous)
+ALARM_SUSTAINED_CYCLES = 3    # Nombre de cycles consécutifs avant de déclencher une alarme
 
 # --- Mapping intent → variable favorisee/penalisee ---
 
@@ -113,6 +114,7 @@ class Hypothalamus:
         self._last_regulation: float = 0.0
         self._alarm_last_fired: Dict[str, float] = {}   # variable → timestamp dernière alarme
         self._alarm_repeat_count: Dict[str, int] = {}    # variable → nb répétitions consécutives
+        self._alarm_sustained_count: Dict[str, int] = {}  # cycles consécutifs au-dessus du seuil
 
         self._load()
 
@@ -248,23 +250,28 @@ class Hypothalamus:
                 corrections.append(correction)
                 self.total_corrections += 1
 
-            # Alarme si deviation trop forte (avec cooldown per-variable)
+            # Alarme si deviation soutenue (N cycles consécutifs au-dessus du seuil)
             if abs(error) > ALARM_THRESHOLD:
-                now = time.time()
-                last = self._alarm_last_fired.get(var, 0.0)
-                if now - last >= ALARM_COOLDOWN_SECONDS:
-                    # Severity dégressive sur répétitions
-                    repeats = self._alarm_repeat_count.get(var, 0)
-                    raw_severity = abs(error)
-                    severity = max(ALARM_SEVERITY_FLOOR, raw_severity - repeats * ALARM_SEVERITY_DECAY)
-                    alarm = {"variable": var, "error": round(error, 3), "severity": round(severity, 3)}
-                    alarms.append(alarm)
-                    self.alarms_triggered += 1
-                    self._alarm_last_fired[var] = now
-                    self._alarm_repeat_count[var] = repeats + 1
+                sustained = self._alarm_sustained_count.get(var, 0) + 1
+                self._alarm_sustained_count[var] = sustained
+
+                if sustained >= ALARM_SUSTAINED_CYCLES:
+                    now = time.time()
+                    last = self._alarm_last_fired.get(var, 0.0)
+                    if now - last >= ALARM_COOLDOWN_SECONDS:
+                        # Severity dégressive sur répétitions
+                        repeats = self._alarm_repeat_count.get(var, 0)
+                        raw_severity = abs(error)
+                        severity = max(ALARM_SEVERITY_FLOOR, raw_severity - repeats * ALARM_SEVERITY_DECAY)
+                        alarm = {"variable": var, "error": round(error, 3), "severity": round(severity, 3)}
+                        alarms.append(alarm)
+                        self.alarms_triggered += 1
+                        self._alarm_last_fired[var] = now
+                        self._alarm_repeat_count[var] = repeats + 1
             else:
-                # Variable OK → reset répétitions pour cette variable
+                # Variable OK → reset compteurs pour cette variable
                 self._alarm_repeat_count.pop(var, None)
+                self._alarm_sustained_count.pop(var, None)
 
         # Stocker dans l'historique
         if corrections:
@@ -415,6 +422,7 @@ class Hypothalamus:
                 "corrections_history": list(self.corrections_history),
                 "alarm_last_fired": self._alarm_last_fired,
                 "alarm_repeat_count": self._alarm_repeat_count,
+                "alarm_sustained_count": self._alarm_sustained_count,
                 "saved_at": time.time(),
             }
             tmp = HYPOTHALAMUS_STATE_FILE + ".tmp"
@@ -439,6 +447,7 @@ class Hypothalamus:
                 self.corrections_history = deque(hist[-HOMEOSTASIS_HISTORY_SIZE:], maxlen=HOMEOSTASIS_HISTORY_SIZE)
                 self._alarm_last_fired = {k: float(v) for k, v in data.get("alarm_last_fired", {}).items()}
                 self._alarm_repeat_count = {k: int(v) for k, v in data.get("alarm_repeat_count", {}).items()}
+                self._alarm_sustained_count = {k: int(v) for k, v in data.get("alarm_sustained_count", {}).items()}
                 logger.info("[HYPOTHALAMUS] Etat restaure.")
         except Exception as e:
             logger.warning(f"[HYPOTHALAMUS] Chargement echoue: {e}")

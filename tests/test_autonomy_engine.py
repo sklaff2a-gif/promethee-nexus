@@ -719,7 +719,7 @@ class TestGrimoireInvokeRoutine:
 
     @pytest.mark.asyncio
     async def test_execute_grimoire_routine_rotation(self):
-        """Le slug le moins récemment invoqué est choisi."""
+        """Le slug le moins récemment invoqué est choisi (dr_debug skippé sans erreur)."""
         fake_index = [
             {"slug": "math_wizard", "name": "MathWizard", "description": "Maths", "keywords": ["calcul"]},
             {"slug": "dr_debug", "name": "DrDebug", "description": "Debug", "keywords": ["debug"]},
@@ -735,7 +735,29 @@ class TestGrimoireInvokeRoutine:
              patch("core.autonomy_engine.orchestrator") as mock_orch:
             mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "ok"})
             result = await self.engine._execute_grimoire_routine()
-            # dr_debug doit être choisi (pas encore invoqué)
+            call_args = mock_orch.dispatch_task.call_args
+            # dr_debug skippé (pas d'erreur récente) → math_wizard en fallback
+            assert call_args[0][0] == "math_wizard"
+
+    @pytest.mark.asyncio
+    async def test_execute_grimoire_dr_debug_with_errors(self):
+        """dr_debug est invoqué normalement quand il y a des erreurs récentes."""
+        fake_index = [
+            {"slug": "math_wizard", "name": "MathWizard", "description": "Maths", "keywords": ["calcul"]},
+            {"slug": "dr_debug", "name": "DrDebug", "description": "Debug", "keywords": ["debug"]},
+        ]
+        self.engine.routine_history = [
+            {"agent": "_grimoire", "intent": "GRIMOIRE_INVOKE", "status": "success",
+             "timestamp": "2026-02-14T10:00:00", "grimoire_slug": "math_wizard"},
+            {"agent": "coder", "intent": "EXPANSION_CODE", "status": "error",
+             "timestamp": "2026-02-14T10:05:00"},
+        ]
+        with patch("builtins.open", MagicMock()), \
+             patch("json.load", return_value=fake_index), \
+             patch("os.path.join", return_value="/fake/path"), \
+             patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "ok"})
+            result = await self.engine._execute_grimoire_routine()
             call_args = mock_orch.dispatch_task.call_args
             assert call_args[0][0] == "dr_debug"
 
@@ -1532,7 +1554,7 @@ class TestGrimoireSlugRotation:
     async def test_grimoire_routine_sets_last_slug(self):
         """_execute_grimoire_routine stocke le slug dans _last_grimoire_slug."""
         fake_index = [
-            {"slug": "dr_debug", "name": "DrDebug", "description": "Debug", "keywords": ["debug"]},
+            {"slug": "math_wizard", "name": "MathWizard", "description": "Maths", "keywords": ["calcul"]},
         ]
         with patch("builtins.open", MagicMock()), \
              patch("json.load", return_value=fake_index), \
@@ -1540,7 +1562,7 @@ class TestGrimoireSlugRotation:
              patch("core.autonomy_engine.orchestrator") as mock_orch:
             mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "ok"})
             await self.engine._execute_grimoire_routine()
-            assert self.engine._last_grimoire_slug == "dr_debug"
+            assert self.engine._last_grimoire_slug == "math_wizard"
 
     @pytest.mark.asyncio
     async def test_grimoire_rotation_skips_recent_slugs(self):
@@ -1571,16 +1593,16 @@ class TestGrimoireSlugRotation:
         """Si tous les slugs ont été invoqués, fallback sur modulo."""
         fake_index = [
             {"slug": "math_wizard", "name": "MathWizard", "description": "Maths", "keywords": ["calcul"]},
-            {"slug": "dr_debug", "name": "DrDebug", "description": "Debug", "keywords": ["debug"]},
+            {"slug": "log_analyst", "name": "LogAnalyst", "description": "Logs", "keywords": ["log"]},
         ]
         # Les deux déjà invoqués
         self.engine.routine_history = [
             {"agent": "_grimoire", "intent": "GRIMOIRE_INVOKE", "status": "success",
              "timestamp": "2026-02-14T10:00:00", "grimoire_slug": "math_wizard"},
             {"agent": "_grimoire", "intent": "GRIMOIRE_INVOKE", "status": "success",
-             "timestamp": "2026-02-14T11:00:00", "grimoire_slug": "dr_debug"},
+             "timestamp": "2026-02-14T11:00:00", "grimoire_slug": "log_analyst"},
         ]
-        self.engine.total_routines_executed = 1  # 1 % 2 = 1 → dr_debug
+        self.engine.total_routines_executed = 1  # 1 % 2 = 1 → log_analyst
         with patch("builtins.open", MagicMock()), \
              patch("json.load", return_value=fake_index), \
              patch("os.path.join", return_value="/fake/path"), \
@@ -1588,7 +1610,7 @@ class TestGrimoireSlugRotation:
             mock_orch.dispatch_task = AsyncMock(return_value={"status": "success", "result": "ok"})
             await self.engine._execute_grimoire_routine()
             call_args = mock_orch.dispatch_task.call_args
-            assert call_args[0][0] == "dr_debug"
+            assert call_args[0][0] == "log_analyst"
 
 
 # ═══════════════════════════════════════════════════════════
