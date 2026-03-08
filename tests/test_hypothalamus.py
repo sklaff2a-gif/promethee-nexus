@@ -29,6 +29,8 @@ def isolate_hypothalamus(tmp_path, monkeypatch):
     h.alarms_triggered = 0
     h._cycle_count = 0
     h._last_regulation = 0.0
+    h._alarm_last_fired = {}
+    h._alarm_repeat_count = {}
     h._subscribed = False
     mod.hypothalamus = h
     yield h
@@ -440,3 +442,131 @@ class TestHypothalamusPersistence:
         assert h2.total_corrections == 10
         # Les autres champs gardent leur valeur par defaut
         assert h2.alarms_triggered == 0
+
+
+# ===== TestAlarmCooldown =====
+
+class TestAlarmCooldown:
+    """Tests du cooldown per-variable et severity dégressive."""
+
+    @pytest.mark.asyncio
+    async def test_alarm_fires_first_time(self, isolate_hypothalamus):
+        """Première alarme émise normalement."""
+        h = isolate_hypothalamus
+        h.current_values["stress"] = 1.0  # error > ALARM_THRESHOLD
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock) as mock_pub:
+            await h.regulate()
+        alarm_calls = [c for c in mock_pub.call_args_list if c[0][0] == "HYPOTHALAMUS_ALARM"]
+        stress_alarms = [c for c in alarm_calls if c[0][1]["variable"] == "stress"]
+        assert len(stress_alarms) == 1
+        assert stress_alarms[0][0][1]["severity"] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_alarm_blocked_during_cooldown(self, isolate_hypothalamus):
+        """Alarme supprimée si <120s depuis la dernière."""
+        h = isolate_hypothalamus
+        h.current_values["stress"] = 1.0
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock):
+            await h.regulate()
+        # Deuxième appel immédiat → cooldown bloque
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock) as mock_pub:
+            await h.regulate()
+        alarm_calls = [c for c in mock_pub.call_args_list if c[0][0] == "HYPOTHALAMUS_ALARM"]
+        stress_alarms = [c for c in alarm_calls if c[0][1]["variable"] == "stress"]
+        assert len(stress_alarms) == 0
+
+    @pytest.mark.asyncio
+    async def test_alarm_fires_after_cooldown(self, isolate_hypothalamus):
+        """Alarme ré-émise après expiration du cooldown."""
+        h = isolate_hypothalamus
+        h.current_values["stress"] = 1.0
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock):
+            await h.regulate()
+        # Simuler cooldown expiré
+        h._alarm_last_fired["stress"] = time.time() - 200
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock) as mock_pub:
+            await h.regulate()
+        alarm_calls = [c for c in mock_pub.call_args_list if c[0][0] == "HYPOTHALAMUS_ALARM"]
+        stress_alarms = [c for c in alarm_calls if c[0][1]["variable"] == "stress"]
+        assert len(stress_alarms) == 1
+
+    @pytest.mark.asyncio
+    async def test_severity_degrades_on_repeat(self, isolate_hypothalamus):
+        """2ème alarme a une severity réduite."""
+        h = isolate_hypothalamus
+        h.current_values["stress"] = 1.0
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock):
+            await h.regulate()
+        # Simuler cooldown expiré pour permettre la 2ème alarme
+        h._alarm_last_fired["stress"] = time.time() - 200
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock) as mock_pub:
+            await h.regulate()
+        alarm_calls = [c for c in mock_pub.call_args_list if c[0][0] == "HYPOTHALAMUS_ALARM"]
+        stress_alarms = [c for c in alarm_calls if c[0][1]["variable"] == "stress"]
+        assert len(stress_alarms) == 1
+        # severity = max(0.3, 1.0 - 1 * 0.15) = 0.85
+        assert stress_alarms[0][0][1]["severity"] == 0.85
+
+    @pytest.mark.asyncio
+    async def test_severity_floor(self, isolate_hypothalamus):
+        """Après N répétitions, severity ne descend pas sous le floor."""
+        from core.hypothalamus import ALARM_SEVERITY_FLOOR
+        h = isolate_hypothalamus
+        h.current_values["stress"] = 1.0
+        # Simuler 20 répétitions passées
+        h._alarm_repeat_count["stress"] = 20
+        h._alarm_last_fired["stress"] = time.time() - 200
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock) as mock_pub:
+            await h.regulate()
+        alarm_calls = [c for c in mock_pub.call_args_list if c[0][0] == "HYPOTHALAMUS_ALARM"]
+        stress_alarms = [c for c in alarm_calls if c[0][1]["variable"] == "stress"]
+        assert len(stress_alarms) == 1
+        assert stress_alarms[0][0][1]["severity"] == ALARM_SEVERITY_FLOOR
+
+    @pytest.mark.asyncio
+    async def test_reset_on_recovery(self, isolate_hypothalamus):
+        """Variable revenue sous le seuil → compteur reset."""
+        h = isolate_hypothalamus
+        h.current_values["stress"] = 1.0
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock):
+            await h.regulate()
+        assert h._alarm_repeat_count.get("stress", 0) == 1
+        # Stress revient à la normale
+        h.current_values["stress"] = 0.3
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock):
+            await h.regulate()
+        assert "stress" not in h._alarm_repeat_count
+
+    @pytest.mark.asyncio
+    async def test_independent_per_variable(self, isolate_hypothalamus):
+        """Cooldown energy n'affecte pas stress."""
+        h = isolate_hypothalamus
+        h.current_values["energy"] = 0.0  # error > threshold
+        h.current_values["stress"] = 1.0  # error > threshold
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock):
+            await h.regulate()
+        # energy en cooldown, mais on reset le cooldown de stress seulement
+        h._alarm_last_fired["stress"] = time.time() - 200
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock) as mock_pub:
+            await h.regulate()
+        alarm_calls = [c for c in mock_pub.call_args_list if c[0][0] == "HYPOTHALAMUS_ALARM"]
+        variables = [c[0][1]["variable"] for c in alarm_calls]
+        # stress doit passer, energy doit être bloquée
+        assert "stress" in variables
+        assert "energy" not in variables
+
+    @pytest.mark.asyncio
+    async def test_cooldown_persisted(self, isolate_hypothalamus, tmp_path):
+        """Save/load préserve les cooldowns."""
+        from core import hypothalamus as mod
+        h = isolate_hypothalamus
+        h._alarm_last_fired = {"stress": 1000.0, "energy": 2000.0}
+        h._alarm_repeat_count = {"stress": 3, "energy": 1}
+        h._save()
+
+        mod.Hypothalamus.reset_singleton()
+        h2 = mod.Hypothalamus()
+        assert h2._alarm_last_fired["stress"] == 1000.0
+        assert h2._alarm_repeat_count["stress"] == 3
+        assert h2._alarm_last_fired["energy"] == 2000.0
+        assert h2._alarm_repeat_count["energy"] == 1

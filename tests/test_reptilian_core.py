@@ -1532,3 +1532,43 @@ class TestDecayFormula:
 
         # Résultat : bien en dessous de l'ancien 4.0 bloqué
         assert rept.threat_level < 3.0
+
+
+# ============================================================
+# TestHypothalamusAlarmPlancher
+# ============================================================
+
+class TestHypothalamusAlarmPlancher:
+    """Tests du handler plancher (max au lieu de += additif)."""
+
+    @pytest.mark.asyncio
+    async def test_alarm_uses_floor_not_additive(self, rept):
+        """max() au lieu de += : une alarme fixe un plancher."""
+        rept.threat_level = 0.0
+        await rept._on_hypothalamus_alarm({"variable": "stress", "severity": 1.0})
+        # floor = min(3.0, 1.0 * 2.0) = 2.0
+        assert rept.threat_level == 2.0
+
+    @pytest.mark.asyncio
+    async def test_multiple_alarms_no_accumulation(self, rept):
+        """5 alarmes severity 1.0 = plancher 2.0, pas +2.5."""
+        rept.threat_level = 0.0
+        for var in ["energy", "stress", "dopamine", "cardiac_bpm", "sleep_pressure"]:
+            await rept._on_hypothalamus_alarm({"variable": var, "severity": 1.0})
+        # Ancien: 0 + 5*0.5 = 2.5 ; Nouveau: max(2.0, 2.0, ...) = 2.0
+        assert rept.threat_level == 2.0
+
+    @pytest.mark.asyncio
+    async def test_alarm_severity_scales_floor(self, rept):
+        """severity 0.5 → plancher 1.0."""
+        rept.threat_level = 0.0
+        await rept._on_hypothalamus_alarm({"variable": "energy", "severity": 0.5})
+        assert rept.threat_level == 1.0
+
+    @pytest.mark.asyncio
+    async def test_alarm_floor_capped(self, rept):
+        """Plancher max 3.0 même avec severity très élevée."""
+        rept.threat_level = 0.0
+        await rept._on_hypothalamus_alarm({"variable": "energy", "severity": 5.0})
+        # floor = min(3.0, 5.0 * 2.0) = 3.0
+        assert rept.threat_level == 3.0

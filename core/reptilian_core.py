@@ -781,12 +781,18 @@ class ReptilianCore:
             logger.info("REPTILIEN: Réveil — scan repris.")
 
     async def _on_hypothalamus_alarm(self, event: dict):
-        """Alarme homeostatique → alerte reptilienne moderee."""
+        """Alarme homéostatique → plancher de menace (pas d'accumulation).
+
+        Utilise max() comme les handlers tissue, pas += additif.
+        Cela empêche le bombardement cumulatif quand plusieurs variables
+        sont en alarme simultanément.
+        """
         variable = event.get("variable", "")
         severity = event.get("severity", 0.5)
-        # Contribuer au threat_level sans eclipser les menaces reelles
-        self.threat_level = min(10.0, self.threat_level + severity * 0.5)
-        logger.info(f"REPTILIEN: Alarme hypothalamique ({variable}, severity={severity:.2f})")
+        # Plancher proportionnel à la severity (max 3.0 pour ne pas éclipser les vraies menaces)
+        floor = min(3.0, severity * 2.0)
+        self.threat_level = max(self.threat_level, floor)
+        logger.info(f"REPTILIEN: Alarme hypothalamique ({variable}, severity={severity:.2f}) → plancher {floor:.1f}")
 
     async def _on_parasympathetic_signal(self, event: dict):
         """Signal parasympathique — le cortex rassure le tronc cérébral.
