@@ -88,6 +88,7 @@ _STIMULUS_MAP: Dict[str, Dict[str, Any]] = {
     "adrenaline":   {"emotion": "determination","bpm_delta": +30,  "ans_shift": +0.25, "intensity": 0.85},
     "sleep_deep":   {"emotion": "serenite",    "bpm_delta": -20,  "ans_shift": -0.30, "intensity": 0.15},
     "dawn":         {"emotion": "curiosite",   "bpm_delta": +5,   "ans_shift": +0.05, "intensity": 0.4},
+    "soothe":       {"emotion": "serenite",    "bpm_delta": -10,  "ans_shift": -0.20, "intensity": 0.3},
 }
 
 # ============================================================

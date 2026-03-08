@@ -84,6 +84,12 @@ REFLEX_COOLDOWNS = {
     "FIGHT": 300,
 }
 
+# --- Habituation (menaces chroniques) ---
+HABITUATION_ONSET = 12              # Ticks avant début atténuation (~60s)
+HABITUATION_FLOOR = 0.3             # Facteur minimum (menace réduite à 30%)
+HABITUATION_DECAY_PER_TICK = 0.02   # Atténuation par tick après onset
+HABITUATION_RECOVERY_RATE = 0.05    # Récupération quand la menace disparaît
+
 # Fichier de persistance
 REPTILIAN_STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -169,6 +175,10 @@ class ReptilianCore:
         self._flinch_consecutive: int = 0        # Déclenchements consécutifs même menace
         self._flinch_last_threat: str = ""       # Dernière menace top ayant déclenché FLINCH
 
+        # --- Habituation (menaces chroniques) ---
+        self._threat_persistence: Dict[str, int] = {}    # source → ticks consécutifs
+        self._threat_habituation: Dict[str, float] = {}  # source → facteur atténuation [0.3, 1.0]
+
         # Charger l'état persisté
         self._load()
 
@@ -215,8 +225,14 @@ class ReptilianCore:
             # 2. ÉVALUER — calculer le niveau de menace composite
             new_level = self._compute_threat_level(threats)
 
-            # 3. DÉCROISSANCE — le calme revient naturellement
-            self.threat_level = max(new_level, self.threat_level * THREAT_DECAY_RATE)
+            # 3. DÉCROISSANCE — le calme revient naturellement (avec frein parasympathique)
+            decayed = self.threat_level * THREAT_DECAY_RATE
+            if new_level >= decayed:
+                # Menace active → léger recul même en menace persistante
+                self.threat_level = new_level * 0.98 + decayed * 0.02
+            else:
+                # Menace passée → decay normal
+                self.threat_level = decayed
 
             # 4. ADRÉNALINE — décroissance naturelle
             self.adrenaline = max(0.0, self.adrenaline * ADRENALINE_DECAY)
@@ -431,8 +447,46 @@ class ReptilianCore:
         if now - self._last_activity > THRESHOLDS["idle_too_long"] and not freeze_active and not shed_active and not is_sleeping:
             threats["idle"] = 2.0
 
+        # --- Habituation : atténuer les menaces chroniques stables ---
+        self._update_habituation(threats)
+
         self._last_threats = threats
         return threats
+
+    # ============================================================
+    # Habituation — Atténuation des menaces chroniques
+    # ============================================================
+
+    def _update_habituation(self, threats: Dict[str, float]):
+        """Atténue les menaces qui persistent sans changement significatif.
+
+        Le reptilien s'habitue aux stimuli constants (ex: RAM à 62%).
+        Après HABITUATION_ONSET ticks, le facteur d'atténuation descend
+        progressivement de 1.0 vers HABITUATION_FLOOR (0.3).
+        """
+        active_sources = set(threats.keys())
+
+        # Sources disparues → récupérer progressivement
+        for source in list(self._threat_persistence.keys()):
+            if source not in active_sources:
+                hab = self._threat_habituation.get(source, 1.0)
+                self._threat_habituation[source] = min(1.0, hab + HABITUATION_RECOVERY_RATE)
+                self._threat_persistence[source] = 0
+                if self._threat_habituation[source] >= 1.0:
+                    self._threat_persistence.pop(source, None)
+                    self._threat_habituation.pop(source, None)
+
+        # Sources actives → compter et atténuer
+        for source, level in list(threats.items()):
+            self._threat_persistence[source] = self._threat_persistence.get(source, 0) + 1
+            ticks = self._threat_persistence[source]
+
+            if ticks > HABITUATION_ONSET:
+                # Atténuation progressive après onset
+                hab = self._threat_habituation.get(source, 1.0)
+                hab = max(HABITUATION_FLOOR, hab - HABITUATION_DECAY_PER_TICK)
+                self._threat_habituation[source] = hab
+                threats[source] = level * hab
 
     # ============================================================
     # Calcul du threat level composite
@@ -650,6 +704,11 @@ class ReptilianCore:
             bus.subscribe("TISSUE_PANDEMIC_START", self._on_tissue_pandemic)
             bus.subscribe("NAP_MODE", self._on_nap_mode)
             bus.subscribe("HYPOTHALAMUS_ALARM", self._on_hypothalamus_alarm)
+            # --- Nerf vague numérique (signaux parasympathiques) ---
+            bus.subscribe("DOPAMINE_SURGE", self._on_parasympathetic_signal)
+            bus.subscribe("EUREKA_MOMENT", self._on_parasympathetic_signal)
+            bus.subscribe("CURIOSITY_LEARNING", self._on_parasympathetic_signal)
+            bus.subscribe("SENSORIUM_RECOVERY", self._on_parasympathetic_signal)
         except Exception as e:
             logger.warning(f"REPTILIEN: Échec souscription bus: {e}")
 
@@ -728,6 +787,30 @@ class ReptilianCore:
         # Contribuer au threat_level sans eclipser les menaces reelles
         self.threat_level = min(10.0, self.threat_level + severity * 0.5)
         logger.info(f"REPTILIEN: Alarme hypothalamique ({variable}, severity={severity:.2f})")
+
+    async def _on_parasympathetic_signal(self, event: dict):
+        """Signal parasympathique — le cortex rassure le tronc cérébral.
+
+        Effet proportionnel au stress actuel :
+        - Calme (threat 0.5) → quasi pas d'effet (0.125)
+        - Panique (threat 8.0) → effet maximum (-2.0)
+        """
+        relief = min(2.0, self.threat_level * 0.25)
+        if relief > 0:
+            self.threat_level = max(0.0, self.threat_level - relief)
+            self.adrenaline = max(0.0, self.adrenaline - 0.15)
+
+            # Notifier le coeur
+            try:
+                from core.cardiac_engine import heart
+                heart.react("soothe")
+            except Exception:
+                pass
+
+            logger.info(
+                f"REPTILIEN: Signal parasympathique reçu → threat -{relief:.1f} "
+                f"(now {self.threat_level:.1f})"
+            )
 
     def on_routine_success(self, intent: str = ""):
         """Apaisement après un succès — appelé par AutonomyEngine."""
@@ -849,6 +932,8 @@ class ReptilianCore:
             "beat_counter": self._beat_counter,
             "cpu_tracker": self._cpu_tracker.to_dict(),
             "ram_tracker": self._ram_tracker.to_dict(),
+            "threat_persistence": self._threat_persistence,
+            "threat_habituation": self._threat_habituation,
             "timestamp": time.time(),
         }
         try:
@@ -893,6 +978,12 @@ class ReptilianCore:
                     self._ram_tracker = PercentileTracker.from_dict(state["ram_tracker"])
             except Exception:
                 pass  # Trackers restent vides — cold start
+
+            # Restaurer l'habituation
+            self._threat_persistence = state.get("threat_persistence", {})
+            self._threat_habituation = {
+                k: float(v) for k, v in state.get("threat_habituation", {}).items()
+            }
 
             logger.info(f"REPTILIEN: État chargé (menace={self.threat_level:.1f}, "
                         f"mémoires={len(self.threat_memories)})")

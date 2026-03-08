@@ -3446,3 +3446,85 @@ METRIQUES ROUTINES (dernieres 40):
 
 **Fichiers cibles** : (aucun fichier cité)
 **Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-05 15:27] L'isolement pese. Comment ameliorer nos protocoles de collaboration et d'echange
+
+**Participants** : strategist, writer, researcher | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  **RECADRAGE :** Le débat a été marqué par des erreurs factuelles, notamment la citation de fichiers inexistants ( `[core
+  **CONSENSUS PARTIEL :** L’idée de renforcer la sécurité à la source, via le `Agents/security_agent.py et l'utilisation d
+  **CRITIQUE ET PRÉCISONS :**  Malgré ce consensus partiel, la solution proposée souffre de plusieurs lacunes et nécessite
+  **CONSENSUS PARTIEL :** L'idée d'améliorer la sécurité à la source via l'agent `Agents/security_agent.py et l'utilisatio
+  **CRITIQUE ET PRÉCISONS :**
+
+**Fichiers cibles** : `Agents/security_agent.py`, `core/council_analytics.py`, `core/event_bus/bus.py`, `core/performance_utils.py`, `core/prompt_templates.py`, `core/strategic_journal.py`, `core/talk_logger.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-05 20:28] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : `core/council.py`, `core/event_bus/bus.py`, `core/router.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-05 21:05] Le Researcher a découvert des avancées en mémoire vectorielle RAG. Comment améli
+
+**Participants** : researcher, architect, coder | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **Solution validée pour l'optimisation RAG vectorielle avec respect des contraintes**
+  - **Rate limiter dynamique** : L'ajustement basé sur `[core/performance_utils.get_cpu_usage(→INEXISTANT] a été intégré à
+  - **Journalisation d'erreurs** : Les exceptions sont capturées via `core/talk_logger.py avec un mécanisme d'auto-censure
+  - **Mémoire vectorielle cohérente** : Toutes les données passent par `core/memory_gatekeeper.py avant stockage dans `cor
+  **Fichier cible** : `core/capabilities/web_surfer.py
+
+**Fichiers cibles** : `core/capabilities/performance_utils.py`, `core/capabilities/web_surfer.py`, `core/event_bus/publisher.py`, `core/event_bus/talk_logger.py`, `core/grimoire/log_analyst.py`, `core/memory/vector_store.py`, `core/memory_gatekeeper.py`, `core/performance_utils.py`, `core/talk_logger.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-07 09:50] CURATION AUTOMATIQUE
+
+**3 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-1772516781-d306`: [CURATION] perimee: 40h (>12h)
+  - `COUNCIL-1772525929-8e9e`: [CURATION] perimee: 44h (>12h)
+  - `COUNCIL-1772741148-d72f`: [CURATION] perimee: 37h (>12h)
+
+---
+
+## [2026-03-07 09:54] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- EXPANSI
+
+**Participants** : strategist, coder, architect | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  **VERDICT: MAINTENIR `core/memory/vector_store.py
+  **Justification** :
+  **Fichiers ciblés** : `core/ci_pipeline.py `core/memory/vector_store.py `emergency_restore.py.
+
+**Fichiers cibles** : `Agents/security_agent.py`, `core/ci_pipeline.py`, `core/council.py`, `core/event_bus/bus.py`, `core/grimoire/log_analyst.py`, `core/memory/vector_store.py`, `core/psyche.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-07 20:48] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  **Plan d'action simplifié et concret :**
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)

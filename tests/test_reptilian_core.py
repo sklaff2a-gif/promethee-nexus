@@ -21,6 +21,10 @@ import pytest
 
 from core.reptilian_core import (
     ADRENALINE_DECAY,
+    HABITUATION_DECAY_PER_TICK,
+    HABITUATION_FLOOR,
+    HABITUATION_ONSET,
+    HABITUATION_RECOVERY_RATE,
     REFLEX_COOLDOWNS,
     REPTILIAN_STATE_FILE,
     THREAT_ALERT,
@@ -1229,3 +1233,302 @@ class TestAdaptiveThresholds:
         assert "ram_tracker_samples" in stats
         assert stats["cpu_tracker_ready"] is False
         assert stats["cpu_tracker_samples"] == 0
+
+
+# ============================================================
+# Habituation — Atténuation des menaces chroniques
+# ============================================================
+
+class TestHabituation:
+    """Tests du mécanisme d'habituation aux menaces persistantes."""
+
+    def test_no_habituation_before_onset(self, rept):
+        """Pas d'atténuation avant HABITUATION_ONSET ticks."""
+        threats = {"ram": 4.0}
+        for _ in range(HABITUATION_ONSET - 1):
+            rept._update_habituation(threats)
+        # Le facteur doit rester à 1.0 (ou non défini)
+        hab = rept._threat_habituation.get("ram", 1.0)
+        assert hab == 1.0
+        assert threats["ram"] == 4.0
+
+    def test_habituation_starts_after_onset(self, rept):
+        """L'atténuation commence après HABITUATION_ONSET ticks."""
+        threats_template = {"ram": 4.0}
+        for _ in range(HABITUATION_ONSET + 2):
+            threats = dict(threats_template)
+            rept._update_habituation(threats)
+        hab = rept._threat_habituation.get("ram", 1.0)
+        assert hab < 1.0
+        assert hab >= HABITUATION_FLOOR
+
+    def test_habituation_floor(self, rept):
+        """Le facteur ne descend pas en dessous de HABITUATION_FLOOR."""
+        for _ in range(200):
+            threats = {"ram": 4.0}
+            rept._update_habituation(threats)
+        hab = rept._threat_habituation.get("ram", 1.0)
+        assert hab == pytest.approx(HABITUATION_FLOOR, abs=0.01)
+
+    def test_habituation_recovery(self, rept):
+        """Quand la menace disparaît, le facteur remonte vers 1.0."""
+        # Phase 1 : habituation
+        for _ in range(50):
+            threats = {"ram": 4.0}
+            rept._update_habituation(threats)
+        hab_before = rept._threat_habituation["ram"]
+        assert hab_before < 1.0
+
+        # Phase 2 : menace disparue → récupération
+        for _ in range(30):
+            threats = {}
+            rept._update_habituation(threats)
+        hab_after = rept._threat_habituation.get("ram", 1.0)
+        assert hab_after > hab_before
+
+    def test_habituation_per_source(self, rept):
+        """RAM et CPU sont habitués indépendamment."""
+        for _ in range(30):
+            threats = {"ram": 4.0, "cpu": 8.0}
+            rept._update_habituation(threats)
+        # Les deux sources ont leurs propres compteurs
+        assert rept._threat_persistence["ram"] == 30
+        assert rept._threat_persistence["cpu"] == 30
+        # Mais si une disparaît...
+        for _ in range(5):
+            threats = {"cpu": 8.0}
+            rept._update_habituation(threats)
+        assert rept._threat_persistence["cpu"] == 35
+        assert rept._threat_persistence["ram"] == 0
+
+    def test_habituation_attenuates_threat(self, rept):
+        """La menace effective est réduite par l'habituation."""
+        for _ in range(50):
+            threats = {"ram": 4.0}
+            rept._update_habituation(threats)
+        # Après 50 ticks, le facteur a baissé → la menace RAM devrait être < 4.0
+        threats = {"ram": 4.0}
+        rept._update_habituation(threats)
+        assert threats["ram"] < 4.0
+        assert threats["ram"] >= 4.0 * HABITUATION_FLOOR
+
+    def test_habituation_full_recovery_cleans_up(self, rept):
+        """Après récupération complète (facteur=1.0), les entrées sont nettoyées."""
+        for _ in range(30):
+            threats = {"ram": 4.0}
+            rept._update_habituation(threats)
+        assert "ram" in rept._threat_habituation
+
+        # Récupération complète (assez de ticks sans la menace)
+        for _ in range(50):
+            threats = {}
+            rept._update_habituation(threats)
+        # Nettoyé une fois le facteur revenu à 1.0
+        assert "ram" not in rept._threat_habituation
+        assert "ram" not in rept._threat_persistence
+
+    def test_habituation_persisted(self, rept, tmp_path, monkeypatch):
+        """save → load conserve l'habituation."""
+        state_file = str(tmp_path / "reptilian_hab.json")
+        monkeypatch.setattr("core.reptilian_core.REPTILIAN_STATE_FILE", state_file)
+
+        for _ in range(30):
+            threats = {"ram": 4.0}
+            rept._update_habituation(threats)
+        rept.save()
+
+        ReptilianCore.reset_singleton()
+        r2 = ReptilianCore()
+        assert r2._threat_persistence.get("ram", 0) == 30
+        assert r2._threat_habituation.get("ram", 1.0) < 1.0
+
+
+# ============================================================
+# Parasympathique — Nerf vague numérique
+# ============================================================
+
+class TestParasympathetic:
+    """Tests du signal parasympathique (DOPAMINE_SURGE, EUREKA_MOMENT, etc.)."""
+
+    @pytest.mark.asyncio
+    async def test_dopamine_surge_calms(self, rept):
+        """DOPAMINE_SURGE → réduction threat_level."""
+        rept.threat_level = 6.0
+        with patch.dict("sys.modules", {"core.cardiac_engine": MagicMock()}):
+            await rept._on_parasympathetic_signal({})
+        assert rept.threat_level < 6.0
+
+    @pytest.mark.asyncio
+    async def test_relief_proportional_to_stress(self, rept):
+        """Plus stressé → plus de soulagement (25% du threat actuel)."""
+        # Cas 1 : stress élevé
+        rept.threat_level = 8.0
+        with patch.dict("sys.modules", {"core.cardiac_engine": MagicMock()}):
+            await rept._on_parasympathetic_signal({})
+        after_high = rept.threat_level
+        expected_high = 8.0 - min(2.0, 8.0 * 0.25)  # 8.0 - 2.0 = 6.0
+        assert after_high == pytest.approx(expected_high)
+
+        # Cas 2 : stress faible
+        rept.threat_level = 2.0
+        with patch.dict("sys.modules", {"core.cardiac_engine": MagicMock()}):
+            await rept._on_parasympathetic_signal({})
+        after_low = rept.threat_level
+        expected_low = 2.0 - min(2.0, 2.0 * 0.25)  # 2.0 - 0.5 = 1.5
+        assert after_low == pytest.approx(expected_low)
+
+    @pytest.mark.asyncio
+    async def test_relief_capped_at_2(self, rept):
+        """Le soulagement est plafonné à 2.0 même avec un threat très élevé."""
+        rept.threat_level = 10.0
+        with patch.dict("sys.modules", {"core.cardiac_engine": MagicMock()}):
+            await rept._on_parasympathetic_signal({})
+        # 10.0 * 0.25 = 2.5 → cap à 2.0 → threat = 8.0
+        assert rept.threat_level == pytest.approx(8.0)
+
+    @pytest.mark.asyncio
+    async def test_calm_when_already_calm(self, rept):
+        """Quand threat est bas, quasi pas d'effet."""
+        rept.threat_level = 0.5
+        with patch.dict("sys.modules", {"core.cardiac_engine": MagicMock()}):
+            await rept._on_parasympathetic_signal({})
+        # 0.5 * 0.25 = 0.125 → threat = 0.375
+        assert rept.threat_level == pytest.approx(0.375)
+
+    @pytest.mark.asyncio
+    async def test_no_effect_at_zero(self, rept):
+        """Aucun effet quand threat = 0."""
+        rept.threat_level = 0.0
+        rept.adrenaline = 0.0
+        with patch.dict("sys.modules", {"core.cardiac_engine": MagicMock()}):
+            await rept._on_parasympathetic_signal({})
+        assert rept.threat_level == 0.0
+        assert rept.adrenaline == 0.0
+
+    @pytest.mark.asyncio
+    async def test_adrenaline_reduced(self, rept):
+        """L'adrénaline est aussi réduite par le signal parasympathique."""
+        rept.threat_level = 5.0
+        rept.adrenaline = 0.8
+        with patch.dict("sys.modules", {"core.cardiac_engine": MagicMock()}):
+            await rept._on_parasympathetic_signal({})
+        assert rept.adrenaline == pytest.approx(0.65)
+
+    @pytest.mark.asyncio
+    async def test_cardiac_soothe_called(self, rept):
+        """heart.react('soothe') est appelé lors du signal parasympathique."""
+        rept.threat_level = 5.0
+        mock_heart = MagicMock()
+        mock_cardiac = MagicMock(heart=mock_heart)
+        with patch.dict("sys.modules", {"core.cardiac_engine": mock_cardiac}):
+            await rept._on_parasympathetic_signal({})
+        mock_heart.react.assert_called_once_with("soothe")
+
+    @pytest.mark.asyncio
+    async def test_threat_never_below_zero(self, rept):
+        """Threat ne descend jamais sous 0 après signal parasympathique."""
+        rept.threat_level = 0.1
+        with patch.dict("sys.modules", {"core.cardiac_engine": MagicMock()}):
+            await rept._on_parasympathetic_signal({})
+        assert rept.threat_level >= 0.0
+
+
+# ============================================================
+# Decay Formula — Formule de décroissance améliorée
+# ============================================================
+
+class TestDecayFormula:
+    """Tests de la formule decay corrigée (menace persistante descend lentement)."""
+
+    def test_persistent_threat_slowly_decays(self, rept):
+        """Même menace persistante → le threat_level descend lentement via blending."""
+        rept.threat_level = 4.0
+        new_level = 4.0
+        # Appliquer la formule du watchdog_loop
+        decayed = rept.threat_level * THREAT_DECAY_RATE
+        if new_level >= decayed:
+            result = new_level * 0.98 + decayed * 0.02
+        else:
+            result = decayed
+        # 4.0 * 0.98 + (4.0 * 0.85) * 0.02 = 3.92 + 0.068 = 3.988
+        assert result < 4.0
+        assert result > 3.9
+
+    def test_no_threat_normal_decay(self, rept):
+        """Quand la menace disparaît, decay normal (×0.85)."""
+        rept.threat_level = 5.0
+        new_level = 0.0
+        decayed = rept.threat_level * THREAT_DECAY_RATE
+        if new_level >= decayed:
+            result = new_level * 0.98 + decayed * 0.02
+        else:
+            result = decayed
+        # decayed = 5.0 * 0.85 = 4.25, new_level=0 < 4.25 → result = 4.25
+        assert result == pytest.approx(4.25)
+
+    def test_decay_faster_with_habituation(self, rept):
+        """Habituation + decay = descente rapide du threat_level."""
+        # Simuler 50 ticks d'habituation sur la RAM
+        for _ in range(50):
+            threats = {"ram": 4.0}
+            rept._update_habituation(threats)
+
+        # Le facteur d'habituation est < 1.0
+        hab = rept._threat_habituation.get("ram", 1.0)
+        attenuated = 4.0 * hab  # Ex: 4.0 * 0.54 = 2.16
+
+        # Compute threat → max(values) → attenuated
+        new_level = attenuated
+        rept.threat_level = 4.0  # Avant habituation
+
+        decayed = rept.threat_level * THREAT_DECAY_RATE
+        if new_level >= decayed:
+            result = new_level * 0.98 + decayed * 0.02
+        else:
+            result = decayed
+
+        # L'habituation réduit new_level → descent plus rapide
+        assert result < 3.5  # Bien en dessous de l'ancien 4.0 bloqué
+
+    def test_spike_overrides_decay(self, rept):
+        """Un nouveau spike remonte le threat immédiatement."""
+        rept.threat_level = 2.0
+        new_level = 8.0  # Spike !
+        decayed = rept.threat_level * THREAT_DECAY_RATE
+        if new_level >= decayed:
+            result = new_level * 0.98 + decayed * 0.02
+        else:
+            result = decayed
+        # 8.0 * 0.98 + (2.0 * 0.85) * 0.02 = 7.84 + 0.034 = 7.874
+        assert result > 7.5
+        assert result < 8.0
+
+    def test_combined_parasympathetic_and_decay(self, rept):
+        """Les 3 effets cumulés (habituation + decay + parasympathique) descendent vite."""
+        rept.threat_level = 4.0
+
+        # 1. Habituation : 30 ticks
+        for _ in range(30):
+            threats = {"ram": 4.0}
+            rept._update_habituation(threats)
+
+        # 2. Menace atténuée
+        threats = {"ram": 4.0}
+        rept._update_habituation(threats)
+        attenuated = threats["ram"]
+        assert attenuated < 4.0
+
+        # 3. Decay formula
+        new_level = attenuated
+        decayed = rept.threat_level * THREAT_DECAY_RATE
+        if new_level >= decayed:
+            rept.threat_level = new_level * 0.98 + decayed * 0.02
+        else:
+            rept.threat_level = decayed
+
+        # 4. Signal parasympathique
+        relief = min(2.0, rept.threat_level * 0.25)
+        rept.threat_level = max(0.0, rept.threat_level - relief)
+
+        # Résultat : bien en dessous de l'ancien 4.0 bloqué
+        assert rept.threat_level < 3.0

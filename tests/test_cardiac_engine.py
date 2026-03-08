@@ -1008,3 +1008,38 @@ class TestAffectPersistence:
             assert h._emotion_cause == "failure"
             assert h._prev_emotion == "enthousiasme"
             assert h._transition_count == 5
+
+
+# ============================================================
+# TestSootheStimulus — Stimulus parasympathique "soothe"
+# ============================================================
+
+class TestSootheStimulus:
+    """Tests du stimulus 'soothe' (nerf vague numérique)."""
+
+    def test_soothe_reduces_bpm(self, isolate_cardiac):
+        """react('soothe') → BPM diminue (bpm_delta = -10)."""
+        h = isolate_cardiac
+        h.bpm = 80.0
+        h.emotion_intensity = 0.0
+        with patch.object(h, "_get_psyche_resonance", return_value=1.0):
+            h.react("soothe")
+        assert h.bpm < 80.0
+
+    def test_soothe_shifts_ans_parasympathetic(self, isolate_cardiac):
+        """react('soothe') → ANS shift vers parasympathique (négatif)."""
+        h = isolate_cardiac
+        h.ans_balance = 0.6  # Légèrement sympathique
+        h.emotion_intensity = 0.0
+        with patch.object(h, "_get_psyche_resonance", return_value=1.0):
+            h.react("soothe")
+        assert h.ans_balance < 0.6
+
+    def test_soothe_emotion_serenite(self, isolate_cardiac):
+        """react('soothe') → émotion = sérénité."""
+        h = isolate_cardiac
+        h.current_emotion = "frustration"
+        h.emotion_intensity = 0.0  # Faible pour permettre le changement
+        with patch.object(h, "_get_psyche_resonance", return_value=1.0):
+            h.react("soothe")
+        assert h.current_emotion == "serenite"
