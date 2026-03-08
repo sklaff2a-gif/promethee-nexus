@@ -240,14 +240,107 @@ class TestPendingQueue:
         assert any(m["category"] == "digest" for m in engine._delivered)
 
     @pytest.mark.asyncio
-    async def test_critical_never_queued(self, reset_outreach):
-        """Critical jamais en queue, toujours livré directement."""
+    async def test_critical_delivered_in_silent_mode(self, reset_outreach):
+        """Critical livré même en silent mode (sauf si burst-limité)."""
         engine = reset_outreach
         engine.set_silent_mode(True)
-        # Meme en silent mode, critical est livré
+        # En silent mode, un seul critical est livré (pas de burst)
         await bus.publish("OLLAMA_UNRESPONSIVE", {})
         assert len(engine._delivered) == 1
         assert len(engine._pending_queue) == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  TestBurstLimiter (5 tests)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestBurstLimiter:
+    """Anti-burst : max BURST_MAX messages par BURST_WINDOW secondes."""
+
+    @pytest.mark.asyncio
+    async def test_burst_queues_after_max(self, reset_outreach):
+        """Au-dela de BURST_MAX deliveries, tout est queue (via _deliver direct)."""
+        engine = reset_outreach
+        import core.outreach as mod
+
+        # Simuler BURST_MAX livraisons recentes via _deliver directement
+        for i in range(mod.BURST_MAX):
+            engine._deliver("digest", f"message {i}")
+        assert len(engine._delivered) == mod.BURST_MAX
+
+        # Un nouveau critical doit etre queue (burst atteint)
+        await bus.publish("OLLAMA_UNRESPONSIVE", {})
+        assert len(engine._delivered) == mod.BURST_MAX  # pas de nouveau
+        assert len(engine._pending_queue) == 1
+
+    @pytest.mark.asyncio
+    async def test_burst_resets_after_window(self, reset_outreach):
+        """Apres expiration burst + cooldown, un nouveau message passe."""
+        engine = reset_outreach
+        import core.outreach as mod
+
+        # Remplir le burst
+        engine._deliver("critical", "alerte 1")
+        assert len(engine._delivered) == 1
+
+        # Simuler le passage du temps (> BURST_WINDOW et > cooldown critical 120s)
+        max_cd = max(mod.BURST_WINDOW, mod.COOLDOWN_PER_CATEGORY.get("critical", 120))
+        old = time.time() - max_cd - 1
+        engine._hourly_timestamps = [old] * mod.BURST_MAX
+        engine._last_per_category["critical"] = old
+
+        # Un nouveau message doit passer
+        await bus.publish("OLLAMA_UNRESPONSIVE", {})
+        assert len(engine._delivered) == 2
+
+    @pytest.mark.asyncio
+    async def test_burst_affects_all_categories(self, reset_outreach):
+        """Le burst limiter s'applique a toutes les categories."""
+        engine = reset_outreach
+        import core.outreach as mod
+
+        # Remplir le burst via _deliver (categories mixtes)
+        for i in range(mod.BURST_MAX):
+            engine._deliver("digest", f"msg {i}")
+
+        # Un eureka doit etre queue
+        with _patch_now_hour(10), _patch_thalamus_salient(True), _patch_connexion(60.0):
+            await bus.publish("EUREKA_MOMENT", {"intent": "test"})
+        assert len(engine._pending_queue) == 1
+
+        # Un critical aussi doit etre queue
+        await bus.publish("OLLAMA_UNRESPONSIVE", {})
+        assert len(engine._pending_queue) == 2
+
+    @pytest.mark.asyncio
+    async def test_critical_cooldown_prevents_spam(self, reset_outreach):
+        """2 critical rapides : le 2e est queue (cooldown 120s)."""
+        engine = reset_outreach
+
+        await bus.publish("HYPOTHALAMUS_ALARM", {"severity": 0.9, "reason": "test1"})
+        assert len(engine._delivered) == 1
+
+        # 2e immediatement apres : cooldown bloque
+        await bus.publish("HYPOTHALAMUS_ALARM", {"severity": 0.95, "reason": "test2"})
+        assert len(engine._delivered) == 1
+        assert len(engine._pending_queue) == 1
+        assert engine._pending_queue[0]["context"]["detail"].startswith("Alarme hypothalamus")
+
+    @pytest.mark.asyncio
+    async def test_race_condition_prevented(self, reset_outreach):
+        """Plusieurs events input_needed concurrents : un seul delivre grace au cooldown eager."""
+        engine = reset_outreach
+
+        with _patch_now_hour(10), _patch_thalamus_salient(True), \
+             _patch_connexion(60.0), _patch_compose("Need input"):
+            # Publier 5 CINGULATE_CONFLICT en rafale
+            for i in range(5):
+                await bus.publish("CINGULATE_CONFLICT", {"severity": 0.8, "subject": f"issue_{i}"})
+            await asyncio.sleep(0.2)
+
+        # Un seul delivre, les autres drop (cooldown eagerly reserved)
+        assert len(engine._delivered) == 1
+        assert engine._delivered[0]["category"] == "input_needed"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

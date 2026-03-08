@@ -38,9 +38,11 @@ SILENT_HOUR_START = 1                # 1h-7h
 SILENT_HOUR_END = 7
 SILENT_MODE_AUTO_RESET = 4 * 3600   # 4h
 PASSIVE_MODE_TIMEOUT = 24 * 3600    # 24h sans USER_CHAT → passif
+BURST_WINDOW = 60                    # fenetre anti-burst (secondes)
+BURST_MAX = 3                        # max messages par fenetre anti-burst
 
 COOLDOWN_PER_CATEGORY = {
-    "critical": 300,      # 5 min
+    "critical": 120,      # 2 min (etait exempt, maintenant rate-limite)
     "eureka": 3600,       # 1h
     "curiosity": 7200,    # 2h
     "dream": 7200,        # 2h
@@ -162,6 +164,13 @@ class OutreachEngine:
         cd = COOLDOWN_PER_CATEGORY.get(category, 3600)
         return (now - last) < cd
 
+    def _is_burst_limited(self) -> bool:
+        """Max BURST_MAX messages dans une fenetre de BURST_WINDOW secondes."""
+        now = time.time()
+        cutoff = now - BURST_WINDOW
+        recent = [t for t in self._hourly_timestamps if t > cutoff]
+        return len(recent) >= BURST_MAX
+
     def _connexion_too_satisfied(self) -> bool:
         """CONNEXION deprivation < 40 → trop satisfait, pas besoin de parler."""
         try:
@@ -187,9 +196,22 @@ class OutreachEngine:
         return (time.time() - self._last_user_chat) > PASSIVE_MODE_TIMEOUT
 
     def _apply_filters(self, category: str, event_type: str, context: dict) -> str:
-        """Applique les 6 filtres en cascade. Retourne 'pass', 'queue' ou 'drop'."""
-        # Critical bypass TOUS les filtres
+        """Applique les filtres en cascade. Retourne 'pass', 'queue' ou 'drop'.
+
+        Anti-burst : max BURST_MAX messages par BURST_WINDOW secondes (tous types).
+        Anti-race-condition : cooldown reserve immediatement quand 'pass' est retourne,
+        avant asyncio.create_task, pour eviter les doublons concurrents.
+        """
+        # 0. Burst global — meme critical ne flood pas
+        if self._is_burst_limited():
+            return "queue"
+
+        # Critical : skip filtres classiques, mais respecte son propre cooldown
         if category == "critical":
+            if self._is_on_cooldown(category):
+                return "queue"
+            # Reserve le cooldown immediatement
+            self._last_per_category[category] = time.time()
             return "pass"
 
         # 1. Mode silencieux
@@ -216,6 +238,8 @@ class OutreachEngine:
         if not self._is_thalamus_salient():
             return "queue"
 
+        # Reserve le cooldown immediatement (anti race condition asyncio.create_task)
+        self._last_per_category[category] = time.time()
         return "pass"
 
     # ─── Composition et livraison ────────────────────────────────────────────
@@ -311,21 +335,29 @@ class OutreachEngine:
     # ─── Handlers bus ────────────────────────────────────────────────────────
 
     async def _on_ollama_unresponsive(self, event: dict):
-        """OLLAMA_UNRESPONSIVE → critical (toujours deterministe)."""
+        """OLLAMA_UNRESPONSIVE → critical (deterministe, passe par filtres burst/cooldown)."""
         context = {"detail": "Ollama ne repond plus — circuit breaker ouvert."}
-        text = self._fallback_template("critical", context)
-        self._deliver("critical", text)
+        decision = self._apply_filters("critical", "OLLAMA_UNRESPONSIVE", context)
+        if decision == "pass":
+            text = self._fallback_template("critical", context)
+            self._deliver("critical", text)
+        elif decision == "queue":
+            self._enqueue("critical", context)
 
     async def _on_hypothalamus_alarm(self, event: dict):
-        """HYPOTHALAMUS_ALARM → critical si severity > 0.8."""
+        """HYPOTHALAMUS_ALARM → critical si severity > 0.8 (passe par filtres burst/cooldown)."""
         severity = event.get("severity", 0)
         if severity <= 0.8:
             return
         context = {
             "detail": f"Alarme hypothalamus (severity {severity:.1f}): {event.get('reason', 'inconnu')}",
         }
-        text = self._fallback_template("critical", context)
-        self._deliver("critical", text)
+        decision = self._apply_filters("critical", "HYPOTHALAMUS_ALARM", context)
+        if decision == "pass":
+            text = self._fallback_template("critical", context)
+            self._deliver("critical", text)
+        elif decision == "queue":
+            self._enqueue("critical", context)
 
     async def _on_eureka_moment(self, event: dict):
         """EUREKA_MOMENT → eureka."""
