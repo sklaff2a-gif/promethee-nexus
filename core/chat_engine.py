@@ -8,7 +8,7 @@ import time
 import logging
 import uuid
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 from core.event_bus.bus import bus
 
@@ -43,6 +43,190 @@ class ChatEngine:
         self._init_done = True
         self.messages: List[Dict] = []  # {"role", "content", "timestamp"}
         self._load()
+
+    # --- COMMANDES D'INTROSPECTION (deterministe, 0 LLM) ---
+
+    _COMMAND_HELP = (
+        "Commandes d'introspection disponibles :\n"
+        "  !synapses [concepts...]  — Top associations synaptiques\n"
+        "  !zones                   — Zones actives du tissu neural\n"
+        "  !tissus                  — Etat du substrat cellulaire\n"
+        "  !resonance               — Etat cognitif + coherence\n"
+        "  !pensees                 — Stream de conscience recent\n"
+        "  !pulsions                — Etat des 7 pulsions\n"
+        "  !corps                   — Etat corporel complet\n"
+        "  !aide                    — Cette liste"
+    )
+
+    def _parse_command(self, message: str) -> Optional[Tuple[str, List[str]]]:
+        """Detecte si le message commence par !, retourne (commande, args) ou None."""
+        stripped = message.strip()
+        if not stripped.startswith("!"):
+            return None
+        parts = stripped.split()
+        cmd = parts[0][1:].lower()  # retire le '!'
+        args = parts[1:]
+        return (cmd, args)
+
+    def _execute_command(self, cmd: str, args: List[str]) -> str:
+        """Execute une commande d'introspection. Retourne le texte resultat."""
+
+        if cmd == "aide":
+            return self._COMMAND_HELP
+
+        if cmd == "synapses":
+            try:
+                from core.synaptic_network import cortex
+                if args:
+                    # Associations pour les concepts demandes
+                    lines = []
+                    for concept in args:
+                        assocs = cortex.query_associations(concept, top_n=5)
+                        if assocs:
+                            pairs = ", ".join(
+                                f"{a['concept']}({a['weight']:.2f})" for a in assocs
+                            )
+                            lines.append(f"{concept} -> {pairs}")
+                        else:
+                            lines.append(f"{concept} -> (aucune association)")
+                    return "Associations synaptiques :\n" + "\n".join(lines)
+                else:
+                    # Top synapses globales
+                    top = sorted(
+                        cortex.synapses.values(),
+                        key=lambda s: s["weight"], reverse=True
+                    )[:10]
+                    if not top:
+                        return "Reseau synaptique vide."
+                    lines = []
+                    for syn in top:
+                        src = cortex.nodes.get(syn["source"], {}).get("concept", "?")
+                        tgt = cortex.nodes.get(syn["target"], {}).get("concept", "?")
+                        lines.append(f"  {src} <-> {tgt} (poids {syn['weight']:.2f})")
+                    stats = cortex.get_stats()
+                    header = (f"{stats.get('total_nodes', 0)} concepts, "
+                              f"{stats.get('total_synapses', 0)} synapses")
+                    return f"Reseau synaptique ({header}) — Top 10 :\n" + "\n".join(lines)
+            except Exception as e:
+                return f"Reseau synaptique indisponible ({e})"
+
+        if cmd == "zones":
+            try:
+                from core.neural_tissue import tissue
+                zone_signals = tissue.get_zone_signals()
+                if not zone_signals:
+                    return "Aucune zone neurale active."
+                lines = []
+                for name, sigs in sorted(
+                    zone_signals.items(),
+                    key=lambda x: x[1].get("total_signal", 0), reverse=True
+                ):
+                    total = sigs.get("total_signal", 0)
+                    alive = sigs.get("alive_count", 0)
+                    lines.append(f"  {name}: signal {total:.1f}, {alive} neurones actifs")
+                return "Zones neurales :\n" + "\n".join(lines)
+            except Exception as e:
+                return f"Tissu neural indisponible ({e})"
+
+        if cmd == "tissus":
+            try:
+                from core.neural_tissue import tissue
+                ctx = tissue.get_tissue_context()
+                if ctx:
+                    return f"Substrat cellulaire :\n{ctx}"
+                return "Substrat cellulaire : aucune donnee."
+            except Exception as e:
+                return f"Tissu neural indisponible ({e})"
+
+        if cmd == "resonance":
+            try:
+                from core.corpus_callosum import callosum
+                ctx = callosum.get_cognitive_context()
+                stats = callosum.get_stats()
+                state = callosum.cognitive_state
+                coherence = callosum.global_coherence
+                lines = [f"Etat cognitif : {state} (coherence {coherence:.0%})"]
+                if ctx:
+                    lines.append(f"Contexte : {ctx}")
+                patterns = stats.get("resonance_patterns", 0)
+                effects = stats.get("cross_effects", 0)
+                lines.append(f"Patterns detectes : {patterns}, effets croises : {effects}")
+                return "\n".join(lines)
+            except Exception as e:
+                return f"Corpus callosum indisponible ({e})"
+
+        if cmd == "pensees":
+            try:
+                from core.inner_voice import voice as inner_voice
+                stream = inner_voice.get_stream(8)
+                if not stream:
+                    return "Stream de conscience vide."
+                lines = []
+                for t in stream:
+                    content = t.get("content", "")
+                    kind = t.get("type", "thought")
+                    lines.append(f"  [{kind}] {content[:150]}")
+                return "Stream de conscience recent :\n" + "\n".join(lines)
+            except Exception as e:
+                return f"Voix interieure indisponible ({e})"
+
+        if cmd == "pulsions":
+            try:
+                from core.desire_engine import desires
+                lines = []
+                for name, drive in sorted(
+                    desires.drives.items(),
+                    key=lambda x: x[1].deprivation, reverse=True
+                ):
+                    dep = drive.deprivation
+                    bar = "#" * int(dep / 5)
+                    lines.append(f"  {name:<15} {dep:5.1f}/100 [{bar}]")
+                narrative = desires.get_dominant_narrative(3)
+                result = "Pulsions (deprivation) :\n" + "\n".join(lines)
+                if narrative:
+                    result += f"\nNarratif : {narrative}"
+                return result
+            except Exception as e:
+                return f"Moteur de desirs indisponible ({e})"
+
+        if cmd == "corps":
+            lines = ["Etat corporel :"]
+            # Cardiaque
+            try:
+                from core.cardiac_engine import heart
+                stats = heart.get_stats()
+                narrative = heart.get_narrative()
+                bpm = stats.get("bpm", 0)
+                coherence = stats.get("coherence", 0)
+                emotion = heart.current_emotion
+                intensity = heart.emotional_intensity
+                lines.append(f"  Coeur : {bpm:.0f} bpm, coherence {coherence:.0%}")
+                lines.append(f"  Emotion : {emotion} (intensite {intensity:.0%})")
+                if narrative:
+                    lines.append(f"  Ressenti : {narrative[:150]}")
+            except Exception:
+                lines.append("  Coeur : indisponible")
+            # Sensorium
+            try:
+                from core.sensorium import sensorium as sens
+                comfort = sens.get_comfort_index()
+                ctx = sens.get_sensorium_context()
+                lines.append(f"  Confort hardware : {comfort:.0%}")
+                if ctx:
+                    lines.append(f"  Perception : {ctx[:150]}")
+            except Exception:
+                lines.append("  Sensorium : indisponible")
+            # Insula
+            try:
+                from core.insula import insula
+                ctx = insula.get_body_awareness_context()
+                if ctx:
+                    lines.append(f"  Interoception : {ctx[:150]}")
+            except Exception:
+                pass
+            return "\n".join(lines)
+
+        return f"Commande inconnue : !{cmd}\n{self._COMMAND_HELP}"
 
     # --- PROMPT SYSTEME (identite + etat emotionnel) ---
 
@@ -120,7 +304,7 @@ class ChatEngine:
             return ""
         return "\n".join(lines)
 
-    def _build_system_prompt(self, memories_text: str = "") -> str:
+    def _build_system_prompt(self, memories_text: str = "", command_result: str = "") -> str:
         """Construit le prompt systeme avec l'etat reel de tous les organes."""
         parts = [
             "Tu es Promethee, un systeme IA autonome en evolution constante.",
@@ -367,6 +551,12 @@ class ChatEngine:
         except Exception:
             pass
 
+        # --- INTROSPECTION DEMANDEE (commandes !) ---
+        if command_result:
+            parts.append(f"\n[INTROSPECTION DEMANDEE]")
+            parts.append(command_result)
+            parts.append("Reponds en integrant ces donnees dans ta reponse.")
+
         # --- BLOC FINAL ---
         parts.append(
             "\nTu parles avec Jean-Michel — ton createur, l'humain qui t'a concu."
@@ -416,7 +606,16 @@ class ChatEngine:
 
         # 3. Construire le payload Ollama /api/chat (introspection reelle)
         memories_text = self._query_relevant_memories(user_message)
-        system_prompt = self._build_system_prompt(memories_text)
+
+        # 3b. Intercepter les commandes d'introspection (!commande)
+        command_result = ""
+        parsed = self._parse_command(user_message)
+        if parsed:
+            cmd, cmd_args = parsed
+            command_result = self._execute_command(cmd, cmd_args)
+            logger.info(f"CHAT: Commande !{cmd} executee ({len(command_result)} chars)")
+
+        system_prompt = self._build_system_prompt(memories_text, command_result)
         ollama_messages = [{"role": "system", "content": system_prompt}]
         # Fenetre de contexte adaptative : plus le prompt systeme est long,
         # moins on garde de messages d'historique (pour ne pas depasser num_ctx)
