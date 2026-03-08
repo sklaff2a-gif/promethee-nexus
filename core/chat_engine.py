@@ -18,10 +18,13 @@ logger = logging.getLogger("ChatEngine")
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHAT_HISTORY_FILE = Path(os.path.join(PROJECT_ROOT, "memory", "chat_history.json"))
-MAX_HISTORY_MESSAGES = 30       # Fenetre de contexte envoyee a Ollama
+MAX_HISTORY_MESSAGES = 30       # Fenetre de contexte envoyee a Ollama (max)
+MIN_HISTORY_MESSAGES = 8        # Minimum garanti meme si prompt long
 MAX_SAVED_MESSAGES = 200        # Max messages persistes (FIFO)
 CHAT_MODEL = "gemma3:12b"      # Bon en conversation, meme modele que strategist
 OLLAMA_CHAT_URL = "http://127.0.0.1:11434/api/chat"
+OLLAMA_CHAT_CTX = 12288         # Fenetre de contexte Ollama (tokens)
+SYSTEM_PROMPT_TOKEN_BUDGET = 3000  # Budget estimé pour le prompt systeme (tokens)
 CONNEXION_SATISFACTION = 12.0   # Points de satisfaction par echange
 
 
@@ -55,6 +58,67 @@ class ChatEngine:
         except Exception:
             pass
         return ""
+
+    def _build_cartography(self) -> str:
+        """Construit la section [CARTOGRAPHIE] — vue structurelle des connexions inter-modules."""
+        lines = ["\n[CARTOGRAPHIE]"]
+        try:
+            # 1. Reseau synaptique : top associations les plus fortes
+            from core.synaptic_network import cortex
+            stats = cortex.get_stats()
+            lines.append(f"- Reseau : {stats.get('total_nodes', 0)} concepts, "
+                         f"{stats.get('total_synapses', 0)} synapses "
+                         f"({stats.get('strong_synapses', 0)} fortes)")
+            # Top 5 synapses les plus fortes
+            top_synapses = sorted(
+                cortex.synapses.values(),
+                key=lambda s: s["weight"], reverse=True
+            )[:5]
+            if top_synapses:
+                bridges = []
+                for syn in top_synapses:
+                    src = cortex.nodes.get(syn["source"], {}).get("concept", "?")
+                    tgt = cortex.nodes.get(syn["target"], {}).get("concept", "?")
+                    bridges.append(f"{src}<->{tgt}({syn['weight']:.2f})")
+                lines.append(f"- Ponts forts : {', '.join(bridges)}")
+        except Exception:
+            pass
+
+        try:
+            # 2. Tissu neural : zones actives
+            from core.neural_tissue import tissue
+            zone_signals = tissue.get_zone_signals()
+            active_zones = {
+                name: sigs.get("total_signal", sigs.get("alive_count", 0))
+                for name, sigs in zone_signals.items()
+            }
+            # Trier par activite decroissante, top 5
+            top_zones = sorted(active_zones.items(), key=lambda x: x[1], reverse=True)[:5]
+            if top_zones:
+                zone_str = ", ".join(f"{name}({val:.1f})" for name, val in top_zones if val > 0)
+                if zone_str:
+                    lines.append(f"- Zones actives : {zone_str}")
+        except Exception:
+            pass
+
+        try:
+            # 3. Corpus callosum : etat cognitif et coherence
+            from core.corpus_callosum import callosum
+            cog_state = callosum.cognitive_state
+            coherence = callosum.global_coherence
+            narrative = callosum.get_narrative()
+            if cog_state != "standard":
+                lines.append(f"- Etat cognitif : {cog_state} (coherence {coherence:.0%})")
+            else:
+                lines.append(f"- Etat cognitif : standard (coherence {coherence:.0%})")
+            if narrative:
+                lines.append(f"- Resonance : {narrative[:120]}")
+        except Exception:
+            pass
+
+        if len(lines) <= 1:
+            return ""
+        return "\n".join(lines)
 
     def _build_system_prompt(self, memories_text: str = "") -> str:
         """Construit le prompt systeme avec l'etat reel de tous les organes."""
@@ -259,17 +323,8 @@ class ChatEngine:
         except Exception:
             pass
 
-        # --- TISSU NEURAL (SynapticNetwork) ---
-        try:
-            from core.synaptic_network import cortex
-            stats = cortex.get_stats()
-            nodes = stats.get("total_nodes", 0)
-            synapses = stats.get("total_synapses", 0)
-            if nodes > 0:
-                parts.append(f"\n[TISSU NEURAL]")
-                parts.append(f"- {nodes} concepts, {synapses} connexions")
-        except Exception:
-            pass
+        # --- CARTOGRAPHIE (SynapticNetwork + NeuralTissue + CorpusCallosum) ---
+        parts.append(self._build_cartography())
 
         # --- MEMOIRE (Hippocampus + RAG) ---
         try:
@@ -363,8 +418,14 @@ class ChatEngine:
         memories_text = self._query_relevant_memories(user_message)
         system_prompt = self._build_system_prompt(memories_text)
         ollama_messages = [{"role": "system", "content": system_prompt}]
-        # Fenetre de contexte limitee
-        recent = self.messages[-MAX_HISTORY_MESSAGES:]
+        # Fenetre de contexte adaptative : plus le prompt systeme est long,
+        # moins on garde de messages d'historique (pour ne pas depasser num_ctx)
+        prompt_chars = len(system_prompt)
+        estimated_prompt_tokens = prompt_chars // 3  # ~3 chars/token approximation
+        remaining_tokens = OLLAMA_CHAT_CTX - estimated_prompt_tokens - 2048  # reserve reponse
+        # ~50 tokens/message en moyenne
+        adaptive_max = max(MIN_HISTORY_MESSAGES, min(MAX_HISTORY_MESSAGES, remaining_tokens // 50))
+        recent = self.messages[-adaptive_max:]
         for msg in recent:
             ollama_messages.append({
                 "role": msg["role"],
@@ -387,7 +448,7 @@ class ChatEngine:
                     "model": CHAT_MODEL,
                     "messages": ollama_messages,
                     "stream": True,
-                    "options": {"temperature": 0.7, "num_ctx": 8192, "num_predict": 2048},
+                    "options": {"temperature": 0.7, "num_ctx": OLLAMA_CHAT_CTX, "num_predict": 2048},
                 }
 
                 async with httpx.AsyncClient() as client:
