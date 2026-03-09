@@ -349,7 +349,14 @@ PYTHONIOENCODING=utf-8 python -m pytest tests/ -x --tb=short
 
 ## License
 
-This project is under active development. License TBD.
+This project is licensed under the **GNU Affero General Public License v3.0** (AGPL-3.0).
+
+This means you are free to use, modify, and distribute this software, provided that:
+- Any modified version you distribute must also be open-sourced under AGPL-3.0
+- If you run a modified version as a network service (SaaS), you must make the source code available to its users
+- You must retain the original copyright and license notices
+
+See [LICENSE](LICENSE) for the full text.
 
 ---
 
