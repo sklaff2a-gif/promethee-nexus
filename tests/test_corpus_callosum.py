@@ -985,3 +985,125 @@ class TestTissuePatternHandler:
         """Pattern freq <= 0.4 → ignoré."""
         await isolate_callosum._on_tissue_pattern({"frequency": 0.3, "genome": "CG"})
         assert not hasattr(isolate_callosum, "_tissue_frequency") or isolate_callosum._tissue_frequency == 0.0
+
+
+# ============================================================
+# TestTissueInCoherence — Tissue dans OrganSnapshot et cohérence
+# ============================================================
+
+class TestTissueInCoherence:
+    """Tests pour l'intégration tissue dans cohérence et patterns."""
+
+    def test_organ_snapshot_has_tissue_fields(self):
+        """OrganSnapshot contient tissue_vitality, tissue_diversity, tissue_alive_cells."""
+        snap = OrganSnapshot()
+        assert hasattr(snap, "tissue_vitality")
+        assert hasattr(snap, "tissue_diversity")
+        assert hasattr(snap, "tissue_alive_cells")
+        assert snap.tissue_vitality == 0.0
+        assert snap.tissue_diversity == 0.0
+        assert snap.tissue_alive_cells == 0
+
+    def test_coherence_weights_include_tissue(self):
+        """COHERENCE_WEIGHTS contient 'tissue' avec poids > 0."""
+        from core.corpus_callosum import COHERENCE_WEIGHTS
+        assert "tissue" in COHERENCE_WEIGHTS
+        assert COHERENCE_WEIGHTS["tissue"] > 0
+
+    def test_coherence_weights_sum_to_one(self):
+        """La somme des poids de cohérence = 1.0."""
+        from core.corpus_callosum import COHERENCE_WEIGHTS
+        total = sum(COHERENCE_WEIGHTS.values())
+        assert total == pytest.approx(1.0, abs=0.01)
+
+    def test_coherence_score_with_tissue(self, isolate_callosum):
+        """Tissue vital + diversifié → meilleur score de cohérence."""
+        snap_low = _make_snapshot(tissue_vitality=0.0, tissue_diversity=0.0, tissue_alive_cells=5)
+        snap_high = _make_snapshot(tissue_vitality=0.8, tissue_diversity=0.6, tissue_alive_cells=50)
+        score_low = isolate_callosum._compute_global_coherence(snap_low)
+        score_high = isolate_callosum._compute_global_coherence(snap_high)
+        assert score_high > score_low
+
+    def test_coherence_tissue_fallback_few_cells(self, isolate_callosum):
+        """< 10 cellules → score tissue = 0.3 (défaut)."""
+        snap = _make_snapshot(tissue_vitality=0.9, tissue_diversity=0.9, tissue_alive_cells=5)
+        score = isolate_callosum._compute_global_coherence(snap)
+        # Avec seulement 5 cellules, le score tissue est 0.3 (défaut)
+        snap2 = _make_snapshot(tissue_vitality=0.9, tissue_diversity=0.9, tissue_alive_cells=50)
+        score2 = isolate_callosum._compute_global_coherence(snap2)
+        # Les 50 cellules utilisent le vrai score
+        assert score2 > score
+
+    def test_flow_pattern_tissue_bonus(self, isolate_callosum):
+        """Tissu diversifié contribue à la confiance du pattern flow."""
+        snap = _make_snapshot(
+            cardiac_coherence=0.8,
+            dopamine_level=0.7,
+            has_active_goal=True,
+            goal_progress=50.0,
+            threat_level=1.0,
+            tissue_diversity=0.5,
+            tissue_vitality=0.6,
+            tissue_alive_cells=50,
+        )
+        patterns = isolate_callosum._detect_resonance_patterns(snap)
+        flow_patterns = [p for p in patterns if p.pattern_type == "flow"]
+        assert len(flow_patterns) >= 1
+
+    def test_creative_surge_tissue_contribution(self, isolate_callosum):
+        """Tissu diversifié apparaît dans les contributeurs du creative_surge."""
+        snap = _make_snapshot(
+            dopamine_level=0.7,
+            frustrated_drives=["CURIOSITE", "CREATION"],
+            dominant_deprivation=60.0,
+            synaptic_energy=0.5,
+            tissue_diversity=0.5,
+            tissue_alive_cells=50,
+        )
+        patterns = isolate_callosum._detect_resonance_patterns(snap)
+        creative = [p for p in patterns if p.pattern_type == "creative_surge"]
+        if creative:
+            assert "tissue" in creative[0].contributing_organs
+
+    def test_stagnation_low_tissue_diversity(self, isolate_callosum):
+        """Tissu peu diversifié renforce la stagnation (bonus confiance)."""
+        snap = _make_snapshot(
+            dopamine_level=0.15,
+            dominant_deprivation=70.0,
+            synaptic_energy=0.05,
+            cardiac_coherence=0.2,
+            threat_level=0.5,
+            tissue_diversity=0.05,
+            tissue_alive_cells=50,
+        )
+        patterns = isolate_callosum._detect_resonance_patterns(snap)
+        stag = [p for p in patterns if p.pattern_type == "stagnation"]
+        # S'il y a stagnation, la confiance inclut le tissue bonus
+        if stag:
+            assert stag[0].confidence > 0
+
+    def test_capture_organ_states_tissue_integration(self, isolate_callosum):
+        """_capture_organ_states() capture les métriques tissue."""
+        mock_tissue = MagicMock()
+        mock_tissue.get_stats.return_value = {
+            "alive_cells": 100,
+            "avg_energy": 150.0,
+            "genome_diversity": 30,
+        }
+        mock_mod = MagicMock()
+        mock_mod.tissue = mock_tissue
+        with patch.dict("sys.modules", {
+            "core.cardiac_engine": None,
+            "core.desire_engine": None,
+            "core.reptilian_core": None,
+            "core.prefrontal": None,
+            "core.dopamine_system": None,
+            "core.synaptic_network": None,
+            "core.inner_voice": None,
+            "core.hippocampus": None,
+            "core.neural_tissue": mock_mod,
+        }):
+            snap = isolate_callosum._capture_organ_states()
+        assert snap.tissue_alive_cells == 100
+        assert snap.tissue_vitality == pytest.approx(0.75, abs=0.01)  # 150/200
+        assert snap.tissue_diversity > 0

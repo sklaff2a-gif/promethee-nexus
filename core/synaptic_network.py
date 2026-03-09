@@ -35,7 +35,7 @@ STDP_BUFFER_SIZE = 15             # Taille du buffer STDP (était 50, réduit po
 # par les organes internes et créent du bruit auto-référentiel massif.
 _STDP_EXCLUDED_PREFIXES = frozenset({
     "dmn", "synaptic", "desire", "reptilian", "cardiac",
-    "reflex:", "trait:", "pulsion:",
+    "reflex:", "trait:", "pulsion:", "zone:",
 })
 
 # Noeuds bruit rejetes par ensure_node() — artefacts filesystem et mots-béquilles LLM
@@ -52,7 +52,7 @@ STATE_FILE = os.path.join(
 
 # Types de noeuds valides
 VALID_NODE_TYPES = frozenset({
-    "memory", "desire", "trait", "event", "objective", "eureka", "meta", "affect"
+    "memory", "desire", "trait", "event", "objective", "eureka", "meta", "affect", "zone"
 })
 
 # Types de synapses valides
@@ -756,6 +756,7 @@ class SynapticNetwork:
             bus.subscribe("CARDIAC_EMOTION_CHANGE", self._on_cardiac_emotion_change)
             # Sensorium hardware (Sprint 2 Sensorium)
             bus.subscribe("SENSORIUM_UPDATE", self._on_sensorium_update)
+            bus.subscribe("TISSUE_ZONE_UPDATE", self._on_tissue_zone_update)
         except Exception as e:
             logger.warning(f"SYNAPSE: Impossible de souscrire aux evenements: {e}")
 
@@ -1272,6 +1273,66 @@ class SynapticNetwork:
         except Exception as e:
             logger.warning(f"SYNAPSE: Erreur _on_sensorium_update: {e}")
 
+    async def _on_tissue_zone_update(self, event: dict):
+        """Zones actives du tissu neural → noeuds zone + synapses contextuelles."""
+        try:
+            data = event.get("data", event) if isinstance(event, dict) else {}
+            zones = data.get("zones", {})
+            dominants = data.get("dominants", {})
+
+            for zone_name, metrics in zones.items():
+                activity = metrics.get("activity", 0.0)
+                diversity = metrics.get("diversity", 0.0)
+
+                # Ne créer/renforcer un noeud que si la zone est significativement active
+                if activity < 0.3 and diversity < 0.2:
+                    continue
+
+                node_id = self.ensure_node(
+                    f"zone:{zone_name}",
+                    node_type="zone",
+                    semantic_weight=min(1.0, activity * diversity * 2),
+                    functional_systems=["neural_tissue"],
+                )
+                if not node_id:
+                    continue
+
+                # Energie proportionnelle à activité × diversité
+                if node_id in self.nodes:
+                    self.nodes[node_id]["energy"] = min(
+                        1.0, activity * (0.5 + diversity * 0.5)
+                    )
+
+                # Relier au dernier noeud routine si disponible
+                if self._last_routine_node and self._last_routine_node in self.nodes:
+                    self.hebbian_strengthen(
+                        node_id, self._last_routine_node,
+                        success=True, context="tissue_zone",
+                    )
+
+                # Zone créative haute → relier aux noeuds eureka récents
+                if zone_name == "creativity" and activity > 1.0:
+                    eureka_nodes = [
+                        nid for nid, n in self.nodes.items()
+                        if n.get("node_type") == "eureka"
+                    ][-3:]
+                    for enid in eureka_nodes:
+                        self.hebbian_strengthen(
+                            node_id, enid, success=True, context="tissue_creativity",
+                        )
+
+        except Exception as e:
+            logger.warning(f"SYNAPSE: Erreur _on_tissue_zone_update: {e}")
+
+    def activate_concept(self, concept: str, intensity: float = 0.5):
+        """Active un concept (alias pour ensure_node + boost energie)."""
+        node_id = self.ensure_node(concept, "memory", intensity)
+        if node_id and node_id in self.nodes:
+            self.nodes[node_id]["energy"] = min(
+                1.0, self.nodes[node_id]["energy"] + intensity
+            )
+        return node_id
+
     def _extract_and_ensure(self, text: str, node_type: str = "memory",
                             functional_systems: Optional[List[str]] = None,
                             max_concepts: int = 5) -> List[str]:
@@ -1412,6 +1473,9 @@ class SynapticNetwork:
         # 5b. CURIOSITE SYNAPTIQUE — forcer l'exploration inter-systemes
         report["curiosity_links"] = self._curiosity_explore()
 
+        # 6b. SEED TISSULAIRE — zones actives guident la consolidation
+        report["tissue_seeds"] = self._dream_tissue_seed()
+
         # 6. Normalisation homeostatique
         self.homeostatic_normalize()
 
@@ -1475,6 +1539,53 @@ class SynapticNetwork:
                 break
 
         return created
+
+    def _dream_tissue_seed(self) -> int:
+        """Seed la consolidation dream depuis les zones actives du tissu neural.
+
+        Les noeuds zone: avec haute énergie deviennent des hubs de connexion
+        pendant le rêve — les zones actives du tissu guident la consolidation.
+        """
+        seeded = 0
+        try:
+            zone_nodes = [
+                (nid, node) for nid, node in self.nodes.items()
+                if node.get("node_type") == "zone" and node.get("energy", 0) > 0.3
+            ]
+            if not zone_nodes:
+                return 0
+
+            # Pour chaque zone active, créer 1-2 connexions vers des noeuds mémoire récents
+            memory_nodes = [
+                nid for nid, node in self.nodes.items()
+                if node.get("node_type") in ("memory", "event", "eureka")
+                and node.get("energy", 0) > 0.1
+            ]
+            if not memory_nodes:
+                return 0
+
+            for zone_nid, zone_node in zone_nodes:
+                # Sélectionner 1-2 noeuds mémoire non-connectés
+                connected = set()
+                for key, syn in self.synapses.items():
+                    if syn["source"] == zone_nid:
+                        connected.add(syn["target"])
+                    elif syn["target"] == zone_nid:
+                        connected.add(syn["source"])
+                candidates = [n for n in memory_nodes if n not in connected and n != zone_nid]
+                if not candidates:
+                    continue
+                targets = random.sample(candidates, min(2, len(candidates)))
+                for target_nid in targets:
+                    key = _synapse_key(zone_nid, target_nid)
+                    if key not in self.synapses:
+                        self.synapses[key] = _make_synapse(
+                            zone_nid, target_nid, 0.12, "emotional", "tissue_dream"
+                        )
+                        seeded += 1
+        except Exception as e:
+            logger.debug(f"SYNAPSE: Erreur dream tissue seed: {e}")
+        return seeded
 
     def _create_meta_concepts(self) -> int:
         """Detecte des cliques de 3+ noeuds fortement connectes et cree des meta-concepts."""

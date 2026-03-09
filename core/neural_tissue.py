@@ -102,6 +102,51 @@ GOAL_ZONE_MAP = {
 }
 GOAL_FOOD_BONUS = 2  # Food supplémentaire par zone bonusée par goal actif
 
+# Mapping intent de routine → zones tissu pertinentes (pour scoring V2)
+INTENT_ZONE_MAP = {
+    "EXPANSION_CODE":       ["creativity", "cognition"],
+    "AUDIT_STRUCTURE":      ["stability", "cognition"],
+    "VEILLE_SILENCIEUSE":   ["cognition", "memory"],
+    "DROPZONE_SCAN":        ["memory"],
+    "COUNCIL_DEBATE":       ["cognition", "stability"],
+    "GRIMOIRE_INVOKE":      ["creativity", "cognition"],
+    "SECURITY_AUDIT":       ["threat", "stability"],
+    "MEMORY_CLEANUP":       ["memory"],
+    "REFACTOR_RANDOM":      ["cognition", "stability"],
+    "MEMORY_CONSOLIDATION": ["memory", "cognition"],
+    "SOLILOQUE_INTERNE":    ["emotion", "creativity"],
+    "ROADMAP_RESEARCH":     ["creativity", "desire"],
+    "ROADMAP_SPEC":         ["cognition", "creativity"],
+    "SELF_INSPECT":         ["cognition", "memory"],
+    "NEURAL_COMPILE":       ["cognition"],
+    "CURIOSITY_REFLEX":     ["creativity", "desire"],
+}
+
+# Profils comportementaux dérivés du génome dominant d'une zone
+# Basé sur la distribution des instructions : C+G=producteur, R+A=colonisateur, I+T=modulateur, S=recycleur
+GENOME_PROFILE_THRESHOLDS = {
+    "producteur":   ("C", "G"),     # Capter + Générer
+    "colonisateur": ("R", "A"),     # Reproduire + Activer
+    "modulateur":   ("I", "T"),     # Inhiber + Transformer
+    "recycleur":    ("S",),         # Symbiose
+}
+
+# Effets des profils zonaux sur le scoring des intents
+ZONE_PROFILE_EFFECTS = {
+    ("creativity", "producteur"):   {"EXPANSION_CODE": 0.5, "ROADMAP_SPEC": 0.3},
+    ("creativity", "modulateur"):   {"REFACTOR_RANDOM": 0.4, "COUNCIL_DEBATE": 0.2},
+    ("cognition", "producteur"):    {"VEILLE_SILENCIEUSE": 0.4, "MEMORY_CONSOLIDATION": 0.3},
+    ("cognition", "colonisateur"):  {"EXPANSION_CODE": 0.3, "ROADMAP_RESEARCH": 0.3},
+    ("threat", "modulateur"):       {"SECURITY_AUDIT": 0.5, "AUDIT_STRUCTURE": 0.3},
+    ("memory", "producteur"):       {"MEMORY_CONSOLIDATION": 0.5},
+    ("memory", "recycleur"):        {"MEMORY_CLEANUP": 0.5},
+    ("stability", "modulateur"):    {"AUDIT_STRUCTURE": 0.4, "SECURITY_AUDIT": 0.3},
+    ("desire", "colonisateur"):     {"ROADMAP_RESEARCH": 0.4, "SOLILOQUE_INTERNE": 0.3},
+}
+
+# Intervalle de publication TISSUE_ZONE_UPDATE (en ticks)
+ZONE_UPDATE_PUBLISH_INTERVAL = 50
+
 # Zones de la grille où les signaux cognitifs sont injectés
 SIGNAL_ZONES = {
     "emotion":    (0,  0,  4,  4),
@@ -420,6 +465,27 @@ class NeuralCell:
 # ─────────────────────────────────────────────
 # Utilitaires
 # ─────────────────────────────────────────────
+
+def _classify_genome_profile(genome: str) -> str:
+    """Classifie un génome selon la distribution de ses instructions.
+    Retourne: producteur, colonisateur, modulateur, recycleur, ou mixte."""
+    if not genome:
+        return "mixte"
+    counts = Counter(genome.upper())
+    prod = counts.get("C", 0) + counts.get("G", 0)
+    colo = counts.get("R", 0) + counts.get("A", 0)
+    modu = counts.get("I", 0) + counts.get("T", 0)
+    recy = counts.get("S", 0)
+    scores = {"producteur": prod, "colonisateur": colo, "modulateur": modu, "recycleur": recy}
+    best = max(scores, key=scores.get)
+    if scores[best] == 0:
+        return "mixte"
+    # Exiger au moins 40% de dominance pour classifier
+    total = sum(scores.values())
+    if total > 0 and scores[best] / total >= 0.4:
+        return best
+    return "mixte"
+
 
 def _genome_divergence(genome: str, reference: str) -> float:
     """Distance de Hamming normalisée entre deux génomes. [0, 1]"""
@@ -1122,6 +1188,10 @@ class NeuralTissue:
         except Exception:
             pass
 
+        # 9c. Publier TISSUE_ZONE_UPDATE périodiquement (pour synaptic + corpus callosum)
+        if self.tick_count % ZONE_UPDATE_PUBLISH_INTERVAL == 0:
+            self._publish_zone_update()
+
         # 10. Publier les événements de seuil (efférences)
         self._check_thresholds()
 
@@ -1319,17 +1389,42 @@ class NeuralTissue:
                 if nb_cells > 0 else 0.0
             )
 
+            # Genome dominant de la zone
+            dominant_genome = ""
+            genome_freq = 0.0
+            if zone_cells:
+                genome_counts = Counter(c.genome for c in zone_cells)
+                dominant_genome, dom_count = genome_counts.most_common(1)[0]
+                genome_freq = dom_count / nb_cells
+
             signals[zone_name] = {
                 "activity": round(activity, 4),
                 "density": round(density, 4),
                 "energy": round(energy, 1),
                 "diversity": round(diversity, 4),
+                "dominant_genome": dominant_genome,
+                "genome_frequency": round(genome_freq, 3),
             }
         self._zone_signals = signals
 
     def get_zone_signals(self) -> Dict[str, Dict[str, float]]:
         """Retourne les signaux de zone (shallow copy)."""
         return dict(self._zone_signals)
+
+    def get_zone_dominants(self) -> Dict[str, Dict[str, Any]]:
+        """Retourne le génome dominant par zone et son profil comportemental."""
+        result = {}
+        for zone_name, sig in self._zone_signals.items():
+            genome = sig.get("dominant_genome", "")
+            if not genome:
+                continue
+            profile = _classify_genome_profile(genome)
+            result[zone_name] = {
+                "genome": genome,
+                "frequency": sig.get("genome_frequency", 0.0),
+                "profile": profile,
+            }
+        return result
 
     def _normalize(self):
         """Clamp tous les signaux cognitifs dans leurs bornes valides."""
@@ -1640,11 +1735,48 @@ class NeuralTissue:
                 self._cognitive_state["stability"] * 0.7 + float(coherence) * 0.3
             )
 
+    def _publish_zone_update(self):
+        """Publie l'état agrégé des zones pour les autres organes."""
+        try:
+            from core.event_bus.bus import bus
+            dominants = self.get_zone_dominants()
+            asyncio.get_event_loop().create_task(bus.publish("TISSUE_ZONE_UPDATE", {
+                "zones": {
+                    name: {
+                        "activity": sig.get("activity", 0.0),
+                        "density": sig.get("density", 0.0),
+                        "energy": sig.get("energy", 0.0),
+                        "diversity": sig.get("diversity", 0.0),
+                        "dominant_genome": sig.get("dominant_genome", ""),
+                    }
+                    for name, sig in self._zone_signals.items()
+                },
+                "dominants": dominants,
+                "season": SEASON_ORDER[self._current_season_index] if self._current_season_index < len(SEASON_ORDER) else "",
+                "tick": self.tick_count,
+                "alive_cells": len(self.cells),
+            }))
+        except Exception:
+            pass  # Pas de boucle événementielle disponible (tests)
+
     async def _on_synaptic_update(self, event):
-        """Mise à jour synaptique → activité mémoire."""
+        """Mise à jour synaptique → modulation zones tissu."""
+        data = event.get("data", event) if isinstance(event, dict) else {}
+        # Effet de base : activité mémoire
         self._cognitive_state["memory_activity"] = min(
             self._cognitive_state["memory_activity"] + 0.1, 1.0
         )
+        # Renforcement synaptique fort → boost cognition
+        delta_type = data.get("type", "")
+        if delta_type == "strengthen" and data.get("weight", 0) > 0.5:
+            self._cognitive_state["cognition_level"] = min(
+                self._cognitive_state["cognition_level"] + 0.05, 1.0
+            )
+        # Pruning → légère baisse mémoire
+        elif delta_type == "prune":
+            self._cognitive_state["memory_activity"] = max(
+                self._cognitive_state["memory_activity"] - 0.03, 0.0
+            )
 
     async def _on_council_end(self, event):
         """Fin de council → stabilité selon résultat."""
@@ -1741,39 +1873,68 @@ class NeuralTissue:
         return None
 
     def compute_tissue_bonus(self, intent: str) -> float:
-        """Bonus pour le scoring autonomy basé sur la vitalité du substrat.
+        """Bonus V2 pour le scoring autonomy basé sur l'état du tissu neural.
 
-        Si l'intent correspond à des zones actives, bonus amplifié.
+        Intègre : affinité zone, santé zone, profil génomique, saison.
+        Retourne un bonus dans [-1.0, +2.0].
         """
-        if not self.dominant_patterns or not self.cells:
+        if not self.cells or not self._zone_signals:
             return 0.0
 
-        top = self.dominant_patterns[0]
-        freq_bonus = top["frequency"] * 0.5
-        fitness_bonus = min(top["avg_fitness"] * 0.3, 0.5)
+        bonus = 0.0
 
-        # Bonus zone : si l'intent correspond à une zone très active
-        zone_bonus = 0.0
-        if intent and self._zone_signals:
-            intent_lower = intent.lower()
-            for keyword, zones in GOAL_ZONE_MAP.items():
-                if keyword in intent_lower:
-                    for zone_name in zones:
-                        sig = self._zone_signals.get(zone_name, {})
-                        if sig.get("activity", 0.0) > 0.5:
-                            zone_bonus = max(zone_bonus, 0.2)
+        # 1. AFFINITÉ ZONE : les zones pertinentes pour cet intent sont-elles actives ?
+        target_zones = INTENT_ZONE_MAP.get(intent, [])
+        if target_zones:
+            zone_score = 0.0
+            for zone_name in target_zones:
+                sig = self._zone_signals.get(zone_name, {})
+                activity = sig.get("activity", 0.0)
+                diversity = sig.get("diversity", 0.0)
+                energy = sig.get("energy", 0.0)
+                # Score zone = activité × diversité × énergie normalisée
+                energy_norm = min(energy / 200.0, 1.0)  # 200 = bonne énergie moyenne
+                zone_score += activity * (0.5 + diversity * 0.5) * (0.5 + energy_norm * 0.5)
+            zone_score /= len(target_zones)
+            bonus += min(zone_score * 0.8, 0.8)  # Max +0.8
 
-        # Santé tissulaire : ratio apoptose/nécrose favorable → bonus
-        health_bonus = 0.0
+        # 2. SANTÉ ZONE : pénaliser si zones pertinentes sont désertes ou surchargées
+        for zone_name in target_zones:
+            sig = self._zone_signals.get(zone_name, {})
+            density = sig.get("density", 0.0)
+            activity = sig.get("activity", 0.0)
+            if density < 0.05:
+                bonus -= 0.3  # Zone désertée
+            elif activity > THRESHOLD_ZONE_OVERLOAD:
+                bonus -= 0.2  # Zone surchargée
+
+        # 3. PROFIL GÉNOMIQUE : le génome dominant des zones influence l'intent
+        for zone_name in target_zones:
+            sig = self._zone_signals.get(zone_name, {})
+            genome = sig.get("dominant_genome", "")
+            if not genome:
+                continue
+            profile = _classify_genome_profile(genome)
+            effects = ZONE_PROFILE_EFFECTS.get((zone_name, profile), {})
+            profile_bonus = effects.get(intent, 0.0)
+            bonus += profile_bonus
+
+        # 4. SAISON : bonus si la saison courante favorise une zone de l'intent
+        if self._current_season_index < len(SEASON_ORDER):
+            current_season = SEASON_ORDER[self._current_season_index]
+            if current_season in target_zones:
+                bonus += 0.3  # Saison alignée
+
+        # 5. SANTÉ GLOBALE : ratio apoptose/nécrose
         total_typed = self.total_apoptosis + self.total_necrosis
         if total_typed > 10:
             health_ratio = self.total_apoptosis / total_typed
             if health_ratio > 0.5:
-                health_bonus = 0.2
+                bonus += 0.1
             elif health_ratio < 0.3:
-                health_bonus = -0.2
+                bonus -= 0.2
 
-        return round(freq_bonus + fitness_bonus + zone_bonus + health_bonus, 3)
+        return round(max(-1.0, min(2.0, bonus)), 3)
 
     def get_tissue_context(self) -> str:
         """Texte injectable dans le purpose_context."""

@@ -3528,3 +3528,72 @@ METRIQUES ROUTINES (dernieres 40):
 
 **Fichiers cibles** : (aucun fichier cité)
 **Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-08 15:50] L'isolement pese. Comment ameliorer nos protocoles de collaboration et d'echange
+
+**Participants** : strategist, writer, researcher | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  **Consolidation des propositions et plan d'ac
+  **Analyse des critiques précédentes :**
+  **Justification** :
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-08 22:12] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  **Nouvelle Stratégie Intégrée :**
+  **Nouvelle Stratégie Simplifiée et Ciblée :**
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-09 03:36] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- ROADMAP
+
+**Participants** : strategist, coder, architect | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : `core/autonomy_engine.py`, `core/event_bus/bus.py`, `core/memory/vector_store.py`, `core/memory_gatekeeper.py`, `core/router.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-09 04:14] L'instinct de survie est extrême. Est-ce de la prudence excessive ?
+
+**Participants** : architect, security, strategist | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  **CONSENSUS :** Après une analyse attentive des tours précédents et des critiques formulées par l’Avocat du Diable, je c
+  **Analyse finale et actions de consolidation :**
+  **CONSENSUS :** Suite à l'examen approfondi des échanges précédents et en tenant compte des observations de l'Avocat du 
+  **Justification et consolidation des actions :**
+
+**Fichiers cibles** : `core/base_agent.py`, `core/memory/vector_store.py`, `core/prompt_templates.py`, `core/router.py`, `core/sandbox_engine.py`
+**Verdict** : (à curé manuellement)
+
+---
+
+## [2026-03-09 12:46] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 5 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : `core/council.py`, `core/grimoire/git_keeper.py`, `core/psyche.py`, `core/strategic_journal.py`
+**Verdict** : (à curé manuellement)

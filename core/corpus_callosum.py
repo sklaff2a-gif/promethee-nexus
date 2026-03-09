@@ -42,13 +42,14 @@ COGNITIVE_STATES = ("standard", "flow", "crisis", "creative_surge",
 
 # Ponderation des organes pour la coherence globale
 COHERENCE_WEIGHTS = {
-    "cardiac": 0.20,
-    "desire": 0.15,
-    "reptilian": 0.15,
-    "prefrontal": 0.15,
-    "dopamine": 0.15,
-    "synaptic": 0.10,
-    "voice": 0.10,
+    "cardiac": 0.18,
+    "desire": 0.14,
+    "reptilian": 0.14,
+    "prefrontal": 0.14,
+    "dopamine": 0.14,
+    "synaptic": 0.08,
+    "voice": 0.08,
+    "tissue": 0.10,
 }
 
 # Bonus scoring par etat cognitif (intent_keyword -> bonus)
@@ -108,6 +109,10 @@ class OrganSnapshot:
     # Hippocampus
     hippocampus_arcs: int = 0
     hippocampus_last_arc: str = ""
+    # Neural Tissue
+    tissue_vitality: float = 0.0
+    tissue_diversity: float = 0.0
+    tissue_alive_cells: int = 0
 
 
 @dataclass
@@ -470,6 +475,18 @@ class CorpusCallosum:
         except Exception:
             pass
 
+        # Neural Tissue
+        try:
+            from core.neural_tissue import tissue
+            stats = tissue.get_stats()
+            alive = stats.get("alive_cells", 0)
+            snap.tissue_alive_cells = alive
+            if alive > 0:
+                snap.tissue_vitality = min(1.0, stats.get("avg_energy", 0) / 200.0)
+                snap.tissue_diversity = stats.get("genome_diversity", 0) / max(alive, 1)
+        except Exception:
+            pass
+
         return snap
 
     # ============================================================
@@ -486,16 +503,23 @@ class CorpusCallosum:
                 and snap.dopamine_level >= 0.60
                 and snap.has_active_goal
                 and snap.threat_level < 3.0):
+            # Tissu diversifié renforce le flow
+            tissue_flow_bonus = 0.05 if snap.tissue_diversity > 0.3 else 0.0
             confidence = min(1.0, (
-                snap.cardiac_coherence * 0.3
-                + snap.dopamine_level * 0.3
+                snap.cardiac_coherence * 0.25
+                + snap.dopamine_level * 0.25
                 + (snap.goal_progress / 100.0 if snap.goal_progress > 1 else snap.goal_progress) * 0.2
                 + (1.0 - snap.threat_level / 10.0) * 0.2
+                + snap.tissue_vitality * 0.1
+                + tissue_flow_bonus
             ))
+            contributing = ["cardiac", "dopamine", "prefrontal"]
+            if snap.tissue_alive_cells > 10:
+                contributing.append("tissue")
             patterns.append(ResonancePattern(
                 pattern_type="flow",
                 confidence=confidence,
-                contributing_organs=["cardiac", "dopamine", "prefrontal"],
+                contributing_organs=contributing,
                 timestamp=now,
                 narrative=(
                     f"Etat de flow detecte : coherence cardiaque elevee ({snap.cardiac_coherence:.2f}), "
@@ -529,15 +553,21 @@ class CorpusCallosum:
         if (snap.dopamine_level >= 0.65
                 and any(d in ("CURIOSITE", "CREATION") for d in snap.frustrated_drives)
                 and snap.synaptic_energy > 0.2):
+            # Tissu diversifié + vital amplifie la créativité
+            tissue_creative = snap.tissue_diversity * 0.15 if snap.tissue_alive_cells > 10 else 0.0
             confidence = min(1.0, (
-                snap.dopamine_level * 0.35
-                + min(snap.synaptic_energy, 1.0) * 0.35
-                + (len(snap.frustrated_drives) / 7.0) * 0.3
+                snap.dopamine_level * 0.30
+                + min(snap.synaptic_energy, 1.0) * 0.30
+                + (len(snap.frustrated_drives) / 7.0) * 0.25
+                + tissue_creative
             ))
+            contributing = ["dopamine", "desire", "synaptic"]
+            if snap.tissue_alive_cells > 10 and snap.tissue_diversity > 0.2:
+                contributing.append("tissue")
             patterns.append(ResonancePattern(
                 pattern_type="creative_surge",
                 confidence=confidence,
-                contributing_organs=["dopamine", "desire", "synaptic"],
+                contributing_organs=contributing,
                 timestamp=now,
                 narrative=(
                     f"Vague creative : dopamine haute ({snap.dopamine_level:.2f}), "
@@ -554,16 +584,22 @@ class CorpusCallosum:
             and (not snap.has_active_goal or snap.goal_progress < 0.15)
         )
         if stagnation_check:
+            # Tissu peu diversifié renforce la stagnation
+            tissue_stag = 0.1 if snap.tissue_diversity < 0.1 and snap.tissue_alive_cells > 10 else 0.0
             confidence = min(1.0, (
-                (1.0 - snap.dopamine_level) * 0.3
-                + snap.dominant_deprivation / 100.0 * 0.3
+                (1.0 - snap.dopamine_level) * 0.25
+                + snap.dominant_deprivation / 100.0 * 0.25
                 + (1.0 - snap.cardiac_coherence) * 0.2
                 + 0.2  # bonus absence goal
+                + tissue_stag
             ))
+            contributing = ["dopamine", "desire", "prefrontal", "cardiac"]
+            if tissue_stag > 0:
+                contributing.append("tissue")
             patterns.append(ResonancePattern(
                 pattern_type="stagnation",
                 confidence=confidence,
-                contributing_organs=["dopamine", "desire", "prefrontal", "cardiac"],
+                contributing_organs=contributing,
                 timestamp=now,
                 narrative=(
                     f"Stagnation detectee : dopamine basse ({snap.dopamine_level:.2f}), "
@@ -792,6 +828,10 @@ class CorpusCallosum:
 
         # Voice : bonus si active
         scores["voice"] = 0.6 if snap.voice_active else 0.4
+
+        # Tissue : vitalite + diversite
+        tissue_score = (snap.tissue_vitality * 0.5 + snap.tissue_diversity * 0.5)
+        scores["tissue"] = min(1.0, tissue_score) if snap.tissue_alive_cells > 10 else 0.3
 
         # Moyenne ponderee
         total = sum(

@@ -1690,3 +1690,148 @@ class TestSensoriumSynaptic:
         assert hw_nid in network.nodes
         # Pas de synapse
         assert len(network.synapses) == 0
+
+
+# ============================================================
+# TestTissueZoneIntegration — Tissue → Synaptic
+# ============================================================
+
+class TestTissueZoneIntegration:
+    """Tests pour _on_tissue_zone_update, activate_concept, _dream_tissue_seed."""
+
+    @pytest.mark.asyncio
+    async def test_on_tissue_zone_update_creates_zone_nodes(self, network):
+        """Zone active (activity > 0.3) → noeud zone: créé."""
+        event = {
+            "zones": {
+                "creativity": {"activity": 1.2, "diversity": 0.5},
+                "memory": {"activity": 0.1, "diversity": 0.1},  # Sous le seuil
+            },
+            "dominants": {},
+        }
+        await network._on_tissue_zone_update(event)
+        creativity_nid = _make_node_id("zone:creativity")
+        memory_nid = _make_node_id("zone:memory")
+        assert creativity_nid in network.nodes
+        assert memory_nid not in network.nodes  # Sous le seuil
+
+    @pytest.mark.asyncio
+    async def test_on_tissue_zone_update_node_type_is_zone(self, network):
+        """Les noeuds créés ont le type 'zone'."""
+        event = {
+            "zones": {"cognition": {"activity": 0.8, "diversity": 0.4}},
+            "dominants": {},
+        }
+        await network._on_tissue_zone_update(event)
+        nid = _make_node_id("zone:cognition")
+        assert network.nodes[nid]["node_type"] == "zone"
+
+    @pytest.mark.asyncio
+    async def test_on_tissue_zone_update_energy_proportional(self, network):
+        """Énergie du noeud zone proportionnelle à activity × diversity."""
+        event = {
+            "zones": {"creativity": {"activity": 1.0, "diversity": 0.6}},
+            "dominants": {},
+        }
+        await network._on_tissue_zone_update(event)
+        nid = _make_node_id("zone:creativity")
+        # energy = min(1.0, 1.0 * (0.5 + 0.6 * 0.5)) = 0.8
+        assert network.nodes[nid]["energy"] == pytest.approx(0.8, abs=0.1)
+
+    @pytest.mark.asyncio
+    async def test_on_tissue_zone_update_links_to_routine(self, network):
+        """Zone active reliée au dernier noeud routine."""
+        routine_nid = network.ensure_node("routine_test", "routine", 0.5)
+        network._last_routine_node = routine_nid
+        event = {
+            "zones": {"cognition": {"activity": 0.5, "diversity": 0.4}},
+            "dominants": {},
+        }
+        await network._on_tissue_zone_update(event)
+        zone_nid = _make_node_id("zone:cognition")
+        key = _synapse_key(zone_nid, routine_nid)
+        assert key in network.synapses
+
+    @pytest.mark.asyncio
+    async def test_on_tissue_zone_update_creativity_eureka_link(self, network):
+        """Zone creativity haute activity → reliée aux noeuds eureka."""
+        eureka_nid = network.ensure_node("eureka_test", "eureka", 0.5)
+        event = {
+            "zones": {"creativity": {"activity": 1.5, "diversity": 0.5}},
+            "dominants": {},
+        }
+        await network._on_tissue_zone_update(event)
+        zone_nid = _make_node_id("zone:creativity")
+        key = _synapse_key(zone_nid, eureka_nid)
+        assert key in network.synapses
+
+    @pytest.mark.asyncio
+    async def test_on_tissue_zone_update_graceful_on_error(self, network):
+        """Erreur dans le handler → log warning, pas de crash."""
+        # Passer un event malformé
+        await network._on_tissue_zone_update(None)
+        # Pas de crash
+
+    def test_activate_concept_creates_node(self, network):
+        """activate_concept() crée un noeud et booste son énergie."""
+        nid = network.activate_concept("test_concept", 0.7)
+        assert nid is not None
+        assert nid in network.nodes
+        assert network.nodes[nid]["energy"] >= 0.7
+
+    def test_activate_concept_boosts_existing(self, network):
+        """activate_concept() sur un noeud existant augmente l'énergie."""
+        nid = network.ensure_node("existing_concept", "memory", 0.3)
+        initial_energy = network.nodes[nid]["energy"]
+        network.activate_concept("existing_concept", 0.4)
+        assert network.nodes[nid]["energy"] > initial_energy
+
+    def test_zone_excluded_from_stdp(self):
+        """Le préfixe 'zone:' est exclu du STDP."""
+        from core.synaptic_network import _STDP_EXCLUDED_PREFIXES
+        assert "zone:" in _STDP_EXCLUDED_PREFIXES
+
+    def test_zone_in_valid_node_types(self):
+        """'zone' est un type de noeud valide."""
+        from core.synaptic_network import VALID_NODE_TYPES
+        assert "zone" in VALID_NODE_TYPES
+
+    def test_dream_tissue_seed_no_zone_nodes(self, network):
+        """Pas de noeuds zone → 0 seeds."""
+        seeded = network._dream_tissue_seed()
+        assert seeded == 0
+
+    def test_dream_tissue_seed_creates_connections(self, network):
+        """Noeuds zone actifs + noeuds mémoire → nouvelles synapses."""
+        # Créer un noeud zone avec haute énergie
+        zone_nid = network.ensure_node("zone:creativity", "zone", 0.8)
+        network.nodes[zone_nid]["energy"] = 0.5
+        # Créer des noeuds mémoire avec énergie > 0.1
+        mem1 = network.ensure_node("memory_concept_a", "memory", 0.3)
+        network.nodes[mem1]["energy"] = 0.3
+        mem2 = network.ensure_node("memory_concept_b", "memory", 0.3)
+        network.nodes[mem2]["energy"] = 0.3
+        seeded = network._dream_tissue_seed()
+        assert seeded > 0
+        # Vérifier qu'au moins une synapse est créée
+        zone_synapses = [
+            k for k, s in network.synapses.items()
+            if s["source"] == zone_nid or s["target"] == zone_nid
+        ]
+        assert len(zone_synapses) > 0
+
+    def test_dream_tissue_seed_no_memory_nodes(self, network):
+        """Noeuds zone mais pas de noeuds mémoire → 0 seeds."""
+        zone_nid = network.ensure_node("zone:cognition", "zone", 0.5)
+        network.nodes[zone_nid]["energy"] = 0.5
+        seeded = network._dream_tissue_seed()
+        assert seeded == 0
+
+    def test_dream_tissue_seed_low_energy_excluded(self, network):
+        """Noeuds zone avec énergie ≤ 0.3 exclus du seeding."""
+        zone_nid = network.ensure_node("zone:memory", "zone", 0.1)
+        network.nodes[zone_nid]["energy"] = 0.2  # Sous le seuil 0.3
+        mem_nid = network.ensure_node("memory_test", "memory", 0.5)
+        network.nodes[mem_nid]["energy"] = 0.5
+        seeded = network._dream_tissue_seed()
+        assert seeded == 0

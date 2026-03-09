@@ -351,8 +351,10 @@
       "phase_name": "SIGNAL BUS",
       "display": "connectivity_matrix",
       "description": "Matrice de connectivite — poids des connexions inter-organes, plasticite synaptique dynamique",
-      "status": "planned",
-      "specs": [],
+      "status": "ready",
+      "specs": [
+        "SPEC_STRUCTURED: [SYSTEM: Nexus V20 (Local First) | AGENT: VISION]\n\nVoici les spécifications techniques structurées pour le module `connectivity_matrix`, en tenant compte du contexte Prométhée et des contraintes locales :\n\n**1. Responsabilités principales :**\n\n*   Calculer et maintenir une matrice de connectivité dynamique entre les agents Prométhée.\n*   Adapter les poids synaptiques des connexions inter-agents en fonction des performances et des besoins.\n*   Fournir une vue d'ensemble de la communication et de la collaboration entre les agents.\n*   Intégrer les retours d'expérience de l'agent `evolution` pour optimiser la connectivité.\n*   Assurer la plasticité synaptique pour permettre l'apprentissage et l'adaptation du système.\n\n**2. Interface publique (méthodes clés) :**\n\n```python\nclass ConnectivityMatrix:\n    def get_matrix(self) -> dict:\n        \"\"\"Retourne la matrice de connectivité actuelle.\"\"\"\n    def update_weight(self, agent1: str, agent2: str, delta: float) -> None:\n        \"\"\"Met à jour le poids synaptique entre deux agents.\"\"\"\n    def observe_performance(self, agent: str, performance: float) -> None:\n        \"\"\"Observe la performance d'un agent pour ajuster les poids.\"\"\"\n    def reset_matrix(self) -> None:\n        \"\"\"Réinitialise la matrice de connectivité à ses valeurs par défaut.\"\"\"\n```\n\n**3. Événements Bus à publier/souscrire :**\n\n*   **Publier:** `agent_performance_update` (contient l'agent et sa performance)\n*   **Souscrire:** `agent_request` (pour recevoir les requêtes d'ajustement de poids)\n*   **Publier:** `connectivity_update` (signale une modification significative de la matrice)\n\n**4. Dépendances et connexions :**\n\n*   `core.synaptic_network`: Utilise la structure de données du réseau synaptique.\n*   `core.corpus_callosum`: Interagit pour synchroniser les données entre les agents.\n*   `Agents.*`:  Interagit avec les agents pour observer leurs performances et recevoir des demandes d'ajustement.\n*   `evolution_agent`:  Reçoit des recommandations pour l'optimisation de la connectivité.\n\n**5. Critères de validation :**\n\n*   La matrice de connectivité doit être cohérente et non négative.\n*   Les ajustements de poids doivent respecter les limites prédéfinies.\n*   L'impact des modifications sur les performances des agents doit être surveillé.\n*   La matrice doit être adaptable aux changements dans l'environnement et les objectifs de Prométhée.\n*   L'efficacité de la matrice doit être validée par l'agent `evolution`."
+      ],
       "depends_on": [
         "signal_bus"
       ],
@@ -366,7 +368,7 @@
         "core.corpus_callosum"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-01T00:00:00"
+      "updated_at": "2026-03-08T21:43:16"
     },
     {
       "id": "brain_vm",
@@ -374,8 +376,10 @@
       "phase_name": "VM NEURALE",
       "display": "brain_vm",
       "description": "Machine virtuelle neurale — runtime unifie pour tous les organes, cycle tick, isolation, monitoring",
-      "status": "planned",
-      "specs": [],
+      "status": "ready",
+      "specs": [
+        "SPEC_STRUCTURED: [SYSTEM: Nexus V20 (Local First) | AGENT: VISION]\n\nVoici les spécifications techniques structurées pour le module `brain_vm` :\n\n**1. Responsabilités principales :**\n\n*   **Runtime unifié :** Fournir un environnement d'exécution isolé et surveillé pour les organes (agents) de Prométhée.\n*   **Suivi des cycles :** Enregistrer et analyser l'état des agents à chaque cycle de tick (exécutions).\n*   **Isolation fonctionnelle :** Assurer l'isolation entre les agents, minimisant les interférences et améliorant la sécurité.\n*   **Monitoring interne :** Permettre la surveillance en temps réel des paramètres internes des agents (état, sécurité, etc.).\n*   **Abstraction de l'architecture physique :** Masquer les détails d'implémentation de l'infrastructure sous-jacente.\n\n**2. Interface publique :**\n\n*   `start_vm(agent_id: str) -> bool`: Démarre la machine virtuelle pour un agent donné.\n*   `stop_vm(agent_id: str) -> bool`: Arrête la machine virtuelle d'un agent.\n*   `get_vm_state(agent_id: str) -> dict`: Retourne l'état actuel de la machine virtuelle d'un agent.\n*   `set_vm_parameter(agent_id: str, parameter_name: str, value: any) -> bool`: Modifie un paramètre interne de la VM pour un agent (utilisé pour les tests et le débogage).\n\n**3. Events Bus à publier/souscrire :**\n\n*   **Publier:**\n    *   `vm_cycle_tick`: Signalé à chaque cycle de tick, contient l'état de la VM.\n    *   `vm_state_changed`: Signalé lorsqu'un paramètre de la VM est modifié.\n    *   `vm_error`: Signalé en cas d'erreur lors de l'exécution de la VM.\n*   **Souscrire:**\n    *   `agent_start_request`: Pour démarrer la VM d'un agent.\n    *   `agent_stop_request`: Pour arrêter la VM d'un agent.\n    *   `parameter_update_request`: Pour demander la modification d'un paramètre de la VM.\n\n**4. Dépendances et connexions :**\n\n*   **Dépendances:**\n    *   `core.autonomy_engine`: Pour l'orchestration des cycles et la gestion des agents.\n    *   `core.prefrontal`: Pour la gestion des paramètres et la configuration de la VM.\n    *   `core.reptilian_core`: Pour l'intégration des mécanismes de sécurité.\n    *   `chromadb`: Pour stocker l'historique de l'état de la VM.\n*   **Connexions:**\n    *   Fournit une API à tous les agents pour l'exécution et la surveillance.\n    *   Utilise le bus d'événements pour la communication asynchrone.\n\n**5. Critères de validation :**\n\n*   L'état de la VM doit correspondre à l'état réel des processus de l'agent.\n*   La surveillance des cycles ne doit pas introduire de latence significative.\n*   L'isolation fonctionnelle doit empêcher les interférences entre les agents.\n*   Les événements doivent être publiés et souscrits de manière fiable.\n*   La consommation des ressources doit être minimisée."
+      ],
       "depends_on": [
         "signal_bus",
         "connectivity_matrix"
@@ -391,7 +395,7 @@
         "core.reptilian_core"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-01T00:00:00"
+      "updated_at": "2026-03-08T23:46:42"
     },
     {
       "id": "tick_generator",
@@ -399,8 +403,10 @@
       "phase_name": "VM NEURALE",
       "display": "tick_generator",
       "description": "Generateur de ticks — horloge interne unifiee, cadence adaptative, synchronisation inter-organes",
-      "status": "planned",
-      "specs": [],
+      "status": "ready",
+      "specs": [
+        "SPEC_STRUCTURED: [SYSTEM: Nexus V20 (Local First) | AGENT: VISION]\n\nVoici les spécifications techniques structurées pour le module `tick_generator` :\n\n**1. Responsabilités principales :**\n\n*   Fournir une horloge interne unifiée pour Prométhée.\n*   Gérer la cadence des ticks de manière adaptative en fonction de la charge système et de l'activité.\n*   Synchroniser les opérations des agents avec la cadence globale.\n*   Permettre une configuration flexible de la fréquence des ticks.\n*   Minimiser la latence et l'impact sur les performances du système.\n\n**2. Interface publique :**\n\n*   `start_ticks(initial_tick_rate: float) -> None`: Démarre le générateur de ticks avec une fréquence initiale.\n*   `stop_ticks() -> None`: Arrête le générateur de ticks.\n*   `get_current_tick() -> int`: Renvoie le tick actuel.\n*   `set_tick_rate(new_tick_rate: float) -> None`: Modifie la fréquence des ticks.\n\n**3. Events bus à publier/souscrire :**\n\n*   **Publier :** `tick.generated(tick_number: int)`: Événement émis à chaque tick.\n*   **Souscrire :** `system.load.changed(load_percentage: float)`: Pour adapter dynamiquement la fréquence des ticks en fonction de la charge système.\n\n**4. Dépendances et connexions :**\n\n*   `core.cardiac_engine`: Pour la synchronisation globale.\n*   `core.circadian_rhythm`:  (Potentiellement) Pour intégrer des rythmes biologiques dans la cadence.\n*   `config/tick_rate.py`: Pour la configuration des paramètres de cadence.\n\n**5. Critères de validation :**\n\n*   La synchronisation entre les agents est maintenue dans une tolérance de +/- 1 tick.\n*   La cadence adaptative réduit l'utilisation des ressources lors de périodes de faible activité.\n*   Le module ne dépend pas de bibliothèques interdites.\n*   Le module est testé avec un minimum de 90% de couverture de code."
+      ],
       "depends_on": [
         "brain_vm"
       ],
@@ -414,7 +420,7 @@
         "core.circadian_rhythm"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-01T00:00:00"
+      "updated_at": "2026-03-09T03:56:10"
     },
     {
       "id": "topology",
@@ -422,8 +428,10 @@
       "phase_name": "VM NEURALE",
       "display": "topology",
       "description": "Topologie neurale — carte des connexions, regions fonctionnelles, hubs, metriques de graphe",
-      "status": "planned",
-      "specs": [],
+      "status": "ready",
+      "specs": [
+        "SPEC_STRUCTURED: En tant qu'architecte logiciel, voici les spécifications techniques pour le module \"topology\" de Prométhée :\n\n**1. Responsabilités principales :**\n\n*   Cartographier les connexions neuronales et identifier les régions fonctionnelles.\n*   Détecter les hubs fonctionnels en utilisant les métriques de graphe.\n*   Interpréter les caractéristiques topologiques grâce à Ollama.\n*   Intégrer les données de décodage neuronal via des endpoints FastAPI.\n*   Indexer les métriques graphiques dans ChromaDB.\n\n**2. Interface publique (méthodes clés) :**\n\n*   `detect_hubs(graph_metrics: dict) -> list`: Identifie les hubs fonctionnels à partir des métriques graphiques fournies.\n*   `interpret_topology(topology_data: str) -> str`: Interprète les données topologiques via Ollama et renvoie une description textuelle.\n*   `decode_neural_signal(signal_data: str) -> dict`: Décode un signal neuronal (EEG/fMRI) et renvoie un schéma fonctionnel.\n*   `index_metric(metric: dict)`: Ajoute une métrique graphique dans ChromaDB.\n\n**3. Événements bus à publier/souscrire :**\n\n*   **Publier:** `topology.hub_detected(hub_data: dict)` – Lorsqu'un hub fonctionnel est détecté.\n*   **Publier:** `topology.interpretation_ready(interpretation: str)` – Quand une interprétation topologique est prête.\n*   **Souscrire:** `data.metrics_available` – Pour récupérer de nouvelles métriques graphiques à indexer.\n\n**4. Dépendances et connexions :**\n\n*   `core.synaptic_network` : Pour l'intégration des données de topologie dans le réseau synaptique.\n*   `core.impact_analyzer` : Pour analyser l'impact des hubs et des régions fonctionnelles.\n*   `Ollama` : Pour l'interprétation des données topologiques.\n*   `FastAPI` : Pour exposer les endpoints de décodage neuronal.\n*   `ChromaDB` : Pour le stockage et la recherche des métriques graphiques.\n\n**5. Critères de validation :**\n\n*   Les hubs détectés correspondent aux structures cérébrales connues.\n*   Les interprétations d'Ollama sont cohérentes et pertinentes.\n*   Le décodage neuronal génère des schémas fonctionnels plausibles.\n*   L'indexation ChromaDB est rapide et efficace."
+      ],
       "depends_on": [
         "brain_vm"
       ],
@@ -437,7 +445,7 @@
         "core.impact_analyzer"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-01T00:00:00"
+      "updated_at": "2026-03-09T06:46:29"
     },
     {
       "id": "workspace",
@@ -445,8 +453,10 @@
       "phase_name": "VM NEURALE",
       "display": "workspace",
       "description": "Blackboard technique — memoire partagee inter-organes, broadcasting, acces concurrent (infra pour global_workspace Phase 7)",
-      "status": "planned",
-      "specs": [],
+      "status": "ready",
+      "specs": [
+        "SPEC_STRUCTURED: [SYSTEM: Nexus V20 (Local First) | AGENT: VISION]\n\nVoici les spécifications techniques structurées pour le module `workspace` :\n\n**1. Responsabilités principales :**\n\n*   Fournir une mémoire partagée (blackboard) pour la communication inter-agents.\n*   Gérer la diffusion (broadcasting) d'informations entre les agents.\n*   Assurer un accès concurrentiel sécurisé aux données partagées.\n*   Servir d'infrastructure pour le \"Global Workspace\" (Phase 7).\n*   Centraliser la gestion des données structurées et non structurées.\n\n**2. Interface publique (méthodes clés) :**\n\n*   `publish(message: str, sender: str) -> None`: Publie un message sur le workspace.\n*   `subscribe(topic: str, callback) -> None`: S'abonne à un topic spécifique.\n*   `get(key: str) -> Any`: Récupère une valeur stockée via une clé.\n*   `set(key: str, value: Any) -> None`: Stocke une valeur associée à une clé.\n*   `clear_topic(topic: str) -> None`: Efface toutes les données d'un topic.\n\n**3. Événements bus à publier/souscrire :**\n\n*   `workspace.message_published(topic: str, message: str, sender: str)`: Publié lors de la publication d'un message.\n*   `workspace.data_updated(key: str, value: Any)`: Publié lors d'une modification de données.\n*   `workspace.topic_cleared(topic: str)`: Publié après l'effacement d'un topic.\n*   Souscription aux événements des agents connectés (via les méthodes `publish` et `subscribe`).\n\n**4. Dépendances et connexions :**\n\n*   `core.prefrontal`: Pour la coordination globale et la gestion des tâches.\n*   `core.inner_voice`: Pour l'intégration des pensées et réflexions de l'IA.\n*   `core.corpus_callosum`: Pour la communication entre les hémisphères de l'IA (mémoire et logique).\n*   `asyncio.Queue`: Pour la gestion asynchrone des messages.\n\n**5. Critères de validation :**\n\n*   Absence de blocage lors de l'accès concurrentiel.\n*   Intégrité des données après publication et récupération.\n*   Faible latence pour la diffusion des messages.\n*   Conformité aux règles de sécurité locales (validation des expéditeurs).\n*   Capacité à gérer un nombre significatif d'agents connectés."
+      ],
       "depends_on": [
         "brain_vm",
         "topology"
@@ -462,7 +472,7 @@
         "core.corpus_callosum"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-01T00:00:00"
+      "updated_at": "2026-03-09T09:15:25"
     },
     {
       "id": "neural_tissue",
@@ -493,8 +503,10 @@
       "phase_name": "NEUROCHIMIE",
       "display": "neurochemistry",
       "description": "Neurochimie simulee — neurotransmetteurs virtuels (serotonine, noradrenaline, GABA), modulation globale",
-      "status": "planned",
-      "specs": [],
+      "status": "researching",
+      "specs": [
+        "RESEARCH_RAW: **Synthèse des résultats de recherche : Neurotransmetteurs et modulation neurochimique**  \n*Source : Shutterstock & iStock (données fournies)*  \n\n---\n\n### **1. Neurotransmetteurs clés et rôles biologiques**  \n- **Sérotonine** : Régulation de l'humeur, du bien-être et de l'apaisement (liée à la \"happiness hormones\" selon Shutterstock).  \n- **Noradrénaline** : Réponse à l'alerte, au stress et à l'attention (via le système nerveux sympathique).  \n- **GABA** : Neurotransmetteur inhibiteur réduisant l'anxiété et les excitations neuronales (mentionné dans les deux sources).  \n- **Dopamine** : Système de récompense, motivation et réactivité comportementale (liée aux \"brain happiness hormones\" selon Shutterstock).  \n\n---\n\n### **2. Modulation neurochimique**  \n- **Interactions** :  \n  - La sérotonine et la dopamine influencent les émotions positives (humeur, motivation).  \n  - La GABA module l'activité neuronale pour stabiliser les états anxieux (inhibition préventive).  \n  - La noradrénaline amplifie la vigilance, souvent en interaction avec la dopamine pour les réactions de stress.  \n- **Contexte** : Les mécanismes de modulation sont décrits comme essentiels pour la régulation émotionnelle (Shutterstock, 2023).  \n\n---\n\n### **3. Application pour le système PROMÉTHÉE**  \n- **Modélisation émotionnelle** :  \n  - Les données peuvent être intégrées dans les modèles de l'IA (via ChromaDB) pour simuler des scénarios neurochimiques liés à l'humain (ex: simulation de l'effet de la sérotonine sur les interactions utilisateur).  \n- **Limites** :  \n  - Aucune implémentation technique n'est requise : les données restent théoriques et doivent être utilisées via des *descriptions* ou des *modèles linguistiques* (ex: Ollama pour générer des réponses adaptées aux modulations émotionnelles).  \n\n---\n\n**Sources citées** :  \n- [Shutterstock](https://www.shutterstock.com/search/dopamine-neurotransmitters) : \"Three neurotransmitters, dopamine, serotonin, noradrenaline, norepinephrine. Emotional r"
+      ],
       "depends_on": [
         "brain_vm"
       ],
@@ -509,7 +521,7 @@
         "core.desire_engine"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-01T00:00:00"
+      "updated_at": "2026-03-09T10:09:56"
     },
     {
       "id": "lora_pipeline",
@@ -517,8 +529,10 @@
       "phase_name": "VIRTUALISATION LLM",
       "display": "lora_pipeline",
       "description": "Pipeline LoRA — fine-tuning local de modeles, generation de datasets, evaluation automatique",
-      "status": "planned",
-      "specs": [],
+      "status": "researching",
+      "specs": [
+        "RESEARCH_RAW: **Synthèse structurée : LoRA fine-tuning local pour LLM dans PROMÉTHÉE**  \n*(Sources : [DDG] YouTube, Sebastian Raschka, AMD)*  \n\n1. **Principe de LoRA**  \n   - LoRA (Low-Rank Adaptation) ajoute des matrices de rang faible *sans modifier les poids originaux* du modèle, réduisant la consommation de mémoire et les ressources computationnelles. Idéal pour des environnements locaux (PC Windows) avec des ressources limitées ([DDG] YouTube).  \n   - Après fine-tuning, les adapters sont fusionnés avec le modèle original pour simplifier l'inférence (exécution sans gestion de poids séparés), conformément à la logique de PROMÉTHÉE ([DDG] AMD).  \n\n2. **Dataset et adaptation locale**  \n   - Un dataset **diversifié** est essentiel pour éviter les limites d'un dataset statique (ex: performance insuffisante sur des tâches variées).  \n   - Utiliser **ChromaDB** (déjà intégré à PROMÉTHÉE) pour générer et gérer dynamiquement le dataset local, aligné avec le concept de mémoire vectorielle du projet ([DDG] Sebastian Raschka).  \n\n3. **Intégration avec PROMÉTHÉE**  \n   - **Évaluation automatisée** :  \n     - Utiliser la **Gemini API (via FastAPI)** pour évaluer le modèle fine-tune, en respectant la contrainte de \"cloud limité\" (appels ciblés, pas de dépendance excessive).  \n     - Intégrer les adapters fusionnés dans la pipeline PROMÉTHÉE via des modules existants (ex: gestion des modèles locaux via Ollama).  \n   - **Hardware** :  \n     - Si le PC Windows possède un processeur AMD Ryzen AI NPU/IGPU, exploiter l'accélération matérielle pour réduire le temps d'inférence ([DDG] AMD).  \n\n4. **Contraintes techniques**  \n   - **Pas de dépendance à PyTorch** : LoRA nécessite généralement des bibliothèques comme Hugging Face Transformers, mais PROMÉTHÉE utilise Ollama (non basé sur PyTorch). Une adaptation via des librairies tierces (ex: `peft` en mode *local*) est possible, sans utiliser de frameworks interdits (torch, LangChain, etc.).  \n   - **Ressources limitées** : Prioriser des datasets loc"
+      ],
       "depends_on": [
         "neurochemistry"
       ],
@@ -532,7 +546,7 @@
         "Agents.evolution_agent"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-01T00:00:00"
+      "updated_at": "2026-03-09T12:15:06"
     },
     {
       "id": "modelfile_generator",
@@ -540,8 +554,10 @@
       "phase_name": "VIRTUALISATION LLM",
       "display": "modelfile_generator",
       "description": "Generateur de Modelfiles — creation automatique de Modelfiles Ollama avec system prompts adaptatifs",
-      "status": "planned",
-      "specs": [],
+      "status": "researching",
+      "specs": [
+        "RESEARCH_RAW: **Synthèse : Génération de Modelfile et Ingénierie de Prompt pour Ollama dans PROMÉTHÉE**  \n\n**1. Structure de base du Modelfile**  \n- Utilisez `ollama show <nom_modèle> --modelfile` pour exporter le Modelfile existant (ex: `ollama show gemma3 --modelfile > mon_modelfile.txt`).  \n- Personnalisez le contenu avec :  \n  - `FROM [modèle_base]` (ex: `gemma3` ou `llama2:latest`).  \n  - `SYSTEM \"[votre_prompt]\"` pour définir le rôle et les contraintes (ex: `\"Vous êtes un agent de recherche PROMÉTHÉE : respectez les consignes locales et évitez les contenus sensibles.\"`).  \n  - Paramètres spécifiques (ex: `PARAMETER temperature=0.3`) ou ajout d'adaptateurs LoRA via `ADD ...`.  \n\n**2. Adaptation pour PROMÉTHÉE**  \n- **Prompt système personnalisé** : Modifiez le bloc `SYSTEM` pour aligner le modèle avec les exigences du projet (ex: priorité à la confidentialité, format de réponse structuré).  \n- **Import de modèles locaux** :  \n  - Utilisez `ollama create --modelfile mon_modelfile.txt` pour générer un modèle personnalisé à partir d’un Modelfile existant.  \n  - Importez des poids GGUF/Safetensors via `ollama create --model [nom] --modelfile [fichier]` (source [DDG](https://www.gpu-mart.com/blog/custom-llm-models-with-ollama-modelfile)).  \n\n**3. Exemple concret pour PROMÉTHÉE**  \n```modelfile  \nFROM gemma3  \nSYSTEM \"Vous êtes un agent de recherche PROMÉTHÉE. Répondez en français, évitez les informations sensibles et respectez les consignes locales.\"  \nPARAMETER temperature=0.2  \n```  \n- Sauvegardez le fichier (`mon_modelfile.txt`) et exécutez `ollama create -f mon_modelfile.txt prometheus` pour générer le modèle.  \n\n**4. Rappels techniques**  \n- Utilisez **Notepad** ou un éditeur texte pour modifier le Modelfile (compatible Windows).  \n- Les adaptations LoRA nécessitent des poids pré-entraînés en GGUF/Safetensors (source [DDG](https://apidog.com/blog/how-to-use-ollama/)).  \n\n**Sources** :  \n- [Documentation Ollama CLI](https://docs.ollama.com/cli) (exemples de Modelfile).  \n- [B"
+      ],
       "depends_on": [
         "lora_pipeline"
       ],
@@ -555,7 +571,7 @@
         "config"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-01T00:00:00"
+      "updated_at": "2026-03-09T13:37:47"
     },
     {
       "id": "ab_testing",
@@ -563,8 +579,10 @@
       "phase_name": "VIRTUALISATION LLM",
       "display": "ab_testing",
       "description": "A/B testing de modeles — comparaison automatisee de variantes LLM, selection par metriques",
-      "status": "planned",
-      "specs": [],
+      "status": "researching",
+      "specs": [
+        "RESEARCH_RAW: **Synthèse des métriques d'évaluation pour A/B testing de modèles LLM dans Prométhée**  \n*Adaptée au contexte mono-PC Windows avec Ollama local*\n\n---\n\n### **1. Métriques clés pour l'évaluation**  \n- **Cross-entropy** : Métrique préférée pour évaluer la qualité des modèles LLM (source : [Wikipedia](https://en.wikipedia.org/wiki/Large_language_model)).  \n  - Utiliser pour comparer la précision des réponses (ex : via des tests structurés avec des prompts standardisés).  \n- **Biais de sélection** : Tendance des modèles à privilégier des options spécifiques indépendamment du contenu réel (source : [Wikipedia](https://en.wikipedia.org/wiki/Large_language_model)).  \n  - **À éviter** lors des tests A/B : Valider les résultats avec des prompts neutres et variés.  \n- **Taille de la fenêtre contextuelle** : Paramètre critique pour les tâches nécessitant un contexte étendu (source : [Artificial Analysis Leaderboard](https://artificialanalysis.ai/leaderboards/models)).  \n  - Mesurer via Ollama pour adapter les modèles aux besoins du système.  \n\n---\n\n### **2. Métriques de performance locales**  \n- **Vitesse de génération (tokens/s)** et **latence (TTFT)** :  \n  - Indicateurs essentiels pour optimiser la réactivité (source : [Artificial Analysis Leaderboard](https://artificialanalysis.ai/leaderboards/models)).  \n  - **Application dans Prométhée** :  \n    - Utiliser les APIs Ollama pour capturer ces données (ex : via `ollama generate` avec un timer).  \n    - Comparer les modèles sur des prompts identiques pour isoler les performances.  \n- **Context window** :  \n  - Vérifier les limites de chaque modèle (ex : 4096 tokens pour les modèles Ollama).  \n  - Adapter les prompts à la taille maximale pour éviter les troncations.  \n\n---\n\n### **3. Éviter les pièges**  \n- **Biais de sélection** : Tester avec des prompts neutres et des données diverses (ex : évaluer la génération de réponses sur des thèmes neutres).  \n- **Sur-optimisation** : Ne pas privilégier un modèle pour un seul scénario ("
+      ],
       "depends_on": [
         "modelfile_generator"
       ],
@@ -578,7 +596,7 @@
         "Agents.evolution_agent"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-01T00:00:00"
+      "updated_at": "2026-03-09T14:25:09"
     },
     {
       "id": "global_workspace",

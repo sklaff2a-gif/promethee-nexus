@@ -3,7 +3,7 @@
 
 import pytest
 import random
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock, AsyncMock
 
 from core.neural_tissue import (
     NeuralCell, NeuralTissue, GRID_SIZE, INITIAL_CELLS, INITIAL_ENERGY,
@@ -1706,31 +1706,32 @@ class TestInteractionsCroisees:
 
     # 3
     def test_compute_tissue_bonus_health_good(self):
-        """Ratio apoptose/nécrose favorable → bonus positif."""
+        """Ratio apoptose/nécrose favorable → bonus positif avec un intent mappé."""
         tissue = _make_tissue()
         tissue.total_apoptosis = 15
         tissue.total_necrosis = 5
         tissue._update_dominant_patterns()
-        bonus = tissue.compute_tissue_bonus("exploration")
-        # health_ratio = 15/20 = 0.75 > 0.5 → health_bonus = 0.2
-        assert bonus >= 0.2
+        tissue._update_zone_signals()
+        bonus = tissue.compute_tissue_bonus("EXPANSION_CODE")
+        # V2 : zone affinity (creativity+cognition) + health bonus +0.1
+        assert bonus >= 0.1
 
     # 4
     def test_compute_tissue_bonus_health_bad(self):
-        """Beaucoup de nécrose → malus."""
+        """Beaucoup de nécrose → malus relatif."""
         tissue = _make_tissue()
         tissue.total_apoptosis = 2
         tissue.total_necrosis = 15
         tissue._update_dominant_patterns()
-        bonus = tissue.compute_tissue_bonus("")
-        # health_ratio = 2/17 ≈ 0.12 < 0.3 → health_bonus = -0.2
-        # Le bonus total peut être > 0 grâce aux autres composantes
-        # Vérifions juste que le health malus est appliqué
+        tissue._update_zone_signals()
+        bonus = tissue.compute_tissue_bonus("AUDIT_STRUCTURE")
+        # Vérifions que le health malus est appliqué
         tissue2 = _make_tissue()
         tissue2.total_apoptosis = 15
         tissue2.total_necrosis = 2
         tissue2._update_dominant_patterns()
-        bonus2 = tissue2.compute_tissue_bonus("")
+        tissue2._update_zone_signals()
+        bonus2 = tissue2.compute_tissue_bonus("AUDIT_STRUCTURE")
         assert bonus < bonus2  # Moins bon quand nécrose domine
 
     # 5
@@ -2408,3 +2409,321 @@ class TestSubstrateDynamic:
         assert result["tick_slowdown"] == 1.0
         assert result["pop_cap_factor"] == 1.0
         assert result["reward_boost"] == 1.0
+
+
+# ============================================================
+# TestClassifyGenomeProfile — Profils comportementaux
+# ============================================================
+
+class TestClassifyGenomeProfile:
+    """Tests pour _classify_genome_profile()."""
+
+    def test_producteur_majority_cg(self):
+        """Génome CCGCG → producteur (C+G dominant ≥ 40%)."""
+        from core.neural_tissue import _classify_genome_profile
+        assert _classify_genome_profile("CCGCG") == "producteur"
+
+    def test_colonisateur_majority_ra(self):
+        """Génome RRAAR → colonisateur (R+A dominant)."""
+        from core.neural_tissue import _classify_genome_profile
+        assert _classify_genome_profile("RRAAR") == "colonisateur"
+
+    def test_modulateur_majority_it(self):
+        """Génome IIITT → modulateur (I+T dominant)."""
+        from core.neural_tissue import _classify_genome_profile
+        assert _classify_genome_profile("IIITT") == "modulateur"
+
+    def test_recycleur_majority_s(self):
+        """Génome SSSSS → recycleur (S dominant)."""
+        from core.neural_tissue import _classify_genome_profile
+        assert _classify_genome_profile("SSSSS") == "recycleur"
+
+    def test_mixte_balanced(self):
+        """Génome CRIS → mixte (aucune dominance ≥ 40%)."""
+        from core.neural_tissue import _classify_genome_profile
+        # C=1(25%), R=1(25%), I=1(25%), S=1(25%) → aucun ≥ 40%
+        assert _classify_genome_profile("CRIS") == "mixte"
+
+    def test_empty_genome_is_mixte(self):
+        """Génome vide → mixte."""
+        from core.neural_tissue import _classify_genome_profile
+        assert _classify_genome_profile("") == "mixte"
+
+    def test_case_insensitive(self):
+        """Fonctionne en minuscules."""
+        from core.neural_tissue import _classify_genome_profile
+        assert _classify_genome_profile("ccgcg") == "producteur"
+
+
+# ============================================================
+# TestGetZoneDominants — Dominants par zone
+# ============================================================
+
+class TestGetZoneDominants:
+    """Tests pour get_zone_dominants()."""
+
+    def test_zone_dominants_basic(self):
+        """Retourne les dominants des zones peuplées."""
+        tissue = _make_tissue()
+        # Peupler la zone cognition avec un génome connu
+        tissue._zone_signals["cognition"] = {
+            "activity": 1.0, "density": 0.5, "energy": 100.0,
+            "diversity": 0.5, "dominant_genome": "CCGCG",
+            "genome_frequency": 0.6,
+        }
+        result = tissue.get_zone_dominants()
+        assert "cognition" in result
+        assert result["cognition"]["genome"] == "CCGCG"
+        assert result["cognition"]["profile"] == "producteur"
+        assert result["cognition"]["frequency"] == 0.6
+
+    def test_zone_dominants_empty_genome_excluded(self):
+        """Zones sans dominant_genome ne sont pas retournées."""
+        tissue = _make_tissue()
+        tissue._zone_signals["creativity"] = {
+            "activity": 0.5, "dominant_genome": "",
+        }
+        result = tissue.get_zone_dominants()
+        assert "creativity" not in result
+
+    def test_zone_dominants_multiple_zones(self):
+        """Plusieurs zones avec dominants différents."""
+        tissue = _make_tissue()
+        tissue._zone_signals["creativity"] = {
+            "dominant_genome": "RRAAR", "genome_frequency": 0.5,
+        }
+        tissue._zone_signals["memory"] = {
+            "dominant_genome": "SSSSS", "genome_frequency": 0.3,
+        }
+        result = tissue.get_zone_dominants()
+        assert result["creativity"]["profile"] == "colonisateur"
+        assert result["memory"]["profile"] == "recycleur"
+
+
+# ============================================================
+# TestComputeTissueBonusV2 — Scoring V2 avec zones/profils/saison
+# ============================================================
+
+class TestComputeTissueBonusV2:
+    """Tests pour compute_tissue_bonus() V2."""
+
+    def test_bonus_zero_without_cells(self):
+        """Pas de cellules → bonus = 0."""
+        tissue = _make_tissue()
+        tissue.cells = []
+        assert tissue.compute_tissue_bonus("EXPANSION_CODE") == 0.0
+
+    def test_bonus_zero_without_zone_signals(self):
+        """Pas de zone_signals → bonus = 0."""
+        tissue = _make_tissue()
+        tissue._zone_signals = {}
+        assert tissue.compute_tissue_bonus("EXPANSION_CODE") == 0.0
+
+    def test_zone_affinity_boosts_intent(self):
+        """Intent avec zones actives → bonus positif."""
+        tissue = _make_tissue()
+        # Simuler zone cognition et creativity actives
+        tissue._zone_signals["cognition"] = {
+            "activity": 1.5, "density": 0.3, "energy": 180.0,
+            "diversity": 0.6, "dominant_genome": "CCGCG",
+            "genome_frequency": 0.5,
+        }
+        tissue._zone_signals["creativity"] = {
+            "activity": 1.2, "density": 0.3, "energy": 150.0,
+            "diversity": 0.5, "dominant_genome": "GCCG",
+            "genome_frequency": 0.4,
+        }
+        bonus = tissue.compute_tissue_bonus("EXPANSION_CODE")
+        assert bonus > 0.0
+
+    def test_deserted_zone_penalty(self):
+        """Zone pertinente désertée (density < 0.05) → pénalité."""
+        tissue = _make_tissue()
+        tissue._zone_signals["cognition"] = {
+            "activity": 0.0, "density": 0.01, "energy": 5.0,
+            "diversity": 0.1, "dominant_genome": "",
+        }
+        tissue._zone_signals["creativity"] = {
+            "activity": 0.5, "density": 0.3, "energy": 100.0,
+            "diversity": 0.4, "dominant_genome": "",
+        }
+        bonus = tissue.compute_tissue_bonus("EXPANSION_CODE")
+        # La zone cognition désertée devrait pénaliser
+        assert bonus < 0.5  # Pas le bonus max
+
+    def test_profile_effect_boost(self):
+        """Zone avec bon profil → bonus supplémentaire via ZONE_PROFILE_EFFECTS."""
+        tissue = _make_tissue()
+        tissue._zone_signals["creativity"] = {
+            "activity": 1.0, "density": 0.3, "energy": 150.0,
+            "diversity": 0.5, "dominant_genome": "CCGCG",
+            "genome_frequency": 0.6,
+        }
+        tissue._zone_signals["cognition"] = {
+            "activity": 1.0, "density": 0.3, "energy": 150.0,
+            "diversity": 0.5, "dominant_genome": "",
+        }
+        # CCGCG = producteur, ("creativity", "producteur") → EXPANSION_CODE: +0.5
+        bonus_with_profile = tissue.compute_tissue_bonus("EXPANSION_CODE")
+        # Vérifier qu'il y a bien un bonus
+        assert bonus_with_profile > 0
+
+    def test_season_alignment_bonus(self):
+        """Intent dont les zones incluent la saison courante → +0.3."""
+        tissue = _make_tissue()
+        # SEASON_ORDER[0] = "emotion", SOLILOQUE_INTERNE → ["emotion", "creativity"]
+        tissue._current_season_index = 0  # emotion
+        tissue._zone_signals["emotion"] = {
+            "activity": 0.5, "density": 0.3, "energy": 100.0,
+            "diversity": 0.3, "dominant_genome": "",
+        }
+        tissue._zone_signals["creativity"] = {
+            "activity": 0.5, "density": 0.3, "energy": 100.0,
+            "diversity": 0.3, "dominant_genome": "",
+        }
+        bonus = tissue.compute_tissue_bonus("SOLILOQUE_INTERNE")
+        # Doit inclure +0.3 de saison
+        assert bonus >= 0.3
+
+    def test_bonus_clamped_to_range(self):
+        """Bonus clampé à [-1.0, +2.0]."""
+        tissue = _make_tissue()
+        # Saturer les zones pour tenter de dépasser +2
+        for zone_name in ["cognition", "creativity", "memory", "stability"]:
+            tissue._zone_signals[zone_name] = {
+                "activity": 5.0, "density": 0.8, "energy": 500.0,
+                "diversity": 1.0, "dominant_genome": "CCGCG",
+                "genome_frequency": 0.9,
+            }
+        tissue._current_season_index = 0
+        bonus = tissue.compute_tissue_bonus("EXPANSION_CODE")
+        assert -1.0 <= bonus <= 2.0
+
+    def test_unknown_intent_returns_global_only(self):
+        """Intent inconnu (pas dans INTENT_ZONE_MAP) → seulement santé globale."""
+        tissue = _make_tissue()
+        tissue._zone_signals["cognition"] = {
+            "activity": 1.0, "density": 0.3, "energy": 100.0,
+            "diversity": 0.5, "dominant_genome": "",
+        }
+        bonus = tissue.compute_tissue_bonus("UNKNOWN_INTENT_XYZ")
+        # Pas d'affinité zone, seulement le composant santé globale
+        assert -1.0 <= bonus <= 2.0
+
+
+# ============================================================
+# TestPublishZoneUpdate — Publication TISSUE_ZONE_UPDATE
+# ============================================================
+
+class TestPublishZoneUpdate:
+    """Tests pour _publish_zone_update()."""
+
+    def test_publish_zone_update_fires_event(self):
+        """_publish_zone_update() publie un événement TISSUE_ZONE_UPDATE."""
+        tissue = _make_tissue()
+        tissue._zone_signals["cognition"] = {
+            "activity": 1.0, "density": 0.3, "energy": 100.0,
+            "diversity": 0.5, "dominant_genome": "CCGCG",
+            "genome_frequency": 0.5,
+        }
+        from unittest.mock import AsyncMock
+        import asyncio
+        mock_bus = MagicMock()
+        mock_bus.publish = AsyncMock()
+        mock_bus_mod = MagicMock()
+        mock_bus_mod.bus = mock_bus
+
+        captured_coros = []
+        mock_loop = MagicMock()
+        mock_loop.create_task = lambda c: captured_coros.append(c) or MagicMock()
+
+        with patch.dict("sys.modules", {"core.event_bus": mock_bus_mod, "core.event_bus.bus": mock_bus_mod}):
+            with patch("asyncio.get_event_loop", return_value=mock_loop):
+                tissue._publish_zone_update()
+        # Exécuter les coroutines capturées
+        loop = asyncio.new_event_loop()
+        try:
+            for coro in captured_coros:
+                loop.run_until_complete(coro)
+        finally:
+            loop.close()
+        assert mock_bus.publish.call_count == 1
+        call_args = mock_bus.publish.call_args
+        assert call_args[0][0] == "TISSUE_ZONE_UPDATE"
+        data = call_args[0][1]
+        assert "zones" in data
+        assert "dominants" in data
+        assert "season" in data
+        assert "tick" in data
+        assert "alive_cells" in data
+
+    def test_publish_zone_update_includes_dominants(self):
+        """Les dominants sont inclus dans l'événement."""
+        tissue = _make_tissue()
+        tissue._zone_signals["creativity"] = {
+            "activity": 1.0, "density": 0.3, "energy": 100.0,
+            "diversity": 0.5, "dominant_genome": "RRAAR",
+            "genome_frequency": 0.7,
+        }
+        from unittest.mock import AsyncMock
+        import asyncio
+        mock_bus = MagicMock()
+        mock_bus.publish = AsyncMock()
+        mock_bus_mod = MagicMock()
+        mock_bus_mod.bus = mock_bus
+
+        captured_coros = []
+        mock_loop = MagicMock()
+        mock_loop.create_task = lambda c: captured_coros.append(c) or MagicMock()
+
+        with patch.dict("sys.modules", {"core.event_bus": mock_bus_mod, "core.event_bus.bus": mock_bus_mod}):
+            with patch("asyncio.get_event_loop", return_value=mock_loop):
+                tissue._publish_zone_update()
+        loop = asyncio.new_event_loop()
+        try:
+            for coro in captured_coros:
+                loop.run_until_complete(coro)
+        finally:
+            loop.close()
+        data = mock_bus.publish.call_args[0][1]
+        dominants = data["dominants"]
+        assert "creativity" in dominants
+        assert dominants["creativity"]["profile"] == "colonisateur"
+
+    def test_publish_interval_in_tick(self):
+        """ZONE_UPDATE_PUBLISH_INTERVAL = 50 → publication toutes les 50 ticks."""
+        from core.neural_tissue import ZONE_UPDATE_PUBLISH_INTERVAL
+        assert ZONE_UPDATE_PUBLISH_INTERVAL == 50
+
+
+# ============================================================
+# TestIntentZoneMap — Mapping intent→zones
+# ============================================================
+
+class TestIntentZoneMap:
+    """Tests pour INTENT_ZONE_MAP."""
+
+    def test_expansion_code_zones(self):
+        """EXPANSION_CODE → creativity + cognition."""
+        from core.neural_tissue import INTENT_ZONE_MAP
+        assert "creativity" in INTENT_ZONE_MAP["EXPANSION_CODE"]
+        assert "cognition" in INTENT_ZONE_MAP["EXPANSION_CODE"]
+
+    def test_security_audit_zones(self):
+        """SECURITY_AUDIT → threat + stability."""
+        from core.neural_tissue import INTENT_ZONE_MAP
+        assert "threat" in INTENT_ZONE_MAP["SECURITY_AUDIT"]
+        assert "stability" in INTENT_ZONE_MAP["SECURITY_AUDIT"]
+
+    def test_all_intents_reference_valid_zones(self):
+        """Tous les intents référencent des zones existantes dans SIGNAL_ZONES."""
+        from core.neural_tissue import INTENT_ZONE_MAP, SIGNAL_ZONES
+        valid_zones = set(SIGNAL_ZONES.keys())
+        for intent, zones in INTENT_ZONE_MAP.items():
+            for zone in zones:
+                assert zone in valid_zones, f"Intent {intent} référence zone inconnue: {zone}"
+
+    def test_all_main_intents_mapped(self):
+        """Au moins 10 intents sont mappés."""
+        from core.neural_tissue import INTENT_ZONE_MAP
+        assert len(INTENT_ZONE_MAP) >= 10
