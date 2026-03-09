@@ -433,6 +433,58 @@ class BaseAgent:
         except Exception:
             pass
 
+    # --- Collecte données QLoRA ---
+
+    _TRAINING_PAIRS_FILE = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "memory", "training_pairs.jsonl"
+    )
+    _TRAINING_PAIR_MIN_LENGTH = 50     # Réponse trop courte = bruit
+    _TRAINING_PAIR_MAX_LENGTH = 4000   # Tronquer les réponses trop longues
+    _TRAINING_PAIRS_MAX_SIZE = 50 * 1024 * 1024  # 50 MB max avant rotation
+
+    def _save_training_pair(self, prompt: str, response: str, was_cloud: bool):
+        """Sauvegarde une paire (prompt, response) pour QLoRA fine-tuning.
+
+        Format JSONL append-only. Chaque ligne = un exemple d'entraînement.
+        Filtrage minimal : longueur réponse, pas de réponse d'erreur.
+        """
+        try:
+            if not response or len(response) < self._TRAINING_PAIR_MIN_LENGTH:
+                return
+            # Filtrer les réponses d'erreur/timeout
+            if response.startswith("Erreur") or response.startswith("⚠️"):
+                return
+
+            # Tronquer si trop long
+            resp = response[:self._TRAINING_PAIR_MAX_LENGTH]
+
+            pair = {
+                "agent": self.name,
+                "prompt": prompt,
+                "response": resp,
+                "was_cloud": was_cloud,
+                "timestamp": time.time(),
+            }
+
+            # Rotation si fichier trop gros
+            filepath = self._TRAINING_PAIRS_FILE
+            if os.path.exists(filepath):
+                try:
+                    size = os.path.getsize(filepath)
+                    if size > self._TRAINING_PAIRS_MAX_SIZE:
+                        rotated = filepath + ".old"
+                        if os.path.exists(rotated):
+                            os.remove(rotated)
+                        os.rename(filepath, rotated)
+                except OSError:
+                    pass
+
+            with open(filepath, "a", encoding="utf-8") as f:
+                f.write(json.dumps(pair, ensure_ascii=False) + "\n")
+        except Exception:
+            pass  # Jamais bloquer le flux principal
+
     async def generate_content(self, prompt: str) -> str:
         # ===== NEURAL COMPILER: Tentative réponse compilée =====
         try:
@@ -564,6 +616,7 @@ class BaseAgent:
                                 self.remember(f"Q: {prompt}\nA: {cloud_response}", metadata={"source": used_model, "trigger": "cloud_escalation"})
                             final = self._sanitize_response(self._strip_cot(cloud_response), self.name)
                             self._record_for_compiler(prompt, final, was_cloud=True)
+                            self._save_training_pair(prompt, final, was_cloud=True)
                             return final
                     except Exception as e:
                         # Détecter les erreurs 429 (quota exceeded)
@@ -590,6 +643,7 @@ class BaseAgent:
         result = await self._call_ollama_stream(full_prompt, local_model)
         final = self._sanitize_response(self._strip_cot(result), self.name)
         self._record_for_compiler(prompt, final, was_cloud=False)
+        self._save_training_pair(prompt, final, was_cloud=False)
         return final
 
     @classmethod
