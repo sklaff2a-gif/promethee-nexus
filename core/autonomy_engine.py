@@ -23,7 +23,7 @@ DAILY_BUDGET_POINTS = 200
 BUDGET_RESERVE_POINTS = 20
 
 # Routines 0-LLM qui continuent même quand le budget est épuisé
-POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
+POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE", "SELF_INSPECT"}
 
 # Clamping final du score total (après toutes les couches de scoring)
 FINAL_SCORE_CLAMP_MIN = -5.0
@@ -212,6 +212,7 @@ CONTEXT_KEYWORDS = {
     "ROADMAP_RESEARCH": ["roadmap", "vision", "module", "planification", "recherche", "futur"],
     "ROADMAP_SPEC": ["specification", "specs", "roadmap", "concevoir", "design", "architecture"],
     "COUNCIL_DEBATE": ["council", "debate", "consensus", "decision", "délibération"],
+    "SELF_INSPECT": ["github", "code source", "repo", "inspection", "miroir", "auto-analyse"],
 }
 
 
@@ -472,6 +473,7 @@ class AutonomyEngine:
             {"agent": "_soliloque", "intent": "SOLILOQUE_INTERNE", "mission": "Engage un dialogue introspectif avec le compagnon intérieur."},
             {"agent": "vision", "intent": "ROADMAP_RESEARCH", "mission": "Recherche et analyse des sujets pour le prochain module de la roadmap."},
             {"agent": "vision", "intent": "ROADMAP_SPEC", "mission": "Genere des specifications structurees pour un module en cours de recherche."},
+            {"agent": "_self_inspect", "intent": "SELF_INSPECT", "mission": "Explore ton propre code source sur GitHub pour mieux te comprendre."},
         ]
 
     def _persist_state(self):
@@ -1208,6 +1210,8 @@ class AutonomyEngine:
             response = await self._execute_memory_consolidation()
         elif intent == "SOLILOQUE_INTERNE":
             response = await self._execute_soliloque()
+        elif intent == "SELF_INSPECT":
+            response = await self._execute_self_inspect()
         elif intent == "DROPZONE_SCAN" and dropzone_count == 0:
             # Dropzone vide → veille YouTube IA (rotation des sujets)
             yt_index = self.total_routines_executed % len(YOUTUBE_AI_VEILLE)
@@ -1925,6 +1929,137 @@ class AutonomyEngine:
         except Exception as e:
             logger.warning(f"[AUTONOMY] Erreur routine Grimoire: {e}")
             return {"status": "error", "result": str(e)}
+
+    async def _execute_self_inspect(self) -> dict:
+        """Prométhée explore son propre code source sur GitHub. 0 LLM."""
+        try:
+            from core.capabilities.github_mirror import GitHubMirror
+            mirror = GitHubMirror()
+
+            if not mirror.is_available():
+                return {"status": "skipped", "result": "gh CLI non disponible."}
+
+            # Choisir QUOI inspecter en fonction de l'état interne
+            target = self._choose_inspect_target(mirror)
+            if not target:
+                return {"status": "skipped", "result": "Aucune cible d'inspection pertinente."}
+
+            action = target["action"]
+            label = target["label"]
+            print(f"   🔍 SELF_INSPECT: {label}")
+
+            result_text = None
+            if action == "summary":
+                result_text = mirror.get_self_summary()
+            elif action == "read_file":
+                result_text = mirror.read_file_raw(target["path"])
+                if result_text:
+                    result_text = f"[FICHIER] {target['path']}\n{result_text}"
+            elif action == "commits":
+                commits = mirror.recent_commits(10)
+                if commits:
+                    result_text = "[COMMITS RÉCENTS]\n" + "\n".join(
+                        f"  {c.get('sha', '?')} | {c.get('date', '?')[:10]} | {c.get('message', '?')[:100]}"
+                        for c in commits
+                    )
+            elif action == "issues":
+                issues = mirror.read_issues(n=10)
+                if issues:
+                    result_text = "[ISSUES OUVERTES]\n" + "\n".join(
+                        f"  #{i.get('number', '?')} {i.get('title', '?')[:80]}"
+                        for i in issues
+                    )
+            elif action == "list_files":
+                files = mirror.list_files(target.get("path", ""))
+                if files:
+                    result_text = f"[CONTENU] {target.get('path', '/')}\n" + "\n".join(f"  {f}" for f in files)
+
+            if not result_text:
+                return {"status": "error", "result": f"Lecture GitHub échouée pour {label}"}
+
+            # Publier la découverte sur le bus
+            await bus.publish("SELF_INSPECT_RESULT", {
+                "action": action,
+                "label": label,
+                "excerpt": result_text[:500],
+                "timestamp": time.time(),
+            })
+
+            # Stocker en mémoire si contenu substantiel
+            if len(result_text) > 100:
+                try:
+                    from core.base_agent import BaseAgent
+                    agent = BaseAgent("introspection", "auto-inspection", "Prométhée s'auto-inspecte")
+                    await agent.remember(
+                        f"[SELF_INSPECT] {label}\n{result_text[:2000]}",
+                        tags=["self_inspect", "github", action],
+                    )
+                except Exception:
+                    pass  # Mémoire optionnelle
+
+            return {
+                "status": "success",
+                "result": f"Inspection: {label}\n{result_text[:1000]}",
+            }
+
+        except Exception as e:
+            logger.warning(f"[AUTONOMY] Erreur SELF_INSPECT: {e}")
+            return {"status": "error", "result": str(e)}
+
+    def _choose_inspect_target(self, mirror) -> dict | None:
+        """Choisit quoi inspecter en fonction de l'état cognitif. 0 LLM."""
+        import random as _rng
+
+        # Fichiers intéressants à explorer (rotation)
+        interesting_paths = [
+            "core/autonomy_engine.py", "core/neural_tissue.py", "core/synaptic_network.py",
+            "core/psyche.py", "core/desire_engine.py", "core/inner_voice.py",
+            "core/reptilian_core.py", "core/prefrontal.py", "core/cardiac_engine.py",
+            "core/dopamine_system.py", "core/hypothalamus.py", "core/corpus_callosum.py",
+            "core/council.py", "core/base_agent.py", "core/code_smith.py",
+            "Agents/evolution_agent.py", "Agents/coder_agent.py",
+        ]
+
+        # Ce qu'on a déjà inspecté récemment (extrait du result_preview)
+        recent_inspects = []
+        for h in self.routine_history:
+            if h.get("intent") == "SELF_INSPECT":
+                preview = h.get("result_preview", "")
+                if "Issues" in preview:
+                    recent_inspects.append("issues")
+                elif "Commits" in preview:
+                    recent_inspects.append("commits")
+                elif "sumé" in preview or "summary" in preview.lower():
+                    recent_inspects.append("summary")
+                elif "Lecture" in preview or "Relecture" in preview:
+                    # Extraire le chemin du fichier
+                    for p in interesting_paths:
+                        if p in preview:
+                            recent_inspects.append(p)
+                            break
+        recent_inspects = recent_inspects[-5:]
+
+        # Priorité 1 : issues ouvertes (si pas inspecté récemment)
+        if "issues" not in recent_inspects:
+            return {"action": "issues", "label": "Issues ouvertes sur GitHub"}
+
+        # Priorité 2 : derniers commits (si pas inspecté récemment)
+        if "commits" not in recent_inspects:
+            return {"action": "commits", "label": "Derniers commits"}
+
+        # Priorité 3 : résumé du repo
+        if "summary" not in recent_inspects:
+            return {"action": "summary", "label": "Résumé du repo GitHub"}
+
+        # Priorité 4 : explorer un fichier pas encore inspecté
+        not_inspected = [p for p in interesting_paths if p not in recent_inspects]
+        if not_inspected:
+            path = _rng.choice(not_inspected)
+            return {"action": "read_file", "path": path, "label": f"Lecture {path}"}
+
+        # Priorité 5 : rotation aléatoire sur tout
+        path = _rng.choice(interesting_paths)
+        return {"action": "read_file", "path": path, "label": f"Relecture {path}"}
 
     async def _execute_council_debate(self) -> dict:
         """Lance un débat autonome Council : Recherche web → Débat éclairé.

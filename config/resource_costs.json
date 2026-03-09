@@ -66,5 +66,9 @@
   "CURIOSITY_REFLEX": {
     "cost": 1,
     "description": "Reflexe curiosite: 1 appel LLM leger + optionnel web search"
+  },
+  "SELF_INSPECT": {
+    "cost": 0,
+    "description": "Lecture GitHub read-only via gh CLI, 0 appel LLM"
   }
 }
