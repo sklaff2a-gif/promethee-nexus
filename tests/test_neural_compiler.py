@@ -965,8 +965,9 @@ class TestBusIntegration:
             response_structure="text", quality=-1.0, was_cloud=False,
         )
         c._observations.append(obs)
-        await c._on_mission_finished({"agent": "coder", "status": "success"})
-        assert obs.quality == 0.7
+        await c._on_mission_finished({"agent": "coder", "status": "success", "result": "réponse mission"})
+        # Scoring multi-facteurs : réponse courte = score bas mais > 0.2
+        assert 0.2 < obs.quality <= 1.0
 
     @pytest.mark.asyncio
     async def test_mission_finished_error_quality(self, isolate_compiler):
@@ -995,6 +996,22 @@ class TestBusIntegration:
         c = isolate_compiler
         await c._on_mission_finished({})
         await c._on_mission_finished({"agent": "unknown", "status": "success"})
+
+    def test_evaluate_quality_differentiates(self, isolate_compiler):
+        """Le scoring multi-facteurs distingue les réponses riches des médiocres."""
+        from core.neural_compiler import NeuralCompiler
+        # Réponse courte vide
+        q_short = NeuralCompiler._evaluate_quality({"status": "success", "result": "ok"})
+        # Réponse riche avec structure et code
+        rich = ("## Analyse\n- Point 1\n- Point 2\n\ndef fix_bug():\n    pass\n\n"
+                "**Recommandation**: blablabla " * 30)
+        q_rich = NeuralCompiler._evaluate_quality({"status": "success", "result": rich})
+        # Erreur
+        q_err = NeuralCompiler._evaluate_quality({"status": "error", "result": rich})
+
+        assert q_short < q_rich, "Réponse riche doit scorer plus haut"
+        assert q_err == 0.2, "Erreur = toujours 0.2"
+        assert q_rich >= 0.8, "Réponse riche et structurée doit scorer >= 0.8"
 
 
 # ============================================================
@@ -1067,7 +1084,11 @@ class TestInterceptFeedback:
         rule = self._make_rule(positive_feedback=10, negative_feedback=1)
         c._rules.append(rule)
         c._last_intercepts["coder"] = ("r_feedback", time.time())
-        await c._on_mission_finished({"agent": "coder", "status": "success"})
+        # Fournir un result assez riche pour que le scoring multi-facteurs donne >= 0.6
+        await c._on_mission_finished({
+            "agent": "coder", "status": "success",
+            "result": "## Analyse\n- Point 1\n- Point 2\n\ndef fix(): pass\n\nBlabla " * 10
+        })
         assert rule.positive_feedback == 11
         assert "coder" not in c._last_intercepts
 

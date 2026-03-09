@@ -42,9 +42,10 @@ BASAL_ENERGY_THRESHOLD = 50.0      # Seuil d'activation du mode basal
 ACTION_COST = 0.5
 CAPTURE_REWARD = 3.0
 GENERATE_REWARD = 2.0
-MUTATION_RATE = 0.02            # 2% par nucléotide
-INSERTION_RATE = 0.005
-DELETION_RATE = 0.003
+MUTATION_RATE = 0.03            # 3% par nucléotide (augmenté: diversité génétique)
+INSERTION_RATE = 0.007          # Augmenté pour plus de variété structurelle
+DELETION_RATE = 0.004
+RARITY_ENERGY_BONUS = 15.0     # Bonus énergie pour genomes rares (< 5% population)
 MAX_GENOME_LENGTH = 24
 MIN_GENOME_LENGTH = 2
 SIGNAL_DECAY = 0.92
@@ -988,6 +989,17 @@ class NeuralTissue:
         for cell in self.cells:
             if cell.alive:
                 cell_density[cell.y][cell.x] += 1
+
+        # 1e. Bonus rareté : les genomes rares reçoivent un boost d'énergie
+        if self.tick_count % 10 == 0:  # Toutes les 10 ticks (~20s)
+            alive_cells = [c for c in self.cells if c.alive]
+            if len(alive_cells) > 10:
+                genome_counts = Counter(c.genome for c in alive_cells)
+                pop_total = len(alive_cells)
+                for cell in alive_cells:
+                    freq = genome_counts[cell.genome] / pop_total
+                    if freq < 0.05:  # Genome < 5% de la population
+                        cell.energy += RARITY_ENERGY_BONUS
 
         # 2. Exécuter chaque cellule + check apoptose
         new_cells = []

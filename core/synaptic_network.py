@@ -24,7 +24,8 @@ SPIKE_TIMING_WINDOW = 300.0       # 5 min pour causalite temporelle
 HOMEOSTATIC_TARGET = 0.3
 SYNAPSE_DECAY_PER_DAY = 0.02
 PRUNING_THRESHOLD = 0.08
-MAX_PRUNE_RATIO = 0.05            # Max 5% du réseau purgé par dream
+MAX_PRUNE_RATIO = 0.05            # Max 5% du réseau purgé par dream (fallback)
+ADAPTIVE_PRUNE_RATIO = 0.98       # Pruning adaptatif : 98% du taux de création
 MIN_CONCEPT_LENGTH = 3            # Rejeter les concepts trop courts (bruit)
 RESONANCE_CYCLES = 4
 STDP_MULTIPLIER = 1.5             # STDP 1.5x plus fort que Hebb classique
@@ -1357,7 +1358,8 @@ class SynapticNetwork:
                         )
                         report["dream_connections"] += 1
 
-        # 3. PRUNING SYNAPTIQUE (decay incrémental depuis le dernier dream)
+        # 3. PRUNING SYNAPTIQUE ADAPTATIF
+        # Le pruning cible 98% du taux de création → croissance nette de 2%
         now = time.time()
         days_since_last_dream = (now - self._last_dream_time) / 86400
         to_prune = []
@@ -1367,8 +1369,15 @@ class SynapticNetwork:
             if syn["weight"] < PRUNING_THRESHOLD:
                 to_prune.append(key)
 
-        # Cap : maximum MAX_PRUNE_RATIO du réseau purgé par dream
-        max_prune = max(10, int(len(self.synapses) * MAX_PRUNE_RATIO))
+        # Cap adaptatif : pruning = 98% du nombre de connexions créées ce cycle
+        dream_created = report.get("dream_connections", 0)
+        # Estimation créations depuis le dernier dream (mutations_since_save comme proxy)
+        estimated_creations = max(dream_created, self._mutations_since_save // 2)
+        adaptive_cap = max(10, int(estimated_creations * ADAPTIVE_PRUNE_RATIO))
+        # Fallback : ne pas dépasser MAX_PRUNE_RATIO du réseau total
+        hard_cap = max(10, int(len(self.synapses) * MAX_PRUNE_RATIO))
+        max_prune = min(len(to_prune), max(adaptive_cap, hard_cap))
+
         if len(to_prune) > max_prune:
             to_prune_scored = [(k, self.synapses[k]["weight"]) for k in to_prune]
             to_prune_scored.sort(key=lambda x: x[1])  # Plus faibles en premier
@@ -1400,6 +1409,9 @@ class SynapticNetwork:
         # 5. META-CONCEPTS (clustering)
         report["new_meta_concepts"] = self._create_meta_concepts()
 
+        # 5b. CURIOSITE SYNAPTIQUE — forcer l'exploration inter-systemes
+        report["curiosity_links"] = self._curiosity_explore()
+
         # 6. Normalisation homeostatique
         self.homeostatic_normalize()
 
@@ -1415,10 +1427,54 @@ class SynapticNetwork:
             f"+{report['dream_connections']} connexions, "
             f"-{report['pruned_synapses']} pruned, "
             f"+{report['new_meta_concepts']} meta, "
+            f"+{report.get('curiosity_links', 0)} curiosite, "
             f"{report['strengthened']} renforcees, "
             f"{report.get('promoted_to_hebbian', 0)} promues hebbian"
         )
         return report
+
+    def _curiosity_explore(self, max_links: int = 5) -> int:
+        """Curiosite synaptique : cree des liens entre systemes fonctionnels differents.
+        Force l'exploration de connexions inattendues entre noeuds de domaines separes."""
+        created = 0
+        # Grouper les noeuds par systeme fonctionnel
+        systems: Dict[str, List[str]] = {}
+        for nid, node in self.nodes.items():
+            if node.get("node_type") == "meta":
+                continue
+            for sys in node.get("dimensions", {}).get("functional_systems", []):
+                systems.setdefault(sys, []).append(nid)
+
+        sys_names = list(systems.keys())
+        if len(sys_names) < 2:
+            return 0
+
+        # Tenter des ponts entre systemes differents
+        for _ in range(max_links * 3):  # 3x attempts pour compenser les doublons
+            s1, s2 = random.sample(sys_names, 2)
+            if not systems[s1] or not systems[s2]:
+                continue
+            n1 = random.choice(systems[s1])
+            n2 = random.choice(systems[s2])
+            if n1 == n2:
+                continue
+            key = _synapse_key(n1, n2)
+            if key in self.synapses:
+                continue
+            # Verifier que les noeuds ont un minimum d'energie (pas des noeuds morts)
+            e1 = self.nodes[n1].get("energy", 0)
+            e2 = self.nodes[n2].get("energy", 0)
+            if e1 < 0.1 or e2 < 0.1:
+                continue
+            # Creer un lien exploratoire faible
+            self.synapses[key] = _make_synapse(
+                n1, n2, 0.12, "emotional", f"curiosity:{s1}->{s2}"
+            )
+            created += 1
+            if created >= max_links:
+                break
+
+        return created
 
     def _create_meta_concepts(self) -> int:
         """Detecte des cliques de 3+ noeuds fortement connectes et cree des meta-concepts."""

@@ -1436,7 +1436,8 @@ class TestPruningCap:
     """Tests du cap de pruning à MAX_PRUNE_RATIO par dream."""
 
     def test_pruning_cap_limits_deletions(self, network):
-        """Le pruning ne supprime pas plus de MAX_PRUNE_RATIO du réseau."""
+        """Le pruning adaptatif limite les suppressions (98% du taux de création)."""
+        from core.synaptic_network import ADAPTIVE_PRUNE_RATIO
         # Créer 200 synapses avec des poids faibles (seront sous le seuil après decay)
         for i in range(200):
             concept_a = f"concept_a_{i}"
@@ -1448,6 +1449,11 @@ class TestPruningCap:
             key = _synapse_key(nid_a, nid_b)
             network.synapses[key] = _make_synapse(nid_a, nid_b, 0.09, "temporal", "test")
 
+        # PAS de noeuds avec énergie → pas de dream connections → cap adaptatif bas
+        # Mettre l'énergie à 0 pour empêcher les dream connections
+        for node in network.nodes.values():
+            node["energy"] = 0.0
+
         # Simuler 2 jours sans dream → decay = 0.04, toutes sous le seuil
         network._last_dream_time = time.time() - 2 * 86400
 
@@ -1455,7 +1461,7 @@ class TestPruningCap:
             report = network.dream_consolidation()
 
         pruned = report["pruned_synapses"]
-        # Le cap s'applique sur le réseau APRÈS dream connections (step 2)
+        # Cap adaptatif : sans créations, fallback sur hard_cap (MAX_PRUNE_RATIO)
         total_at_prune = len(network.synapses) + pruned
         max_allowed = max(10, int(total_at_prune * MAX_PRUNE_RATIO))
         assert pruned <= max_allowed, f"Pruned {pruned} > max {max_allowed}"

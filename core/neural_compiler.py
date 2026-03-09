@@ -546,13 +546,45 @@ class NeuralCompiler:
         except Exception as e:
             logger.warning(f"COMPILER: Erreur on_routine_complete: {e}")
 
+    @staticmethod
+    def _evaluate_quality(data: dict) -> float:
+        """Évalue la qualité d'une réponse agent avec des critères multi-facteurs.
+        Retourne un score [0.2, 1.0] au lieu du binaire 0.7/0.2."""
+        status = data.get("status", "")
+        if status != "success":
+            return 0.2
+
+        result = str(data.get("result", ""))
+        score = 0.5  # Base pour un succès
+
+        # Longueur de la réponse (trop court = superficiel)
+        length = len(result)
+        if length > 500:
+            score += 0.1
+        if length > 1500:
+            score += 0.1
+
+        # Contient du code structuré
+        if any(kw in result for kw in ("def ", "class ", "import ", "async def ")):
+            score += 0.1
+
+        # Contient une analyse structurée (listes, recommandations)
+        structured_markers = sum(1 for m in ("- ", "1.", "2.", "**", "###")
+                                 if m in result)
+        if structured_markers >= 2:
+            score += 0.1
+
+        # Pénalité : réponse vide ou trop courte
+        if length < 50:
+            score -= 0.2
+
+        return max(0.2, min(1.0, round(score, 2)))
+
     async def _on_mission_finished(self, data: dict):
         """Feedback sur les observations de missions utilisateur."""
         try:
             agent = data.get("agent", "")
-            status = data.get("status", "")
-            # Qualité heuristique : mission réussie = 0.7, erreur = 0.2
-            quality = 0.7 if status == "success" else 0.2
+            quality = self._evaluate_quality(data)
             cutoff = time.time() - FEEDBACK_WINDOW
             updated = 0
             for obs in reversed(self._observations):
