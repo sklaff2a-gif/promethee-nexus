@@ -168,6 +168,8 @@ DRAINAGE_RATE = 0.25           # 25% de l'excès distribué aux 4 voisins
 CROSSOVER_PROBABILITY = 0.6   # 60% crossover vs clone quand conditions remplies
 CROSSOVER_ENERGY_THRESHOLD = 100.0  # Énergie min pour participer au crossover
 COMPETITION_DIVISOR_CAP = 5          # Max compétiteurs comptés (évite division trop brutale)
+HYBRID_VIGOR_MULTIPLIER = 20.0      # Bonus énergie enfant = divergence × ce facteur
+MATE_DIVERSITY_WEIGHT = 3.0         # Poids de la distance génétique dans la sélection de partenaire
 
 # --- Symbiose ---
 WASTE_PER_ACTION = 0.5
@@ -383,8 +385,12 @@ class NeuralCell:
     def _replicate(self, partner_genome=None):
         """Division cellulaire avec mutation (ou crossover si partenaire)."""
         self.energy /= 2
+        hybrid_bonus = 0.0
         if partner_genome and random.random() < CROSSOVER_PROBABILITY:
             child_genome = crossover(self.genome, partner_genome)
+            # Vigueur hybride : bonus proportionnel à la distance génétique des parents
+            divergence = _genome_divergence(self.genome, partner_genome)
+            hybrid_bonus = divergence * HYBRID_VIGOR_MULTIPLIER
         else:
             eff_rate = getattr(self, '_eff_mutation_rate', None)
             child_genome = mutate(self.genome, mutation_rate=eff_rate)
@@ -404,7 +410,7 @@ class NeuralCell:
         return NeuralCell(
             genome=child_genome,
             x=cx, y=cy,
-            energy=self.energy,
+            energy=self.energy + hybrid_bonus,
             generation=self.generation + 1,
             immune_to=child_immunity,
             epigenetic_markers=child_markers,
@@ -1015,14 +1021,23 @@ class NeuralTissue:
                 self._execute_apoptosis(cell, neighbors, reason)
                 continue
 
-            # Détection partenaire crossover
+            # Détection partenaire crossover — attraction par la différence
             partner_genome = None
             if cell.energy >= CROSSOVER_ENERGY_THRESHOLD:
                 different_neighbors = [n for n in neighbors if n.alive
                                        and n.genome != cell.genome
                                        and n.energy >= CROSSOVER_ENERGY_THRESHOLD]
                 if different_neighbors:
-                    partner_genome = random.choice(different_neighbors).genome
+                    # Pondérer par distance génétique : plus le voisin est différent, plus il attire
+                    weights = [_genome_divergence(cell.genome, n.genome) ** MATE_DIVERSITY_WEIGHT
+                               for n in different_neighbors]
+                    total_w = sum(weights)
+                    if total_w > 0:
+                        weights = [w / total_w for w in weights]
+                        partner = random.choices(different_neighbors, weights=weights, k=1)[0]
+                    else:
+                        partner = random.choice(different_neighbors)
+                    partner_genome = partner.genome
 
             child = cell.tick(self.grid, neighbors, eff_capture, eff_generate,
                               eff_mutation, waste_grid=self.waste_grid,

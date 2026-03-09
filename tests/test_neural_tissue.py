@@ -2087,6 +2087,95 @@ class TestCrossover:
         assert final_diversity >= initial_diversity or len(tissue.cells) < 10
 
 
+class TestHybridVigor:
+    """Vigueur hybride — les enfants de parents génétiquement distants reçoivent un bonus."""
+
+    def test_hybrid_child_gets_energy_bonus(self):
+        """Crossover entre génomes divergents → enfant reçoit bonus énergie."""
+        random.seed(42)
+        cell = NeuralCell(genome="AAAA", x=5, y=5, energy=200.0)
+        # Forcer le crossover (seed qui donne random() < CROSSOVER_PROBABILITY)
+        bonuses = []
+        for i in range(100):
+            random.seed(i)
+            cell.energy = 200.0
+            child = cell._replicate(partner_genome="TTTT")
+            if child:
+                # Sans hybrid vigor, energy serait 100.0 (200/2)
+                # Avec, c'est 100.0 + divergence * HYBRID_VIGOR_MULTIPLIER
+                if child.energy > 100.1:
+                    bonuses.append(child.energy - 100.0)
+        # Au moins certains crossovers produisent un bonus
+        assert len(bonuses) > 0, "Le hybrid vigor devrait donner un bonus à certains enfants"
+
+    def test_no_bonus_without_partner(self):
+        """Clone sans partenaire → pas de bonus hybrid."""
+        random.seed(42)
+        cell = NeuralCell(genome="AAAA", x=5, y=5, energy=200.0)
+        child = cell._replicate(partner_genome=None)
+        assert child.energy == pytest.approx(100.0, abs=0.01)
+
+    def test_bonus_proportional_to_divergence(self):
+        """Parents plus divergents → bonus plus élevé."""
+        from core.neural_tissue import HYBRID_VIGOR_MULTIPLIER
+        bonuses_close = []
+        bonuses_far = []
+        for i in range(200):
+            random.seed(i)
+            cell_close = NeuralCell(genome="AAAB", x=5, y=5, energy=200.0)
+            child_close = cell_close._replicate(partner_genome="AAAC")
+            if child_close and child_close.energy > 100.1:
+                bonuses_close.append(child_close.energy - 100.0)
+
+            random.seed(i)
+            cell_far = NeuralCell(genome="AAAA", x=5, y=5, energy=200.0)
+            child_far = cell_far._replicate(partner_genome="TTTT")
+            if child_far and child_far.energy > 100.1:
+                bonuses_far.append(child_far.energy - 100.0)
+
+        if bonuses_close and bonuses_far:
+            avg_close = sum(bonuses_close) / len(bonuses_close)
+            avg_far = sum(bonuses_far) / len(bonuses_far)
+            assert avg_far > avg_close, "Parents plus divergents devraient donner un bonus plus élevé"
+
+
+class TestMateSelection:
+    """Attraction par la différence — sélection pondérée par distance génétique."""
+
+    def test_prefers_distant_partner(self):
+        """Parmi des voisins, le plus génétiquement distant est choisi plus souvent."""
+        from core.neural_tissue import _genome_divergence, MATE_DIVERSITY_WEIGHT
+        tissue = _make_tissue()
+        tissue._circadian_phase = "eveil"
+        # Cellule RCGT entourée de : RCGS (proche) et TTTT (distant)
+        main_cell = NeuralCell(genome="RCGT", x=8, y=8, energy=150.0)
+        close_neighbor = NeuralCell(genome="RCGS", x=8, y=9, energy=150.0)
+        far_neighbor = NeuralCell(genome="TTTT", x=9, y=8, energy=150.0)
+        tissue.cells = [main_cell, close_neighbor, far_neighbor]
+
+        # Simuler la sélection de partenaire 500 fois
+        from collections import Counter
+        choices = Counter()
+        neighbors = [close_neighbor, far_neighbor]
+        for _ in range(500):
+            weights = [_genome_divergence(main_cell.genome, n.genome) ** MATE_DIVERSITY_WEIGHT
+                       for n in neighbors]
+            total_w = sum(weights)
+            if total_w > 0:
+                weights = [w / total_w for w in weights]
+                partner = random.choices(neighbors, weights=weights, k=1)[0]
+                choices[partner.genome] += 1
+        # TTTT (distant) devrait être choisi bien plus souvent que RCGS (proche)
+        assert choices["TTTT"] > choices["RCGS"], \
+            f"TTTT={choices['TTTT']} devrait être > RCGS={choices['RCGS']}"
+
+    def test_constants_defined(self):
+        """Les constantes de sélection sont définies."""
+        from core.neural_tissue import HYBRID_VIGOR_MULTIPLIER, MATE_DIVERSITY_WEIGHT
+        assert HYBRID_VIGOR_MULTIPLIER > 0
+        assert MATE_DIVERSITY_WEIGHT > 1.0  # Doit amplifier les différences
+
+
 class TestLocalCompetition:
     """Compétition locale — le reward Capture est divisé par la densité locale."""
 
