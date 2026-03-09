@@ -10,7 +10,8 @@ from core.desire_engine import (
     DesireEngine, Drive, DRIVE_NAMES, TRAIT_RESONANCE,
     EVENT_IMPACT, DRIVE_ROUTINE_AFFINITY, DRIVE_NARRATIVES,
     NATURAL_RISE_PER_HOUR, TOLERANCE_HALF_LIFE, TOLERANCE_MIN,
-    TOLERANCE_RECOVERY_PER_HOUR,
+    TOLERANCE_RECOVERY_PER_HOUR, TOLERANCE_MAX,
+    DEPRIVATION_TOLERANCE_BYPASS, DEPRIVATION_CEILING_START,
 )
 
 
@@ -406,36 +407,48 @@ class TestTolerance:
     """Tests pour le mecanisme de tolerance biologique (habituation)."""
 
     def test_tolerance_reduces_satisfaction(self, engine):
-        """Les satisfactions repetees ont un effet decroissant."""
-        engine.drives["CREATION"].deprivation = 90.0
-        # Premiere satisfaction : plein effet (tolerance_accumulator = 0)
+        """Les satisfactions repetees ont un effet decroissant (sous seuil bypass)."""
+        # Tester sous DEPRIVATION_TOLERANCE_BYPASS (80) pour que la tolerance joue
+        engine.drives["CREATION"].deprivation = 70.0
+        engine.drives["CREATION"].tolerance_accumulator = 0.0
         engine.on_event("ARTIFACT_CREATED")  # delta = -20 CREATION
-        first_drop = 90.0 - engine.drives["CREATION"].deprivation
+        first_drop = 70.0 - engine.drives["CREATION"].deprivation
 
-        # Remonter et satisfaire 10 fois pour accumuler la tolerance
-        for _ in range(10):
-            engine.drives["CREATION"].deprivation = 90.0
-            engine.on_event("ARTIFACT_CREATED")
+        # Accumuler la tolerance manuellement (simule satisfactions repetees)
+        engine.drives["CREATION"].tolerance_accumulator = 80.0
 
-        # La derniere satisfaction devrait avoir un effet reduit
-        engine.drives["CREATION"].deprivation = 90.0
+        engine.drives["CREATION"].deprivation = 70.0
         engine.on_event("ARTIFACT_CREATED")
-        last_drop = 90.0 - engine.drives["CREATION"].deprivation
+        last_drop = 70.0 - engine.drives["CREATION"].deprivation
 
         assert last_drop < first_drop * 0.6  # Au moins 40% de reduction
 
     def test_tolerance_never_below_minimum(self, engine):
-        """Meme apres 100 satisfactions, l'effet reste >= TOLERANCE_MIN."""
-        # Accumuler massivement
-        for _ in range(100):
-            engine.drives["CREATION"].deprivation = 90.0
-            engine.on_event("ARTIFACT_CREATED")
+        """Meme apres 100 satisfactions, l'effet reste >= TOLERANCE_MIN (sous seuil bypass)."""
+        # Accumuler massivement la tolerance
+        engine.drives["CREATION"].tolerance_accumulator = TOLERANCE_MAX
 
-        # Verifier que l'effet n'est pas nul
+        # Tester sous le seuil de bypass (deprivation < 80)
+        engine.drives["CREATION"].deprivation = 70.0
+        engine.on_event("ARTIFACT_CREATED")  # delta brut = -20
+        drop = 70.0 - engine.drives["CREATION"].deprivation
+        assert drop >= 20.0 * TOLERANCE_MIN * 0.95  # ~3.0 minimum (marge flottante)
+
+    def test_tolerance_bypass_when_deprived(self, engine):
+        """Au-dessus de DEPRIVATION_TOLERANCE_BYPASS, satisfaction a plein effet."""
+        engine.drives["CREATION"].tolerance_accumulator = 200.0  # Max tolerance
         engine.drives["CREATION"].deprivation = 90.0
         engine.on_event("ARTIFACT_CREATED")  # delta brut = -20
         drop = 90.0 - engine.drives["CREATION"].deprivation
-        assert drop >= 20.0 * TOLERANCE_MIN * 0.95  # ~3.0 minimum (marge flottante)
+        assert drop == 20.0  # Plein effet malgre la tolerance accumulee
+
+    def test_tolerance_bypass_accumulates_slower(self, engine):
+        """En mode bypass, la tolerance monte quand meme mais 3x plus lentement."""
+        engine.drives["CREATION"].deprivation = 90.0
+        engine.drives["CREATION"].tolerance_accumulator = 0.0
+        engine.on_event("ARTIFACT_CREATED")  # delta brut = -20, bypass actif
+        # Tolerance devrait monter de 20 * 0.3 = 6.0 (au lieu de 20)
+        assert abs(engine.drives["CREATION"].tolerance_accumulator - 6.0) < 0.1
 
     def test_tolerance_recovery_over_time(self, engine):
         """L'accumulateur de tolerance diminue avec le temps (repos)."""
@@ -465,6 +478,41 @@ class TestTolerance:
         # delta +8 pour MAITRISE (pas de tolerance appliquee)
         assert engine.drives["MAITRISE"].deprivation == 58.0
 
+    def test_ceiling_dampens_rise_near_100(self, engine):
+        """La montee naturelle ralentit au-dessus de DEPRIVATION_CEILING_START (85)."""
+        # Dep a 95 → ceiling_factor = 1 - (95-85)/(100-85) = 1 - 10/15 = 0.333
+        engine.drives["MAITRISE"].deprivation = 95.0
+        engine.drives["CURIOSITE"].deprivation = 50.0  # Reference
+        engine._last_tick = time.time() - 3600  # 1h
+        with patch.object(engine, "_get_traits_avg", return_value={}):
+            engine.tick()
+        maitrise_rise = engine.drives["MAITRISE"].deprivation - 95.0
+        curiosite_rise = engine.drives["CURIOSITE"].deprivation - 50.0
+        # MAITRISE devrait avoir monte beaucoup moins que CURIOSITE
+        assert maitrise_rise < curiosite_rise * 0.5
+
+    def test_ceiling_no_effect_below_threshold(self, engine):
+        """Sous 85, la montee est normale (pas d'amortissement)."""
+        engine.drives["MAITRISE"].deprivation = 60.0
+        engine.drives["CURIOSITE"].deprivation = 60.0
+        engine._last_tick = time.time() - 3600
+        with patch.object(engine, "_get_traits_avg", return_value={}):
+            engine.tick()
+        maitrise_rise = engine.drives["MAITRISE"].deprivation - 60.0
+        curiosite_rise = engine.drives["CURIOSITE"].deprivation - 60.0
+        # Les deux devraient monter pareil (pas de resonance PSYCHE mockee)
+        assert abs(maitrise_rise - curiosite_rise) < 0.01
+
+    def test_maitrise_oscillation_not_stuck(self, engine):
+        """MAITRISE ne reste pas collee a 100 apres des REFACTOR_RANDOM repetes."""
+        engine.drives["MAITRISE"].deprivation = 100.0
+        engine.drives["MAITRISE"].tolerance_accumulator = 200.0  # Max tolerance
+        # Simuler 5 REFACTOR_RANDOM succes
+        for _ in range(5):
+            engine.on_event("ROUTINE_SUCCESS", {"intent": "REFACTOR_RANDOM"})
+        # Deprivation devrait avoir baisse significativement (sous le seuil urgent 75)
+        assert engine.drives["MAITRISE"].deprivation < 75.0
+
     def test_tolerance_persisted(self, engine, tmp_path):
         """save/load preserve tolerance_accumulator."""
         state_file = str(tmp_path / "desire_state.json")
@@ -486,3 +534,61 @@ class TestTolerance:
         # Verifier que _compute_tolerance renvoie 1.0 (plein effet)
         for drive in engine.drives.values():
             assert engine._compute_tolerance(drive) == 1.0
+
+
+# ============================================================
+# Seuil quality par intent (Fix post-run 2026-03-03)
+# ============================================================
+
+class TestRoutineSuccessThreshold:
+    """ROUTINE_SUCCESS_THRESHOLD : seuils adaptatifs par intent."""
+
+    @pytest.mark.asyncio
+    async def test_refactor_random_low_quality_is_success(self, engine):
+        """REFACTOR_RANDOM avec quality=0.4 (> 0.3) → ROUTINE_SUCCESS."""
+        engine.drives["MAITRISE"].deprivation = 80.0
+        before = engine.drives["MAITRISE"].deprivation
+        await engine._on_routine_complete({
+            "intent": "REFACTOR_RANDOM",
+            "status": "success",
+            "quality_score": 0.4,
+        })
+        # ROUTINE_SUCCESS pour REFACTOR_RANDOM: MAITRISE -10
+        assert engine.drives["MAITRISE"].deprivation < before
+
+    @pytest.mark.asyncio
+    async def test_expansion_code_low_quality_is_failure(self, engine):
+        """EXPANSION_CODE avec quality=0.4 (< 0.6 default) → ROUTINE_FAILURE."""
+        engine.drives["MAITRISE"].deprivation = 50.0
+        await engine._on_routine_complete({
+            "intent": "EXPANSION_CODE",
+            "status": "success",
+            "quality_score": 0.4,
+        })
+        # ROUTINE_FAILURE: MAITRISE +8
+        assert engine.drives["MAITRISE"].deprivation == 58.0
+
+    @pytest.mark.asyncio
+    async def test_default_threshold_unchanged(self, engine):
+        """Intent non listé utilise le seuil par défaut (0.6)."""
+        engine.drives["MAITRISE"].deprivation = 50.0
+        await engine._on_routine_complete({
+            "intent": "UNKNOWN_INTENT",
+            "status": "success",
+            "quality_score": 0.5,  # < 0.6
+        })
+        # Doit être traité comme FAILURE (_default: MAITRISE +8)
+        assert engine.drives["MAITRISE"].deprivation == 58.0
+
+    @pytest.mark.asyncio
+    async def test_audit_structure_low_quality_is_success(self, engine):
+        """AUDIT_STRUCTURE avec quality=0.35 (> 0.3) → ROUTINE_SUCCESS."""
+        engine.drives["STABILITE"].deprivation = 70.0
+        before = engine.drives["STABILITE"].deprivation
+        await engine._on_routine_complete({
+            "intent": "AUDIT_STRUCTURE",
+            "status": "success",
+            "quality_score": 0.35,
+        })
+        # ROUTINE_SUCCESS pour AUDIT_STRUCTURE: STABILITE -10
+        assert engine.drives["STABILITE"].deprivation < before

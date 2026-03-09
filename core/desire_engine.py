@@ -32,6 +32,8 @@ TOLERANCE_HALF_LIFE = 8.0        # Apres 8 satisfactions, effet divise par 2
 TOLERANCE_MIN = 0.15             # Plancher : meme sature, 15% d'effet reste
 TOLERANCE_RECOVERY_PER_HOUR = 15.0  # L'accumulateur diminue de 15/h (demi-vie ~24h pour accumulation typique)
 TOLERANCE_MAX = 200.0            # Plafond de tolerance — au-delà, plus d'accumulation
+DEPRIVATION_TOLERANCE_BYPASS = 80.0   # Au-dessus, tolerance ignoree (privation extreme)
+DEPRIVATION_CEILING_START = 85.0      # Au-dessus, la montee naturelle ralentit (homeostasie)
 
 
 @dataclass
@@ -322,6 +324,12 @@ class DesireEngine:
             if drive.frustration_streak >= 3:
                 rise *= 1.5
 
+            # Amortissement homeostatique : la montee ralentit pres du plafond
+            # Simule la regulation naturelle (le corps ne reste pas en privation extreme)
+            if drive.deprivation > DEPRIVATION_CEILING_START:
+                ceiling_factor = max(0.0, 1.0 - (drive.deprivation - DEPRIVATION_CEILING_START) / (100.0 - DEPRIVATION_CEILING_START))
+                rise *= ceiling_factor
+
             drive.deprivation = min(100.0, drive.deprivation + rise)
 
             # Recuperation tolerance (l'organisme se deshabitue au repos)
@@ -353,10 +361,16 @@ class DesireEngine:
             drive = self.drives.get(drive_name)
             if not drive:
                 continue
-            if delta < 0:  # Satisfaction → appliquer tolerance
-                tolerance = self._compute_tolerance(drive)
-                effective_delta = delta * tolerance
-                drive.tolerance_accumulator = min(TOLERANCE_MAX, drive.tolerance_accumulator + abs(delta))
+            if delta < 0:  # Satisfaction → appliquer tolerance (sauf privation extreme)
+                if drive.deprivation >= DEPRIVATION_TOLERANCE_BYPASS:
+                    # Privation extreme : la satisfaction a plein effet
+                    effective_delta = delta
+                    # Tolerance monte quand meme, mais plus lentement
+                    drive.tolerance_accumulator = min(TOLERANCE_MAX, drive.tolerance_accumulator + abs(delta) * 0.3)
+                else:
+                    tolerance = self._compute_tolerance(drive)
+                    effective_delta = delta * tolerance
+                    drive.tolerance_accumulator = min(TOLERANCE_MAX, drive.tolerance_accumulator + abs(delta))
                 drive.deprivation = max(0.0, min(100.0, drive.deprivation + effective_delta))
             else:  # Frustration → plein effet
                 drive.deprivation = max(0.0, min(100.0, drive.deprivation + delta))
