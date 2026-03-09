@@ -147,6 +147,173 @@ class TestSystemAverage:
         assert avg["bienveillance"] > 60.0
 
 
+# --- TestProposeCouncilTopic ---
+
+class TestProposeCouncilTopic:
+    """Prométhée propose ses propres sujets de Council via _propose_council_topic()."""
+
+    def test_no_signals_returns_none(self, engine):
+        """Sans signaux internes, pas de proposition."""
+        with patch.dict("sys.modules", {
+            "core.inner_voice": type("M", (), {"voice": type("V", (), {"get_stream": lambda s, n=10: []})()})(),
+            "core.cingulate_cortex": type("M", (), {"cingulate": type("C", (), {"_active_conflicts": []})()})(),
+            "core.prefrontal": type("M", (), {"prefrontal": type("P", (), {"get_working_memory": lambda s: []})()})(),
+            "core.default_mode_network": type("M", (), {"dmn": type("D", (), {"insights": []})()})(),
+        }):
+            result = engine._propose_council_topic()
+        assert result is None
+
+    def test_high_salience_thought_triggers_proposal(self, engine):
+        """Pensée à haute saillance + émotion frustration → proposition."""
+        mock_voice = type("V", (), {
+            "get_stream": lambda s, n=10: [
+                {"salience": 0.9, "content": "Je ne comprends pas pourquoi mes routines échouent", "emotion": "frustration"},
+            ]
+        })()
+        with patch.dict("sys.modules", {
+            "core.inner_voice": type("M", (), {"voice": mock_voice})(),
+            "core.cingulate_cortex": type("M", (), {"cingulate": type("C", (), {"_active_conflicts": []})()})(),
+            "core.prefrontal": type("M", (), {"prefrontal": type("P", (), {"get_working_memory": lambda s: []})()})(),
+            "core.default_mode_network": type("M", (), {"dmn": type("D", (), {"insights": []})()})(),
+        }):
+            result = engine._propose_council_topic()
+        assert result is not None
+        assert result["subject_key"] == "inner_proposal"
+        assert "préoccupations" in result["mission"]
+        assert result["needs_research"] is False
+
+    def test_conflict_sets_security_participants(self, engine):
+        """Conflit de sévérité élevée → participants security."""
+        mock_cingulate = type("C", (), {
+            "_active_conflicts": [
+                {"severity": 3.0, "details": "Contradiction entre reptilien et dopamine", "type": "homeostatic"}
+            ]
+        })()
+        with patch.dict("sys.modules", {
+            "core.inner_voice": type("M", (), {"voice": type("V", (), {"get_stream": lambda s, n=10: []})()})(),
+            "core.cingulate_cortex": type("M", (), {"cingulate": mock_cingulate})(),
+            "core.prefrontal": type("M", (), {"prefrontal": type("P", (), {"get_working_memory": lambda s: []})()})(),
+            "core.default_mode_network": type("M", (), {"dmn": type("D", (), {"insights": []})()})(),
+        }):
+            result = engine._propose_council_topic()
+        assert result is not None
+        assert "security" in result["participants"]
+
+    def test_blocked_goal_triggers_proposal(self, engine):
+        """Goal bloqué (progress < 0.3, cost >= 10) → proposition."""
+        mock_prefrontal = type("P", (), {
+            "get_working_memory": lambda s: [
+                {"goal_title": "Implémenter workspace global", "progress": 0.1, "cost_spent": 15}
+            ]
+        })()
+        with patch.dict("sys.modules", {
+            "core.inner_voice": type("M", (), {"voice": type("V", (), {"get_stream": lambda s, n=10: []})()})(),
+            "core.cingulate_cortex": type("M", (), {"cingulate": type("C", (), {"_active_conflicts": []})()})(),
+            "core.prefrontal": type("M", (), {"prefrontal": mock_prefrontal})(),
+            "core.default_mode_network": type("M", (), {"dmn": type("D", (), {"insights": []})()})(),
+        }):
+            result = engine._propose_council_topic()
+        assert result is not None
+        assert "Goal bloqué" in result["mission"]
+        assert "coder" in result["participants"]
+
+    def test_dmn_insight_triggers_proposal(self, engine):
+        """Insight DMN → proposition avec participants researcher."""
+        mock_dmn = type("D", (), {
+            "insights": [
+                {"text": "Connexion inattendue: 'cardiac' relie 'dopamine' et 'prefrontal'", "timestamp": 0, "cycle": 1}
+            ]
+        })()
+        with patch.dict("sys.modules", {
+            "core.inner_voice": type("M", (), {"voice": type("V", (), {"get_stream": lambda s, n=10: []})()})(),
+            "core.cingulate_cortex": type("M", (), {"cingulate": type("C", (), {"_active_conflicts": []})()})(),
+            "core.prefrontal": type("M", (), {"prefrontal": type("P", (), {"get_working_memory": lambda s: []})()})(),
+            "core.default_mode_network": type("M", (), {"dmn": mock_dmn})(),
+        }):
+            result = engine._propose_council_topic()
+        assert result is not None
+        assert "researcher" in result["participants"]
+
+    def test_low_salience_ignored(self, engine):
+        """Pensées à faible saillance ne déclenchent pas de proposition."""
+        mock_voice = type("V", (), {
+            "get_stream": lambda s, n=10: [
+                {"salience": 0.3, "content": "Tout va bien", "emotion": "serenite"},
+                {"salience": 0.2, "content": "Routine normale", "emotion": "neutre"},
+            ]
+        })()
+        with patch.dict("sys.modules", {
+            "core.inner_voice": type("M", (), {"voice": mock_voice})(),
+            "core.cingulate_cortex": type("M", (), {"cingulate": type("C", (), {"_active_conflicts": []})()})(),
+            "core.prefrontal": type("M", (), {"prefrontal": type("P", (), {"get_working_memory": lambda s: []})()})(),
+            "core.default_mode_network": type("M", (), {"dmn": type("D", (), {"insights": []})()})(),
+        }):
+            result = engine._propose_council_topic()
+        assert result is None
+
+    def test_multiple_sources_combined(self, engine):
+        """Signaux multiples combinés → mission contient plusieurs lignes."""
+        mock_voice = type("V", (), {
+            "get_stream": lambda s, n=10: [
+                {"salience": 0.8, "content": "Pourquoi mes prédictions sont si mauvaises ?", "emotion": "confusion"},
+            ]
+        })()
+        mock_cingulate = type("C", (), {
+            "_active_conflicts": [
+                {"severity": 2.5, "details": "Conflit reptilien-dopamine", "type": "homeostatic"}
+            ]
+        })()
+        with patch.dict("sys.modules", {
+            "core.inner_voice": type("M", (), {"voice": mock_voice})(),
+            "core.cingulate_cortex": type("M", (), {"cingulate": mock_cingulate})(),
+            "core.prefrontal": type("M", (), {"prefrontal": type("P", (), {"get_working_memory": lambda s: []})()})(),
+            "core.default_mode_network": type("M", (), {"dmn": type("D", (), {"insights": []})()})(),
+        }):
+            result = engine._propose_council_topic()
+        assert result is not None
+        assert "[voix]" in result["mission"]
+        assert "[conflit]" in result["mission"]
+
+    def test_organ_unavailable_graceful(self, engine):
+        """Si un organe n'est pas importable, dégradation gracieuse."""
+        # Aucun module mocké → imports échouent → pas de crash
+        with patch.dict("sys.modules", {
+            "core.inner_voice": None,
+            "core.cingulate_cortex": None,
+            "core.prefrontal": None,
+            "core.default_mode_network": None,
+        }):
+            result = engine._propose_council_topic()
+        assert result is None
+
+    def test_select_council_topic_uses_proposal(self, engine):
+        """select_council_topic() utilise la proposition si disponible."""
+        proposal = {
+            "participants": ["strategist", "evolution", "coder"],
+            "mission": "Test inner proposal",
+            "needs_research": False,
+            "research_query": None,
+            "subject_key": "inner_proposal",
+        }
+        with patch.object(engine, "_propose_council_topic", return_value=proposal):
+            topic = engine.select_council_topic(recent_subjects=[])
+        assert topic["subject_key"] == "inner_proposal"
+
+    def test_select_council_skips_if_recent(self, engine):
+        """Si inner_proposal est dans recent_subjects, on ne re-propose pas."""
+        proposal = {
+            "participants": ["strategist", "evolution", "coder"],
+            "mission": "Test",
+            "needs_research": False,
+            "research_query": None,
+            "subject_key": "inner_proposal",
+        }
+        with patch.object(engine, "_propose_council_topic", return_value=proposal):
+            topic = engine.select_council_topic(recent_subjects=["inner_proposal"])
+        # Devrait être un autre sujet (eureka, desir, ou recherche web)
+        assert topic["subject_key"] != "inner_proposal"
+
+
 # --- TestSaveLoad ---
 
 class TestSaveLoad:

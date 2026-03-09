@@ -430,6 +430,12 @@ class PsycheEngine:
                 "subject_key": "budget",
             }
 
+        # Priorité 2.6 : voix intérieure — Prométhée propose son propre sujet
+        if "inner_proposal" not in recent:
+            proposal = self._propose_council_topic()
+            if proposal:
+                return proposal
+
         # Priorité 2.5 : eureka — pont créatif non exploré (spreading activation)
         if "eureka" not in recent:
             try:
@@ -558,6 +564,108 @@ class PsycheEngine:
             "needs_research": True,
             "research_query": theme["query"],
             "subject_key": theme_key,
+        }
+
+    def _propose_council_topic(self) -> Optional[Dict[str, Any]]:
+        """Voix intérieure : Prométhée propose son propre sujet de Council.
+
+        Agrège les signaux de 4 organes cognitifs (0 LLM) :
+        - InnerVoice : pensées récentes à haute saillance
+        - CingulateCortex : conflits non résolus
+        - PrefrontalCortex : goals bloqués
+        - DMN : insights de vagabondage
+
+        Retourne un topic dict si un sujet suffisamment chargé émerge, None sinon.
+        """
+        signals: list[tuple[float, str, str]] = []  # (urgence, description, source)
+
+        # 1. InnerVoice — pensées frustrantes ou questionnantes
+        try:
+            from core.inner_voice import voice
+            stream = voice.get_stream(10)
+            for thought in stream:
+                salience = thought.get("salience", 0)
+                content = thought.get("content", "")
+                emotion = thought.get("emotion", "")
+                if salience >= 0.7 and emotion in ("frustration", "confusion", "curiosite", "doute"):
+                    signals.append((salience, content[:120], "voix"))
+        except Exception:
+            pass
+
+        # 2. CingulateCortex — conflits actifs de sévérité élevée
+        try:
+            from core.cingulate_cortex import cingulate
+            for conflict in getattr(cingulate, "_active_conflicts", []):
+                severity = conflict.get("severity", 0)
+                if severity >= 2.0:
+                    details = conflict.get("details", conflict.get("type", "conflit"))
+                    signals.append((min(severity / 3, 1.0), str(details)[:120], "conflit"))
+        except Exception:
+            pass
+
+        # 3. PrefrontalCortex — goals bloqués
+        try:
+            from core.prefrontal import prefrontal
+            for goal in prefrontal.get_working_memory():
+                progress = goal.get("progress", 0)
+                title = goal.get("goal_title", "")
+                # Goal avec peu de progression malgré du coût dépensé
+                cost = goal.get("cost_spent", 0)
+                if progress < 0.3 and cost >= 10:
+                    signals.append((0.8, f"Goal bloqué: {title}", "goal"))
+        except Exception:
+            pass
+
+        # 4. DMN — insights récents de vagabondage
+        try:
+            from core.default_mode_network import dmn
+            for insight in getattr(dmn, "insights", [])[-3:]:
+                text = insight.get("text", "")
+                if text:
+                    signals.append((0.7, text[:120], "reverie"))
+        except Exception:
+            pass
+
+        # Pas assez de signaux → pas de proposition
+        if not signals:
+            return None
+
+        # Trier par urgence décroissante
+        signals.sort(key=lambda s: s[0], reverse=True)
+
+        # Seuil : au moins 1 signal fort (>=0.7) ou 3+ signaux moyens
+        strong = [s for s in signals if s[0] >= 0.7]
+        if len(strong) < 1 and len(signals) < 3:
+            return None
+
+        # Construire la mission à partir des top signaux
+        top_signals = signals[:3]
+        signal_lines = []
+        for urgency, desc, source in top_signals:
+            signal_lines.append(f"- [{source}] {desc}")
+        mission_body = "\n".join(signal_lines)
+
+        # Choisir les participants selon la nature dominante des signaux
+        sources = [s[2] for s in top_signals]
+        if "conflit" in sources:
+            participants = ["strategist", "architect", "security"]
+        elif "goal" in sources:
+            participants = ["strategist", "coder", "evolution"]
+        elif "reverie" in sources:
+            participants = ["researcher", "evolution", "strategist"]
+        else:
+            participants = ["strategist", "evolution", "coder"]
+
+        return {
+            "participants": participants,
+            "mission": (
+                f"Prométhée ressent le besoin de discuter des préoccupations suivantes :\n"
+                f"{mission_body}\n"
+                f"Comment adresser ces points pour progresser ?"
+            ),
+            "needs_research": False,
+            "research_query": None,
+            "subject_key": "inner_proposal",
         }
 
     def _get_routine_history(self) -> list:
