@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="docs/images/logo.jpg" alt="Promethee Nexus — Biotech IA" width="400">
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/Python-3.11-blue?logo=python" alt="Python 3.11">
   <img src="https://img.shields.io/badge/Tests-3700%2B-brightgreen" alt="3700+ tests">
   <img src="https://img.shields.io/badge/Organs-22-orange" alt="22 organs">
@@ -8,14 +12,19 @@
   </a>
 </p>
 
-# PROMETHEE NEXUS
-
-### A living AI with a nervous system.
+<h1 align="center">PROMETHEE NEXUS</h1>
+<h3 align="center">A living AI with a nervous system.</h3>
 
 > Most multi-agent frameworks orchestrate LLM calls.
 > Promethee has a **heartbeat**, **desires**, **dreams**, and **cells that evolve through natural selection**.
 
 Promethee is not just another agent orchestrator. It is a **biologically-inspired autonomous AI** that runs on a single PC, combining symbolic reasoning (10 specialized agents) with a sub-symbolic nervous system made of 22 interconnected organs. It feels GPU temperature through its reptilian core, modulates motivation via dopamine, grows synaptic connections while dreaming, and chooses its own topics of reflection.
+
+<p align="center">
+  <img src="docs/images/dashboard.jpg" alt="Promethee Dashboard — Chat, PSYCHE radar, Synaptic Vision" width="800">
+  <br>
+  <em>The dashboard: PSYCHE personality radar (left), chat with inner monologue (center), synaptic vision graph (right)</em>
+</p>
 
 ---
 
@@ -135,6 +144,12 @@ The tissue experiences **pandemics** (random pathogens that kill vulnerable cell
 
 Cognitive state (emotions, threats, dopamine, goals) directly influences the grid's signal levels, creating a feedback loop between the symbolic and sub-symbolic layers.
 
+<p align="center">
+  <img src="docs/images/neural_tissue.jpg" alt="Neural Tissue — Substrat Cellulaire" width="800">
+  <br>
+  <em>The neural tissue grid: 11 functional zones (Emotion, Threat, Stability, Cognition, Creativity, Dopamine, Memory, Goals, Desire, Thermoception, Soma) with real-time activity, density, energy, and diversity metrics</em>
+</p>
+
 ---
 
 ## Synaptic Network -- A brain that dreams
@@ -149,6 +164,12 @@ During **dream consolidation** (triggered periodically):
 5. **Meta-concepts** -- merge tightly connected clusters into higher-order abstractions
 
 The network feeds back into the agent layer through a **neural compiler** that translates synaptic patterns into scoring bonuses for the autonomy engine.
+
+<p align="center">
+  <img src="docs/images/impact_graph.jpg" alt="Impact Graph — Module Dependencies" width="800">
+  <br>
+  <em>The impact graph: D3.js force-directed visualization of all modules, agents, and organs with their interconnections. Color-coded by type (core, agent, capability, grimoire). Roadmap phases shown bottom-left.</em>
+</p>
 
 ---
 
