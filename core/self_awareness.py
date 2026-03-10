@@ -1133,6 +1133,15 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Contexte temporel (narration mémoire unifiée)
+        try:
+            from core.temporal_lobe import temporal
+            temporal_ctx = temporal.get_temporal_context()
+            if temporal_ctx:
+                parts.append(f"[MEMOIRE] {temporal_ctx}")
+        except Exception:
+            pass
+
         return " ".join(parts)
 
     # --- Accesseurs ---

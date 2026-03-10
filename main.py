@@ -331,6 +331,12 @@ async def lifespan(app: FastAPI):
     hippocampus.init()
     print(f"   🧠 HIPPOCAMPE: Mémoire épisodique active ({len(hippocampus._episodes)} épisodes, {len(hippocampus._arcs)} arcs).")
 
+    # --- LOBE TEMPORAL (Intégration Mémoire Unifiée) ---
+    from core.temporal_lobe import temporal as temporal_lobe
+    temporal_lobe.init()
+    stats = temporal_lobe.get_stats()
+    print(f"   🧠 LOBE TEMPORAL: Mémoire unifiée active ({stats['indexed_intents']} intents indexés).")
+
     # --- NEURAL COMPILER (Knowledge Distillation) ---
     from core.neural_compiler import compiler as neural_compiler
     neural_compiler.init()

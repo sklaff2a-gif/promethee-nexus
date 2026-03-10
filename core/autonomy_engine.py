@@ -719,6 +719,7 @@ class AutonomyEngine:
             ("incubation", "core.incubation_cognitive", "incubation", "compute_eureka_bonus"),
             ("curiosity", "core.curiosity_reflex", "curiosity", "compute_curiosity_bonus"),
             ("sensorium", "core.sensorium", "sensorium", "compute_sensorium_bonus"),
+            ("temporal", "core.temporal_lobe", "temporal", "compute_temporal_bonus"),
         ]
         for layer_name, module_path, instance_name, method_name in scoring_methods:
             try:

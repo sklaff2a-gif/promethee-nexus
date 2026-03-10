@@ -212,6 +212,16 @@ class BaseAgent:
     def recall(self, query: str, limit: int = None, collection="collective_wisdom",
                lateral: bool = False) -> str:
         if not self.has_memory: return ""
+        # Tentative via Lobe Temporal (intégration mémoire unifiée)
+        try:
+            from core.temporal_lobe import temporal
+            if limit is None:
+                limit = getattr(Config, "RAG_RECALL_LIMIT", 2)
+            traces = temporal.unified_recall(query, limit=limit, collection=collection)
+            if traces:
+                return temporal.format_for_prompt(traces, max_chars=500)
+        except Exception:
+            pass  # Fallback au recall classique
         try:
             import math
             if limit is None:
