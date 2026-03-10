@@ -45,6 +45,7 @@ def _make_engine():
     engine._drive_force_cycle = 0
     engine._drive_force_total = {}
     engine._council_adjustments = {}
+    engine._forced_failure_counts = {}
     engine._current_council_subject = ""
     engine._last_grimoire_slug = ""
     engine._council_degraded = False

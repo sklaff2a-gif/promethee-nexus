@@ -26,6 +26,7 @@ from core.autonomy_engine import (
     EXTROVERSION_STREAK_THRESHOLD,
     EXTROVERSION_BONUS_PER_STREAK,
     EXTROVERSION_BONUS_MAX,
+    FORCED_FAILURE_THRESHOLD,
 )
 
 
@@ -2465,3 +2466,153 @@ class TestExtroversion:
         engine._council_adjustments = {}
         breakdown = engine._build_scoring_breakdown("COUNCIL_DEBATE")
         assert "extroversion" not in breakdown
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Tests Anti-Gaspillage FORCED + Post-Budget Cooldown
+# ═══════════════════════════════════════════════════════════════════
+
+class TestForcedFailureThreshold:
+    """Tests du compteur d'echecs consecutifs pour routines FORCED."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        self.state_path = str(tmp_path / "state.json")
+        with patch("core.autonomy_engine.STATE_FILE", self.state_path):
+            with patch("core.autonomy_engine.AutonomyStatePersistence.load",
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
+                self.engine = AutonomyEngine(idle_threshold_seconds=300)
+        yield
+
+    def test_forced_failure_counts_initialized(self):
+        """Le compteur d'echecs FORCED est initialise a vide."""
+        assert self.engine._forced_failure_counts == {}
+
+    def test_forced_failure_threshold_constant(self):
+        """La constante FORCED_FAILURE_THRESHOLD est definie."""
+        assert FORCED_FAILURE_THRESHOLD == 3
+
+    @pytest.mark.asyncio
+    async def test_forced_skipped_after_threshold(self):
+        """Un intent FORCED avec trop d'echecs est ignore, fallback au scoring normal."""
+        self.engine._forced_next_intent = "REFACTOR_RANDOM"
+        self.engine._forced_failure_counts = {"REFACTOR_RANDOM": 3}
+        health = _make_health("GO")
+        routines = [
+            {"agent": "architect", "intent": "AUDIT_STRUCTURE", "mission": "test"},
+        ]
+        scored = [(routines[0], 5.0)]
+        with patch("core.autonomy_engine.RoutineScorer.score_routines", return_value=scored), \
+             patch.object(self.engine, "_get_routines", return_value=routines), \
+             patch.object(self.engine, "_execute_audit_structure", new_callable=AsyncMock,
+                          return_value={"status": "success", "result": "ok"}), \
+             patch.object(self.engine, "_persist_state"):
+            await self.engine._execute_scored_routine(health)
+        # REFACTOR_RANDOM a ete ignore, AUDIT_STRUCTURE executee
+        assert self.engine._forced_next_intent == ""
+        assert any(h["intent"] == "AUDIT_STRUCTURE" for h in self.engine.routine_history)
+
+    @pytest.mark.asyncio
+    async def test_forced_allowed_below_threshold(self):
+        """Un intent FORCED avec moins d'echecs que le seuil est execute."""
+        self.engine._forced_next_intent = "AUDIT_STRUCTURE"
+        self.engine._forced_failure_counts = {"AUDIT_STRUCTURE": 2}
+        health = _make_health("GO")
+        routines = [
+            {"agent": "architect", "intent": "AUDIT_STRUCTURE", "mission": "test"},
+        ]
+        with patch.object(self.engine, "_get_routines", return_value=routines), \
+             patch.object(self.engine, "_execute_forced_routine", new_callable=AsyncMock) as mock_forced:
+            await self.engine._execute_scored_routine(health)
+        mock_forced.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_forced_failure_counter_increments_on_error(self):
+        """Le compteur d'echecs s'incremente sur une routine FORCED en echec."""
+        routine = {"agent": "coder", "intent": "REFACTOR_RANDOM", "mission": "test"}
+        health = _make_health("GO")
+        with patch.object(self.engine, "_execute_refactor_random", new_callable=AsyncMock,
+                          return_value={"status": "error", "result": "fail"}), \
+             patch.object(self.engine, "_persist_state"), \
+             patch("core.autonomy_engine.bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+            await self.engine._execute_forced_routine(routine, health)
+        assert self.engine._forced_failure_counts["REFACTOR_RANDOM"] == 1
+
+    @pytest.mark.asyncio
+    async def test_forced_failure_counter_resets_on_success(self):
+        """Le compteur d'echecs est reset sur une routine FORCED reussie."""
+        self.engine._forced_failure_counts = {"REFACTOR_RANDOM": 2}
+        routine = {"agent": "coder", "intent": "REFACTOR_RANDOM", "mission": "test"}
+        health = _make_health("GO")
+        long_result = "Refactoring complet du module code_smith.py avec ameliorations structurelles et optimisations de performance significatives"
+        with patch.object(self.engine, "_execute_refactor_random", new_callable=AsyncMock,
+                          return_value={"status": "success", "result": long_result}), \
+             patch.object(self.engine, "_persist_state"), \
+             patch("core.autonomy_engine.bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+            await self.engine._execute_forced_routine(routine, health)
+        assert "REFACTOR_RANDOM" not in self.engine._forced_failure_counts
+
+    def test_forced_failure_counts_persisted(self):
+        """Le compteur d'echecs est inclus dans l'etat persiste."""
+        self.engine._forced_failure_counts = {"REFACTOR_RANDOM": 2}
+        with patch("core.autonomy_engine.AutonomyStatePersistence.save") as mock_save:
+            self.engine._persist_state()
+        saved_state = mock_save.call_args[0][0]
+        assert saved_state["forced_failure_counts"] == {"REFACTOR_RANDOM": 2}
+
+
+class TestPostBudgetCooldownAssoupli:
+    """Tests du cooldown assoupli des routines post-budget (fenetre 3 au lieu de 5)."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        self.state_path = str(tmp_path / "state.json")
+        with patch("core.autonomy_engine.STATE_FILE", self.state_path):
+            with patch("core.autonomy_engine.AutonomyStatePersistence.load",
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
+                self.engine = AutonomyEngine(idle_threshold_seconds=300)
+        yield
+
+    @pytest.mark.asyncio
+    async def test_post_budget_cooldown_window_3(self):
+        """Avec une fenetre de 3, un intent execute il y a 4 routines est disponible."""
+        # Remplir l'historique : les 3 derniers sont autres intents
+        self.engine.routine_history = [
+            _make_history_entry("AUDIT_STRUCTURE"),   # il y a 4
+            _make_history_entry("MEMORY_CLEANUP"),     # il y a 3 — hors fenetre
+            _make_history_entry("NEURAL_COMPILE"),     # il y a 2
+            _make_history_entry("SELF_INSPECT"),       # il y a 1
+        ]
+        # AUDIT_STRUCTURE n'est PAS dans les 3 derniers → disponible
+        with patch.object(self.engine, "_execute_audit_structure", new_callable=AsyncMock,
+                          return_value={"status": "success", "result": "ok"}), \
+             patch("random.shuffle"):  # Pas de shuffle pour prédictibilité
+            await self.engine._execute_post_budget_routine()
+        # Vérifie qu'une routine a été exécutée (pas "toutes en cooldown")
+        last = self.engine.routine_history[-1]
+        assert last["intent"] in POST_BUDGET_INTENTS
+
+    @pytest.mark.asyncio
+    async def test_post_budget_all_in_cooldown_only_3_recent(self):
+        """Toutes en cooldown uniquement si les 4 intents sont dans les 3 derniers (impossible)."""
+        # Avec 4 intents et une fenêtre de 3, au moins 1 intent est toujours disponible
+        # Ce test vérifie que 3 intents dans les 3 derniers laisse le 4ème disponible
+        self.engine.routine_history = [
+            _make_history_entry("AUDIT_STRUCTURE"),
+            _make_history_entry("MEMORY_CLEANUP"),
+            _make_history_entry("NEURAL_COMPILE"),
+        ]
+        with patch.object(self.engine, "_execute_audit_structure", new_callable=AsyncMock,
+                          return_value={"status": "success", "result": "ok"}), \
+             patch.object(self.engine, "_execute_memory_cleanup", new_callable=AsyncMock,
+                          return_value={"status": "success", "result": "ok"}), \
+             patch.object(self.engine, "_execute_neural_compile", new_callable=AsyncMock,
+                          return_value={"status": "success", "result": "ok"}), \
+             patch("random.shuffle"):
+            await self.engine._execute_post_budget_routine()
+        # SELF_INSPECT n'est pas dans les 3 derniers → au moins 1 routine exécutable
+        # (ou un des autres si shuffle les met en premier)
+        last = self.engine.routine_history[-1]
+        assert last["intent"] in POST_BUDGET_INTENTS

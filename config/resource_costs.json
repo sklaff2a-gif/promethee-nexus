@@ -12,8 +12,8 @@
     "description": "Normal: 3-5 tours x 3 participants. Dégradé: 3 tours x 2 participants."
   },
   "REFACTOR_RANDOM": {
-    "cost": 4,
-    "description": "Coder génère + chaîne Architect → Formatter → Factory"
+    "cost": 1,
+    "description": "Coder génère refactoring léger (coût réduit car taux d'échec élevé)"
   },
   "SECURITY_AUDIT": {
     "cost": 2,

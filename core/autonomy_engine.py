@@ -51,6 +51,9 @@ NAP_PERIOD_DURATION = 3600    # 60 min par période
 NAP_MAX_RENEWALS = 1          # 1 renouvellement max (= 2h total)
 NAP_COOLDOWN = 300            # 5 min avant de pouvoir re-siester
 
+# Anti-gaspillage : seuil d'échecs consécutifs pour blacklister un intent FORCED
+FORCED_FAILURE_THRESHOLD = 3  # après 3 échecs consécutifs, l'intent FORCED est ignoré pour la session
+
 def _load_resource_costs() -> dict:
     """Charge les coûts par routine depuis config/resource_costs.json."""
     costs_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -393,6 +396,9 @@ class AutonomyEngine:
         self._temp_blacklist: set = set()
         # Loop breaker : intent force par le loop_breaker (bypass scoring)
         self._forced_next_intent: str = ""
+        # Anti-gaspillage : compteur d'échecs consécutifs par intent FORCED
+        # {intent: count} — après FORCED_FAILURE_THRESHOLD échecs, intent blacklisté pour la session
+        self._forced_failure_counts: dict = persisted.get("forced_failure_counts", {})
         # M01: Anti-boucle drive — compteur de forçages par pulsion {drive_name: count}
         self._drive_force_counts: dict = {}
         self._drive_force_cycle: int = 0  # cycle courant pour le reset fenêtre
@@ -502,6 +508,7 @@ class AutonomyEngine:
             "learning_history": self._learning_history,
             "security_audited_files": self._security_audited_files,
             "council_adjustments": self._council_adjustments,
+            "forced_failure_counts": self._forced_failure_counts,
             "is_napping": self.is_napping,
             "_nap_started_at": self._nap_started_at,
             "_nap_renewals_used": self._nap_renewals_used,
@@ -770,14 +777,19 @@ class AutonomyEngine:
         if self._forced_next_intent:
             forced = self._forced_next_intent
             self._forced_next_intent = ""
-            routines = self._get_routines()
-            forced_routine = next((r for r in routines if r["intent"] == forced), None)
-            if forced_routine:
-                print(f"   🔀 LOOP_BREAKER: Intent force -> [{forced}]")
-                # Deleguer l'execution directe (sauter tout le scoring)
-                return await self._execute_forced_routine(forced_routine, health)
+            # Anti-gaspillage : skip si cet intent a trop échoué en FORCED
+            fail_count = self._forced_failure_counts.get(forced, 0)
+            if fail_count >= FORCED_FAILURE_THRESHOLD:
+                logger.info(f"[AUTONOMY] Intent FORCED '{forced}' ignoré — {fail_count} échecs consécutifs (seuil={FORCED_FAILURE_THRESHOLD}), fallback scoring normal.")
             else:
-                logger.warning(f"[AUTONOMY] Intent forcé '{forced}' introuvable dans les routines, fallback au scoring normal.")
+                routines = self._get_routines()
+                forced_routine = next((r for r in routines if r["intent"] == forced), None)
+                if forced_routine:
+                    print(f"   🔀 LOOP_BREAKER: Intent force -> [{forced}]")
+                    # Deleguer l'execution directe (sauter tout le scoring)
+                    return await self._execute_forced_routine(forced_routine, health)
+                else:
+                    logger.warning(f"[AUTONOMY] Intent forcé '{forced}' introuvable dans les routines, fallback au scoring normal.")
 
         routines = self._get_routines()
 
@@ -1710,8 +1722,15 @@ class AutonomyEngine:
         self._record_routine(agent, intent, status, quality_score=quality)
         if status == "success" and quality >= 0.3:
             self.error_streak = 0
+            # Anti-gaspillage : reset compteur échecs FORCED sur succès
+            self._forced_failure_counts.pop(intent, None)
         else:
             self.error_streak += 1
+            # Anti-gaspillage : incrémenter compteur échecs FORCED
+            self._forced_failure_counts[intent] = self._forced_failure_counts.get(intent, 0) + 1
+            fail_count = self._forced_failure_counts[intent]
+            if fail_count >= FORCED_FAILURE_THRESHOLD:
+                logger.warning(f"[AUTONOMY] Intent FORCED '{intent}' blacklisté — {fail_count} échecs consécutifs, ne sera plus forcé cette session.")
         self.daily_count += 1
         self.total_routines_executed += 1
         self.daily_budget_used += routine_cost
@@ -2389,8 +2408,9 @@ class AutonomyEngine:
         free_intents = list(POST_BUDGET_INTENTS)
         random.shuffle(free_intents)
         for intent in free_intents:
-            # Cooldown : pas 2x le même dans les 5 derniers
-            recent = [h["intent"] for h in self.routine_history[-5:]]
+            # Cooldown assoupli : pas 2x le même dans les 3 derniers (était 5)
+            # Avec 4 intents et fenêtre de 3, garantit une rotation fluide
+            recent = [h["intent"] for h in self.routine_history[-3:]]
             if intent in recent:
                 continue
             # Dispatch
