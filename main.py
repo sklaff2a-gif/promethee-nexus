@@ -1,7 +1,7 @@
 # main.py
 from fastapi import FastAPI, WebSocket, Request, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from contextlib import asynccontextmanager
 import os
@@ -478,6 +478,10 @@ _start_time = time.time()
 
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse("static/favicon.svg", media_type="image/svg+xml")
 
 @app.get("/")
 async def root():
