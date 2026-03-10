@@ -2513,6 +2513,8 @@ class AutonomyEngine:
             pass
         # 3. Rêve — consolidation synaptique + stimulation cellulaire
         await self._execute_dream_routine()
+        # 4. LoRA Auto-Training — fine-tuning nocturne (GPU libre pendant le nap)
+        await self._execute_lora_training()
 
     async def _execute_dream_routine(self):
         """Micro-routine de rêve : consolide les synapses, nourrit le tissu neural.
@@ -2620,6 +2622,39 @@ class AutonomyEngine:
                 "content": " | ".join(dream_report),
                 "type": "info"
             })
+
+    async def _execute_lora_training(self):
+        """Fine-tuning QLoRA nocturne pendant le nap mode.
+        Utilise le GPU libre pour entrainer le prochain agent dans la rotation.
+        Ne bloque pas si les seuils ne sont pas atteints."""
+        try:
+            from tools.lora_auto_trainer import auto_trainer
+            result = await auto_trainer.run_training_cycle()
+            agent = result.get("agent", "?")
+            if result.get("success"):
+                self._nap_tasks_done.append(f"LORA_{agent.upper()}")
+                await bus.publish("THOUGHT_STREAM", {
+                    "agent": "LORA",
+                    "content": (
+                        f"Fine-tuning {agent} termine : "
+                        f"{result.get('n_examples', '?')} exemples, "
+                        f"loss={result.get('loss', 0):.4f}, "
+                        f"duree={result.get('duration_s', '?')}s, "
+                        f"modele={result.get('model_name', '?')}"
+                    ),
+                    "type": "success"
+                })
+                logger.info(f"[NAP/LORA] Training {agent} reussi")
+            elif result.get("skipped"):
+                logger.info(
+                    f"[NAP/LORA] Skip {agent}: {result.get('threshold_reason', '?')}"
+                )
+            else:
+                logger.warning(
+                    f"[NAP/LORA] Echec {agent}: {result.get('error', '?')}"
+                )
+        except Exception as e:
+            logger.debug(f"[NAP/LORA] LoRA auto-training indisponible: {e}")
 
     # ── Fin Mode Sieste ──────────────────────────────────────────────
 

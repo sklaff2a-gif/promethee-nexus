@@ -107,16 +107,14 @@ ws.onmessage = (event) => {
         highlightAgent(payload.target);
         addLog('ROUTER', `Mission envoyée vers -> ${payload.target.toUpperCase()}`, 'sys');
     }
-    // 2. Flux de pensée (Thought Stream)
+    // 2. Flux de pensée (Thought Stream) — affiché dans le panneau flux
     else if (type === "THOUGHT_STREAM") {
         highlightAgent(payload.agent);
-        // On n'affiche pas tout dans le dialogue pour éviter le spam, juste dans les logs ou si c'est important
-        if (payload.type === 'success') {
-            addDialogue(payload.agent.toUpperCase(), payload.content, 'agent');
-        } else if (payload.type === 'error') {
+        if (payload.type === 'error') {
+            addDialogue(payload.agent.toUpperCase(), payload.content, 'system');
             addLog(payload.agent, payload.content, 'err');
         } else {
-            addLog(payload.agent, payload.content, 'info');
+            addDialogue(payload.agent.toUpperCase(), payload.content, 'system');
         }
     } 
     // 2b. Streaming temps réel (tokens progressifs)
