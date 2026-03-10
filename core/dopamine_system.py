@@ -73,7 +73,7 @@ def _get_current_mood() -> str:
     """Recupere l'humeur cardiaque courante."""
     try:
         from core.cardiac_engine import heart
-        return heart.dominant_emotion
+        return heart.current_emotion
     except Exception:
         return "neutre"
 

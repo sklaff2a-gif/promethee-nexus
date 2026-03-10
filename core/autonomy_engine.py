@@ -402,7 +402,7 @@ class AutonomyEngine:
         # M01: Anti-boucle drive — compteur de forçages par pulsion {drive_name: count}
         self._drive_force_counts: dict = {}
         self._drive_force_cycle: int = 0  # cycle courant pour le reset fenêtre
-        self._drive_force_total: Dict[str, int] = {}   # Compteur session par drive
+        self._drive_force_total: dict[str, int] = {}   # Compteur session par drive
         # Council data-driven : adjustments temporaires {intent: {delta, expires, reason}}
         self._council_adjustments: dict = persisted.get("council_adjustments", {})
         # Transients pour feedback council/grimoire
