@@ -87,11 +87,25 @@ def restricted(func):
 
 
 def _clean_env() -> dict:
-    """Retourne un env nettoyé des variables Claude Code (évite le blocage de claude CLI)."""
+    """Retourne un env nettoyé des variables Claude Code (évite le blocage de claude CLI).
+
+    Supprime les variables CLAUDE_* qui font croire à claude CLI qu'il tourne
+    déjà dans une session interactive, tout en préservant les variables système
+    essentielles (HOME, PATH, APPDATA…) dont Bun/Node ont besoin.
+    """
     env = os.environ.copy()
     for key in list(env):
-        if key.startswith("CLAUDE_"):
+        if key.startswith("CLAUDE_") or key == "CLAUDECODE":
             del env[key]
+    # S'assurer que les variables système critiques sont présentes
+    # (nécessaires pour Bun/uv_os_homedir et Node)
+    home = Path.home()
+    env.setdefault("HOME", str(home))
+    env.setdefault("USERPROFILE", str(home))
+    env.setdefault("APPDATA", str(home / "AppData" / "Roaming"))
+    env.setdefault("LOCALAPPDATA", str(home / "AppData" / "Local"))
+    env.setdefault("HOMEDRIVE", "C:")
+    env.setdefault("HOMEPATH", str(home).replace("C:", ""))
     return env
 
 
@@ -429,11 +443,15 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     # --- Messages proactifs : poll l'API toutes les 60s ---
-    app.job_queue.run_repeating(
-        check_proactive_messages,
-        interval=60,
-        first=30,
-    )
+    if app.job_queue is not None:
+        app.job_queue.run_repeating(
+            check_proactive_messages,
+            interval=60,
+            first=30,
+        )
+    else:
+        log.warning("JobQueue indisponible (pip install 'python-telegram-bot[job-queue]'). "
+                     "Messages proactifs desactives.")
 
     log.info("Bot Telegram demarre. En attente de messages...")
     app.run_polling(drop_pending_updates=True)

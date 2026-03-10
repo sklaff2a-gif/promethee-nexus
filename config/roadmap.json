@@ -503,9 +503,9 @@
       "phase_name": "NEUROCHIMIE",
       "display": "neurochemistry",
       "description": "Neurochimie simulee — neurotransmetteurs virtuels (serotonine, noradrenaline, GABA), modulation globale",
-      "status": "researching",
+      "status": "ready",
       "specs": [
-        "RESEARCH_RAW: **Synthèse des résultats de recherche : Neurotransmetteurs et modulation neurochimique**  \n*Source : Shutterstock & iStock (données fournies)*  \n\n---\n\n### **1. Neurotransmetteurs clés et rôles biologiques**  \n- **Sérotonine** : Régulation de l'humeur, du bien-être et de l'apaisement (liée à la \"happiness hormones\" selon Shutterstock).  \n- **Noradrénaline** : Réponse à l'alerte, au stress et à l'attention (via le système nerveux sympathique).  \n- **GABA** : Neurotransmetteur inhibiteur réduisant l'anxiété et les excitations neuronales (mentionné dans les deux sources).  \n- **Dopamine** : Système de récompense, motivation et réactivité comportementale (liée aux \"brain happiness hormones\" selon Shutterstock).  \n\n---\n\n### **2. Modulation neurochimique**  \n- **Interactions** :  \n  - La sérotonine et la dopamine influencent les émotions positives (humeur, motivation).  \n  - La GABA module l'activité neuronale pour stabiliser les états anxieux (inhibition préventive).  \n  - La noradrénaline amplifie la vigilance, souvent en interaction avec la dopamine pour les réactions de stress.  \n- **Contexte** : Les mécanismes de modulation sont décrits comme essentiels pour la régulation émotionnelle (Shutterstock, 2023).  \n\n---\n\n### **3. Application pour le système PROMÉTHÉE**  \n- **Modélisation émotionnelle** :  \n  - Les données peuvent être intégrées dans les modèles de l'IA (via ChromaDB) pour simuler des scénarios neurochimiques liés à l'humain (ex: simulation de l'effet de la sérotonine sur les interactions utilisateur).  \n- **Limites** :  \n  - Aucune implémentation technique n'est requise : les données restent théoriques et doivent être utilisées via des *descriptions* ou des *modèles linguistiques* (ex: Ollama pour générer des réponses adaptées aux modulations émotionnelles).  \n\n---\n\n**Sources citées** :  \n- [Shutterstock](https://www.shutterstock.com/search/dopamine-neurotransmitters) : \"Three neurotransmitters, dopamine, serotonin, noradrenaline, norepinephrine. Emotional r"
+        "SPEC_STRUCTURED: [SYSTEM: Nexus V20 (Local First) | AGENT: VISION]\n\nVoici les spécifications techniques structurées pour le module `neurochemistry` de Prométhée :\n\n1.  **Responsabilités principales:**\n    *   Modélisation de l'influence des neurotransmetteurs (sérotonine, noradrénaline, GABA, dopamine) sur les états émotionnels et les actions des agents.\n    *   Fournir des données contextuelles pour les modèles linguistiques (Ollama) afin de générer des réponses et des comportements adaptés.\n    *   Faciliter la simulation des effets neurochimiques sur les interactions des agents et l'expérience utilisateur.\n    *   Intégration de descriptions de la neurochimie dans les modèles comportementaux des agents.\n\n2.  **Interface publique (méthodes clés):**\n    *   `get_neurotransmitter_influence(agent_id: str, neurotransmitter: str) -> float`: Retourne une valeur (entre -1 et 1) représentant l'influence actuelle du neurotransmetteur spécifié sur l'agent donné.\n    *   `simulate_neurochemical_response(agent_id: str, event: str) -> dict`: Simule une réponse neurochimique à un événement spécifique et retourne un dictionnaire contenant les changements simulés dans les niveaux de neurotransmetteurs.\n\n3.  **Events bus à publier/souscrire:**\n    *   **Publier:** `neurochemical_event` (contient `agent_id`, `neurotransmitter`, `change_value`).\n    *   **Souscrire:** `agent_state_changed` (pour réagir aux changements d'état des agents).\n\n4.  **Dépendances et connexions:**\n    *   `core.dopamine_system`: Pour l'intégration avec le système de récompense.\n    *   `core.cardiac_engine`: Pour l'influence sur les états physiologiques.\n    *   `core.desire_engine`:  Pour influencer la motivation et les objectifs des agents.\n    *   `Ollama`: Pour générer des réponses basées sur les données neurochimiques.\n\n5.  **Critères de validation:**\n    *   Les valeurs retournées par `get_neurotransmitter_influence` doivent rester dans la plage de -1 à 1.\n    *   `simulate_neurochemical_response` doit retourner des valeurs réalistes et cohérentes en fonction de l'événement déclencheur.\n    *   L'intégration avec Ollama doit produire des réponses contextuellement pertinentes basées sur les données neurochimiques."
       ],
       "depends_on": [
         "brain_vm"
@@ -521,7 +521,7 @@
         "core.desire_engine"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-09T10:09:56"
+      "updated_at": "2026-03-09T16:14:52"
     },
     {
       "id": "lora_pipeline",
@@ -529,9 +529,9 @@
       "phase_name": "VIRTUALISATION LLM",
       "display": "lora_pipeline",
       "description": "Pipeline LoRA — fine-tuning local de modeles, generation de datasets, evaluation automatique",
-      "status": "researching",
+      "status": "ready",
       "specs": [
-        "RESEARCH_RAW: **Synthèse structurée : LoRA fine-tuning local pour LLM dans PROMÉTHÉE**  \n*(Sources : [DDG] YouTube, Sebastian Raschka, AMD)*  \n\n1. **Principe de LoRA**  \n   - LoRA (Low-Rank Adaptation) ajoute des matrices de rang faible *sans modifier les poids originaux* du modèle, réduisant la consommation de mémoire et les ressources computationnelles. Idéal pour des environnements locaux (PC Windows) avec des ressources limitées ([DDG] YouTube).  \n   - Après fine-tuning, les adapters sont fusionnés avec le modèle original pour simplifier l'inférence (exécution sans gestion de poids séparés), conformément à la logique de PROMÉTHÉE ([DDG] AMD).  \n\n2. **Dataset et adaptation locale**  \n   - Un dataset **diversifié** est essentiel pour éviter les limites d'un dataset statique (ex: performance insuffisante sur des tâches variées).  \n   - Utiliser **ChromaDB** (déjà intégré à PROMÉTHÉE) pour générer et gérer dynamiquement le dataset local, aligné avec le concept de mémoire vectorielle du projet ([DDG] Sebastian Raschka).  \n\n3. **Intégration avec PROMÉTHÉE**  \n   - **Évaluation automatisée** :  \n     - Utiliser la **Gemini API (via FastAPI)** pour évaluer le modèle fine-tune, en respectant la contrainte de \"cloud limité\" (appels ciblés, pas de dépendance excessive).  \n     - Intégrer les adapters fusionnés dans la pipeline PROMÉTHÉE via des modules existants (ex: gestion des modèles locaux via Ollama).  \n   - **Hardware** :  \n     - Si le PC Windows possède un processeur AMD Ryzen AI NPU/IGPU, exploiter l'accélération matérielle pour réduire le temps d'inférence ([DDG] AMD).  \n\n4. **Contraintes techniques**  \n   - **Pas de dépendance à PyTorch** : LoRA nécessite généralement des bibliothèques comme Hugging Face Transformers, mais PROMÉTHÉE utilise Ollama (non basé sur PyTorch). Une adaptation via des librairies tierces (ex: `peft` en mode *local*) est possible, sans utiliser de frameworks interdits (torch, LangChain, etc.).  \n   - **Ressources limitées** : Prioriser des datasets loc"
+        "SPEC_STRUCTURED: En tant qu'architecte logiciel pour Prométhée, voici les spécifications techniques structurées pour le module `lora_pipeline`:\n\n**1. Responsabilités principales:**\n\n*   Orchestrer le fine-tuning LoRA de modèles LLM locaux.\n*   Gérer la génération dynamique de datasets via ChromaDB.\n*   Intégrer les adapters LoRA fusionnés dans le pipeline Prométhée, notamment via Ollama.\n*   Automatiser l'évaluation des modèles fine-tunés avec l'API Gemini (FastAPI).\n*   Optimiser l'utilisation des ressources matérielles (AMD Ryzen AI NPU/IGPU si disponibles).\n\n**2. Interface publique (méthodes clés):**\n\n*   `generate_dataset(prompt_template: str, num_samples: int) -> ChromaDBCollection`: Génère un dataset local à partir d'un template de prompt.\n*   `fine_tune_lora(model_name: str, dataset: ChromaDBCollection, rank: int = 8) -> LoRALayer`: Effectue le fine-tuning LoRA.\n*   `merge_adapters(model_name: str, lora_layer: LoRALayer) -> str`: Fusionne les adapters LoRA avec le modèle Ollama.\n*   `evaluate_model(model_name: str, test_prompts: list[str]) -> dict`: Évalue le modèle fine-tune avec un ensemble de prompts test.\n\n**3. Événements bus à publier/souscrire:**\n\n*   **Publier:** `dataset_generated(dataset_id: str)`: Indique la génération d'un nouveau dataset.\n*   **Publier:** `lora_tuning_completed(model_name: str, rank: int)`: Signalise la fin du fine-tuning LoRA.\n*   **Publier:** `model_evaluated(model_name: str, evaluation_results: dict)`: Notifie l'évaluation d'un modèle.\n*   **Souscrire:** `model_request(model_name: str)`: Demande à l'agent `evolution_agent` de préparer un modèle.\n\n**4. Dépendances et connexions:**\n\n*   **`core.neural_compiler`**:  Utilisé pour l'intégration des adapters dans Ollama.\n*   **`Agents.evolution_agent`**:  Dépend du `evolution_agent` pour la gestion des modèles et les cycles de mise à jour.\n*   **`ChromaDB`**:  Utilisé pour la génération et la gestion des datasets.\n*   **`Ollama`**:  Pour l'exécution des modèles et la fusion des adapters.\n*   **`FastAPI`**: Pour l'appel à l'API Gemini (évaluation).\n\n**5. Critères de validation:**\n\n*   Le dataset généré doit être diversifié et représentatif des tâches visées.\n*   Le fine-tuning LoRA doit se terminer sans erreur et dans un délai raisonnable.\n*   L'évaluation du modèle doit démontrer une amélioration des performances par rapport au modèle de base.\n*   L'intégration des adapters dans Ollama doit être transparente et sans impact négatif sur les performances.\n*   L'utilisation des ressources matérielles (GPU/NPU) doit être optimisée."
       ],
       "depends_on": [
         "neurochemistry"
@@ -546,7 +546,7 @@
         "Agents.evolution_agent"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-09T12:15:06"
+      "updated_at": "2026-03-10T04:57:15"
     },
     {
       "id": "modelfile_generator",
@@ -554,9 +554,9 @@
       "phase_name": "VIRTUALISATION LLM",
       "display": "modelfile_generator",
       "description": "Generateur de Modelfiles — creation automatique de Modelfiles Ollama avec system prompts adaptatifs",
-      "status": "researching",
+      "status": "ready",
       "specs": [
-        "RESEARCH_RAW: **Synthèse : Génération de Modelfile et Ingénierie de Prompt pour Ollama dans PROMÉTHÉE**  \n\n**1. Structure de base du Modelfile**  \n- Utilisez `ollama show <nom_modèle> --modelfile` pour exporter le Modelfile existant (ex: `ollama show gemma3 --modelfile > mon_modelfile.txt`).  \n- Personnalisez le contenu avec :  \n  - `FROM [modèle_base]` (ex: `gemma3` ou `llama2:latest`).  \n  - `SYSTEM \"[votre_prompt]\"` pour définir le rôle et les contraintes (ex: `\"Vous êtes un agent de recherche PROMÉTHÉE : respectez les consignes locales et évitez les contenus sensibles.\"`).  \n  - Paramètres spécifiques (ex: `PARAMETER temperature=0.3`) ou ajout d'adaptateurs LoRA via `ADD ...`.  \n\n**2. Adaptation pour PROMÉTHÉE**  \n- **Prompt système personnalisé** : Modifiez le bloc `SYSTEM` pour aligner le modèle avec les exigences du projet (ex: priorité à la confidentialité, format de réponse structuré).  \n- **Import de modèles locaux** :  \n  - Utilisez `ollama create --modelfile mon_modelfile.txt` pour générer un modèle personnalisé à partir d’un Modelfile existant.  \n  - Importez des poids GGUF/Safetensors via `ollama create --model [nom] --modelfile [fichier]` (source [DDG](https://www.gpu-mart.com/blog/custom-llm-models-with-ollama-modelfile)).  \n\n**3. Exemple concret pour PROMÉTHÉE**  \n```modelfile  \nFROM gemma3  \nSYSTEM \"Vous êtes un agent de recherche PROMÉTHÉE. Répondez en français, évitez les informations sensibles et respectez les consignes locales.\"  \nPARAMETER temperature=0.2  \n```  \n- Sauvegardez le fichier (`mon_modelfile.txt`) et exécutez `ollama create -f mon_modelfile.txt prometheus` pour générer le modèle.  \n\n**4. Rappels techniques**  \n- Utilisez **Notepad** ou un éditeur texte pour modifier le Modelfile (compatible Windows).  \n- Les adaptations LoRA nécessitent des poids pré-entraînés en GGUF/Safetensors (source [DDG](https://apidog.com/blog/how-to-use-ollama/)).  \n\n**Sources** :  \n- [Documentation Ollama CLI](https://docs.ollama.com/cli) (exemples de Modelfile).  \n- [B"
+        "SPEC_STRUCTURED: En tant qu'architecte logiciel, voici les spécifications techniques structurées pour le module `modelfile_generator`:\n\n1.  **Responsabilités principales:**\n    *   Générer des Modelfiles Ollama personnalisés en fonction des besoins de Prométhée.\n    *   Adapter les prompts système pour aligner les modèles Ollama avec les directives de Prométhée (confidentialité, format de réponse, etc.).\n    *   Automatiser la création des modèles Ollama à partir des Modelfiles générés.\n    *   Faciliter l'intégration de modèles locaux (GGUF/Safetensors) dans Prométhée.\n    *   Fournir une interface pour la gestion et le versionnement des Modelfiles.\n\n2.  **Interface publique (méthodes clés):**\n    *   `generate_modelfile(prompt_system: str, base_model: str = \"gemma3\") -> str`: Génère un Modelfile à partir d'un prompt système et d'un modèle de base.\n    *   `create_ollama_model(modelfile_content: str, model_name: str)`: Crée un modèle Ollama à partir du contenu du Modelfile.\n    *   `get_existing_modelfile(model_name: str) -> str`: Récupère un Modelfile existant.\n\n3.  **Events bus à publier/souscrire:**\n    *   **Publier:** `modelfile_generated`:  Événement déclenché lors de la génération réussie d'un Modelfile.\n    *   **Publier:** `ollama_model_created`: Événement déclenché lors de la création réussie d'un modèle Ollama.\n    *   **Souscrire:** `prompt_request`: Pour adapter le Modelfile en fonction des besoins du prompt.\n\n4.  **Dépendances et connexions:**\n    *   `core.neural_compiler`: Pour compiler et intégrer les modèles Ollama.\n    *   `config`: Pour accéder aux paramètres de configuration d'Ollama et de Prométhée.\n\n5.  **Critères de validation:**\n    *   Le Modelfile généré doit être syntaxiquement correct et compatible avec Ollama.\n    *   Le modèle Ollama créé doit fonctionner sans erreur.\n    *   Le prompt système doit respecter les contraintes de sécurité et de confidentialité de Prométhée.\n    *   Le Modelfile doit être versionné et traçable."
       ],
       "depends_on": [
         "lora_pipeline"
@@ -571,7 +571,7 @@
         "config"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-09T13:37:47"
+      "updated_at": "2026-03-10T09:40:11"
     },
     {
       "id": "ab_testing",
@@ -579,9 +579,9 @@
       "phase_name": "VIRTUALISATION LLM",
       "display": "ab_testing",
       "description": "A/B testing de modeles — comparaison automatisee de variantes LLM, selection par metriques",
-      "status": "researching",
+      "status": "ready",
       "specs": [
-        "RESEARCH_RAW: **Synthèse des métriques d'évaluation pour A/B testing de modèles LLM dans Prométhée**  \n*Adaptée au contexte mono-PC Windows avec Ollama local*\n\n---\n\n### **1. Métriques clés pour l'évaluation**  \n- **Cross-entropy** : Métrique préférée pour évaluer la qualité des modèles LLM (source : [Wikipedia](https://en.wikipedia.org/wiki/Large_language_model)).  \n  - Utiliser pour comparer la précision des réponses (ex : via des tests structurés avec des prompts standardisés).  \n- **Biais de sélection** : Tendance des modèles à privilégier des options spécifiques indépendamment du contenu réel (source : [Wikipedia](https://en.wikipedia.org/wiki/Large_language_model)).  \n  - **À éviter** lors des tests A/B : Valider les résultats avec des prompts neutres et variés.  \n- **Taille de la fenêtre contextuelle** : Paramètre critique pour les tâches nécessitant un contexte étendu (source : [Artificial Analysis Leaderboard](https://artificialanalysis.ai/leaderboards/models)).  \n  - Mesurer via Ollama pour adapter les modèles aux besoins du système.  \n\n---\n\n### **2. Métriques de performance locales**  \n- **Vitesse de génération (tokens/s)** et **latence (TTFT)** :  \n  - Indicateurs essentiels pour optimiser la réactivité (source : [Artificial Analysis Leaderboard](https://artificialanalysis.ai/leaderboards/models)).  \n  - **Application dans Prométhée** :  \n    - Utiliser les APIs Ollama pour capturer ces données (ex : via `ollama generate` avec un timer).  \n    - Comparer les modèles sur des prompts identiques pour isoler les performances.  \n- **Context window** :  \n  - Vérifier les limites de chaque modèle (ex : 4096 tokens pour les modèles Ollama).  \n  - Adapter les prompts à la taille maximale pour éviter les troncations.  \n\n---\n\n### **3. Éviter les pièges**  \n- **Biais de sélection** : Tester avec des prompts neutres et des données diverses (ex : évaluer la génération de réponses sur des thèmes neutres).  \n- **Sur-optimisation** : Ne pas privilégier un modèle pour un seul scénario ("
+        "SPEC_STRUCTURED: [ARCHITECTURE] Module: ab_testing\n\n1. **Responsabilités principales:**\n    * Automatiser la comparaison de modèles LLM locaux (Ollama) en A/B testing.\n    * Collecter et analyser les métriques de performance (cross-entropy, tokens/s, TTFT, context window).\n    * Sélectionner le modèle optimal en fonction des métriques et des contraintes de Prométhée.\n    * Fournir une interface pour le `evolution_agent` afin d'intégrer les résultats dans le cycle d'amélioration continue.\n\n2. **Interface publique:**\n    * `start_test(model_a: str, model_b: str, prompt_template: str, num_iterations: int) -> dict`: Lance un test A/B entre deux modèles avec un prompt donné. Retourne un dictionnaire contenant les résultats agrégés.\n    * `get_results(test_id: str) -> dict`: Récupère les résultats d'un test A/B spécifique.\n    * `cancel_test(test_id: str)`: Annule un test A/B en cours.\n\n3. **Events bus:**\n    * **Publier:** `model_evaluation_request`: Indique au `evolution_agent` qu'une évaluation de modèle est nécessaire.\n    * **Souscrire:** `ollama_metrics_available`: Réagit à la disponibilité de métriques Ollama (tokens/s, TTFT) pour optimiser les tests.\n\n4. **Dépendances et connexions:**\n    * `core.dopamine_system`: Pour la gestion des récompenses et des pénalités en fonction des résultats des tests.\n    * `Agents.evolution_agent`: Pour l'intégration des résultats et l'amélioration des modèles.\n    * `core.bus`: Pour la communication via le bus d'événements.\n    * Ollama API: Pour interagir avec les modèles LLM locaux.\n\n5. **Critères de validation:**\n    * Les résultats des tests doivent être statistiquement significatifs pour garantir la validité de la sélection du modèle.\n    * La latence des tests ne doit pas dépasser un seuil défini pour ne pas impacter la réactivité de Prométhée.\n    * Les tests doivent être exécutés dans un environnement contrôlé pour éviter les biais."
       ],
       "depends_on": [
         "modelfile_generator"
@@ -596,7 +596,7 @@
         "Agents.evolution_agent"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-09T14:25:09"
+      "updated_at": "2026-03-10T12:21:37"
     },
     {
       "id": "global_workspace",
@@ -604,8 +604,10 @@
       "phase_name": "CONSCIENCE & EMERGENCE",
       "display": "global_workspace",
       "description": "Espace de travail conscient (Baars) — integration de l'information, broadcasting global, attention selective",
-      "status": "planned",
-      "specs": [],
+      "status": "researching",
+      "specs": [
+        "RESEARCH_RAW: **Synthèse structurée : Application de la théorie du workspace global (GWT) à un système IA multi-agent local**  \n\n1. **Concept de base**  \n   La théorie du workspace global (GWT), formulée par Bernard Baars, postule que la conscience émerge de l'intégration d'informations accessibles à un espace centralisé. Dans le contexte de l'IA, cela correspond à un mécanisme de diffusion d'informations entre agents via un hub partagé, permettant une cohérence cognitive. Selon l'article Wikipédia [Wikipedia](https://en.wikipedia.org/wiki/Global_workspace_theory), ce modèle repose sur l'idée que le \"workspace global\" agit comme une mémoire commune permettant à divers modules cérébraux (ou agents) d'accéder aux données critiques.  \n\n2. **Implémentation dans PROMÉTHÉE**  \n   - **Mediator comme workspace global** : Le composant centralisé (géré via `asyncio.gather`) agit comme espace global : il répartit les événements entre agents via des messages synchronisés (ex: `agent1.run()` et `agent2.run()` lancés simultanément).  \n   - **Communication agent-à-agent** : Les agents interagissent via des routes FastAPI (`/agents/trigger` et `/agents/execute`), évitant le couplage direct. Les données sont diffusées en mode asynchrone, conformément au principe GWT.  \n   - **Mémoire vectorielle** : ChromaDB stocke les contextes intégrés dans le workspace global (ex: réponses Ollama), permettant une récupération contextuelle via des requêtes de type `query()`.  \n\n3. **Avantages clés**  \n   - **Intégration cohérente** : Les agents partagent un état commun via le Mediator, reproduisant le mécanisme de diffusion GWT sans dépendance externe (ex: pas de microservices).  \n   - **Évolutivité locale** : Gestion de multiples tâches simultanées via `asyncio` (ex: `await asyncio.gather(...)`) sans surcharger le PC.  \n   - **Conformité aux contraintes** : Architecture monolithique mais modulaire, adaptée à un seul PC Windows (aucune dépendance cloud ou Docker).  \n\n4. **Limites à respecter**  \n   - **Pas de d"
+      ],
       "depends_on": [
         "workspace",
         "neurochemistry"
@@ -621,7 +623,7 @@
         "core.self_awareness"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-01T00:00:00"
+      "updated_at": "2026-03-09T16:46:17"
     },
     {
       "id": "deep_metacognition",
@@ -629,8 +631,10 @@
       "phase_name": "CONSCIENCE & EMERGENCE",
       "display": "deep_metacognition",
       "description": "Meta-cognition profonde — raisonnement sur son propre raisonnement, detection de confusion, calibration de confiance",
-      "status": "planned",
-      "specs": [],
+      "status": "ready",
+      "specs": [
+        "SPEC_STRUCTURED: [SYSTEM: Nexus V20 (Local First) | AGENT: VISION]\n\nVoici les spécifications techniques structurées pour le module `deep_metacognition` de Prométhée :\n\n**1. Responsabilités principales:**\n\n*   **Évaluation de la confiance:** Calculer et maintenir un score de confiance pour les réponses générées par les agents.\n*   **Détection de l'incertitude:** Identifier les situations où la réponse est incertaine ou basée sur des données fragmentées.\n*   **Calibration dynamique:** Ajuster les seuils de confiance et les stratégies de réponse en fonction de l'incertitude détectée.\n*   **Signalement des biais:** Identifier et signaler les biais cognitifs potentiels affectant la performance des agents.\n*   **Amélioration de l'auto-surveillance:** Fournir des données pour l'entraînement et l'amélioration des mécanismes d'auto-surveillance de Prométhée.\n\n**2. Interface publique (méthodes clés):**\n\n*   `calculate_confidence(response: str, metadata: dict) -> float`: Calcule un score de confiance basé sur la réponse et les métadonnées associées.\n*   `detect_uncertainty(response: str) -> float`: Détermine le niveau d'incertitude dans une réponse.\n*   `adjust_response_strategy(confidence: float, uncertainty: float) -> str`: Recommande une stratégie de réponse (ex: reformulation, recherche complémentaire).\n*   `report_bias(agent_id: str, bias_type: str, details: str)` : Signale un biais potentiel détecté par un agent.\n\n**3. Events bus à publier/souscrire:**\n\n*   **Publier:**\n    *   `confidence_update`:  Publié après le calcul d'un score de confiance.  Contient le score, l'agent responsable et la réponse.\n    *   `uncertainty_detected`: Publié lorsqu'une incertitude est détectée. Contient le niveau d'incertitude, l'agent responsable et la réponse.\n    *   `bias_report`: Publié lorsqu'un biais est détecté. Contient le type de biais, l'agent responsable et les détails.\n*   **Souscrire:**\n    *   `response_generated`:  Pour recevoir les réponses des agents et évaluer leur confiance et leur incertitude.\n    *   `metadata_update`: Pour recevoir des mises à jour de métadonnées (ex: scores d'incertitude stockés dans ChromaDB).\n\n**4. Dépendances et connexions:**\n\n*   `core.self_awareness`: Pour obtenir des informations sur l'état interne de Prométhée.\n*   `core.inner_voice`: Pour intégrer les réflexions internes et les intuitions.\n*   `core.prefrontal`: Pour la prise de décision et la gestion des stratégies de réponse.\n*   `core.psyche`: Pour comprendre les motivations et les biais potentiels des agents.\n*   `ChromaDB`: Pour stocker et récupérer les métadonnées d'incertitude.\n\n**5. Critères de validation:**\n\n*   Les scores de confiance doivent être corrélés avec la qualité perçue des réponses (évaluation humaine).\n*   La détection de l'incertitude doit être sensible et spécifique (minimiser les faux positifs et les faux négatifs).\n*   L'ajustement de la stratégie de réponse doit améliorer la précision et la robustesse des résultats.\n*   Les biais signalés doivent être validés par "
+      ],
       "depends_on": [
         "global_workspace"
       ],
@@ -646,7 +650,7 @@
         "core.psyche"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-01T00:00:00"
+      "updated_at": "2026-03-10T14:34:15"
     },
     {
       "id": "emergence_tests",
@@ -654,8 +658,10 @@
       "phase_name": "CONSCIENCE & EMERGENCE",
       "display": "emergence_tests",
       "description": "Tests d'emergence — batterie de tests pour detecter et mesurer les comportements emergents",
-      "status": "planned",
-      "specs": [],
+      "status": "ready",
+      "specs": [
+        "SPEC_STRUCTURED: [SYSTEM: Nexus V20 (Local First) | AGENT: VISION]\n\nVoici les spécifications techniques structurées pour le module `emergence_tests` :\n\n**1. Responsabilités principales:**\n\n*   Concevoir et exécuter des tests pour détecter les comportements émergents du système Prométhée.\n*   Mettre en œuvre des tests basés sur la détection des contingences sensorimotrices, adaptés à un environnement local (Ollama).\n*   Utiliser ChromaDB pour le stockage et la distribution de contextes vectorisés pour les tests.\n*   Mesurer la capacité de détection de contingence (CD) via des métriques de cohérence des réponses.\n*   Documenter et analyser les résultats des tests pour identifier les comportements émergents.\n\n**2. Interface publique (méthodes clés) :**\n\n*   `run_test_suite(test_config: dict) -> dict`: Exécute une suite de tests définie dans `test_config`.\n*   `create_test_scenario(scenario_description: str) -> dict`: Crée un nouveau scénario de test basé sur une description.\n*   `evaluate_response(response: str, expected_outcome: str) -> float`: Évalue la réponse du système par rapport au résultat attendu (retourne un score de cohérence).\n\n**3. Événements bus à publier/souscrire:**\n\n*   **Publier:** `test_started`, `test_completed`, `test_failed`, `test_passed`, `anomaly_detected`.\n*   **Souscrire:** `new_test_scenario_available`, `test_data_ready`.\n\n**4. Dépendances et connexions:**\n\n*   `core.self_awareness`: Pour obtenir des informations sur l'état interne du système.\n*   `core.autonomy_engine`: Pour l'intégration dans le cycle d'autonomie.\n*   ChromaDB: Pour le stockage et la récupération des contextes vectorisés.\n*   `main.py`: Pour l'accès aux configurations générales.\n\n**5. Critères de validation:**\n\n*   Les tests doivent être exécutables localement sur le PC Windows avec Ollama.\n*   Les résultats des tests doivent être quantifiables et reproductibles.\n*   Les métriques de CD doivent démontrer une amélioration par rapport à une ligne de base (baseline).\n*   L'intégration avec `core.self_awareness` et `core.autonomy_engine` doit être transparente.\n*   Les scénarios de test doivent être documentés dans `evolution_catalog.py`."
+      ],
       "depends_on": [
         "deep_metacognition"
       ],
@@ -669,7 +675,7 @@
         "core.autonomy_engine"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-01T00:00:00"
+      "updated_at": "2026-03-10T16:29:22"
     },
     {
       "id": "simulation_framework",
@@ -677,8 +683,10 @@
       "phase_name": "CONSCIENCE & EMERGENCE",
       "display": "simulation_framework",
       "description": "Framework de simulation — simulation de scenarios complets, test d'hypotheses, prediction de consequences",
-      "status": "planned",
-      "specs": [],
+      "status": "researching",
+      "specs": [
+        "RESEARCH_RAW: **Synthèse : Méthodologie de Consequence Analysis pour les simulations d'IA dans PROMÉTHÉE**\n\n**Contexte**  \nLa Consequence Analysis est une approche structurée pour évaluer les impacts des scénarios critiques dans les simulations d'IA, en simulant des défaillances extrêmes et en validant les réponses de l'agent. Elle s'appuie sur des tests de résilience pour garantir la stabilité des systèmes locaux (ex : panne réseau, erreurs de données).\n\n**Méthodologie**  \n- **Identification des scénarios** : Définir des cas de défaillance extrêmes (ex : interruption de service, données corrompues) via des endpoints FastAPI dédiés.  \n- **Simulation locale** : Utiliser Ollama pour générer des réponses cohérentes basées sur les hypothèses (ex : simulation d'une erreur logique via des prompts ciblés).  \n- **Stockage des résultats** : Intégrer les données de simulation dans ChromaDB pour mémoriser les conséquences et améliorer les modèles locaux.  \n- **Validation itérative** : Tester les réponses de l'IA via des boucles de simulation, en ajustant les paramètres selon les résultats.\n\n**Utilisation dans PROMÉTHÉE**  \n- Intégrer des endpoints FastAPI pour exécuter des tests de résilience (ex : `POST /simulate-consequence` avec un corps JSON contenant le scénario).  \n- Analyser les réponses via Ollama (ex : \"Génère une réaction à une panne réseau en 200 mots\").  \n- Stocker les résultats dans ChromaDB pour une analyse post-simulation et une amélioration continue des prédictions.  \n- Adapter les modèles locaux en fonction des conséquences identifiées (ex : optimiser les règles de gestion des erreurs).\n\n**Sources**  \n- L'article de Lerus (2024) sur la stabilité des systèmes dynamiques illustre l'application pratique de la Consequence Analysis en simulation de scénarios critiques : [Lerus - Consequence Analysis](https://www.lerus.com/articles/consequence-analysis-ensuring-stability-in-dp-systems.html).  \n\n*Note : Toutes les actions sont réalisées localement sur le PC Windows, sans dépendanc"
+      ],
       "depends_on": [
         "brain_vm",
         "global_workspace"
@@ -694,7 +702,7 @@
         "core.hippocampus"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-01T00:00:00"
+      "updated_at": "2026-03-10T03:21:36"
     }
   ]
 }

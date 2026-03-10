@@ -1041,4 +1041,6 @@ async def ws_endpoint(websocket: WebSocket, token: str = Query(default="")):
 if __name__ == "__main__":
     print("🔥 Démarrage via Lanceur Direct...")
     # RELOAD=FALSE OBLIGATOIRE : On gère le restart nous-mêmes via sys.exit(65)
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=False)
+    host = os.getenv("APP_HOST", "127.0.0.1")
+    port = int(os.getenv("APP_PORT", "8000"))
+    uvicorn.run("main:app", host=host, port=port, reload=False)
