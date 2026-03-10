@@ -2918,7 +2918,7 @@ class AutonomyEngine:
                 ),
                 "context": f"PROTOCOLE_AUTONOMIE\nFICHIER: {filename}\nCODE:\n{code}",
                 "force_local": True,
-                "intent": intent,
+                "intent": "REFACTOR_RANDOM",
             })
             return response or {"status": "error", "result": "Pas de réponse."}
         except Exception as e:
