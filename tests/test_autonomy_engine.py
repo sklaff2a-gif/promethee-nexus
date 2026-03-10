@@ -2277,6 +2277,41 @@ class TestCouncilDataDriven:
                 "SPEC-42", "Council verdict: inutile"
             )
 
+    def test_apply_verdict_maintenir(self):
+        """_apply_council_verdict MAINTENIR ne crée pas d'adjustment."""
+        engine = self._make_engine()
+        verdict = {"action": "MAINTENIR", "target": "", "reason": "tout va bien"}
+        engine._apply_council_verdict(verdict)
+        assert len(engine._council_adjustments) == 0
+        engine._persist_state.assert_not_called()
+
+    def test_anti_stacking_prioriser(self):
+        """Deux PRIORISER successifs pour le même intent plafonnent à +3.0."""
+        engine = self._make_engine()
+        v1 = {"action": "PRIORISER", "target": "CODE", "reason": "test 1"}
+        v2 = {"action": "PRIORISER", "target": "CODE", "reason": "test 2"}
+        engine._apply_council_verdict(v1)
+        engine._apply_council_verdict(v2)
+        assert engine._council_adjustments["CODE"]["delta"] == 3.0  # pas 4.0
+
+    def test_anti_stacking_deprioriser(self):
+        """Deux DEPRIORISER successifs plafonnent à -3.0."""
+        engine = self._make_engine()
+        v1 = {"action": "DEPRIORISER", "target": "AUDIT", "reason": "test 1"}
+        v2 = {"action": "DEPRIORISER", "target": "AUDIT", "reason": "test 2"}
+        engine._apply_council_verdict(v1)
+        engine._apply_council_verdict(v2)
+        assert engine._council_adjustments["AUDIT"]["delta"] == -3.0  # pas -4.0
+
+    def test_anti_stacking_mixed(self):
+        """PRIORISER puis DEPRIORISER s'annulent partiellement."""
+        engine = self._make_engine()
+        v1 = {"action": "PRIORISER", "target": "MIX", "reason": "test 1"}
+        v2 = {"action": "DEPRIORISER", "target": "MIX", "reason": "test 2"}
+        engine._apply_council_verdict(v1)
+        engine._apply_council_verdict(v2)
+        assert engine._council_adjustments["MIX"]["delta"] == 0.0  # +2 -2 = 0
+
 
 # ─── Tests Extroversion (anti-chambre d'echo) ───
 

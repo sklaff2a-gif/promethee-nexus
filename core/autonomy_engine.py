@@ -2181,6 +2181,7 @@ class AutonomyEngine:
                 "mission": "Quelle amélioration prioritaire pour le système ?",
                 "needs_research": False, "research_query": None,
                 "subject_key": "default",
+                "verdict_type": "general",
             }
 
         # Stocker la clé du sujet pour la déduplication future
@@ -2274,6 +2275,17 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # Guardrail verdict — injecter si pas déjà présent (data-driven l'a déjà)
+        if "VERDICT:" not in mission:
+            mission += (
+                "\n\nIMPORTANT : Votre conclusion DOIT inclure une ligne :\n"
+                "VERDICT: PRIORISER [routine] ou DEPRIORISER [routine] ou MAINTENIR\n"
+                "Routines possibles : EXPANSION_CODE, VEILLE_SILENCIEUSE, SECURITY_AUDIT, "
+                "REFACTOR_RANDOM, COUNCIL_DEBATE, MEMORY_CONSOLIDATION, ROADMAP_RESEARCH, "
+                "ROADMAP_SPEC, SOLILOQUE_INTERNE, AUDIT_STRUCTURE, GRIMOIRE_INVOKE.\n"
+                "Si aucun changement n'est nécessaire, utilisez VERDICT: MAINTENIR."
+            )
+
         print(f"   🗣️ COUNCIL DEBATE: {topic['participants']} — {topic['mission'][:80]}")
         council_max_rounds = 3 if degraded else 5
         result = await orchestrator.dispatch_council(
@@ -2295,17 +2307,19 @@ class AutonomyEngine:
             except Exception as e:
                 logger.warning(f"[COUNCIL→ACTION] Extraction specs échouée: {e}")
 
-        # Verdict data-driven : extraire et appliquer
-        if topic.get("verdict_type"):
-            try:
-                from core.council_analytics import extract_verdict
-                verdict = extract_verdict(
-                    result.get("transcript", []), topic["verdict_type"]
-                )
-                if verdict:
-                    self._apply_council_verdict(verdict)
-            except Exception as e:
-                logger.warning(f"[COUNCIL] Extraction verdict echouee: {e}")
+        # Verdict Council→Action : extraire et appliquer (tous les topics ont verdict_type)
+        council_verdict_applied = None
+        verdict_type = topic.get("verdict_type", "general")
+        try:
+            from core.council_analytics import extract_verdict
+            verdict = extract_verdict(
+                result.get("transcript", []), verdict_type
+            )
+            if verdict:
+                self._apply_council_verdict(verdict)
+                council_verdict_applied = verdict
+        except Exception as e:
+            logger.warning(f"[COUNCIL] Extraction verdict echouee: {e}")
 
         # Enregistrer le débat dans le journal stratégique
         try:
@@ -2322,14 +2336,14 @@ class AutonomyEngine:
 
         # Écrire dans le journal des councils persistant (memory/council_journal.md)
         try:
-            self._append_council_journal(topic, result)
+            self._append_council_journal(topic, result, council_verdict_applied)
         except Exception as e:
             logger.warning(f"[COUNCIL] Écriture council_journal échouée: {e}")
 
         return result
 
     def _apply_council_verdict(self, verdict: dict):
-        """Applique un verdict Council data-driven."""
+        """Applique un verdict Council → ajustement temporaire du scoring."""
         from datetime import timedelta
         action = verdict.get("action", "")
         target = verdict.get("target", "")
@@ -2337,12 +2351,19 @@ class AutonomyEngine:
 
         if action in ("PRIORISER", "DEPRIORISER"):
             delta = 2.0 if action == "PRIORISER" else -2.0
+            # Anti-stacking : ne pas dépasser ±3.0 si adjustment existant
+            existing = self._council_adjustments.get(target, {}).get("delta", 0.0)
+            new_delta = max(-3.0, min(3.0, existing + delta))
             expires = (datetime.now() + timedelta(hours=24)).isoformat()
             self._council_adjustments[target] = {
-                "delta": delta, "expires": expires, "reason": reason,
+                "delta": new_delta, "expires": expires, "reason": reason,
             }
             self._persist_state()
-            logger.info(f"[COUNCIL VERDICT] {action} {target} ({delta:+.1f}) — {reason}")
+            logger.info(f"[COUNCIL VERDICT] {action} {target} ({new_delta:+.1f}) — {reason}")
+
+        elif action == "MAINTENIR":
+            logger.info(f"[COUNCIL VERDICT] MAINTENIR — {reason}")
+            # Pas d'adjustment, décision explicite de ne rien changer
 
         elif action == "ABANDONNER":
             try:
@@ -2353,7 +2374,7 @@ class AutonomyEngine:
             except Exception:
                 pass
 
-    def _append_council_journal(self, topic: dict, result: dict):
+    def _append_council_journal(self, topic: dict, result: dict, verdict: dict = None):
         """Ajoute une entrée au journal persistant des councils (memory/council_journal.md)."""
         import re
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -2388,13 +2409,21 @@ class AutonomyEngine:
         proposals_text = "\n".join(f"  {p}" for p in proposals) if proposals else "  (Aucune proposition extraite automatiquement)"
         files_text = ", ".join(f"`{f}`" for f in sorted(files_mentioned)) if files_mentioned else "(aucun fichier cité)"
 
+        if verdict:
+            v_action = verdict.get("action", "")
+            v_target = verdict.get("target", "")
+            v_reason = verdict.get("reason", "")
+            verdict_text = f"{v_action} {v_target} — {v_reason}"
+        else:
+            verdict_text = "(aucun verdict extrait)"
+
         entry = (
             f"\n---\n\n"
             f"## [{now}] {mission[:80]}\n\n"
             f"**Participants** : {participants} | **Tours** : {rounds_used} | **Consensus** : {'oui' if status == 'consensus' else 'non'}\n\n"
             f"**Propositions clés** :\n{proposals_text}\n\n"
             f"**Fichiers cibles** : {files_text}\n"
-            f"**Verdict** : (à curé manuellement)\n"
+            f"**Verdict** : {verdict_text}\n"
         )
 
         # Append au fichier

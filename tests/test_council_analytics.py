@@ -10,6 +10,7 @@ from core.council_analytics import (
     extract_verdict,
     _heuristic_verdict,
     _build_data_mission,
+    _THEME_INTENT_MAP,
     DRIVE_INTENT_MAP,
 )
 
@@ -290,6 +291,105 @@ class TestHeuristicVerdict:
         text = "Tout va bien, continuons ainsi."
         result = _heuristic_verdict(text, "routine_audit")
         assert result is None
+
+    def test_heuristic_theme_reduire_securite(self):
+        text = "Il serait judicieux de réduire les audits de sécurité pour économiser du budget."
+        result = _heuristic_verdict(text, "general")
+        assert result is not None
+        assert result["action"] == "DEPRIORISER"
+        assert result["target"] == "SECURITY_AUDIT"
+
+    def test_heuristic_theme_renforcer_exploration(self):
+        text = "Nous devrions renforcer l'exploration et la recherche de nouveaux domaines."
+        result = _heuristic_verdict(text, "general")
+        assert result is not None
+        assert result["action"] == "PRIORISER"
+        assert result["target"] == "ROADMAP_RESEARCH"
+
+    def test_heuristic_theme_suspendre_refactor(self):
+        text = "Je propose de suspendre les tentatives de refactoring pour le moment."
+        result = _heuristic_verdict(text, "general")
+        assert result is not None
+        assert result["action"] == "DEPRIORISER"
+        assert result["target"] == "REFACTOR_RANDOM"
+
+    def test_heuristic_theme_plus_de_code(self):
+        text = "Il faut plus de développement de code et d'expansion."
+        result = _heuristic_verdict(text, "general")
+        assert result is not None
+        assert result["action"] == "PRIORISER"
+        assert result["target"] == "EXPANSION_CODE"
+
+    def test_heuristic_theme_no_match_distant(self):
+        """Verbe et thème trop éloignés (>50 chars) → pas de match."""
+        text = "Il faudrait renforcer " + "x" * 60 + " la sécurité des accès."
+        result = _heuristic_verdict(text, "general")
+        assert result is None
+
+
+# ═══════════════════════════════════════════════════════════
+# TestVerdictMaintenir
+# ═══════════════════════════════════════════════════════════
+
+class TestVerdictMaintenir:
+
+    def test_maintenir_explicit(self):
+        transcript = [
+            {"content": "Après analyse, tout est en ordre. VERDICT: MAINTENIR"},
+        ]
+        result = extract_verdict(transcript, "general")
+        assert result is not None
+        assert result["action"] == "MAINTENIR"
+        assert result["target"] == ""  # Pas de target requis
+
+    def test_maintenir_with_target(self):
+        transcript = [
+            {"content": "VERDICT: MAINTENIR EXPANSION_CODE — la routine fonctionne bien actuellement, pas de changement nécessaire."},
+        ]
+        result = extract_verdict(transcript, "general")
+        assert result["action"] == "MAINTENIR"
+        assert result["target"] == "EXPANSION_CODE"
+
+
+# ═══════════════════════════════════════════════════════════
+# TestGeneralVerdictType
+# ═══════════════════════════════════════════════════════════
+
+class TestGeneralVerdictType:
+
+    def test_general_verdict_type_works(self):
+        """verdict_type 'general' fonctionne identiquement aux autres."""
+        transcript = [
+            {"content": "VERDICT: PRIORISER MEMORY_CONSOLIDATION car la mémoire est fragmentée et nécessite une consolidation urgente"},
+        ]
+        result = extract_verdict(transcript, "general")
+        assert result is not None
+        assert result["action"] == "PRIORISER"
+        assert result["target"] == "MEMORY_CONSOLIDATION"
+
+    def test_general_falls_back_to_heuristic(self):
+        """Sans VERDICT: explicite, l'heuristique thématique prend le relais."""
+        transcript = [
+            {"content": "En conclusion, nous devrions renforcer la consolidation mémoire pour améliorer la cohérence."},
+        ]
+        result = extract_verdict(transcript, "general")
+        assert result is not None
+        assert result["action"] == "PRIORISER"
+        assert result["target"] == "MEMORY_CONSOLIDATION"
+
+
+# ═══════════════════════════════════════════════════════════
+# TestThemeIntentMap
+# ═══════════════════════════════════════════════════════════
+
+class TestThemeIntentMap:
+
+    def test_map_has_essential_themes(self):
+        assert "budget" in _THEME_INTENT_MAP
+        assert "securite" in _THEME_INTENT_MAP
+        assert "code" in _THEME_INTENT_MAP
+        assert "memoire" in _THEME_INTENT_MAP
+        assert "exploration" in _THEME_INTENT_MAP
 
 
 # ═══════════════════════════════════════════════════════════

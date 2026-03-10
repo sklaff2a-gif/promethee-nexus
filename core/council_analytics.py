@@ -313,29 +313,54 @@ def extract_verdict(transcript: list, verdict_type: str) -> dict | None:
         return None
 
     # Recherche format explicite VERDICT:
-    pattern = r"VERDICT\s*:\s*(PRIORISER|DEPRIORISER|ABANDONNER|MAINTENIR)\s+(\S+)"
+    pattern = r"VERDICT\s*:\s*(PRIORISER|DEPRIORISER|ABANDONNER|MAINTENIR)(?:\s+(\S+))?"
     match = re.search(pattern, full_text, re.IGNORECASE)
     if match:
         action = match.group(1).upper()
-        target = match.group(2).strip(".,;:!?")
+        target = (match.group(2) or "").strip(".,;:!?")
         # Extraire la raison (texte apres le target)
         rest = full_text[match.end():].strip()
         reason = rest[:200].strip() if rest else "Verdict Council"
         # Nettoyer la raison
         reason = re.sub(r"^\s*[-—:]\s*", "", reason)
         if len(reason) < 10:
-            reason = "Verdict Council data-driven"
+            reason = "Verdict Council"
         return {"action": action, "target": target, "reason": reason}
 
     # Fallback heuristique : chercher intent names + verbes d'action
     return _heuristic_verdict(full_text, verdict_type)
 
 
+_THEME_INTENT_MAP = {
+    "budget": "COUNCIL_DEBATE",
+    "exploration": "ROADMAP_RESEARCH",
+    "explorer": "ROADMAP_RESEARCH",
+    "recherche": "ROADMAP_RESEARCH",
+    "securite": "SECURITY_AUDIT",
+    "sécurité": "SECURITY_AUDIT",
+    "audit": "SECURITY_AUDIT",
+    "stabilit": "AUDIT_STRUCTURE",
+    "consolid": "MEMORY_CONSOLIDATION",
+    "code": "EXPANSION_CODE",
+    "expansion": "EXPANSION_CODE",
+    "develop": "EXPANSION_CODE",
+    "veille": "VEILLE_SILENCIEUSE",
+    "memoire": "MEMORY_CONSOLIDATION",
+    "mémoire": "MEMORY_CONSOLIDATION",
+    "curiosit": "VEILLE_SILENCIEUSE",
+    "isolement": "SOLILOQUE_INTERNE",
+    "refactor": "REFACTOR_RANDOM",
+    "grimoire": "GRIMOIRE_INVOKE",
+    "roadmap": "ROADMAP_SPEC",
+}
+
+
 def _heuristic_verdict(text: str, verdict_type: str) -> dict | None:
     """Fallback heuristique pour extraire un verdict sans format explicite."""
     text_upper = text.upper()
+    text_lower = text.lower()
 
-    # Chercher des patterns comme "il faut prioriser X" ou "abandonner Y"
+    # Pass 1 : patterns directs "il faut prioriser X"
     for action in ("PRIORISER", "DEPRIORISER", "ABANDONNER"):
         pattern = rf"(?:FAUT|DEVONS|DEVRAIT|DOIT)\s+{action}\s+(\S+)"
         match = re.search(pattern, text_upper)
@@ -343,5 +368,35 @@ def _heuristic_verdict(text: str, verdict_type: str) -> dict | None:
             target = match.group(1).strip(".,;:!?")
             return {"action": action, "target": target,
                     "reason": "Verdict heuristique extrait du consensus"}
+
+    # Pass 2 : verbes d'action + thèmes → mapping vers intents
+    # Cherche le thème le PLUS PROCHE du verbe (pas le premier du dict)
+    action_verbs = [
+        ("reduire", "DEPRIORISER"), ("réduire", "DEPRIORISER"),
+        ("diminuer", "DEPRIORISER"), ("limiter", "DEPRIORISER"),
+        ("suspendre", "DEPRIORISER"), ("moins de", "DEPRIORISER"),
+        ("augmenter", "PRIORISER"), ("renforcer", "PRIORISER"),
+        ("concentrer", "PRIORISER"), ("prioriser", "PRIORISER"),
+        ("privilegier", "PRIORISER"), ("privilégier", "PRIORISER"),
+        ("plus de", "PRIORISER"), ("davantage de", "PRIORISER"),
+    ]
+    best_match = None  # (distance, verdict_action, intent, verb, theme)
+    for verb, verdict_action in action_verbs:
+        verb_pos = text_lower.find(verb)
+        if verb_pos < 0:
+            continue
+        for theme, intent in _THEME_INTENT_MAP.items():
+            theme_pos = text_lower.find(theme, max(0, verb_pos - 20))
+            if theme_pos < 0:
+                continue
+            distance = abs(theme_pos - verb_pos)
+            if distance <= 50:
+                if best_match is None or distance < best_match[0]:
+                    best_match = (distance, verdict_action, intent, verb, theme)
+
+    if best_match:
+        _, verdict_action, intent, verb, theme = best_match
+        return {"action": verdict_action, "target": intent,
+                "reason": f"Verdict heuristique : {verb} {theme}"}
 
     return None

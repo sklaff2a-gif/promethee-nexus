@@ -1,7 +1,7 @@
 # tests/test_psyche.py — Tests PSYCHE : trait bienveillance + personality bias + events
 import pytest
 import asyncio
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 
 from core.psyche import (
     PsycheEngine, psyche, TRAIT_NAMES, BASELINES,
@@ -312,6 +312,53 @@ class TestProposeCouncilTopic:
             topic = engine.select_council_topic(recent_subjects=["inner_proposal"])
         # Devrait être un autre sujet (eureka, desir, ou recherche web)
         assert topic["subject_key"] != "inner_proposal"
+
+
+# --- TestCouncilVerdictType ---
+
+class TestCouncilVerdictType:
+    """Tous les topics council doivent avoir verdict_type pour le pipeline Council→Action."""
+
+    @pytest.fixture
+    def engine(self):
+        e = PsycheEngine()
+        with patch.object(e, "_load", return_value=None), \
+             patch.object(e, "save"), \
+             patch.object(e, "_subscribe_events"):
+            e.init()
+        return e
+
+    def test_erreurs_topic_has_verdict_type(self, engine):
+        topic = engine.select_council_topic(error_streak=5, daily_count=0, recent_subjects=[])
+        assert topic.get("verdict_type") == "general"
+
+    def test_budget_topic_has_verdict_type(self, engine):
+        topic = engine.select_council_topic(error_streak=0, daily_count=20, recent_subjects=["erreurs"])
+        assert topic.get("verdict_type") == "general"
+
+    def test_default_topic_has_verdict_type(self, engine):
+        """Le topic par défaut (recherche web) a verdict_type."""
+        with patch.object(engine, "_propose_council_topic", return_value=None):
+            topic = engine.select_council_topic(
+                error_streak=0, daily_count=0,
+                recent_subjects=["erreurs", "budget", "eureka", "desir",
+                                 "data_routine_audit", "data_evolution_triage",
+                                 "data_drive_balance", "curiosite", "survie"],
+            )
+        assert topic.get("verdict_type") == "general"
+
+    def test_inner_proposal_has_verdict_type(self, engine):
+        """Le topic inner_proposal a verdict_type."""
+        proposal = {
+            "participants": ["strategist", "evolution", "coder"],
+            "mission": "Test inner proposal",
+            "needs_research": False, "research_query": None,
+            "subject_key": "inner_proposal",
+            "verdict_type": "general",
+        }
+        with patch.object(engine, "_propose_council_topic", return_value=proposal):
+            topic = engine.select_council_topic(recent_subjects=[])
+        assert topic.get("verdict_type") == "general"
 
 
 # --- TestSaveLoad ---

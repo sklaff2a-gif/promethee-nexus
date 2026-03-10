@@ -421,6 +421,7 @@ class PsycheEngine:
                 "mission": "Le système accumule des erreurs. Comment stabiliser la situation ?",
                 "needs_research": False, "research_query": None,
                 "subject_key": "erreurs",
+                "verdict_type": "general",
             }
         if daily_count >= 15 and "budget" not in recent:
             return {
@@ -428,6 +429,7 @@ class PsycheEngine:
                 "mission": "Le budget quotidien est presque épuisé. Comment prioriser les actions restantes ?",
                 "needs_research": False, "research_query": None,
                 "subject_key": "budget",
+                "verdict_type": "general",
             }
 
         # Priorité 2.6 : voix intérieure — Prométhée propose son propre sujet
@@ -455,6 +457,7 @@ class PsycheEngine:
                         ),
                         "needs_research": False, "research_query": None,
                         "subject_key": "eureka",
+                        "verdict_type": "general",
                     }
             except Exception:
                 pass
@@ -486,7 +489,7 @@ class PsycheEngine:
                     topic = DRIVE_COUNCIL_TOPICS.get(dominant.name)
                     if topic:
                         return {**topic, "needs_research": False, "research_query": None,
-                                "subject_key": "desir"}
+                                "subject_key": "desir", "verdict_type": "general"}
             except Exception:
                 pass
 
@@ -549,6 +552,7 @@ class PsycheEngine:
                 "mission": "La curiosité du système est très élevée. Quel domaine explorer en priorité ?",
                 "needs_research": True, "research_query": theme["query"],
                 "subject_key": "curiosite",
+                "verdict_type": "general",
             }
         if avg.get("survie", 50) > 80 and "survie" not in recent:
             return {
@@ -556,6 +560,7 @@ class PsycheEngine:
                 "mission": "L'instinct de survie est extrême. Est-ce de la prudence excessive ?",
                 "needs_research": True, "research_query": theme["query"],
                 "subject_key": "survie",
+                "verdict_type": "general",
             }
 
         return {
@@ -564,6 +569,7 @@ class PsycheEngine:
             "needs_research": True,
             "research_query": theme["query"],
             "subject_key": theme_key,
+            "verdict_type": "general",
         }
 
     def _propose_council_topic(self) -> Optional[Dict[str, Any]]:
@@ -666,6 +672,7 @@ class PsycheEngine:
             "needs_research": False,
             "research_query": None,
             "subject_key": "inner_proposal",
+            "verdict_type": "general",
         }
 
     def _get_routine_history(self) -> list:
