@@ -40,9 +40,17 @@ _STDP_EXCLUDED_PREFIXES = frozenset({
 
 # Noeuds bruit rejetes par ensure_node() — artefacts filesystem et mots-béquilles LLM
 _NODE_STOPLIST = frozenset({
+    # Artefacts techniques
     "__pycache__", "node_modules", ".git", "venv", "__init__",
+    # Mots vides français (aucune valeur sémantique dans le réseau)
     "okay", "suis", "juste", "vraiment", "d'accord",
     "dossiers", "fichiers", "répertoire", "résultats",
+    "partir", "groupes", "permet", "faire", "comme", "aussi",
+    "cette", "entre", "dans", "avec", "pour", "plus",
+    "tout", "tous", "très", "bien", "fait", "sont",
+    # Mots anglais génériques (erreurs Python, logs techniques)
+    "name", "defined", "error", "none", "true", "false",
+    "failed", "traceback", "exception", "file", "line",
 })
 
 STATE_FILE = os.path.join(
@@ -1014,13 +1022,19 @@ class SynapticNetwork:
             if not intent:
                 return
 
-            # Noeud pour l'intent
+            # Noeud pour l'intent (toujours créé, même en échec)
             intent_nid = self.ensure_node(
                 intent, "event", 0.6, ["autonomy"]
             )
             # Tracker pour associations sensorium
             if intent_nid:
                 self._last_routine_node = intent_nid
+
+            # Anti-bruit : ne pas ingérer les résultats des routines en échec
+            # (erreurs Python, messages techniques → pollution du réseau)
+            if status != "success" or quality < 0.3:
+                logger.debug(f"SYNAPSE: Routine '{intent}' en échec (q={quality:.2f}), skip extraction concepts")
+                return
 
             # Extraire concepts du resultat (limite differenciee selon richesse)
             _ROUTINE_CONCEPT_LIMITS = {

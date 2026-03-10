@@ -1835,3 +1835,80 @@ class TestTissueZoneIntegration:
         network.nodes[mem_nid]["energy"] = 0.5
         seeded = network._dream_tissue_seed()
         assert seeded == 0
+
+
+# =====================================================================
+# TestAntiNoiseRoutine — Filtre anti-bruit sur routines en echec
+# =====================================================================
+
+class TestAntiNoiseRoutine:
+    """Verifie que les routines en echec ne polluent pas le reseau synaptique."""
+
+    @pytest.mark.asyncio
+    async def test_failed_routine_no_concepts(self, network):
+        """Une routine en echec ne cree pas de noeuds memoire (concepts)."""
+        event = {
+            "intent": "REFACTOR_RANDOM",
+            "status": "error",
+            "quality_score": 0.0,
+            "result": "NameError: name 'intent' is not defined",
+        }
+        with patch.object(network, "_auto_save"):
+            await network._on_routine_complete(event)
+        # Le noeud event REFACTOR_RANDOM est cree mais pas les concepts bruit
+        mem_nodes = [n for n in network.nodes.values() if n.get("node_type") == "memory"]
+        assert len(mem_nodes) == 0
+
+    @pytest.mark.asyncio
+    async def test_failed_routine_still_creates_intent_node(self, network):
+        """Une routine en echec cree quand meme le noeud intent (event)."""
+        event = {
+            "intent": "REFACTOR_RANDOM",
+            "status": "error",
+            "quality_score": 0.0,
+            "result": "NameError: name 'intent' is not defined",
+        }
+        with patch.object(network, "_auto_save"):
+            await network._on_routine_complete(event)
+        event_nodes = [n for n in network.nodes.values() if n.get("node_type") == "event"]
+        assert any(n.get("concept") == "refactor_random" for n in event_nodes)
+
+    @pytest.mark.asyncio
+    async def test_success_routine_creates_concepts(self, network):
+        """Une routine reussie cree des noeuds memoire normalement."""
+        event = {
+            "intent": "VEILLE_SILENCIEUSE",
+            "status": "success",
+            "quality_score": 0.8,
+            "result": "Recherche sur les architectures multi-agents avec orchestration distribuee pour systemes autonomes",
+        }
+        with patch.object(network, "_auto_save"):
+            await network._on_routine_complete(event)
+        mem_nodes = [n for n in network.nodes.values() if n.get("node_type") == "memory"]
+        assert len(mem_nodes) > 0
+
+    @pytest.mark.asyncio
+    async def test_low_quality_success_no_concepts(self, network):
+        """Une routine success mais qualite < 0.3 ne cree pas de concepts."""
+        event = {
+            "intent": "SECURITY_AUDIT",
+            "status": "success",
+            "quality_score": 0.1,
+            "result": "No issues",
+        }
+        with patch.object(network, "_auto_save"):
+            await network._on_routine_complete(event)
+        mem_nodes = [n for n in network.nodes.values() if n.get("node_type") == "memory"]
+        assert len(mem_nodes) == 0
+
+    def test_stoplist_contains_error_words(self):
+        """La stoplist contient les mots techniques anglais courants."""
+        from core.synaptic_network import _NODE_STOPLIST
+        for word in ["name", "defined", "error", "none", "traceback", "exception"]:
+            assert word in _NODE_STOPLIST, f"'{word}' devrait etre dans la stoplist"
+
+    def test_stoplist_contains_french_noise(self):
+        """La stoplist contient les mots vides francais."""
+        from core.synaptic_network import _NODE_STOPLIST
+        for word in ["partir", "groupes", "cette", "dans", "pour"]:
+            assert word in _NODE_STOPLIST, f"'{word}' devrait etre dans la stoplist"
