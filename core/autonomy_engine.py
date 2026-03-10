@@ -29,6 +29,19 @@ POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE", "S
 FINAL_SCORE_CLAMP_MIN = -5.0
 FINAL_SCORE_CLAMP_MAX = 25.0
 
+# Anti-chambre d'écho : bonus extroversion quand trop de routines introspectives consécutives
+INTROSPECTIVE_INTENTS = {
+    "COUNCIL_DEBATE", "SOLILOQUE_INTERNE", "SELF_INSPECT",
+    "MEMORY_CLEANUP", "MEMORY_CONSOLIDATION", "AUDIT_STRUCTURE",
+    "REFACTOR_RANDOM", "SECURITY_AUDIT", "EXPANSION_CODE",
+}
+EXTROVERTED_INTENTS = {
+    "VEILLE_SILENCIEUSE", "DROPZONE_SCAN", "ROADMAP_RESEARCH", "ROADMAP_SPEC",
+}
+EXTROVERSION_STREAK_THRESHOLD = 3   # Apres 3 routines introspectives consecutives
+EXTROVERSION_BONUS_PER_STREAK = 0.8 # Bonus par routine au-dela du seuil
+EXTROVERSION_BONUS_MAX = 3.0        # Plafond du bonus extroversion
+
 # Mode sieste : routines autorisées (0-LLM uniquement) et intervalle entre routines
 NAP_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
 NAP_SLEEP_INTERVAL = 300  # 5 min entre routines en sieste
@@ -710,6 +723,18 @@ class AutonomyEngine:
                     breakdown[layer_name] = round(bonus, 3)
             except Exception:
                 pass
+        # Extroversion (anti-chambre d'echo)
+        introversion_streak = 0
+        for h in reversed(self.routine_history):
+            if h.get("intent") in INTROSPECTIVE_INTENTS:
+                introversion_streak += 1
+            else:
+                break
+        if introversion_streak >= EXTROVERSION_STREAK_THRESHOLD and intent in EXTROVERTED_INTENTS:
+            excess = introversion_streak - EXTROVERSION_STREAK_THRESHOLD
+            extro_bonus = min(EXTROVERSION_BONUS_MAX,
+                              EXTROVERSION_BONUS_PER_STREAK * (1 + excess))
+            breakdown["extroversion"] = round(extro_bonus, 3)
         # Adaptive scoring (cache du dernier calcul)
         cached_adaptive = getattr(self, "_last_adaptive_adjustments", {})
         adj = cached_adaptive.get(intent, 0.0)
@@ -1066,6 +1091,24 @@ class AutonomyEngine:
                     scored[i] = (routine, s + sens_bonus)
         except Exception:
             pass
+
+        # --- Anti-chambre d'echo : bonus extroversion (Couche 24) ---
+        # Si les dernieres routines etaient toutes introspectives, bonus aux routines externes
+        introversion_streak = 0
+        for h in reversed(self.routine_history):
+            if h.get("intent") in INTROSPECTIVE_INTENTS:
+                introversion_streak += 1
+            else:
+                break
+        if introversion_streak >= EXTROVERSION_STREAK_THRESHOLD:
+            excess = introversion_streak - EXTROVERSION_STREAK_THRESHOLD
+            extro_bonus = min(EXTROVERSION_BONUS_MAX,
+                              EXTROVERSION_BONUS_PER_STREAK * (1 + excess))
+            for i, (routine, s) in enumerate(scored):
+                if routine["intent"] in EXTROVERTED_INTENTS:
+                    scored[i] = (routine, s + extro_bonus)
+            logger.info(f"[EXTROVERSION] Streak introspective: {introversion_streak}, "
+                        f"bonus extroversion: +{extro_bonus:.1f}")
 
         # --- Clamping final du score total ---
         # Empêche le score d'exploser quand beaucoup de couches poussent dans la même direction

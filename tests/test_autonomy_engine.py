@@ -21,6 +21,11 @@ from core.autonomy_engine import (
     POST_BUDGET_INTENTS,
     RESOURCE_COSTS,
     RESOURCE_COSTS_DEGRADED,
+    INTROSPECTIVE_INTENTS,
+    EXTROVERTED_INTENTS,
+    EXTROVERSION_STREAK_THRESHOLD,
+    EXTROVERSION_BONUS_PER_STREAK,
+    EXTROVERSION_BONUS_MAX,
 )
 
 
@@ -2270,3 +2275,193 @@ class TestCouncilDataDriven:
             mock_catalog.mark_rejected.assert_called_once_with(
                 "SPEC-42", "Council verdict: inutile"
             )
+
+
+# ─── Tests Extroversion (anti-chambre d'echo) ───
+
+class TestExtroversion:
+    """Tests pour le mecanisme anti-chambre d'echo (Couche 24)."""
+
+    def test_introspective_intents_classification(self):
+        """Les intents introspectifs sont correctement classifies."""
+        assert "COUNCIL_DEBATE" in INTROSPECTIVE_INTENTS
+        assert "SOLILOQUE_INTERNE" in INTROSPECTIVE_INTENTS
+        assert "SELF_INSPECT" in INTROSPECTIVE_INTENTS
+        assert "MEMORY_CLEANUP" in INTROSPECTIVE_INTENTS
+        assert "EXPANSION_CODE" in INTROSPECTIVE_INTENTS
+        # Les extroverts ne sont PAS introspectifs
+        assert "VEILLE_SILENCIEUSE" not in INTROSPECTIVE_INTENTS
+        assert "DROPZONE_SCAN" not in INTROSPECTIVE_INTENTS
+        assert "ROADMAP_RESEARCH" not in INTROSPECTIVE_INTENTS
+
+    def test_extroverted_intents_classification(self):
+        """Les intents extroverts sont correctement classifies."""
+        assert "VEILLE_SILENCIEUSE" in EXTROVERTED_INTENTS
+        assert "DROPZONE_SCAN" in EXTROVERTED_INTENTS
+        assert "ROADMAP_RESEARCH" in EXTROVERTED_INTENTS
+        assert "ROADMAP_SPEC" in EXTROVERTED_INTENTS
+        # Les introspectifs ne sont PAS extroverts
+        assert "COUNCIL_DEBATE" not in EXTROVERTED_INTENTS
+        assert "SELF_INSPECT" not in EXTROVERTED_INTENTS
+
+    def test_no_bonus_below_threshold(self):
+        """Pas de bonus extroversion si streak < seuil."""
+        routines = [
+            {"agent": "researcher", "intent": "VEILLE_SILENCIEUSE", "mission": "test"},
+            {"agent": "_council", "intent": "COUNCIL_DEBATE", "mission": "test"},
+        ]
+        # 2 routines introspectives = sous le seuil de 3
+        history = [
+            {"intent": "COUNCIL_DEBATE", "timestamp": "2026-03-10T01:00:00", "status": "success"},
+            {"intent": "SELF_INSPECT", "timestamp": "2026-03-10T02:00:00", "status": "success"},
+        ]
+        scored = RoutineScorer.score_routines(routines, [], history)
+        # Le score de VEILLE ne devrait pas avoir de bonus extroversion
+        veille_score = next(s for r, s in scored if r["intent"] == "VEILLE_SILENCIEUSE")
+        # Score de base (~1.0) avec jitter et penalties potentielles
+        assert veille_score < 5.0  # Pas de gros bonus
+
+    def test_bonus_at_threshold(self):
+        """Bonus extroversion applique quand streak == seuil (via breakdown)."""
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._last_adaptive_adjustments = {}
+        engine._council_adjustments = {}
+
+        # Exactement EXTROVERSION_STREAK_THRESHOLD routines introspectives
+        engine.routine_history = [
+            {"intent": "COUNCIL_DEBATE", "timestamp": "2026-03-09T01:00:00", "status": "success"},
+            {"intent": "SELF_INSPECT", "timestamp": "2026-03-09T02:00:00", "status": "success"},
+            {"intent": "SOLILOQUE_INTERNE", "timestamp": "2026-03-09T03:00:00", "status": "success"},
+        ]
+        assert len(engine.routine_history) == EXTROVERSION_STREAK_THRESHOLD
+
+        bd = engine._build_scoring_breakdown("VEILLE_SILENCIEUSE")
+        assert "extroversion" in bd
+        # Bonus = 0.8 * (1 + 0) = 0.8 (excess=0 au seuil)
+        assert bd["extroversion"] == pytest.approx(EXTROVERSION_BONUS_PER_STREAK, abs=0.01)
+
+        # Sans streak (cassee par une routine externe)
+        engine.routine_history = [
+            {"intent": "COUNCIL_DEBATE", "timestamp": "2026-03-09T01:00:00", "status": "success"},
+            {"intent": "VEILLE_SILENCIEUSE", "timestamp": "2026-03-09T02:00:00", "status": "success"},
+            {"intent": "SOLILOQUE_INTERNE", "timestamp": "2026-03-09T03:00:00", "status": "success"},
+        ]
+        bd_broken = engine._build_scoring_breakdown("VEILLE_SILENCIEUSE")
+        assert "extroversion" not in bd_broken
+
+    def test_bonus_increases_with_streak(self):
+        """Le bonus extroversion augmente avec la longueur de la streak (via breakdown)."""
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._last_adaptive_adjustments = {}
+        engine._council_adjustments = {}
+
+        # Streak de 5 (seuil=3, excess=2) → bonus = 0.8 * 3 = 2.4
+        engine.routine_history = [
+            {"intent": "COUNCIL_DEBATE", "timestamp": "2026-03-09T01:00:00", "status": "success"},
+            {"intent": "SELF_INSPECT", "timestamp": "2026-03-09T02:00:00", "status": "success"},
+            {"intent": "MEMORY_CLEANUP", "timestamp": "2026-03-09T03:00:00", "status": "success"},
+            {"intent": "AUDIT_STRUCTURE", "timestamp": "2026-03-09T04:00:00", "status": "success"},
+            {"intent": "SOLILOQUE_INTERNE", "timestamp": "2026-03-09T05:00:00", "status": "success"},
+        ]
+        bd_5 = engine._build_scoring_breakdown("VEILLE_SILENCIEUSE")
+
+        # Streak de 3 (seuil=3, excess=0) → bonus = 0.8 * 1 = 0.8
+        engine.routine_history = engine.routine_history[-3:]
+        bd_3 = engine._build_scoring_breakdown("VEILLE_SILENCIEUSE")
+
+        assert bd_5["extroversion"] > bd_3["extroversion"]
+        assert bd_5["extroversion"] == pytest.approx(2.4, abs=0.01)
+        assert bd_3["extroversion"] == pytest.approx(0.8, abs=0.01)
+
+    def test_bonus_capped_at_max(self):
+        """Le bonus extroversion est plafonne a EXTROVERSION_BONUS_MAX."""
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._last_adaptive_adjustments = {}
+        engine._council_adjustments = {}
+
+        # Streak tres longue (10 routines introspectives)
+        engine.routine_history = [
+            {"intent": "COUNCIL_DEBATE", "timestamp": f"2026-03-09T0{i}:00:00", "status": "success"}
+            for i in range(10)
+        ]
+        bd = engine._build_scoring_breakdown("VEILLE_SILENCIEUSE")
+        # Le bonus ne doit pas depasser EXTROVERSION_BONUS_MAX (3.0)
+        assert bd["extroversion"] == pytest.approx(EXTROVERSION_BONUS_MAX, abs=0.01)
+
+    def test_no_bonus_for_introspective_routines(self):
+        """Les routines introspectives ne recoivent PAS de bonus extroversion (via breakdown)."""
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine.routine_history = [
+            {"intent": "SELF_INSPECT", "timestamp": "2026-03-09T01:00:00", "status": "success"},
+            {"intent": "MEMORY_CLEANUP", "timestamp": "2026-03-09T02:00:00", "status": "success"},
+            {"intent": "COUNCIL_DEBATE", "timestamp": "2026-03-09T03:00:00", "status": "success"},
+            {"intent": "SOLILOQUE_INTERNE", "timestamp": "2026-03-09T04:00:00", "status": "success"},
+            {"intent": "AUDIT_STRUCTURE", "timestamp": "2026-03-09T05:00:00", "status": "success"},
+        ]
+        engine._last_adaptive_adjustments = {}
+        engine._council_adjustments = {}
+        # VEILLE recoit le bonus extroversion
+        bd_veille = engine._build_scoring_breakdown("VEILLE_SILENCIEUSE")
+        assert "extroversion" in bd_veille
+        assert bd_veille["extroversion"] > 0
+        # COUNCIL ne recoit PAS de bonus extroversion
+        bd_council = engine._build_scoring_breakdown("COUNCIL_DEBATE")
+        assert "extroversion" not in bd_council
+
+    def test_streak_broken_by_external(self):
+        """Une routine externe dans l'historique casse la streak (via breakdown)."""
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._last_adaptive_adjustments = {}
+        engine._council_adjustments = {}
+
+        # Streak cassee par VEILLE_SILENCIEUSE au milieu
+        # Streak effective = 2 (COUNCIL + SOLILOQUE) < seuil de 3
+        engine.routine_history = [
+            {"intent": "COUNCIL_DEBATE", "timestamp": "2026-03-09T01:00:00", "status": "success"},
+            {"intent": "SELF_INSPECT", "timestamp": "2026-03-09T02:00:00", "status": "success"},
+            {"intent": "VEILLE_SILENCIEUSE", "timestamp": "2026-03-09T03:00:00", "status": "success"},
+            {"intent": "COUNCIL_DEBATE", "timestamp": "2026-03-09T04:00:00", "status": "success"},
+            {"intent": "SOLILOQUE_INTERNE", "timestamp": "2026-03-09T05:00:00", "status": "success"},
+        ]
+        bd_broken = engine._build_scoring_breakdown("VEILLE_SILENCIEUSE")
+        assert "extroversion" not in bd_broken  # Streak 2 < seuil 3
+
+        # Streak non cassee (5 introspectives consecutives)
+        engine.routine_history = [
+            {"intent": "COUNCIL_DEBATE", "timestamp": "2026-03-09T01:00:00", "status": "success"},
+            {"intent": "SELF_INSPECT", "timestamp": "2026-03-09T02:00:00", "status": "success"},
+            {"intent": "MEMORY_CLEANUP", "timestamp": "2026-03-09T03:00:00", "status": "success"},
+            {"intent": "COUNCIL_DEBATE", "timestamp": "2026-03-09T04:00:00", "status": "success"},
+            {"intent": "SOLILOQUE_INTERNE", "timestamp": "2026-03-09T05:00:00", "status": "success"},
+        ]
+        bd_solid = engine._build_scoring_breakdown("VEILLE_SILENCIEUSE")
+        assert "extroversion" in bd_solid
+        assert bd_solid["extroversion"] > 0
+
+    def test_breakdown_includes_extroversion(self):
+        """Le breakdown de scoring inclut la couche extroversion."""
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine.routine_history = [
+            {"intent": "COUNCIL_DEBATE", "timestamp": "2026-03-09T01:00:00", "status": "success"},
+            {"intent": "SELF_INSPECT", "timestamp": "2026-03-09T02:00:00", "status": "success"},
+            {"intent": "SOLILOQUE_INTERNE", "timestamp": "2026-03-09T03:00:00", "status": "success"},
+            {"intent": "MEMORY_CLEANUP", "timestamp": "2026-03-09T04:00:00", "status": "success"},
+        ]
+        engine._last_adaptive_adjustments = {}
+        engine._council_adjustments = {}
+        breakdown = engine._build_scoring_breakdown("VEILLE_SILENCIEUSE")
+        assert "extroversion" in breakdown
+        assert breakdown["extroversion"] > 0
+
+    def test_breakdown_no_extroversion_for_introspective(self):
+        """Le breakdown n'inclut pas extroversion pour les routines introspectives."""
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine.routine_history = [
+            {"intent": "COUNCIL_DEBATE", "timestamp": "2026-03-09T01:00:00", "status": "success"},
+            {"intent": "SELF_INSPECT", "timestamp": "2026-03-09T02:00:00", "status": "success"},
+            {"intent": "SOLILOQUE_INTERNE", "timestamp": "2026-03-09T03:00:00", "status": "success"},
+        ]
+        engine._last_adaptive_adjustments = {}
+        engine._council_adjustments = {}
+        breakdown = engine._build_scoring_breakdown("COUNCIL_DEBATE")
+        assert "extroversion" not in breakdown
