@@ -56,7 +56,7 @@ TRAINING_ROTATION = ["strategist", "coder", "researcher", "writer"]
 MIN_DATASET_SIZE = 30           # Minimum d'exemples pour lancer un training
 MIN_NEW_DATA_RATIO = 0.20       # 20% de nouvelles donnees minimum
 MIN_HOURS_BETWEEN_TRAINING = 12 # Cooldown entre deux trainings du meme agent
-MAX_TRAINING_TIMEOUT = 1800     # 30 minutes max pour un training (seconds)
+MAX_TRAINING_TIMEOUT = 3600     # 60 minutes max pour un training (seconds) — 12B: load ~5min + train ~10min + GGUF export ~20min
 
 # Noms des modeles Ollama
 OLLAMA_MODEL_PREFIX = "promethee-"
@@ -70,6 +70,9 @@ class LoRAAutoTrainer:
 
     def __init__(self):
         self._state: Dict[str, Any] = self._load_state()
+        self._training_in_progress: bool = False
+        self._training_agent: Optional[str] = None
+        self._consecutive_timeouts: int = 0
 
     # ================================================================
     # ETAT PERSISTANT
@@ -296,8 +299,22 @@ class LoRAAutoTrainer:
                 }
 
         except asyncio.TimeoutError:
-            proc.kill()
-            logger.error(f"[LORA] Training {agent_name} timeout ({MAX_TRAINING_TIMEOUT}s)")
+            logger.error(
+                f"[LORA] Training {agent_name} timeout ({MAX_TRAINING_TIMEOUT}s)"
+            )
+            # Tenter de recuperer l'output partiel avant kill
+            try:
+                proc.kill()
+                partial_out, _ = await asyncio.wait_for(
+                    proc.communicate(), timeout=10
+                )
+                partial = partial_out.decode("utf-8", errors="replace") if partial_out else ""
+                if partial:
+                    # Afficher les dernieres lignes pour diagnostic
+                    tail = "\n".join(partial.strip().splitlines()[-10:])
+                    logger.error(f"[LORA] Output partiel {agent_name}:\n{tail}")
+            except Exception:
+                pass
             return {"success": False, "error": "Timeout"}
         except Exception as e:
             logger.error(f"[LORA] Erreur lancement training {agent_name}: {e}")
@@ -435,6 +452,44 @@ class LoRAAutoTrainer:
         Returns:
             Dict avec le resultat du cycle
         """
+        # Verrou : un seul training a la fois
+        if self._training_in_progress:
+            logger.warning(
+                f"[LORA] Training deja en cours ({self._training_agent}), skip"
+            )
+            return {
+                "agent": self._training_agent or "?",
+                "phase": "locked",
+                "success": False,
+                "skipped": True,
+                "threshold_reason": f"Training {self._training_agent} deja en cours",
+            }
+
+        # Anti-boucle : apres 2 timeouts consecutifs, cooldown de 4h
+        if self._consecutive_timeouts >= 2 and not force:
+            state = self._get_agent_state(
+                agent_name or self.get_next_agent()
+            )
+            elapsed = time.time() - state.get("last_trained", 0)
+            cooldown_h = 4
+            if elapsed < cooldown_h * 3600:
+                hours_left = (cooldown_h * 3600 - elapsed) / 3600
+                agent = agent_name or self.get_next_agent()
+                logger.info(
+                    f"[LORA] Anti-boucle: {self._consecutive_timeouts} timeouts "
+                    f"consecutifs, cooldown {hours_left:.1f}h"
+                )
+                return {
+                    "agent": agent,
+                    "phase": "anti_loop",
+                    "success": False,
+                    "skipped": True,
+                    "threshold_reason": (
+                        f"Anti-boucle: {self._consecutive_timeouts} timeouts, "
+                        f"cooldown {hours_left:.1f}h"
+                    ),
+                }
+
         start_time = time.time()
 
         # 1. Determiner l'agent
@@ -477,63 +532,77 @@ class LoRAAutoTrainer:
         result["phase"] = "unload_gpu"
         await self._unload_ollama_models()
 
-        # 5. Training
-        result["phase"] = "training"
-        train_result = await self._run_training(agent_name, dataset_path)
+        # 5. Training (avec verrou concurrence)
+        self._training_in_progress = True
+        self._training_agent = agent_name
+        try:
+            result["phase"] = "training"
+            train_result = await self._run_training(agent_name, dataset_path)
 
-        if not train_result.get("success"):
-            result["error"] = train_result.get("error", "Training echoue")
-            result["training_output"] = train_result.get("output", "")
-            logger.error(f"[LORA] Training {agent_name} echoue: {result['error']}")
-            self._advance_rotation()
-            self._save_state()
-            return result
+            if not train_result.get("success"):
+                result["error"] = train_result.get("error", "Training echoue")
+                result["training_output"] = train_result.get("output", "")
+                logger.error(f"[LORA] Training {agent_name} echoue: {result['error']}")
+                # Compteur timeout
+                if train_result.get("error") == "Timeout":
+                    self._consecutive_timeouts += 1
+                    logger.warning(
+                        f"[LORA] Timeouts consecutifs: {self._consecutive_timeouts}"
+                    )
+                self._advance_rotation()
+                self._save_state()
+                return result
 
-        result["loss"] = train_result.get("loss", 0.0)
+            # Reset compteur timeout sur succes
+            self._consecutive_timeouts = 0
+            result["loss"] = train_result.get("loss", 0.0)
 
-        # 6. Deploiement
-        result["phase"] = "deploy"
-        deploy_result = await self._deploy_to_ollama(agent_name)
+            # 6. Deploiement
+            result["phase"] = "deploy"
+            deploy_result = await self._deploy_to_ollama(agent_name)
 
-        if not deploy_result.get("success"):
-            result["error"] = deploy_result.get("error", "Deploiement echoue")
-            logger.error(f"[LORA] Deploy {agent_name} echoue: {result['error']}")
-            # Quand meme mettre a jour l'etat (training reussi, deploy echoue)
+            if not deploy_result.get("success"):
+                result["error"] = deploy_result.get("error", "Deploiement echoue")
+                logger.error(f"[LORA] Deploy {agent_name} echoue: {result['error']}")
+                # Quand meme mettre a jour l'etat (training reussi, deploy echoue)
+                state = self._get_agent_state(agent_name)
+                state["last_trained"] = time.time()
+                state["last_dataset_hash"] = dataset_hash
+                state["last_dataset_size"] = n_examples
+                state["last_loss"] = result["loss"]
+                state["last_deploy_error"] = result["error"]
+                self._advance_rotation()
+                self._save_state()
+                return result
+
+            # 7. Succes complet — mise a jour de l'etat
+            result["phase"] = "done"
+            result["success"] = True
+            result["model_name"] = deploy_result.get("model", "")
+            result["duration_s"] = int(time.time() - start_time)
+
             state = self._get_agent_state(agent_name)
             state["last_trained"] = time.time()
             state["last_dataset_hash"] = dataset_hash
             state["last_dataset_size"] = n_examples
             state["last_loss"] = result["loss"]
-            state["last_deploy_error"] = result["error"]
+            state["training_count"] = state.get("training_count", 0) + 1
+            state.pop("last_deploy_error", None)
+
+            self._state["total_trainings"] = self._state.get("total_trainings", 0) + 1
             self._advance_rotation()
             self._save_state()
+
+            logger.info(
+                f"[LORA] Cycle complet {agent_name}: "
+                f"{n_examples} exemples, loss={result['loss']:.4f}, "
+                f"duree={result['duration_s']}s, modele={result['model_name']}"
+            )
+
             return result
-
-        # 7. Succes complet — mise a jour de l'etat
-        result["phase"] = "done"
-        result["success"] = True
-        result["model_name"] = deploy_result.get("model", "")
-        result["duration_s"] = int(time.time() - start_time)
-
-        state = self._get_agent_state(agent_name)
-        state["last_trained"] = time.time()
-        state["last_dataset_hash"] = dataset_hash
-        state["last_dataset_size"] = n_examples
-        state["last_loss"] = result["loss"]
-        state["training_count"] = state.get("training_count", 0) + 1
-        state.pop("last_deploy_error", None)
-
-        self._state["total_trainings"] = self._state.get("total_trainings", 0) + 1
-        self._advance_rotation()
-        self._save_state()
-
-        logger.info(
-            f"[LORA] Cycle complet {agent_name}: "
-            f"{n_examples} exemples, loss={result['loss']:.4f}, "
-            f"duree={result['duration_s']}s, modele={result['model_name']}"
-        )
-
-        return result
+        finally:
+            self._training_in_progress = False
+            self._training_agent = None
 
     # ================================================================
     # RAPPORT D'ETAT
