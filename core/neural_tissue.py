@@ -231,6 +231,18 @@ TOXIC_RESIDUE = 3.0
 TOXIC_DURATION = 5
 SEED_GENOME = "ACGTIR"
 
+# --- Decay cognitif (anti-saturation) ---
+COGNITIVE_DECAY_RATE = 0.003   # Par tick (~0.3%), convergence baseline en ~30 min sans stimulation
+COGNITIVE_BASELINES = {
+    "memory_activity": 0.3,
+    "creativity": 0.3,
+    "cognition_level": 0.3,
+    "stability": 0.7,
+    "dopamine_level": 0.5,
+    "emotion_intensity": 0.5,
+    "desire_intensity": 50.0,
+}
+
 # ─────────────────────────────────────────────
 # Cellule Neurale
 # ─────────────────────────────────────────────
@@ -1195,6 +1207,9 @@ class NeuralTissue:
         # 10. Publier les événements de seuil (efférences)
         self._check_thresholds()
 
+        # 10b. Decay des signaux cognitifs saturés (anti-saturation)
+        self._decay_cognitive_signals()
+
         # 11. Normaliser les signaux cognitifs (garde-fou anti-divergence)
         self._normalize()
 
@@ -1443,6 +1458,21 @@ class NeuralTissue:
         s["somatic_load"] = max(0.0, min(float(s.get("somatic_load", 0.0)), 1.0))
         s["suffocation"] = max(0.0, min(float(s.get("suffocation", 0.0)), 1.0))
         s["vitality_level"] = max(0.0, min(float(s.get("vitality_level", 0.5)), 1.0))
+
+    # --- Decay cognitif (anti-saturation) ---
+
+    def _decay_cognitive_signals(self):
+        """Decay naturel des signaux vers leur baseline — évite la saturation permanente.
+
+        Sans stimulation externe, un signal à 1.0 revient à son baseline en ~30 min.
+        Avec stimulation régulière (+0.1 tous les N ticks), l'équilibre se stabilise
+        au-dessus du baseline sans saturer à 1.0.
+        """
+        s = self._cognitive_state
+        for key, baseline in COGNITIVE_BASELINES.items():
+            current = s.get(key, baseline)
+            if current != baseline:
+                s[key] = current + COGNITIVE_DECAY_RATE * (baseline - current)
 
     # --- Efférences de seuil (Sprint 5) ---
 
@@ -2217,3 +2247,8 @@ class NeuralTissue:
 
 # Singleton
 tissue = NeuralTissue()
+try:
+    from core.organ_registry import register_organ
+    register_organ("tissue", tissue)
+except Exception:
+    pass

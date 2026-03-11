@@ -2727,3 +2727,93 @@ class TestIntentZoneMap:
         """Au moins 10 intents sont mappés."""
         from core.neural_tissue import INTENT_ZONE_MAP
         assert len(INTENT_ZONE_MAP) >= 10
+
+
+class TestCognitiveDecay:
+    """Tests du decay anti-saturation des signaux cognitifs."""
+
+    def test_saturated_signal_decays(self):
+        """Un signal à 1.0 décroît vers son baseline après decay."""
+        from core.neural_tissue import COGNITIVE_BASELINES
+        tissue = _make_tissue()
+        tissue._cognitive_state["memory_activity"] = 1.0
+        tissue._decay_cognitive_signals()
+        assert tissue._cognitive_state["memory_activity"] < 1.0
+        assert tissue._cognitive_state["memory_activity"] > COGNITIVE_BASELINES["memory_activity"]
+
+    def test_signal_at_baseline_unchanged(self):
+        """Un signal déjà au baseline ne bouge pas."""
+        from core.neural_tissue import COGNITIVE_BASELINES
+        tissue = _make_tissue()
+        tissue._cognitive_state["creativity"] = COGNITIVE_BASELINES["creativity"]
+        tissue._decay_cognitive_signals()
+        assert tissue._cognitive_state["creativity"] == COGNITIVE_BASELINES["creativity"]
+
+    def test_signal_below_baseline_rises(self):
+        """Un signal en dessous du baseline remonte."""
+        from core.neural_tissue import COGNITIVE_BASELINES
+        tissue = _make_tissue()
+        tissue._cognitive_state["stability"] = 0.1  # baseline = 0.7
+        tissue._decay_cognitive_signals()
+        assert tissue._cognitive_state["stability"] > 0.1
+
+    def test_all_baselines_defined(self):
+        """Chaque signal décayable a un baseline défini."""
+        from core.neural_tissue import COGNITIVE_BASELINES
+        expected = {"memory_activity", "creativity", "cognition_level",
+                    "stability", "dopamine_level", "emotion_intensity",
+                    "desire_intensity"}
+        assert expected == set(COGNITIVE_BASELINES.keys())
+
+    def test_convergence_after_many_ticks(self):
+        """Après 1000 ticks sans stimulation, le signal converge vers le baseline."""
+        from core.neural_tissue import COGNITIVE_BASELINES
+        tissue = _make_tissue()
+        tissue._cognitive_state["cognition_level"] = 1.0
+        for _ in range(1000):
+            tissue._decay_cognitive_signals()
+        baseline = COGNITIVE_BASELINES["cognition_level"]
+        assert tissue._cognitive_state["cognition_level"] == pytest.approx(baseline, abs=0.05)
+
+    def test_desire_decays_from_max(self):
+        """desire_intensity à 100 décroît vers 50."""
+        from core.neural_tissue import COGNITIVE_BASELINES
+        tissue = _make_tissue()
+        tissue._cognitive_state["desire_intensity"] = 100.0
+        for _ in range(100):
+            tissue._decay_cognitive_signals()
+        assert tissue._cognitive_state["desire_intensity"] < 100.0
+        assert tissue._cognitive_state["desire_intensity"] > COGNITIVE_BASELINES["desire_intensity"]
+
+    def test_decay_rate_is_gentle(self):
+        """Un seul tick de decay ne change le signal que de ~0.3%."""
+        from core.neural_tissue import COGNITIVE_DECAY_RATE
+        tissue = _make_tissue()
+        tissue._cognitive_state["creativity"] = 1.0
+        old = tissue._cognitive_state["creativity"]
+        tissue._decay_cognitive_signals()
+        delta = abs(old - tissue._cognitive_state["creativity"])
+        # delta ≈ 0.003 * (1.0 - 0.3) = 0.0021
+        assert delta < 0.01  # Très doux
+        assert delta > 0.0   # Mais non nul
+
+    def test_hardware_signals_not_decayed(self):
+        """Les signaux hardware (sensorium) ne sont pas affectés par le decay."""
+        tissue = _make_tissue()
+        tissue._cognitive_state["thermal_stress"] = 0.9
+        tissue._cognitive_state["somatic_load"] = 0.8
+        tissue._decay_cognitive_signals()
+        assert tissue._cognitive_state["thermal_stress"] == 0.9
+        assert tissue._cognitive_state["somatic_load"] == 0.8
+
+    def test_decay_called_in_tick(self):
+        """_tick() appelle _decay_cognitive_signals()."""
+        tissue = _make_tissue()
+        tissue._cognitive_state["memory_activity"] = 1.0
+        with patch.object(tissue, '_save'), \
+             patch.object(tissue, '_check_emergence'), \
+             patch.object(tissue, '_check_symbiosis_emergence'), \
+             patch.object(tissue, '_check_thresholds'), \
+             patch.object(tissue, '_publish_zone_update'):
+            tissue._tick()
+        assert tissue._cognitive_state["memory_activity"] < 1.0
