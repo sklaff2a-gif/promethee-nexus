@@ -15,6 +15,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from tools.lora_data_collector import (
     _is_valid_pair,
     _to_chatml,
+    _format_bio_state,
     _strip_system_prefix,
     _split_qa,
     _resolve_lora_group,
@@ -468,3 +469,222 @@ class TestSystemPrompts:
         for agents in LORA_GROUPS.values():
             covered.update(agents)
         assert KNOWN_AGENTS.issubset(covered), f"Agents non couverts: {KNOWN_AGENTS - covered}"
+
+
+# ============================================================
+# TestBioStateEnrichment
+# ============================================================
+
+class TestBioStateEnrichment:
+    """Tests pour l'enrichissement bio-state dans les donnees LoRA."""
+
+    def test_format_bio_state_empty(self):
+        assert _format_bio_state({}) == ""
+        assert _format_bio_state(None) == ""
+
+    def test_format_bio_state_dopamine_haute(self):
+        result = _format_bio_state({"dopamine": 0.8})
+        assert "ETAT INTERNE" in result
+        assert "haute" in result
+
+    def test_format_bio_state_dopamine_basse(self):
+        result = _format_bio_state({"dopamine": 0.2})
+        assert "basse" in result
+
+    def test_format_bio_state_dopamine_normale(self):
+        result = _format_bio_state({"dopamine": 0.5})
+        assert "normale" in result
+
+    def test_format_bio_state_desire(self):
+        result = _format_bio_state({"desire": "CURIOSITE"})
+        assert "CURIOSITE" in result
+
+    def test_format_bio_state_psyche(self):
+        result = _format_bio_state({"psyche": {"curiosite": 72, "audace": 65}})
+        assert "curiosite=72" in result
+
+    def test_format_bio_state_threat(self):
+        result = _format_bio_state({"threat": 0.7})
+        assert "Menace" in result
+        assert "0.7" in result
+
+    def test_format_bio_state_complet(self):
+        state = {
+            "dopamine": 0.8,
+            "desire": "MAITRISE",
+            "psyche": {"survie": 80},
+            "threat": 0.5,
+        }
+        result = _format_bio_state(state)
+        assert "haute" in result
+        assert "MAITRISE" in result
+        assert "survie=80" in result
+        assert "Menace" in result
+
+    def test_chatml_enrichi_avec_bio_state(self):
+        """Le system prompt est enrichi quand bio_state est present."""
+        result = _to_chatml(
+            "Tu es un agent.",
+            "instruction",
+            "response",
+            metadata={"bio_state": {"dopamine": 0.9, "desire": "CREATION"}},
+        )
+        system_content = result["messages"][0]["content"]
+        assert "Tu es un agent." in system_content
+        assert "ETAT INTERNE" in system_content
+        assert "haute" in system_content
+        assert "CREATION" in system_content
+
+    def test_chatml_sans_bio_state_inchange(self):
+        """Sans bio_state, le system prompt reste inchangé."""
+        result = _to_chatml("system prompt", "inst", "resp")
+        assert result["messages"][0]["content"] == "system prompt"
+
+    def test_training_pair_contient_bio_state(self, tmp_path, monkeypatch):
+        """_save_training_pair inclut le champ bio_state."""
+        from core.base_agent import BaseAgent
+        filepath = tmp_path / "training_pairs.jsonl"
+        monkeypatch.setattr(BaseAgent, "_TRAINING_PAIRS_FILE", str(filepath))
+
+        agent = BaseAgent.__new__(BaseAgent)
+        agent.name = "coder"
+        agent._save_training_pair("prompt test long", "x" * 100, was_cloud=False)
+
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.loads(f.readline())
+        assert "bio_state" in data
+        assert isinstance(data["bio_state"], dict)
+
+    def test_extract_training_pairs_propage_bio_state(self, tmp_path, monkeypatch):
+        """bio_state des training_pairs est propagé dans les métadonnées."""
+        filepath = tmp_path / "training_pairs.jsonl"
+        pair = {
+            "agent": "coder",
+            "prompt": "Ecris une fonction",
+            "response": "x" * 100,
+            "was_cloud": False,
+            "timestamp": time.time(),
+            "bio_state": {"dopamine": 0.7, "desire": "CURIOSITE"},
+        }
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(json.dumps(pair, ensure_ascii=False) + "\n")
+        monkeypatch.setattr("tools.lora_data_collector.TRAINING_PAIRS_FILE", str(filepath))
+        results = extract_training_pairs()
+        assert len(results) == 1
+        # Le system prompt doit être enrichi
+        system = results[0]["messages"][0]["content"]
+        assert "ETAT INTERNE" in system
+        assert "CURIOSITE" in system
+
+
+# ============================================================
+# TestDreamJournal
+# ============================================================
+
+class TestDreamJournal:
+    """Tests pour le journal intime nocturne."""
+
+    def _make_engine(self, tmp_path, monkeypatch):
+        """Cree un AutonomyEngine minimal pour tester le journal."""
+        import core.autonomy_engine as ae_mod
+        monkeypatch.setattr(ae_mod, "DREAM_JOURNAL_FILE", str(tmp_path / "dream_journal.json"))
+
+        engine = ae_mod.AutonomyEngine.__new__(ae_mod.AutonomyEngine)
+        engine.daily_count = 5
+        engine.daily_budget_used = 25
+        engine._routine_history = [
+            {"intent": "EXPANSION_CODE"},
+            {"intent": "VEILLE_SILENCIEUSE"},
+            {"intent": "COUNCIL_DEBATE"},
+        ]
+        return engine
+
+    def test_write_creates_journal_file(self, tmp_path, monkeypatch):
+        engine = self._make_engine(tmp_path, monkeypatch)
+        engine._write_dream_journal(["Reve synaptique: 50 connexions"])
+        journal_path = tmp_path / "dream_journal.json"
+        assert journal_path.exists()
+        with open(journal_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        assert len(data["entries"]) == 1
+        entry = data["entries"][0]
+        assert "5 routines" in entry["narrative"]
+        assert "25pt" in entry["narrative"]
+        assert "EXPANSION_CODE" in entry["narrative"]
+
+    def test_write_includes_mood(self, tmp_path, monkeypatch):
+        engine = self._make_engine(tmp_path, monkeypatch)
+        engine._write_dream_journal([])
+        with open(tmp_path / "dream_journal.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+        assert "mood" in data["entries"][0]
+
+    def test_write_includes_dream_report(self, tmp_path, monkeypatch):
+        engine = self._make_engine(tmp_path, monkeypatch)
+        engine._write_dream_journal(["Reve synaptique: 100 connexions", "Reve cellulaire: 500 cellules"])
+        with open(tmp_path / "dream_journal.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+        assert "Reve synaptique" in data["entries"][0]["narrative"]
+
+    def test_write_replaces_same_day(self, tmp_path, monkeypatch):
+        engine = self._make_engine(tmp_path, monkeypatch)
+        engine._write_dream_journal(["Premier reve"])
+        engine.daily_count = 10
+        engine._write_dream_journal(["Deuxieme reve"])
+        with open(tmp_path / "dream_journal.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+        assert len(data["entries"]) == 1  # Pas de doublon
+        assert "10 routines" in data["entries"][0]["narrative"]
+
+    def test_write_respects_max_entries(self, tmp_path, monkeypatch):
+        import core.autonomy_engine as ae_mod
+        monkeypatch.setattr(ae_mod, "DREAM_JOURNAL_FILE", str(tmp_path / "dream_journal.json"))
+        monkeypatch.setattr(ae_mod, "DREAM_JOURNAL_MAX_ENTRIES", 3)
+        engine = self._make_engine(tmp_path, monkeypatch)
+
+        # Ecrire un fichier avec 3 entrees existantes
+        existing = {"entries": [
+            {"date": f"2026-03-0{i}", "narrative": f"Jour {i}", "mood": "ok", "routines_count": i, "budget_used": i}
+            for i in range(1, 4)
+        ]}
+        with open(tmp_path / "dream_journal.json", "w", encoding="utf-8") as f:
+            json.dump(existing, f)
+
+        engine._write_dream_journal(["Nouveau reve"])
+        with open(tmp_path / "dream_journal.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+        assert len(data["entries"]) == 3  # Max respecte
+
+    def test_get_context_returns_last_entry(self, tmp_path, monkeypatch):
+        import core.autonomy_engine as ae_mod
+        monkeypatch.setattr(ae_mod, "DREAM_JOURNAL_FILE", str(tmp_path / "dream_journal.json"))
+        journal = {"entries": [
+            {"date": "2026-03-10", "narrative": "Hier: journee active.", "mood": "productif", "routines_count": 8, "budget_used": 40},
+        ]}
+        with open(tmp_path / "dream_journal.json", "w", encoding="utf-8") as f:
+            json.dump(journal, f)
+        ctx = ae_mod.AutonomyEngine.get_dream_journal_context()
+        assert "[JOURNAL]" in ctx
+        assert "Hier: journee active." in ctx
+
+    def test_get_context_empty_file(self, tmp_path, monkeypatch):
+        import core.autonomy_engine as ae_mod
+        monkeypatch.setattr(ae_mod, "DREAM_JOURNAL_FILE", str(tmp_path / "nope.json"))
+        assert ae_mod.AutonomyEngine.get_dream_journal_context() == ""
+
+    def test_council_count_in_narrative(self, tmp_path, monkeypatch):
+        engine = self._make_engine(tmp_path, monkeypatch)
+        engine._write_dream_journal([])
+        with open(tmp_path / "dream_journal.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+        assert "1 debat(s) Council" in data["entries"][0]["narrative"]
+
+    def test_zero_routines_narrative(self, tmp_path, monkeypatch):
+        engine = self._make_engine(tmp_path, monkeypatch)
+        engine.daily_count = 0
+        engine.daily_budget_used = 0
+        engine._routine_history = []
+        engine._write_dream_journal([])
+        with open(tmp_path / "dream_journal.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+        assert "calme" in data["entries"][0]["narrative"]

@@ -105,12 +105,37 @@ def _is_valid_pair(prompt: str, response: str) -> bool:
     return True
 
 
+def _format_bio_state(bio_state: Dict) -> str:
+    """Formate l'etat biologique en texte court pour le system prompt."""
+    if not bio_state:
+        return ""
+    parts = []
+    if "dopamine" in bio_state:
+        level = bio_state["dopamine"]
+        label = "haute" if level > 0.65 else "basse" if level < 0.35 else "normale"
+        parts.append(f"Dopamine: {label}")
+    if "desire" in bio_state:
+        parts.append(f"Pulsion: {bio_state['desire']}")
+    if "psyche" in bio_state:
+        traits = ", ".join(f"{k}={int(v)}" for k, v in bio_state["psyche"].items())
+        parts.append(f"Traits: {traits}")
+    if "threat" in bio_state:
+        parts.append(f"Menace: {bio_state['threat']:.1f}")
+    if not parts:
+        return ""
+    return " [ETAT INTERNE: " + ", ".join(parts) + "]"
+
+
 def _to_chatml(system: str, instruction: str, response: str,
                metadata: Optional[Dict] = None) -> Dict:
     """Convertit en format ChatML pour QLoRA."""
+    # Enrichir le system prompt avec l'etat biologique si disponible
+    bio_state = (metadata or {}).get("bio_state", {})
+    enriched_system = system + _format_bio_state(bio_state)
+
     entry = {
         "messages": [
-            {"role": "system", "content": system},
+            {"role": "system", "content": enriched_system},
             {"role": "user", "content": instruction[:MAX_RESPONSE_LENGTH]},
             {"role": "assistant", "content": response[:MAX_RESPONSE_LENGTH]},
         ],
@@ -171,6 +196,7 @@ def extract_training_pairs(min_quality: float = -1.0) -> List[Dict]:
                     "lora": lora,
                     "was_cloud": pair.get("was_cloud", False),
                     "timestamp": pair.get("timestamp", 0),
+                    "bio_state": pair.get("bio_state", {}),
                 },
             ))
 

@@ -475,6 +475,7 @@ class BaseAgent:
                 "response": resp,
                 "was_cloud": was_cloud,
                 "timestamp": time.time(),
+                "bio_state": self._snapshot_bio_state(),
             }
 
             # Rotation si fichier trop gros
@@ -494,6 +495,39 @@ class BaseAgent:
                 f.write(json.dumps(pair, ensure_ascii=False) + "\n")
         except Exception:
             pass  # Jamais bloquer le flux principal
+
+    @staticmethod
+    def _snapshot_bio_state() -> dict:
+        """Capture legere de l'etat biologique pour enrichir les donnees LoRA."""
+        state = {}
+        try:
+            from core.dopamine_system import dopamine
+            state["dopamine"] = round(dopamine.dopamine_level, 2)
+        except Exception:
+            pass
+        try:
+            from core.desire_engine import desires
+            top = max(desires.drives.values(), key=lambda d: d.deprivation)
+            state["desire"] = top.name
+            state["deprivation"] = round(top.deprivation, 0)
+        except Exception:
+            pass
+        try:
+            from core.psyche import psyche
+            traits = psyche.get_traits("_global")
+            if traits:
+                sorted_t = sorted(traits.items(), key=lambda x: -x[1])[:2]
+                state["psyche"] = {k: round(v, 0) for k, v in sorted_t}
+        except Exception:
+            pass
+        try:
+            from core.reptilian_core import reptilian
+            threat = reptilian.get_threat_level()
+            if threat > 0.3:
+                state["threat"] = round(threat, 2)
+        except Exception:
+            pass
+        return state
 
     async def generate_content(self, prompt: str) -> str:
         # ===== NEURAL COMPILER: Tentative réponse compilée =====

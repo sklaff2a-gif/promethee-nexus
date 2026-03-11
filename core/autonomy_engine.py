@@ -54,6 +54,13 @@ NAP_COOLDOWN = 300            # 5 min avant de pouvoir re-siester
 # Anti-gaspillage : seuil d'échecs consécutifs pour blacklister un intent FORCED
 FORCED_FAILURE_THRESHOLD = 3  # après 3 échecs consécutifs, l'intent FORCED est ignoré pour la session
 
+# Journal Intime (narrative nocturne déterministe)
+DREAM_JOURNAL_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "memory", "dream_journal.json"
+)
+DREAM_JOURNAL_MAX_ENTRIES = 30
+
 def _load_resource_costs() -> dict:
     """Charge les coûts par routine depuis config/resource_costs.json."""
     costs_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -1414,6 +1421,10 @@ class AutonomyEngine:
                     purpose_ctx += f"\n{sens_ctx}"
             except Exception:
                 pass
+            # Journal intime (continuité narrative entre sessions)
+            journal_ctx = self.get_dream_journal_context()
+            if journal_ctx:
+                purpose_ctx += f"\n{journal_ctx}"
             # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)
             raw_mission = selected["mission"]
             # Retirer le préfixe [MODE VEILLE] déjà présent dans certaines missions
@@ -2672,6 +2683,133 @@ class AutonomyEngine:
                 "content": " | ".join(dream_report),
                 "type": "info"
             })
+
+        # Phase 4 — Journal Intime (narrative déterministe de la journée)
+        try:
+            self._write_dream_journal(dream_report)
+        except Exception as e:
+            logger.debug(f"[DREAM] Journal intime échoué: {e}")
+
+    def _write_dream_journal(self, dream_report: list):
+        """Ecrit une entree narrative deterministe dans le journal intime.
+
+        Compile les evenements du jour (routines, budget, mood, reves)
+        en un court recit. 0 LLM — tout est deterministe.
+        """
+        today = date.today().isoformat()
+
+        # --- Collecter les faits du jour ---
+        routines_done = self.daily_count
+        budget_used = self.daily_budget_used
+
+        # Mood
+        mood = "equilibre"
+        try:
+            from core.self_awareness import awareness
+            snaps = awareness._snapshots
+            if snaps:
+                mood = snaps[-1].get("mood", "equilibre")
+        except Exception:
+            pass
+
+        # Pulsion dominante
+        dominant_desire = ""
+        try:
+            from core.desire_engine import desires
+            top = max(desires.drives.values(), key=lambda d: d.deprivation)
+            if top.deprivation > 50:
+                dominant_desire = f"{top.name} (privation {top.deprivation:.0f}%)"
+        except Exception:
+            pass
+
+        # Routines executees (liste des intents)
+        routine_names = []
+        try:
+            for entry in self._routine_history[-20:]:
+                intent = entry.get("intent", "")
+                if intent:
+                    routine_names.append(intent)
+        except Exception:
+            pass
+
+        # Councils tenus
+        council_count = 0
+        try:
+            council_count = sum(1 for r in routine_names if "COUNCIL" in r)
+        except Exception:
+            pass
+
+        # --- Composer la narrative ---
+        lines = []
+        lines.append(f"Jour {today}. Humeur: {mood}.")
+
+        if routines_done == 0:
+            lines.append("Journee calme, aucune routine executee.")
+        elif routines_done <= 5:
+            lines.append(f"Journee legere: {routines_done} routines, {budget_used}pt consommes.")
+        else:
+            lines.append(f"Journee active: {routines_done} routines, {budget_used}pt consommes.")
+
+        if routine_names:
+            unique = list(dict.fromkeys(routine_names))[:5]
+            lines.append(f"Activites: {', '.join(unique)}.")
+
+        if council_count > 0:
+            lines.append(f"{council_count} debat(s) Council tenu(s).")
+
+        if dominant_desire:
+            lines.append(f"Pulsion dominante: {dominant_desire}.")
+
+        if dream_report:
+            lines.append(f"Reve: {' | '.join(dream_report[:2])}.")
+
+        narrative = " ".join(lines)
+
+        # --- Persister ---
+        entries = []
+        if os.path.exists(DREAM_JOURNAL_FILE):
+            try:
+                with open(DREAM_JOURNAL_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                entries = data.get("entries", [])
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Eviter doublons si deja ecrit aujourd'hui — remplacer
+        entries = [e for e in entries if e.get("date") != today]
+        entries.append({
+            "date": today,
+            "narrative": narrative,
+            "mood": mood,
+            "routines_count": routines_done,
+            "budget_used": budget_used,
+        })
+
+        # Garder les N dernières entrées
+        if len(entries) > DREAM_JOURNAL_MAX_ENTRIES:
+            entries = entries[-DREAM_JOURNAL_MAX_ENTRIES:]
+
+        os.makedirs(os.path.dirname(DREAM_JOURNAL_FILE), exist_ok=True)
+        with open(DREAM_JOURNAL_FILE, "w", encoding="utf-8") as f:
+            json.dump({"entries": entries}, f, indent=2, ensure_ascii=False)
+
+        logger.info(f"[DREAM] Journal intime: {narrative[:120]}...")
+
+    @staticmethod
+    def get_dream_journal_context() -> str:
+        """Retourne la derniere entree du journal pour injection dans purpose_context."""
+        if not os.path.exists(DREAM_JOURNAL_FILE):
+            return ""
+        try:
+            with open(DREAM_JOURNAL_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entries = data.get("entries", [])
+            if not entries:
+                return ""
+            last = entries[-1]
+            return f"[JOURNAL] {last['narrative']}"
+        except Exception:
+            return ""
 
     async def _execute_lora_training(self):
         """Fine-tuning QLoRA nocturne pendant le nap mode.
