@@ -606,12 +606,12 @@ class TestBusHandlers:
     async def test_knowledge_gap_triggers(self, isolate):
         """KNOWLEDGE_GAP_DETECTED cree une task de trigger."""
         with patch.object(isolate, "_maybe_trigger", new_callable=AsyncMock) as mock_trigger:
-            # Simuler le handler directement (sans passer par create_task)
             event = {"topic": "design patterns"}
-            # Appeler le handler qui fait create_task
             with patch("asyncio.create_task") as mock_ct:
                 await isolate._on_knowledge_gap(event)
             mock_ct.assert_called_once()
+            # Fermer la coroutine non-schedulee pour eviter RuntimeWarning
+            mock_ct.call_args[0][0].close()
 
     @pytest.mark.asyncio
     async def test_curiosity_spark_triggers(self, isolate):
@@ -619,6 +619,8 @@ class TestBusHandlers:
         with patch("asyncio.create_task") as mock_ct:
             await isolate._on_curiosity_spark({"topic": "SOLID principles"})
         mock_ct.assert_called_once()
+        # Fermer la coroutine non-schedulee pour eviter RuntimeWarning
+        mock_ct.call_args[0][0].close()
 
     @pytest.mark.asyncio
     async def test_council_question_triggers(self, isolate):
@@ -626,6 +628,7 @@ class TestBusHandlers:
         with patch("asyncio.create_task") as mock_ct:
             await isolate._on_council_question({"topic": "event sourcing"})
         mock_ct.assert_called_once()
+        mock_ct.call_args[0][0].close()
 
 
 # ================================================================
