@@ -3,6 +3,7 @@
 # avant de les deployer en production.
 # 0 LLM, pur deterministe.
 
+import ast
 import asyncio
 import json
 import os
@@ -11,7 +12,7 @@ import shutil
 import time
 import logging
 from dataclasses import dataclass, asdict
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger("SandboxEngine")
 
@@ -22,8 +23,16 @@ SANDBOX_DIR = os.path.join(os.path.dirname(PROJECT_ROOT), "PROMETHEE_sandbox")
 
 # --- Filtres ---
 
-EXCLUDE_DIRS = {"memory", "logs", ".git", "__pycache__", ".pytest_cache", "chroma_db", ".claude"}
-EXCLUDE_EXTENSIONS = {".bak", ".tmp", ".log"}
+EXCLUDE_DIRS = {
+    "memory", "logs", ".git", "__pycache__", ".pytest_cache",
+    "chroma_db", ".claude", "PROMETHEE_sandbox", "datasets",
+    "node_modules", "static", "USER_DROPZONE", "htmlcov",
+    ".mypy_cache", "venv", ".venv",
+}
+EXCLUDE_EXTENSIONS = {".bak", ".tmp", ".log", ".pyc"}
+
+# Prefixes de modules sources pour la pre-validation
+_SOURCE_PREFIXES = ("core.", "Agents.", "tools.")
 
 # --- Constantes ---
 
@@ -61,12 +70,15 @@ class SandboxEngine:
         self._initialized = True
         self._last_refresh = 0.0
         self._lock = asyncio.Lock()
+        self._test_graph = None
         self._stats = {
             "total_tests_run": 0,
             "total_passed": 0,
             "total_failed": 0,
             "total_promotions": 0,
             "total_discards": 0,
+            "pre_validation_catches": 0,
+            "graph_targeted_runs": 0,
         }
 
     def init(self):
@@ -155,16 +167,24 @@ class SandboxEngine:
         async with self._lock:
             start = time.time()
 
-            # Determiner quels tests lancer
+            # Etape 0: Pre-validation AST (syntaxe + imports, <50ms)
+            if target_file:
+                pre_result = self._pre_validate(target_file)
+                if pre_result is not None:
+                    self._stats["pre_validation_catches"] += 1
+                    return pre_result
+
+            # Determiner quels tests lancer (graphe + fallback)
             test_args = ["python", "-m", "pytest", "-x", "--tb=short", "-q"]
             if target_file:
-                test_file = self._derive_test_file(target_file)
-                if test_file:
-                    test_path = os.path.join(SANDBOX_DIR, test_file)
-                    if os.path.isfile(test_path):
-                        test_args.append(test_file)
-                    else:
-                        test_args.append("tests/")
+                test_files = self._select_tests(target_file)
+                if test_files is None:
+                    # Module hub → run complet
+                    test_args.append("tests/")
+                elif test_files:
+                    self._stats["graph_targeted_runs"] += 1
+                    for tf in test_files:
+                        test_args.append(tf)
                 else:
                     test_args.append("tests/")
             else:
@@ -284,6 +304,95 @@ class SandboxEngine:
         }
 
     # --- METHODES PRIVEES ---
+
+    def _get_test_graph(self):
+        """Initialisation lazy du graphe de dependances."""
+        if self._test_graph is None:
+            from core.test_graph import TestGraph
+            self._test_graph = TestGraph()
+            self._test_graph.build()
+        return self._test_graph
+
+    def _pre_validate(self, target_file: str):
+        """Pre-validation AST du fichier cible (<50ms).
+
+        Verifie la syntaxe et les imports projet.
+        Retourne SandboxResult si erreur, None si OK.
+        """
+        file_path = os.path.join(SANDBOX_DIR, target_file)
+        if not os.path.isfile(file_path):
+            return None
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                source = f.read()
+        except OSError:
+            return None
+
+        # Check 1: Syntaxe
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as e:
+            return SandboxResult(
+                success=False, tests_passed=0, tests_failed=0,
+                tests_errors=1,
+                output=f"[PRE-VALIDATION] SyntaxError ligne {e.lineno}: {e.msg}",
+                duration_seconds=0.0,
+            )
+
+        # Check 2: Imports projet existants
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if any(node.module.startswith(p) for p in _SOURCE_PREFIXES):
+                    parts = node.module.split(".")
+                    # Verifier dans le sandbox et en production
+                    candidates = [
+                        os.path.join(SANDBOX_DIR, *parts) + ".py",
+                        os.path.join(SANDBOX_DIR, *parts, "__init__.py"),
+                        os.path.join(PROJECT_ROOT, *parts) + ".py",
+                        os.path.join(PROJECT_ROOT, *parts, "__init__.py"),
+                    ]
+                    if not any(os.path.isfile(c) for c in candidates):
+                        return SandboxResult(
+                            success=False, tests_passed=0, tests_failed=0,
+                            tests_errors=1,
+                            output=f"[PRE-VALIDATION] ImportError: module '{node.module}' introuvable",
+                            duration_seconds=0.0,
+                        )
+
+        return None
+
+    def _select_tests(self, target_file: str) -> Optional[List[str]]:
+        """Selectionne les tests pertinents via le graphe de dependances.
+
+        Returns:
+            None si module hub (run complet), liste de chemins tests, ou liste vide.
+        """
+        # 1. Essayer le graphe de dependances
+        graph = self._get_test_graph()
+        relevant = graph.get_relevant_tests(target_file)
+
+        if relevant is None:
+            return None  # Hub module
+
+        if relevant:
+            # Verifier que les fichiers existent dans le sandbox
+            valid = []
+            for tf in relevant:
+                test_path = os.path.join(SANDBOX_DIR, tf)
+                if os.path.isfile(test_path):
+                    valid.append(tf)
+            if valid:
+                return valid
+
+        # 2. Fallback: derivation du nom de test
+        test_file = self._derive_test_file(target_file)
+        if test_file:
+            test_path = os.path.join(SANDBOX_DIR, test_file)
+            if os.path.isfile(test_path):
+                return [test_file]
+
+        return []
 
     def _derive_test_file(self, target_file: str) -> Optional[str]:
         """Derive le fichier de test associe a un fichier source.

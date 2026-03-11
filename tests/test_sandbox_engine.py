@@ -289,8 +289,156 @@ class TestStats:
             "sandbox_exists", "is_fresh", "last_refresh",
             "total_tests_run", "total_passed", "total_failed",
             "total_promotions", "total_discards",
+            "pre_validation_catches", "graph_targeted_runs",
         }
         assert set(stats.keys()) == expected_keys
+
+
+# =============================================================
+# PRE-VALIDATION AST
+# =============================================================
+
+class TestPreValidation:
+    def test_syntax_error_caught(self, isolate_sandbox):
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        engine.apply_change("core/bad.py", "def broken(\n")
+        result = engine._pre_validate("core/bad.py")
+        assert result is not None
+        assert result.success is False
+        assert "SyntaxError" in result.output
+
+    def test_missing_import_caught(self, isolate_sandbox):
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        engine.apply_change(
+            "core/bad.py",
+            "from core.nonexistent_module_xyz import foo\n"
+        )
+        result = engine._pre_validate("core/bad.py")
+        assert result is not None
+        assert result.success is False
+        assert "introuvable" in result.output
+
+    def test_valid_code_passes(self, isolate_sandbox):
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        engine.apply_change("core/good.py", "import os\nx = 1\n")
+        result = engine._pre_validate("core/good.py")
+        assert result is None  # None = validation OK
+
+    def test_no_file_returns_none(self, isolate_sandbox):
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        result = engine._pre_validate("core/nonexistent.py")
+        assert result is None
+
+    def test_existing_project_import_passes(self, isolate_sandbox):
+        """Import d'un module projet existant ne declenche pas d'erreur."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        # base_agent.py existe dans le fake prod
+        engine.apply_change(
+            "core/uses_base.py",
+            "from core.base_agent import BaseAgent\n"
+        )
+        result = engine._pre_validate("core/uses_base.py")
+        assert result is None
+
+    def test_stdlib_import_not_checked(self, isolate_sandbox):
+        """Les imports stdlib (collections, json) ne sont pas verifies."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        engine.apply_change(
+            "core/stdlib.py",
+            "from collections import deque\nimport json\n"
+        )
+        result = engine._pre_validate("core/stdlib.py")
+        assert result is None
+
+    def test_pre_validation_stats(self, isolate_sandbox):
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        assert engine._stats["pre_validation_catches"] == 0
+
+
+# =============================================================
+# SELECT TESTS (graphe de dependances)
+# =============================================================
+
+class TestSelectTests:
+    def test_fallback_to_derive(self, isolate_sandbox):
+        """Sans graphe, fallback sur _derive_test_file."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        # Mock le graphe pour retourner liste vide
+        from unittest.mock import MagicMock
+        mock_graph = MagicMock()
+        mock_graph.get_relevant_tests.return_value = []
+        engine._test_graph = mock_graph
+        # test_base_agent.py n'existe pas dans le sandbox → liste vide
+        result = engine._select_tests("core/some_module.py")
+        assert result is not None
+
+    def test_hub_returns_none(self, isolate_sandbox):
+        """Module hub retourne None (run complet)."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        from unittest.mock import MagicMock
+        mock_graph = MagicMock()
+        mock_graph.get_relevant_tests.return_value = None
+        engine._test_graph = mock_graph
+        result = engine._select_tests("core/base_agent.py")
+        assert result is None
+
+    def test_graph_results_used(self, isolate_sandbox):
+        """Tests trouves par le graphe sont utilises s'ils existent."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        from unittest.mock import MagicMock
+        mock_graph = MagicMock()
+        mock_graph.get_relevant_tests.return_value = ["tests/test_base.py"]
+        engine._test_graph = mock_graph
+        result = engine._select_tests("core/base_agent.py")
+        # test_base.py existe dans le sandbox
+        assert result == ["tests/test_base.py"]
+
+
+# =============================================================
+# COPYTREE CIBLE
+# =============================================================
+
+class TestCopytreeCible:
+    def test_excludes_promethee_sandbox(self, isolate_sandbox):
+        """Le dossier PROMETHEE_sandbox est exclu du copytree."""
+        prod_dir = isolate_sandbox["prod_dir"]
+        os.makedirs(os.path.join(prod_dir, "PROMETHEE_sandbox"), exist_ok=True)
+        with open(os.path.join(prod_dir, "PROMETHEE_sandbox", "dummy.py"), "w") as f:
+            f.write("# dummy")
+        engine = SandboxEngine()
+        engine._last_refresh = 0.0
+        engine.create_or_refresh()
+        sandbox_dir = isolate_sandbox["sandbox_dir"]
+        assert not os.path.exists(os.path.join(sandbox_dir, "PROMETHEE_sandbox"))
+
+    def test_excludes_datasets(self, isolate_sandbox):
+        prod_dir = isolate_sandbox["prod_dir"]
+        os.makedirs(os.path.join(prod_dir, "datasets"), exist_ok=True)
+        engine = SandboxEngine()
+        engine._last_refresh = 0.0
+        engine.create_or_refresh()
+        sandbox_dir = isolate_sandbox["sandbox_dir"]
+        assert not os.path.exists(os.path.join(sandbox_dir, "datasets"))
+
+    def test_excludes_pyc(self, isolate_sandbox):
+        """Les fichiers .pyc sont exclus."""
+        prod_dir = isolate_sandbox["prod_dir"]
+        with open(os.path.join(prod_dir, "core", "compiled.pyc"), "w") as f:
+            f.write("")
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        sandbox_dir = isolate_sandbox["sandbox_dir"]
+        assert not os.path.isfile(os.path.join(sandbox_dir, "core", "compiled.pyc"))
 
 
 # =============================================================
