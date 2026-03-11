@@ -1469,3 +1469,8 @@ class PrefrontalCortex:
 
 # ─── Singleton global ─────────────────────────────────────────────────
 prefrontal = PrefrontalCortex()
+try:
+    from core.organ_registry import register_organ
+    register_organ("prefrontal", prefrontal)
+except Exception:
+    pass

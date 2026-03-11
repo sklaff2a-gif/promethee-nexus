@@ -32,6 +32,14 @@ MAX_ASSOCIATIONS = 20
 INSIGHT_PROBABILITY = 0.15
 CONSOLIDATION_BATCH_SIZE = 5
 DMN_HISTORY_SIZE = 50
+INSIGHT_RECENCY_WINDOW = 7200  # 2h : fenêtre pour considérer un insight comme "récent"
+
+# Intents qui bénéficient de la créativité DMN
+DMN_CREATIVE_INTENTS = {
+    "EXPANSION_CODE", "CREATIVE_PLAY", "COUNCIL_DEBATE",
+    "GRIMOIRE_EVOLVE", "ROADMAP_RESEARCH", "ROADMAP_SPEC",
+    "VEILLE_SILENCIEUSE", "REFACTOR_RANDOM",
+}
 
 
 class DefaultModeNetwork:
@@ -325,6 +333,44 @@ class DefaultModeNetwork:
 
         return "Le silence nourrit la reflexion."
 
+    # --- Scoring ---
+
+    def compute_dmn_bonus(self, intent: str) -> float:
+        """Bonus créatif du réseau mode par défaut.
+
+        Plage: [-0.5, +2.0]
+        - Insights récents (< 2h) = le subconscient a travaillé → boost créatif
+        - Vagabondage récent sans insight = repos créatif → léger boost
+        - Ni insights ni vagabondage récent = réservoir créatif vide → malus
+        - Intents non-créatifs → 0 (le DMN ne s'en mêle pas)
+        """
+        if intent not in DMN_CREATIVE_INTENTS:
+            return 0.0
+
+        now = time.time()
+        cutoff = now - INSIGHT_RECENCY_WINDOW
+
+        # Compter les insights récents (< 2h)
+        recent_insights = sum(
+            1 for ins in self.insights
+            if ins.get("timestamp", 0) > cutoff
+        )
+
+        if recent_insights > 0:
+            # Insights frais = carburant créatif (cap à 2.0)
+            return min(2.0, 0.5 + recent_insights * 0.3)
+
+        # Vagabondage récent mais pas d'insights → repos créatif
+        recent_wanderings = sum(
+            1 for w in self.wandering_history
+            if w.get("timestamp", 0) > cutoff
+        )
+        if recent_wanderings > 0:
+            return 0.3
+
+        # Ni insights ni vagabondage → réservoir vide
+        return -0.5
+
     # --- Contexte ---
 
     def get_dmn_context(self) -> str:
@@ -398,3 +444,8 @@ class DefaultModeNetwork:
 
 # --- Singleton ---
 dmn = DefaultModeNetwork()
+try:
+    from core.organ_registry import register_organ
+    register_organ("dmn", dmn)
+except Exception:
+    pass

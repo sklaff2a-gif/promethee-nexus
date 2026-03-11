@@ -559,3 +559,8 @@ class DopamineSystem:
 
 # --- Singleton ---
 dopamine = DopamineSystem()
+try:
+    from core.organ_registry import register_organ
+    register_organ("dopamine", dopamine)
+except Exception:
+    pass

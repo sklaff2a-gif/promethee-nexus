@@ -1695,3 +1695,8 @@ class InnerVoice:
 # ─── Singleton ────────────────────────────────────────────────────────────────
 
 voice = InnerVoice()
+try:
+    from core.organ_registry import register_organ
+    register_organ("inner_voice", voice)
+except Exception:
+    pass

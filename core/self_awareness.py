@@ -1198,3 +1198,8 @@ class SelfAwarenessEngine:
 
 # Singleton global
 awareness = SelfAwarenessEngine()
+try:
+    from core.organ_registry import register_organ
+    register_organ("awareness", awareness)
+except Exception:
+    pass

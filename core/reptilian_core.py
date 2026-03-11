@@ -1007,3 +1007,8 @@ class ReptilianCore:
 # ============================================================
 
 reptile = ReptilianCore()
+try:
+    from core.organ_registry import register_organ
+    register_organ("reptilian", reptile)
+except Exception:
+    pass

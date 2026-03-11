@@ -874,3 +874,10 @@ class CardiacEngine:
 # ============================================================
 
 heart = CardiacEngine()
+
+# Auto-enregistrement dans le registre central
+try:
+    from core.organ_registry import register_organ
+    register_organ("cardiac", heart)
+except Exception:
+    pass

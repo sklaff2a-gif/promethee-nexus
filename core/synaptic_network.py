@@ -1714,3 +1714,8 @@ class SynapticNetwork:
 
 # --- Singleton global ---
 cortex = SynapticNetwork()
+try:
+    from core.organ_registry import register_organ
+    register_organ("synaptic", cortex)
+except Exception:
+    pass

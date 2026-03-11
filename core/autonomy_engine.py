@@ -29,6 +29,117 @@ POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE", "S
 FINAL_SCORE_CLAMP_MIN = -5.0
 FINAL_SCORE_CLAMP_MAX = 25.0
 
+# --- Normalisation du scoring V3 ---
+# Chaque bonus brut est normalisé dans [-1,+1] puis multiplié par un poids configurable.
+# Config : config/scoring_weights.json
+SCORING_WEIGHTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "scoring_weights.json")
+
+_scoring_weights_cache = None
+
+def _load_scoring_weights() -> dict:
+    """Charge les poids et plages de normalisation depuis config/scoring_weights.json."""
+    global _scoring_weights_cache
+    if _scoring_weights_cache is not None:
+        return _scoring_weights_cache
+    try:
+        with open(SCORING_WEIGHTS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # Exclure les clés de documentation
+            _scoring_weights_cache = {k: v for k, v in data.items() if not k.startswith("_")}
+            logger.info(f"[SCORING] Poids de normalisation chargés ({len(_scoring_weights_cache)} couches)")
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning(f"[SCORING] scoring_weights.json introuvable ou invalide ({e}), poids par défaut")
+        _scoring_weights_cache = {}
+    return _scoring_weights_cache
+
+def _normalize_bonus(raw: float, layer_name: str) -> float:
+    """Normalise un bonus brut dans [-1,+1] puis applique poids * précision.
+    Formule : clamp(raw / range_abs, -1, +1) * weight * precision
+    - weight : importance structurelle (config/scoring_weights.json)
+    - precision : fiabilité empirique (memory/organ_precision.json)
+    Si la couche n'est pas dans le JSON, fallback auto-range (|raw| comme range)."""
+    if raw == 0.0:
+        return 0.0
+    weights = _load_scoring_weights()
+    cfg = weights.get(layer_name, {})
+    range_abs = cfg.get("range_abs", abs(raw))  # fallback: auto-range
+    weight = cfg.get("weight", 1.0)
+    if range_abs <= 0:
+        return 0.0
+    normalized = max(-1.0, min(1.0, raw / range_abs))
+    precision = _get_organ_precision(layer_name)
+    return round(normalized * weight * precision, 4)
+
+def reload_scoring_weights():
+    """Force le rechargement des poids (utile après modification du JSON en runtime)."""
+    global _scoring_weights_cache
+    _scoring_weights_cache = None
+    return _load_scoring_weights()
+
+# --- Precision weighting (fiabilité des organes) ---
+# Chaque organe accumule un score de précision basé sur ses prédictions passées.
+# Un organe qui recommande souvent des routines qui échouent perd de l'influence.
+ORGAN_PRECISION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "memory", "organ_precision.json")
+PRECISION_REWARD = 0.02       # Récompense pour prédiction correcte
+PRECISION_PENALTY = 0.05      # Pénalité pour prédiction incorrecte (asymétrique — bio-inspiré)
+PRECISION_MIN = 0.3           # Plancher : même le pire organe garde 30% d'influence
+PRECISION_MAX = 1.5           # Plafond : le meilleur organe gagne 50% d'influence max
+PRECISION_DECAY_RATE = 0.005  # Reversion lente vers 1.0 à chaque update
+PRECISION_CONTRIB_THRESHOLD = 0.05  # Ignore les contributions < 5% (bruit)
+
+_organ_precision_cache = None
+
+def _load_organ_precision() -> dict:
+    """Charge les scores de précision par organe depuis memory/organ_precision.json."""
+    global _organ_precision_cache
+    if _organ_precision_cache is not None:
+        return _organ_precision_cache
+    try:
+        with open(ORGAN_PRECISION_FILE, "r", encoding="utf-8") as f:
+            _organ_precision_cache = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        _organ_precision_cache = {}
+    return _organ_precision_cache
+
+def _save_organ_precision():
+    """Persiste les scores de précision sur disque."""
+    data = _load_organ_precision()
+    try:
+        os.makedirs(os.path.dirname(ORGAN_PRECISION_FILE), exist_ok=True)
+        with open(ORGAN_PRECISION_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.warning(f"[PRECISION] Échec sauvegarde: {e}")
+
+def _get_organ_precision(layer_name: str) -> float:
+    """Retourne le facteur de précision d'un organe (1.0 par défaut)."""
+    data = _load_organ_precision()
+    return data.get(layer_name, {}).get("precision", 1.0)
+
+def _update_single_precision(layer_name: str, correct: bool):
+    """Met à jour la précision d'un seul organe après un feedback."""
+    data = _load_organ_precision()
+    if layer_name not in data:
+        data[layer_name] = {"precision": 1.0, "correct": 0, "total": 0}
+    entry = data[layer_name]
+    # Decay vers 1.0 (empêche le verrouillage permanent)
+    if entry["precision"] > 1.0:
+        entry["precision"] = max(1.0, entry["precision"] - PRECISION_DECAY_RATE)
+    elif entry["precision"] < 1.0:
+        entry["precision"] = min(1.0, entry["precision"] + PRECISION_DECAY_RATE)
+    # Reward/penalty asymétrique
+    if correct:
+        entry["precision"] = min(PRECISION_MAX, entry["precision"] + PRECISION_REWARD)
+        entry["correct"] = entry.get("correct", 0) + 1
+    else:
+        entry["precision"] = max(PRECISION_MIN, entry["precision"] - PRECISION_PENALTY)
+    entry["total"] = entry.get("total", 0) + 1
+
+def reload_organ_precision():
+    """Force le rechargement des précisions (utile pour les tests)."""
+    global _organ_precision_cache
+    _organ_precision_cache = None
+
 # Anti-chambre d'écho : bonus extroversion quand trop de routines introspectives consécutives
 INTROSPECTIVE_INTENTS = {
     "COUNCIL_DEBATE", "SOLILOQUE_INTERNE", "SELF_INSPECT",
@@ -41,6 +152,19 @@ EXTROVERTED_INTENTS = {
 EXTROVERSION_STREAK_THRESHOLD = 3   # Apres 3 routines introspectives consecutives
 EXTROVERSION_BONUS_PER_STREAK = 0.8 # Bonus par routine au-dela du seuil
 EXTROVERSION_BONUS_MAX = 3.0        # Plafond du bonus extroversion
+
+# Anti-stagnation homéostatique : bonus nouveauté quand le système converge trop
+STAGNATION_WINDOW = 15                # Fenêtre d'observation (dernières routines)
+STAGNATION_DIVERSITY_THRESHOLD = 0.4  # Diversité < 40% = stagnation détectée
+STAGNATION_MIN_HISTORY = 5            # Minimum d'historique pour évaluer
+NOVELTY_BONUS_BASE = 1.0              # Bonus base pour intents non-récents
+NOVELTY_BONUS_MAX = 3.0               # Bonus max (stagnation sévère)
+EXPLORATION_INTENTS = {
+    "EXPANSION_CODE", "CREATIVE_PLAY", "VEILLE_SILENCIEUSE",
+    "ROADMAP_RESEARCH", "ROADMAP_SPEC", "GRIMOIRE_EVOLVE",
+    "COUNCIL_DEBATE", "DROPZONE_SCAN",
+}
+EXPLORATION_MULTIPLIER = 1.5          # Les intents exploratoires reçoivent 1.5x le bonus
 
 # Mode sieste : routines autorisées (0-LLM uniquement) et intervalle entre routines
 NAP_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
@@ -706,6 +830,29 @@ class AutonomyEngine:
         if len(self.routine_history) > 40:
             self.routine_history = self.routine_history[-40:]
 
+    def _update_organ_precision(self, intent: str, quality_score: float):
+        """Met à jour la fiabilité des organes basée sur le résultat de la routine.
+        Utilise _last_scoring_breakdown pour savoir quels organes ont contribué."""
+        breakdown = getattr(self, "_last_scoring_breakdown", {})
+        if not breakdown:
+            return
+        success = quality_score >= 0.3
+        updated = []
+        for layer_name, contrib in breakdown.items():
+            if abs(contrib) < PRECISION_CONTRIB_THRESHOLD:
+                continue  # Contribution trop faible = bruit
+            if contrib > 0:
+                # L'organe a recommandé cette routine
+                _update_single_precision(layer_name, correct=success)
+            else:
+                # L'organe a déconseillé cette routine
+                _update_single_precision(layer_name, correct=not success)
+            precision = _get_organ_precision(layer_name)
+            updated.append(f"{layer_name}={precision:.2f}")
+        if updated:
+            _save_organ_precision()
+            logger.info(f"[PRECISION] Mise à jour ({intent}, q={quality_score:.2f}): {', '.join(updated)}")
+
     def _build_scoring_breakdown(self, intent: str) -> dict:
         """Construit un breakdown des bonus par couche pour un intent donne.
         Couvre les 23 couches de scoring + couches speciales."""
@@ -732,6 +879,7 @@ class AutonomyEngine:
             ("incubation", "core.incubation_cognitive", "incubation", "compute_eureka_bonus"),
             ("curiosity", "core.curiosity_reflex", "curiosity", "compute_curiosity_bonus"),
             ("sensorium", "core.sensorium", "sensorium", "compute_sensorium_bonus"),
+            ("dmn", "core.default_mode_network", "dmn", "compute_dmn_bonus"),
             ("temporal", "core.temporal_lobe", "temporal", "compute_temporal_bonus"),
         ]
         for layer_name, module_path, instance_name, method_name in scoring_methods:
@@ -739,9 +887,9 @@ class AutonomyEngine:
                 mod = __import__(module_path, fromlist=[instance_name])
                 organ = getattr(mod, instance_name)
                 method = getattr(organ, method_name)
-                bonus = method(intent)
-                if bonus != 0.0:
-                    breakdown[layer_name] = round(bonus, 3)
+                raw = method(intent)
+                if raw != 0.0:
+                    breakdown[layer_name] = round(_normalize_bonus(raw, layer_name), 3)
             except Exception:
                 pass
         # Extroversion (anti-chambre d'echo)
@@ -755,17 +903,28 @@ class AutonomyEngine:
             excess = introversion_streak - EXTROVERSION_STREAK_THRESHOLD
             extro_bonus = min(EXTROVERSION_BONUS_MAX,
                               EXTROVERSION_BONUS_PER_STREAK * (1 + excess))
-            breakdown["extroversion"] = round(extro_bonus, 3)
-        # Adaptive scoring (cache du dernier calcul)
+            breakdown["extroversion"] = round(_normalize_bonus(extro_bonus, "extroversion"), 3)
+        # Adaptive scoring (cache du dernier calcul — normalisé)
         cached_adaptive = getattr(self, "_last_adaptive_adjustments", {})
         adj = cached_adaptive.get(intent, 0.0)
         if adj != 0.0:
-            breakdown["adaptive"] = round(max(-10.0, min(5.0, adj)), 3)
-        # Council adjustments (data-driven)
+            breakdown["adaptive"] = round(_normalize_bonus(adj, "adaptive"), 3)
+        # Council adjustments (data-driven — normalisé)
         council_adj = getattr(self, "_council_adjustments", {})
         delta = council_adj.get(intent, {}).get("delta", 0.0)
         if delta != 0.0:
-            breakdown["council"] = round(delta, 3)
+            breakdown["council"] = round(_normalize_bonus(delta, "council"), 3)
+        # Anti-stagnation (bonus nouveauté si diversité basse)
+        recent_window = [h["intent"] for h in self.routine_history[-STAGNATION_WINDOW:]]
+        if len(recent_window) >= STAGNATION_MIN_HISTORY:
+            unique_count = len(set(recent_window))
+            diversity = unique_count / len(recent_window)
+            if diversity < STAGNATION_DIVERSITY_THRESHOLD and intent not in set(recent_window):
+                severity = 1.0 - (diversity / STAGNATION_DIVERSITY_THRESHOLD)
+                bonus = NOVELTY_BONUS_BASE + severity * (NOVELTY_BONUS_MAX - NOVELTY_BONUS_BASE)
+                if intent in EXPLORATION_INTENTS:
+                    bonus *= EXPLORATION_MULTIPLIER
+                breakdown["stagnation"] = round(bonus, 3)
         return breakdown
 
     def get_status(self) -> dict:
@@ -856,38 +1015,31 @@ class AutonomyEngine:
             cloud_in_cooldown=cloud_in_cooldown,
         )
 
-        # --- Bonus objectifs ---
+        # --- Bonus objectifs (normalisé) ---
         try:
             from core.objectives_engine import objectives as obj_engine
             for i, (routine, s) in enumerate(scored):
-                obj_bonus = obj_engine.get_routine_bonus(routine["intent"])
-                scored[i] = (routine, s + obj_bonus)
+                raw = obj_engine.get_routine_bonus(routine["intent"])
+                if raw != 0.0:
+                    scored[i] = (routine, s + _normalize_bonus(raw, "objectives"))
         except Exception:
             pass
 
-        # --- Ajustements adaptatifs (conscience de soi) ---
-        # Clamping : les ajustements cumulatifs sont bornés pour éviter les valeurs extrêmes
-        ADAPTIVE_CLAMP_MIN = -10.0
-        ADAPTIVE_CLAMP_MAX = 5.0
+        # --- Ajustements adaptatifs (conscience de soi — normalisés) ---
         adaptive_adjustments = {}
         try:
             from core.self_awareness import awareness
             raw_adjustments = awareness.compute_adaptive_scoring(self.routine_history)
-            # Clamping des ajustements dans [min, max]
-            adaptive_adjustments = {
-                intent: max(ADAPTIVE_CLAMP_MIN, min(ADAPTIVE_CLAMP_MAX, val))
-                for intent, val in raw_adjustments.items()
-            }
-            self._last_adaptive_adjustments = adaptive_adjustments
-            if adaptive_adjustments:
+            self._last_adaptive_adjustments = raw_adjustments
+            if raw_adjustments:
                 for i, (routine, s) in enumerate(scored):
-                    adj = adaptive_adjustments.get(routine["intent"], 0.0)
-                    if adj != 0.0:
-                        scored[i] = (routine, s + adj)
-                # Log des ajustements actifs
-                active = {k: v for k, v in adaptive_adjustments.items() if v != 0.0}
+                    raw = raw_adjustments.get(routine["intent"], 0.0)
+                    if raw != 0.0:
+                        scored[i] = (routine, s + _normalize_bonus(raw, "adaptive"))
+                # Log des ajustements actifs (valeurs normalisées)
+                active = {k: v for k, v in raw_adjustments.items() if v != 0.0}
                 if active:
-                    parts = [f"{k}:{v:+.1f}" for k, v in active.items()]
+                    parts = [f"{k}:{_normalize_bonus(v, 'adaptive'):+.2f}" for k, v in active.items()]
                     print(f"   🧠 CONSCIENCE: Ajustements adaptatifs: {', '.join(parts)}")
         except Exception:
             pass
@@ -898,7 +1050,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 sa_bonus = sa_engine.compute_routine_affinity(routine["intent"])
                 if sa_bonus != 0.0:
-                    scored[i] = (routine, s + sa_bonus)
+                    scored[i] = (routine, s + _normalize_bonus(sa_bonus, "spreading"))
         except Exception:
             pass
 
@@ -908,7 +1060,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 syn_bonus = cortex.compute_routine_affinity(routine["intent"])
                 if syn_bonus != 0.0:
-                    scored[i] = (routine, s + syn_bonus)
+                    scored[i] = (routine, s + _normalize_bonus(syn_bonus, "synaptic"))
         except Exception:
             pass
 
@@ -919,7 +1071,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 desire_bonus = desires.compute_desire_bonus(routine["intent"])
                 if desire_bonus > 0:
-                    scored[i] = (routine, s + desire_bonus)
+                    scored[i] = (routine, s + _normalize_bonus(desire_bonus, "desire"))
             urgent = [d.name for d in desires.drives.values() if d.deprivation >= 75]
             if urgent:
                 print(f"   \U0001FA90 DESIRS: Pulsions urgentes: {', '.join(urgent)}")
@@ -932,7 +1084,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 focus = prefrontal.compute_focus_bonus(routine["intent"])
                 if focus != 0.0:
-                    scored[i] = (routine, s + focus)
+                    scored[i] = (routine, s + _normalize_bonus(focus, "prefrontal"))
             wm = prefrontal.get_working_memory()
             if wm:
                 print(f"   🎯 PRÉFRONTAL: Focus sur '{wm[0]['goal_title']}' ({wm[0]['progress']:.0%})")
@@ -945,7 +1097,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 voice_bonus = inner_voice.compute_voice_bonus(routine["intent"])
                 if voice_bonus != 0.0:
-                    scored[i] = (routine, s + voice_bonus)
+                    scored[i] = (routine, s + _normalize_bonus(voice_bonus, "inner_voice"))
         except Exception:
             pass
 
@@ -955,7 +1107,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 dopa_bonus = dopamine.compute_motivation_bonus(routine["intent"])
                 if dopa_bonus != 0.0:
-                    scored[i] = (routine, s + dopa_bonus)
+                    scored[i] = (routine, s + _normalize_bonus(dopa_bonus, "dopamine"))
         except Exception:
             pass
 
@@ -965,7 +1117,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 resonance_bonus = callosum.compute_resonance_bonus(routine["intent"])
                 if resonance_bonus != 0.0:
-                    scored[i] = (routine, s + resonance_bonus)
+                    scored[i] = (routine, s + _normalize_bonus(resonance_bonus, "callosum"))
         except Exception:
             pass
 
@@ -978,7 +1130,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 somatic_signal = heart.get_somatic_signal(routine["intent"])
                 if somatic_signal != 0.0:
-                    scored[i] = (routine, s + somatic_signal)
+                    scored[i] = (routine, s + _normalize_bonus(somatic_signal, "cardiac"))
                     somatic_effects.append(f"{routine['intent']}({somatic_signal:+.2f})")
             scored.sort(key=lambda x: x[1], reverse=True)
             if somatic_effects:
@@ -995,7 +1147,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 roadmap_bonus = roadmap_engine.compute_roadmap_bonus(routine["intent"])
                 if roadmap_bonus != 0.0:
-                    scored[i] = (routine, s + roadmap_bonus)
+                    scored[i] = (routine, s + _normalize_bonus(roadmap_bonus, "roadmap"))
             scored.sort(key=lambda x: x[1], reverse=True)
         except Exception:
             pass
@@ -1006,7 +1158,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 tissue_bonus = tissue.compute_tissue_bonus(routine["intent"])
                 if tissue_bonus != 0.0:
-                    scored[i] = (routine, s + tissue_bonus)
+                    scored[i] = (routine, s + _normalize_bonus(tissue_bonus, "tissue"))
         except Exception:
             pass
 
@@ -1021,7 +1173,7 @@ class AutonomyEngine:
                     continue
                 for i, (routine, s) in enumerate(scored):
                     if routine["intent"] == intent_key:
-                        scored[i] = (routine, s + adj["delta"])
+                        scored[i] = (routine, s + _normalize_bonus(adj["delta"], "council"))
             for k in expired_keys:
                 del council_adj[k]
 
@@ -1031,7 +1183,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 bonus = thalamus.compute_attention_bonus(routine["intent"])
                 if bonus != 0.0:
-                    scored[i] = (routine, s + bonus)
+                    scored[i] = (routine, s + _normalize_bonus(bonus, "thalamus"))
             scored.sort(key=lambda x: x[1], reverse=True)
         except Exception:
             pass
@@ -1042,7 +1194,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 bias = amygdala.compute_emotional_bias(routine["intent"])
                 if bias != 0.0:
-                    scored[i] = (routine, s + bias)
+                    scored[i] = (routine, s + _normalize_bonus(bias, "amygdala"))
             scored.sort(key=lambda x: x[1], reverse=True)
         except Exception:
             pass
@@ -1053,7 +1205,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 homeo_bonus = hypothalamus.compute_homeostasis_bonus(routine["intent"])
                 if homeo_bonus != 0.0:
-                    scored[i] = (routine, s + homeo_bonus)
+                    scored[i] = (routine, s + _normalize_bonus(homeo_bonus, "hypothalamus"))
         except Exception:
             pass
 
@@ -1063,7 +1215,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 intero_bonus = insula.compute_interoception_bonus(routine["intent"])
                 if intero_bonus != 0.0:
-                    scored[i] = (routine, s + intero_bonus)
+                    scored[i] = (routine, s + _normalize_bonus(intero_bonus, "insula"))
         except Exception:
             pass
 
@@ -1073,7 +1225,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 conflict_bonus = cingulate.compute_conflict_bonus(routine["intent"])
                 if conflict_bonus != 0.0:
-                    scored[i] = (routine, s + conflict_bonus)
+                    scored[i] = (routine, s + _normalize_bonus(conflict_bonus, "cingulate"))
         except Exception:
             pass
 
@@ -1083,7 +1235,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 habit_bonus = ganglia.compute_habit_bonus(routine["intent"])
                 if habit_bonus != 0.0:
-                    scored[i] = (routine, s + habit_bonus)
+                    scored[i] = (routine, s + _normalize_bonus(habit_bonus, "basal_ganglia"))
             scored.sort(key=lambda x: x[1], reverse=True)
         except Exception:
             pass
@@ -1094,7 +1246,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 bonus = incubation.compute_eureka_bonus(routine["intent"])
                 if bonus != 0.0:
-                    scored[i] = (routine, s + bonus)
+                    scored[i] = (routine, s + _normalize_bonus(bonus, "incubation"))
         except Exception:
             pass
 
@@ -1104,7 +1256,7 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 bonus = curiosity.compute_curiosity_bonus(routine["intent"])
                 if bonus != 0.0:
-                    scored[i] = (routine, s + bonus)
+                    scored[i] = (routine, s + _normalize_bonus(bonus, "curiosity"))
         except Exception:
             pass
 
@@ -1114,11 +1266,22 @@ class AutonomyEngine:
             for i, (routine, s) in enumerate(scored):
                 sens_bonus = sensorium.compute_sensorium_bonus(routine["intent"])
                 if sens_bonus != 0.0:
-                    scored[i] = (routine, s + sens_bonus)
+                    scored[i] = (routine, s + _normalize_bonus(sens_bonus, "sensorium"))
         except Exception:
             pass
 
-        # --- Anti-chambre d'echo : bonus extroversion (Couche 24) ---
+        # --- Bonus créatif DMN (Couche 24) ---
+        # Le réseau mode par défaut booste les intents créatifs quand il a produit des insights
+        try:
+            from core.default_mode_network import dmn
+            for i, (routine, s) in enumerate(scored):
+                dmn_bonus = dmn.compute_dmn_bonus(routine["intent"])
+                if dmn_bonus != 0.0:
+                    scored[i] = (routine, s + _normalize_bonus(dmn_bonus, "dmn"))
+        except Exception:
+            pass
+
+        # --- Anti-chambre d'echo : bonus extroversion (Couche 25) ---
         # Si les dernieres routines etaient toutes introspectives, bonus aux routines externes
         introversion_streak = 0
         for h in reversed(self.routine_history):
@@ -1132,9 +1295,36 @@ class AutonomyEngine:
                               EXTROVERSION_BONUS_PER_STREAK * (1 + excess))
             for i, (routine, s) in enumerate(scored):
                 if routine["intent"] in EXTROVERTED_INTENTS:
-                    scored[i] = (routine, s + extro_bonus)
+                    scored[i] = (routine, s + _normalize_bonus(extro_bonus, "extroversion"))
             logger.info(f"[EXTROVERSION] Streak introspective: {introversion_streak}, "
                         f"bonus extroversion: +{extro_bonus:.1f}")
+
+        # --- Anti-stagnation homéostatique (Couche 25) ---
+        # Si le système fait trop souvent les mêmes routines, booste la nouveauté
+        # Complémentaire à l'extroversion (qui ne regarde que les streaks introspectives)
+        recent_window = [h["intent"] for h in self.routine_history[-STAGNATION_WINDOW:]]
+        if len(recent_window) >= STAGNATION_MIN_HISTORY:
+            unique_count = len(set(recent_window))
+            diversity = unique_count / len(recent_window)
+            if diversity < STAGNATION_DIVERSITY_THRESHOLD:
+                # Sévérité : 0.0 (seuil) → 1.0 (diversité nulle)
+                stagnation_severity = 1.0 - (diversity / STAGNATION_DIVERSITY_THRESHOLD)
+                novelty_bonus = NOVELTY_BONUS_BASE + stagnation_severity * (NOVELTY_BONUS_MAX - NOVELTY_BONUS_BASE)
+                recent_set = set(recent_window)
+                novelty_effects = []
+                for i, (routine, s) in enumerate(scored):
+                    intent_key = routine["intent"]
+                    if intent_key not in recent_set:
+                        bonus = novelty_bonus
+                        if intent_key in EXPLORATION_INTENTS:
+                            bonus *= EXPLORATION_MULTIPLIER
+                        scored[i] = (routine, s + bonus)
+                        novelty_effects.append(f"{intent_key}(+{bonus:.1f})")
+                if novelty_effects:
+                    print(f"   \U0001f504 ANTI-STAGNATION: diversité={diversity:.0%}, "
+                          f"bonus: {', '.join(novelty_effects[:5])}")
+                    logger.info(f"[STAGNATION] Diversité {diversity:.2f} < {STAGNATION_DIVERSITY_THRESHOLD}, "
+                                f"bonus nouveauté: {len(novelty_effects)} intents")
 
         # --- Clamping final du score total ---
         # Empêche le score d'exploser quand beaucoup de couches poussent dans la même direction
@@ -1539,6 +1729,12 @@ class AutonomyEngine:
                 except Exception:
                     pass
                 await self._trigger_targeted_learning(selected["mission"], agent, intent)
+
+        # --- Precision weighting : mettre à jour la fiabilité des organes ---
+        try:
+            self._update_organ_precision(intent, quality_score)
+        except Exception as e:
+            logger.warning(f"[PRECISION] Erreur mise à jour: {e}")
 
         # --- Frustration DesireEngine : forcer l'intent suivant si pulsion frustrée ---
         # M01: compteur de forçage par drive — cooldown 10 cycles si >2 forçages en 5 cycles

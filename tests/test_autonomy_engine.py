@@ -27,6 +27,25 @@ from core.autonomy_engine import (
     EXTROVERSION_BONUS_PER_STREAK,
     EXTROVERSION_BONUS_MAX,
     FORCED_FAILURE_THRESHOLD,
+    _normalize_bonus,
+    _load_organ_precision,
+    _update_single_precision,
+    _get_organ_precision,
+    _save_organ_precision,
+    reload_organ_precision,
+    PRECISION_REWARD,
+    PRECISION_PENALTY,
+    PRECISION_MIN,
+    PRECISION_MAX,
+    PRECISION_DECAY_RATE,
+    PRECISION_CONTRIB_THRESHOLD,
+    STAGNATION_WINDOW,
+    STAGNATION_DIVERSITY_THRESHOLD,
+    STAGNATION_MIN_HISTORY,
+    NOVELTY_BONUS_BASE,
+    NOVELTY_BONUS_MAX,
+    EXPLORATION_INTENTS,
+    EXPLORATION_MULTIPLIER,
 )
 
 
@@ -2373,8 +2392,9 @@ class TestExtroversion:
 
         bd = engine._build_scoring_breakdown("VEILLE_SILENCIEUSE")
         assert "extroversion" in bd
-        # Bonus = 0.8 * (1 + 0) = 0.8 (excess=0 au seuil)
-        assert bd["extroversion"] == pytest.approx(EXTROVERSION_BONUS_PER_STREAK, abs=0.01)
+        # Bonus normalisé : raw=0.8, range_abs=3.0, weight=1.0 → 0.8/3.0 ≈ 0.267
+        from core.autonomy_engine import _normalize_bonus
+        assert bd["extroversion"] == pytest.approx(_normalize_bonus(EXTROVERSION_BONUS_PER_STREAK, "extroversion"), abs=0.01)
 
         # Sans streak (cassee par une routine externe)
         engine.routine_history = [
@@ -2406,8 +2426,10 @@ class TestExtroversion:
         bd_3 = engine._build_scoring_breakdown("VEILLE_SILENCIEUSE")
 
         assert bd_5["extroversion"] > bd_3["extroversion"]
-        assert bd_5["extroversion"] == pytest.approx(2.4, abs=0.01)
-        assert bd_3["extroversion"] == pytest.approx(0.8, abs=0.01)
+        # Normalisé : raw=2.4 → 2.4/3.0*1.0=0.8, raw=0.8 → 0.8/3.0*1.0≈0.267
+        from core.autonomy_engine import _normalize_bonus
+        assert bd_5["extroversion"] == pytest.approx(_normalize_bonus(2.4, "extroversion"), abs=0.01)
+        assert bd_3["extroversion"] == pytest.approx(_normalize_bonus(0.8, "extroversion"), abs=0.01)
 
     def test_bonus_capped_at_max(self):
         """Le bonus extroversion est plafonne a EXTROVERSION_BONUS_MAX."""
@@ -2421,8 +2443,9 @@ class TestExtroversion:
             for i in range(10)
         ]
         bd = engine._build_scoring_breakdown("VEILLE_SILENCIEUSE")
-        # Le bonus ne doit pas depasser EXTROVERSION_BONUS_MAX (3.0)
-        assert bd["extroversion"] == pytest.approx(EXTROVERSION_BONUS_MAX, abs=0.01)
+        # Le bonus normalisé ne doit pas depasser weight (1.0 pour extroversion)
+        from core.autonomy_engine import _normalize_bonus
+        assert bd["extroversion"] == pytest.approx(_normalize_bonus(EXTROVERSION_BONUS_MAX, "extroversion"), abs=0.01)
 
     def test_no_bonus_for_introspective_routines(self):
         """Les routines introspectives ne recoivent PAS de bonus extroversion (via breakdown)."""
@@ -2651,3 +2674,316 @@ class TestPostBudgetCooldownAssoupli:
         # (ou un des autres si shuffle les met en premier)
         last = self.engine.routine_history[-1]
         assert last["intent"] in POST_BUDGET_INTENTS
+
+
+# ==================== TESTS NORMALISATION V3 ====================
+
+class TestNormalizationV3:
+    """Tests de la normalisation du scoring et du precision weighting."""
+
+    def setup_method(self):
+        """Reset les caches entre chaque test."""
+        import core.autonomy_engine as ae
+        ae._scoring_weights_cache = None
+        ae._organ_precision_cache = {}
+
+    def test_normalize_zero_returns_zero(self):
+        """Un bonus brut de 0 retourne toujours 0."""
+        assert _normalize_bonus(0.0, "objectives") == 0.0
+
+    def test_normalize_within_range(self):
+        """Un bonus dans la plage est correctement normalisé."""
+        # objectives: range_abs=5.0, weight=2.0
+        result = _normalize_bonus(2.5, "objectives")
+        # 2.5 / 5.0 = 0.5, * 2.0 * 1.0(precision) = 1.0
+        assert result == pytest.approx(1.0, abs=0.01)
+
+    def test_normalize_at_max(self):
+        """Un bonus au max de la plage donne weight."""
+        # desire: range_abs=3.0, weight=1.5
+        result = _normalize_bonus(3.0, "desire")
+        assert result == pytest.approx(1.5, abs=0.01)
+
+    def test_normalize_beyond_range_clamps(self):
+        """Un bonus au-delà de la plage est clampé à ±1."""
+        result = _normalize_bonus(-15.0, "adaptive")
+        # -15/10 clamped to -1.0, * 2.5 = -2.5
+        assert result == pytest.approx(-2.5, abs=0.01)
+
+    def test_normalize_negative(self):
+        """Un bonus négatif est correctement normalisé."""
+        result = _normalize_bonus(-1.5, "cardiac")
+        # -1.5 / 3.0 = -0.5, * 1.5 = -0.75
+        assert result == pytest.approx(-0.75, abs=0.01)
+
+    def test_normalize_unknown_layer_fallback(self):
+        """Une couche inconnue utilise le fallback auto-range."""
+        result = _normalize_bonus(5.0, "couche_inconnue")
+        # fallback: range_abs=5.0, weight=1.0 → 1.0
+        assert result == pytest.approx(1.0, abs=0.01)
+
+    def test_all_layers_defined(self):
+        """Toutes les couches de scoring ont une config dans le JSON."""
+        from core.autonomy_engine import _load_scoring_weights
+        weights = _load_scoring_weights()
+        expected_layers = [
+            "objectives", "adaptive", "spreading", "synaptic", "desire",
+            "prefrontal", "inner_voice", "dopamine", "callosum", "cardiac",
+            "roadmap", "tissue", "council", "thalamus", "amygdala",
+            "hypothalamus", "insula", "cingulate", "basal_ganglia",
+            "incubation", "curiosity", "sensorium", "extroversion",
+        ]
+        for layer in expected_layers:
+            assert layer in weights, f"Couche manquante: {layer}"
+            assert "weight" in weights[layer]
+            assert "range_abs" in weights[layer]
+            assert weights[layer]["range_abs"] > 0
+
+    def test_max_total_organ_score_bounded(self):
+        """La somme max de tous les poids est raisonnable."""
+        from core.autonomy_engine import _load_scoring_weights
+        weights = _load_scoring_weights()
+        total = sum(v["weight"] for k, v in weights.items() if isinstance(v, dict) and "weight" in v)
+        assert 15 < total < 30, f"Somme des poids hors bornes: {total}"
+
+
+class TestPrecisionWeighting:
+    """Tests du precision weighting (fiabilité empirique des organes)."""
+
+    def setup_method(self):
+        """Reset les caches entre chaque test."""
+        import core.autonomy_engine as ae
+        ae._organ_precision_cache = {}
+        ae._scoring_weights_cache = None
+
+    def test_default_precision_is_one(self):
+        """Un organe sans historique a une précision de 1.0."""
+        assert _get_organ_precision("objectives") == 1.0
+
+    def test_penalty_decreases_precision(self):
+        """Une prédiction incorrecte diminue la précision."""
+        _update_single_precision("test_organ", correct=False)
+        p = _get_organ_precision("test_organ")
+        assert p < 1.0
+        assert p == pytest.approx(1.0 - PRECISION_PENALTY, abs=0.01)
+
+    def test_reward_increases_precision(self):
+        """Une prédiction correcte augmente la précision."""
+        _update_single_precision("test_organ", correct=True)
+        p = _get_organ_precision("test_organ")
+        assert p > 1.0
+        assert p == pytest.approx(1.0 + PRECISION_REWARD, abs=0.01)
+
+    def test_asymmetric_penalty_vs_reward(self):
+        """La pénalité est plus forte que la récompense."""
+        assert PRECISION_PENALTY > PRECISION_REWARD
+
+    def test_precision_floor(self):
+        """La précision ne descend pas en dessous de PRECISION_MIN."""
+        for _ in range(100):
+            _update_single_precision("bad_organ", correct=False)
+        p = _get_organ_precision("bad_organ")
+        assert p >= PRECISION_MIN
+        assert p == pytest.approx(PRECISION_MIN, abs=0.01)
+
+    def test_precision_ceiling(self):
+        """La précision ne dépasse pas PRECISION_MAX."""
+        for _ in range(200):
+            _update_single_precision("great_organ", correct=True)
+        p = _get_organ_precision("great_organ")
+        assert p <= PRECISION_MAX
+        assert p == pytest.approx(PRECISION_MAX, abs=0.01)
+
+    def test_decay_toward_one_from_above(self):
+        """La précision au-dessus de 1.0 decay vers 1.0."""
+        import core.autonomy_engine as ae
+        ae._organ_precision_cache["decaying"] = {"precision": 1.3, "correct": 10, "total": 10}
+        _update_single_precision("decaying", correct=True)
+        p = _get_organ_precision("decaying")
+        assert p == pytest.approx(1.3 - PRECISION_DECAY_RATE + PRECISION_REWARD, abs=0.01)
+
+    def test_decay_toward_one_from_below(self):
+        """La précision en-dessous de 1.0 decay vers 1.0."""
+        import core.autonomy_engine as ae
+        ae._organ_precision_cache["weak"] = {"precision": 0.7, "correct": 0, "total": 10}
+        _update_single_precision("weak", correct=False)
+        p = _get_organ_precision("weak")
+        assert p == pytest.approx(0.7 + PRECISION_DECAY_RATE - PRECISION_PENALTY, abs=0.01)
+
+    def test_precision_affects_normalize(self):
+        """La précision module effectivement le bonus normalisé."""
+        import core.autonomy_engine as ae
+        ae._organ_precision_cache["cardiac"] = {"precision": 0.5, "correct": 0, "total": 10}
+        result_low = _normalize_bonus(3.0, "cardiac")
+        ae._organ_precision_cache["cardiac"] = {"precision": 1.0, "correct": 5, "total": 10}
+        result_normal = _normalize_bonus(3.0, "cardiac")
+        assert result_low == pytest.approx(result_normal * 0.5, abs=0.01)
+
+    def test_update_organ_precision_success(self):
+        """_update_organ_precision récompense les bons prédicteurs."""
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._last_scoring_breakdown = {
+            "objectives": 0.5,
+            "cardiac": -0.3,
+        }
+        engine._update_organ_precision("TEST_INTENT", quality_score=0.8)
+        assert _get_organ_precision("objectives") > 1.0
+        assert _get_organ_precision("cardiac") < 1.0
+
+    def test_update_organ_precision_failure(self):
+        """_update_organ_precision pénalise les mauvais prédicteurs."""
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._last_scoring_breakdown = {
+            "dopamine": 0.8,
+            "amygdala": -0.6,
+        }
+        engine._update_organ_precision("TEST_INTENT", quality_score=0.1)
+        assert _get_organ_precision("dopamine") < 1.0
+        assert _get_organ_precision("amygdala") > 1.0
+
+    def test_small_contributions_ignored(self):
+        """Les contributions sous le seuil sont ignorées."""
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._last_scoring_breakdown = {"tissue": 0.01}
+        engine._update_organ_precision("TEST_INTENT", quality_score=0.8)
+        assert _get_organ_precision("tissue") == 1.0
+
+    def test_no_breakdown_no_update(self):
+        """Sans breakdown, aucune mise à jour."""
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._last_scoring_breakdown = {}
+        engine._update_organ_precision("TEST_INTENT", quality_score=0.5)
+        import core.autonomy_engine as ae
+        assert len(ae._organ_precision_cache) == 0
+
+    def test_repeated_failures_compound(self):
+        """Des échecs répétés font chuter la précision."""
+        for _ in range(10):
+            _update_single_precision("unreliable", correct=False)
+        p = _get_organ_precision("unreliable")
+        assert p < 0.6
+
+    def test_recovery_after_failures(self):
+        """Un organe peut récupérer, mais lentement (asymétrie)."""
+        for _ in range(10):
+            _update_single_precision("recovering", correct=False)
+        p_low = _get_organ_precision("recovering")
+        for _ in range(10):
+            _update_single_precision("recovering", correct=True)
+        p_after = _get_organ_precision("recovering")
+        assert p_after > p_low
+        assert p_after < 1.0  # Asymétrie : 10 erreurs > 10 succès
+
+
+class TestAntiStagnation:
+    """Tests du détecteur de stagnation homéostatique (Couche 25)."""
+
+    def setup_method(self):
+        import core.autonomy_engine as ae
+        ae._scoring_weights_cache = None
+        ae._organ_precision_cache = {}
+
+    def _make_engine(self):
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._last_adaptive_adjustments = {}
+        engine._council_adjustments = {}
+        engine.routine_history = []
+        return engine
+
+    def test_no_stagnation_no_bonus(self):
+        """Pas de bonus si la diversité est correcte."""
+        engine = self._make_engine()
+        # Historique diversifié (5 intents différents sur 5)
+        engine.routine_history = [
+            {"intent": f"INTENT_{i}", "timestamp": "2026-03-09T01:00:00", "status": "success"}
+            for i in range(5)
+        ]
+        bd = engine._build_scoring_breakdown("EXPANSION_CODE")
+        assert "stagnation" not in bd
+
+    def test_stagnation_detected(self):
+        """Bonus de stagnation quand la diversité est trop basse."""
+        engine = self._make_engine()
+        # Historique stagnant : 10 fois le même intent
+        engine.routine_history = [
+            {"intent": "AUDIT_STRUCTURE", "timestamp": "2026-03-09T01:00:00", "status": "success"}
+            for _ in range(10)
+        ]
+        # Un intent NON dans l'historique récent devrait avoir le bonus
+        bd = engine._build_scoring_breakdown("EXPANSION_CODE")
+        assert "stagnation" in bd
+        assert bd["stagnation"] > 0
+
+    def test_stagnation_no_bonus_for_recent_intent(self):
+        """Un intent déjà dans la fenêtre récente ne reçoit PAS le bonus."""
+        engine = self._make_engine()
+        engine.routine_history = [
+            {"intent": "AUDIT_STRUCTURE", "timestamp": "2026-03-09T01:00:00", "status": "success"}
+            for _ in range(10)
+        ]
+        # AUDIT_STRUCTURE est dans la fenêtre → pas de bonus
+        bd = engine._build_scoring_breakdown("AUDIT_STRUCTURE")
+        assert "stagnation" not in bd
+
+    def test_exploration_intent_gets_multiplier(self):
+        """Les intents exploratoires reçoivent un bonus multiplié."""
+        engine = self._make_engine()
+        engine.routine_history = [
+            {"intent": "AUDIT_STRUCTURE", "timestamp": "2026-03-09T01:00:00", "status": "success"}
+            for _ in range(10)
+        ]
+        # EXPANSION_CODE est dans EXPLORATION_INTENTS
+        bd_explore = engine._build_scoring_breakdown("EXPANSION_CODE")
+        # Un intent non-exploratoire hors de la fenêtre
+        bd_normal = engine._build_scoring_breakdown("SECURITY_AUDIT")
+        assert bd_explore["stagnation"] > bd_normal["stagnation"]
+        assert bd_explore["stagnation"] == pytest.approx(
+            bd_normal["stagnation"] * EXPLORATION_MULTIPLIER, abs=0.01
+        )
+
+    def test_severity_scales_with_low_diversity(self):
+        """Plus la diversité est basse, plus le bonus est élevé."""
+        engine = self._make_engine()
+        # Diversité très basse : 1 intent unique / 10 = 0.1
+        engine.routine_history = [
+            {"intent": "AUDIT_STRUCTURE", "timestamp": "2026-03-09T01:00:00", "status": "success"}
+            for _ in range(10)
+        ]
+        bd_severe = engine._build_scoring_breakdown("COUNCIL_DEBATE")
+
+        # Diversité modérée : 3 intents / 10 = 0.3
+        engine.routine_history = [
+            {"intent": f"INTENT_{i % 3}", "timestamp": "2026-03-09T01:00:00", "status": "success"}
+            for i in range(10)
+        ]
+        bd_moderate = engine._build_scoring_breakdown("COUNCIL_DEBATE")
+
+        assert bd_severe["stagnation"] > bd_moderate["stagnation"]
+
+    def test_not_enough_history(self):
+        """Pas de détection avec trop peu d'historique."""
+        engine = self._make_engine()
+        engine.routine_history = [
+            {"intent": "AUDIT_STRUCTURE", "timestamp": "2026-03-09T01:00:00", "status": "success"}
+            for _ in range(3)  # < STAGNATION_MIN_HISTORY
+        ]
+        bd = engine._build_scoring_breakdown("EXPANSION_CODE")
+        assert "stagnation" not in bd
+
+    def test_constants_coherent(self):
+        """Les constantes anti-stagnation sont cohérentes."""
+        assert STAGNATION_WINDOW > STAGNATION_MIN_HISTORY
+        assert 0 < STAGNATION_DIVERSITY_THRESHOLD < 1.0
+        assert NOVELTY_BONUS_BASE > 0
+        assert NOVELTY_BONUS_MAX >= NOVELTY_BONUS_BASE
+        assert EXPLORATION_MULTIPLIER >= 1.0
+
+    def test_weight_balance_exploration_vs_stability(self):
+        """Les poids des organes exploratoires sont >= ceux des organes stabilisateurs."""
+        from core.autonomy_engine import _load_scoring_weights
+        weights = _load_scoring_weights()
+        exploration_weight = sum(weights[o]["weight"] for o in ["curiosity", "incubation", "spreading", "desire"])
+        stability_weight = sum(weights[o]["weight"] for o in ["hypothalamus", "insula", "basal_ganglia", "sensorium"])
+        assert exploration_weight >= stability_weight, (
+            f"Exploration ({exploration_weight}) < Stabilité ({stability_weight})"
+        )

@@ -397,3 +397,79 @@ class TestPersistence:
             f.write("BAD")
         d = isolate_dmn
         d._load()
+
+
+# ==================== TESTS COMPUTE DMN BONUS ====================
+
+class TestComputeDmnBonus:
+    """Tests du bonus créatif DMN pour le scoring autonome."""
+
+    def test_non_creative_intent_returns_zero(self, isolate_dmn):
+        """Un intent non-créatif ne reçoit aucun bonus DMN."""
+        assert isolate_dmn.compute_dmn_bonus("AUDIT_STRUCTURE") == 0.0
+        assert isolate_dmn.compute_dmn_bonus("MEMORY_CLEANUP") == 0.0
+        assert isolate_dmn.compute_dmn_bonus("SECURITY_AUDIT") == 0.0
+
+    def test_no_activity_returns_negative(self, isolate_dmn):
+        """Sans insights ni vagabondage, le réservoir créatif est vide."""
+        isolate_dmn._last_routine_time = 0
+        bonus = isolate_dmn.compute_dmn_bonus("EXPANSION_CODE")
+        assert bonus == -0.5
+
+    def test_one_recent_insight_boosts(self, isolate_dmn):
+        """Un insight récent booste les intents créatifs."""
+        isolate_dmn.insights = [{"text": "connexion A-B", "timestamp": time.time() - 100}]
+        bonus = isolate_dmn.compute_dmn_bonus("EXPANSION_CODE")
+        assert bonus == pytest.approx(0.8, abs=0.01)  # 0.5 + 1 * 0.3
+
+    def test_multiple_insights_compound(self, isolate_dmn):
+        """Plusieurs insights récents augmentent le bonus."""
+        now = time.time()
+        isolate_dmn.insights = [
+            {"text": f"insight {i}", "timestamp": now - 100 * i}
+            for i in range(5)
+        ]
+        bonus = isolate_dmn.compute_dmn_bonus("CREATIVE_PLAY")
+        assert bonus == pytest.approx(2.0, abs=0.01)  # min(2.0, 0.5 + 5 * 0.3)
+
+    def test_insight_bonus_capped(self, isolate_dmn):
+        """Le bonus insight est plafonné à 2.0."""
+        now = time.time()
+        isolate_dmn.insights = [
+            {"text": f"insight {i}", "timestamp": now - 50 * i}
+            for i in range(20)
+        ]
+        bonus = isolate_dmn.compute_dmn_bonus("EXPANSION_CODE")
+        assert bonus == 2.0
+
+    def test_old_insights_ignored(self, isolate_dmn):
+        """Les insights de plus de 2h ne comptent pas."""
+        isolate_dmn.insights = [{"text": "vieux", "timestamp": time.time() - 8000}]
+        isolate_dmn.wandering_history = deque()
+        bonus = isolate_dmn.compute_dmn_bonus("EXPANSION_CODE")
+        assert bonus == -0.5  # Pas d'insight récent, pas de vagabondage
+
+    def test_recent_wandering_gives_small_boost(self, isolate_dmn):
+        """Un vagabondage récent sans insight donne un petit boost."""
+        isolate_dmn.wandering_history = deque([
+            {"timestamp": time.time() - 300, "insight": None}
+        ])
+        bonus = isolate_dmn.compute_dmn_bonus("COUNCIL_DEBATE")
+        assert bonus == pytest.approx(0.3, abs=0.01)
+
+    def test_all_creative_intents_covered(self, isolate_dmn):
+        """Tous les intents créatifs répondent au DMN."""
+        from core.default_mode_network import DMN_CREATIVE_INTENTS
+        isolate_dmn.insights = [{"text": "test", "timestamp": time.time() - 60}]
+        for intent in DMN_CREATIVE_INTENTS:
+            bonus = isolate_dmn.compute_dmn_bonus(intent)
+            assert bonus > 0, f"{intent} devrait recevoir un bonus DMN"
+
+    def test_dmn_in_scoring_weights(self):
+        """Le DMN est configuré dans scoring_weights.json."""
+        import core.autonomy_engine as ae
+        ae._scoring_weights_cache = None
+        weights = ae._load_scoring_weights()
+        assert "dmn" in weights
+        assert weights["dmn"]["weight"] > 0
+        assert weights["dmn"]["range_abs"] > 0
