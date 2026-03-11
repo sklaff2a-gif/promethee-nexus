@@ -70,5 +70,17 @@
   "SELF_INSPECT": {
     "cost": 0,
     "description": "Lecture GitHub read-only via gh CLI, 0 appel LLM"
+  },
+  "AUTO_FUZZING": {
+    "cost": 1,
+    "description": "Fuzz-test deterministe: AST + subprocess, 0 appel LLM"
+  },
+  "CREATIVE_PLAY": {
+    "cost": 2,
+    "description": "Association libre entre concepts via 1 appel LLM local"
+  },
+  "GRIMOIRE_EVOLVE": {
+    "cost": 3,
+    "description": "Mutation prompt Grimoire: lecture + 1-2 appels LLM local"
   }
 }

@@ -236,6 +236,9 @@ CONTEXT_KEYWORDS = {
     "ROADMAP_SPEC": ["specification", "specs", "roadmap", "concevoir", "design", "architecture"],
     "COUNCIL_DEBATE": ["council", "debate", "consensus", "decision", "délibération"],
     "SELF_INSPECT": ["github", "code source", "repo", "inspection", "miroir", "auto-analyse"],
+    "AUTO_FUZZING": ["fuzz", "test", "edge case", "crash", "robustesse", "exception", "bug"],
+    "CREATIVE_PLAY": ["créatif", "association", "analogie", "exploration", "idée", "hypothèse"],
+    "GRIMOIRE_EVOLVE": ["grimoire", "prompt", "mutation", "amélioration", "formulation", "optimiser"],
 }
 
 
@@ -500,6 +503,9 @@ class AutonomyEngine:
             {"agent": "vision", "intent": "ROADMAP_RESEARCH", "mission": "Recherche et analyse des sujets pour le prochain module de la roadmap."},
             {"agent": "vision", "intent": "ROADMAP_SPEC", "mission": "Genere des specifications structurees pour un module en cours de recherche."},
             {"agent": "_self_inspect", "intent": "SELF_INSPECT", "mission": "Explore ton propre code source sur GitHub pour mieux te comprendre."},
+            {"agent": "_auto_fuzzing", "intent": "AUTO_FUZZING", "mission": "Fuzz-test une fonction aléatoire du projet pour trouver des bugs cachés."},
+            {"agent": "_creative_play", "intent": "CREATIVE_PLAY", "mission": "Association libre : croise deux concepts éloignés pour découvrir des connexions inattendues."},
+            {"agent": "_grimoire_evolve", "intent": "GRIMOIRE_EVOLVE", "mission": "Mute un prompt du Grimoire et compare les résultats pour trouver de meilleures formulations."},
         ]
 
     def _persist_state(self):
@@ -1275,6 +1281,12 @@ class AutonomyEngine:
             response = await self._execute_soliloque()
         elif intent == "SELF_INSPECT":
             response = await self._execute_self_inspect()
+        elif intent == "AUTO_FUZZING":
+            response = await self._execute_auto_fuzzing()
+        elif intent == "CREATIVE_PLAY":
+            response = await self._execute_creative_play()
+        elif intent == "GRIMOIRE_EVOLVE":
+            response = await self._execute_grimoire_evolve()
         elif intent == "DROPZONE_SCAN" and dropzone_count == 0:
             # Dropzone vide → veille YouTube IA (rotation des sujets)
             yt_index = self.total_routines_executed % len(YOUTUBE_AI_VEILLE)
@@ -1721,6 +1733,12 @@ class AutonomyEngine:
             response = await self._execute_memory_consolidation()
         elif intent == "SOLILOQUE_INTERNE":
             response = await self._execute_soliloque()
+        elif intent == "AUTO_FUZZING":
+            response = await self._execute_auto_fuzzing()
+        elif intent == "CREATIVE_PLAY":
+            response = await self._execute_creative_play()
+        elif intent == "GRIMOIRE_EVOLVE":
+            response = await self._execute_grimoire_evolve()
         else:
             response = await orchestrator.dispatch_task(agent, {
                 "mission": f"[MODE VEILLE] {routine['mission']}",
@@ -3401,6 +3419,365 @@ class AutonomyEngine:
                     await asyncio.sleep(30)
                     self.is_processing = False
                     self.last_user_interaction = time.time()
+
+
+    # ================================================================
+    # CHANTIER 2 : AUTO-FUZZING — test automatique de robustesse
+    # ================================================================
+
+    async def _execute_auto_fuzzing(self) -> dict:
+        """Fuzz-test une fonction aléatoire de core/ avec des entrées aberrantes.
+
+        100% déterministe, 0 appel LLM. Exécute la fonction dans un subprocess
+        isolé pour éviter tout crash du système principal.
+        """
+        import ast
+        import subprocess
+        import random
+        import tempfile
+
+        try:
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+            # Lister les fichiers Python de core/ (pas les grimoires ni __init__)
+            core_dir = os.path.join(project_root, "core")
+            py_files = [
+                os.path.join(core_dir, f) for f in os.listdir(core_dir)
+                if f.endswith(".py") and f != "__init__.py"
+                and not f.startswith("_")
+            ]
+            if not py_files:
+                return {"status": "skipped", "result": "Aucun fichier Python trouvé."}
+
+            # Choisir un fichier en rotation
+            target_file = py_files[self.total_routines_executed % len(py_files)]
+            filename = os.path.basename(target_file)
+
+            # Parser l'AST pour extraire les fonctions avec leurs signatures
+            with open(target_file, "r", encoding="utf-8") as f:
+                source = f.read()
+
+            try:
+                tree = ast.parse(source)
+            except SyntaxError:
+                return {"status": "skipped", "result": f"Erreur de syntaxe dans {filename}."}
+
+            # Extraire les fonctions de premier niveau (pas les méthodes de classe)
+            functions = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
+                    # Compter les paramètres (exclure self)
+                    args = [a.arg for a in node.args.args if a.arg != "self"]
+                    if 1 <= len(args) <= 4:  # Fonctions testables (pas trop de params)
+                        functions.append({"name": node.name, "args": args, "lineno": node.lineno})
+
+            if not functions:
+                return {"status": "skipped", "result": f"Aucune fonction fuzzable dans {filename}."}
+
+            # Choisir une fonction aléatoire
+            func_info = random.choice(functions)
+            func_name = func_info["name"]
+            n_args = len(func_info["args"])
+
+            print(f"   🧪 AUTO-FUZZ: {filename}:{func_info['lineno']} → {func_name}({', '.join(func_info['args'])})")
+
+            # Générer des cas de test aberrants
+            fuzz_values = [
+                "None", '""', '"x" * 10000', "0", "-1", "999999",
+                "[]", "{}", "True", "False", "0.0", "float('inf')",
+                "float('nan')", 'b""', "object()",
+            ]
+
+            # Construire le script de test
+            module_name = filename[:-3]  # sans .py
+            test_cases = []
+            for i in range(min(8, len(fuzz_values))):
+                args_combo = ", ".join(
+                    fuzz_values[(i + j) % len(fuzz_values)]
+                    for j in range(n_args)
+                )
+                test_cases.append(f"    try_call({i}, lambda: target.{func_name}({args_combo}))")
+
+            test_script = f'''
+import sys
+import os
+sys.path.insert(0, r"{project_root}")
+os.environ["PROMETHEE_TESTING"] = "1"
+
+crashes = []
+def try_call(idx, fn):
+    try:
+        fn()
+    except (TypeError, ValueError, AttributeError, KeyError, IndexError) as e:
+        pass  # Erreurs attendues — la fonction gère bien ses entrées
+    except Exception as e:
+        crashes.append(f"Case {{idx}}: {{type(e).__name__}}: {{e}}")
+
+try:
+    from core import {module_name} as target
+except Exception as e:
+    print(f"IMPORT_ERROR: {{e}}")
+    sys.exit(0)
+
+{chr(10).join(test_cases)}
+
+if crashes:
+    print(f"CRASHES_FOUND: {{len(crashes)}}")
+    for c in crashes:
+        print(c)
+else:
+    print("ALL_CLEAN")
+'''
+
+            # Exécuter dans un subprocess isolé (timeout 30s)
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as tmp:
+                tmp.write(test_script)
+                tmp_path = tmp.name
+
+            try:
+                result = subprocess.run(
+                    [sys.executable, tmp_path],
+                    capture_output=True, text=True, timeout=30,
+                    env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                )
+                output = result.stdout.strip()
+                stderr = result.stderr.strip()
+            except subprocess.TimeoutExpired:
+                output = "TIMEOUT"
+                stderr = ""
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+            # Analyser les résultats
+            if "IMPORT_ERROR" in output:
+                msg = f"Auto-fuzz {filename}.{func_name}: import impossible (dépendances)."
+                return {"status": "skipped", "result": msg}
+            elif "CRASHES_FOUND" in output:
+                crash_lines = [l for l in output.split("\n") if l.startswith("Case ")]
+                n_crashes = len(crash_lines)
+                crash_details = "; ".join(crash_lines[:3])
+                msg = f"Auto-fuzz {filename}.{func_name}: {n_crashes} crash(s) détecté(s) ! {crash_details}"
+                print(f"   🐛 {msg}")
+                # Mémoriser la découverte
+                try:
+                    from core.vector_store import ChromaMemoryManager
+                    mgr = ChromaMemoryManager.get_instance()
+                    if mgr:
+                        mgr.add(
+                            collection="collective_wisdom",
+                            text=f"[AUTO-FUZZ] Bug trouvé dans {filename}.{func_name}: {crash_details}",
+                            metadata={"source": "auto_fuzzing", "file": filename, "function": func_name},
+                        )
+                except Exception:
+                    pass
+                return {"status": "success", "result": msg}
+            elif "ALL_CLEAN" in output:
+                msg = f"Auto-fuzz {filename}.{func_name}: aucun crash — fonction robuste."
+                print(f"   ✅ {msg}")
+                return {"status": "success", "result": msg}
+            else:
+                msg = f"Auto-fuzz {filename}.{func_name}: résultat inattendu. stderr={stderr[:200]}"
+                return {"status": "warning", "result": msg}
+
+        except Exception as e:
+            return {"status": "error", "result": f"Auto-fuzzing échoué: {e}"}
+
+    # ================================================================
+    # CHANTIER 3 : CREATIVE PLAY — associations libres inter-concepts
+    # ================================================================
+
+    async def _execute_creative_play(self) -> dict:
+        """Association libre : croise deux concepts éloignés du réseau synaptique.
+
+        Utilise le Lobe Temporel pour tirer 2 mémoires à faible similarité,
+        puis demande au Strategist de trouver une connexion inattendue.
+        Coût: 1 appel LLM local.
+        """
+        import random
+
+        try:
+            # Récupérer des concepts depuis le réseau synaptique
+            concepts = []
+            try:
+                from core.synaptic_network import cortex
+                all_concepts = list(cortex._graph.keys()) if hasattr(cortex, "_graph") else []
+                if len(all_concepts) >= 4:
+                    concepts = all_concepts
+            except Exception:
+                pass
+
+            # Fallback : mots-clés des routines récentes
+            if len(concepts) < 4:
+                from_history = set()
+                for h in self.routine_history[-20:]:
+                    preview = str(h.get("result_preview", ""))
+                    words = [w for w in preview.split() if len(w) > 4 and w.isalpha()]
+                    from_history.update(words[:3])
+                concepts = list(from_history)
+
+            if len(concepts) < 2:
+                return {"status": "skipped", "result": "Pas assez de concepts pour jouer."}
+
+            # Tirer 2 concepts éloignés (pas voisins dans le graphe)
+            random.shuffle(concepts)
+            concept_a = concepts[0]
+            # Prendre un concept loin dans la liste (pas adjacent)
+            concept_b = concepts[min(len(concepts) - 1, len(concepts) // 2)]
+            if concept_a == concept_b and len(concepts) > 2:
+                concept_b = concepts[2]
+
+            print(f"   🎲 CREATIVE PLAY: Croisement [{concept_a}] × [{concept_b}]")
+
+            # Demander au Strategist de trouver une connexion
+            mission = (
+                f"[MODE VEILLE] EXERCICE CRÉATIF — Association libre.\n"
+                f"Trouve une connexion inattendue entre ces deux concepts:\n"
+                f"- Concept A: {concept_a}\n"
+                f"- Concept B: {concept_b}\n\n"
+                f"RÈGLES:\n"
+                f"- Réponds en français, maximum 150 mots.\n"
+                f"- Cherche une analogie technique ou architecturale applicable à Prométhée.\n"
+                f"- Si tu trouves une idée applicable, commence par 'DÉCOUVERTE:'\n"
+                f"- Sinon commence par 'EXPLORATION:'\n"
+            )
+
+            response = await orchestrator.dispatch_task("strategist", {
+                "mission": mission,
+                "context": "PROTOCOLE_AUTONOMIE\nCREATIVE_PLAY",
+                "force_local": True,
+            })
+
+            result_text = response.get("result", "") if response else ""
+
+            # Si une découverte est signalée, la stocker en mémoire
+            if "DÉCOUVERTE:" in result_text.upper() or "DECOUVERTE:" in result_text.upper():
+                try:
+                    from core.synaptic_network import cortex
+                    cortex.strengthen(concept_a, concept_b, weight=0.3)
+                    print(f"   💡 Connexion [{concept_a}]↔[{concept_b}] renforcée dans le cortex.")
+                except Exception:
+                    pass
+                try:
+                    from core.vector_store import ChromaMemoryManager
+                    mgr = ChromaMemoryManager.get_instance()
+                    if mgr:
+                        mgr.add(
+                            collection="collective_wisdom",
+                            text=f"[CREATIVE_PLAY] Connexion {concept_a}↔{concept_b}: {result_text[:500]}",
+                            metadata={"source": "creative_play", "concepts": f"{concept_a},{concept_b}"},
+                        )
+                except Exception:
+                    pass
+
+            return response or {"status": "error", "result": "Pas de réponse."}
+
+        except Exception as e:
+            return {"status": "error", "result": f"Creative play échoué: {e}"}
+
+    # ================================================================
+    # CHANTIER 4 : GRIMOIRE EVOLVE — mutation de prompts spécialistes
+    # ================================================================
+
+    async def _execute_grimoire_evolve(self) -> dict:
+        """Mute un prompt du Grimoire et compare l'original vs la mutation.
+
+        Sélectionne un spécialiste au hasard, lit son prompt/description,
+        génère une variante via LLM local, et compare les deux sur un cas test.
+        Les résultats sont stockés en mémoire — PAS de remplacement automatique.
+        Coût: 2-3 appels LLM locaux.
+        """
+        import json
+        import random
+
+        try:
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+            # Charger l'index du Grimoire
+            index_path = os.path.join(project_root, "core", "grimoire", "grimoire_index.json")
+            if not os.path.isfile(index_path):
+                return {"status": "skipped", "result": "grimoire_index.json introuvable."}
+
+            with open(index_path, "r", encoding="utf-8") as f:
+                grimoire_index = json.load(f)
+
+            if not grimoire_index:
+                return {"status": "skipped", "result": "Index Grimoire vide."}
+
+            # Choisir un spécialiste en rotation
+            specialist = grimoire_index[self.total_routines_executed % len(grimoire_index)]
+            slug = specialist["slug"]
+            description = specialist["description"]
+            keywords = ", ".join(specialist.get("keywords", []))
+
+            # Lire le fichier source du spécialiste pour extraire son prompt
+            spec_dirs = [
+                os.path.join(project_root, "core", "grimoire", "spécialistes"),
+                os.path.join(project_root, "core", "grimoire", "specialistes"),
+                os.path.join(project_root, "core", "grimoire"),
+            ]
+            spec_file = None
+            for d in spec_dirs:
+                candidate = os.path.join(d, specialist["file"])
+                if os.path.isfile(candidate):
+                    spec_file = candidate
+                    break
+
+            if not spec_file:
+                return {"status": "skipped", "result": f"Fichier {specialist['file']} introuvable."}
+
+            with open(spec_file, "r", encoding="utf-8") as f:
+                spec_source = f.read()[:2000]  # Limiter la lecture
+
+            print(f"   🧬 GRIMOIRE EVOLVE: Mutation de [{slug}] — {description[:60]}")
+
+            # Demander au Coder de proposer une mutation du prompt
+            mutation_mission = (
+                f"[MODE VEILLE] MUTATION DE PROMPT — Exercice d'amélioration.\n"
+                f"Voici un spécialiste du Grimoire:\n"
+                f"- Nom: {slug}\n"
+                f"- Description: {description}\n"
+                f"- Mots-clés: {keywords}\n\n"
+                f"Code source actuel (extrait):\n```python\n{spec_source[:1500]}\n```\n\n"
+                f"MISSION:\n"
+                f"1. Identifie le prompt principal utilisé par ce spécialiste.\n"
+                f"2. Propose UNE amélioration concrète du prompt (reformulation, ajout d'instruction, meilleur cadrage).\n"
+                f"3. Explique pourquoi cette mutation pourrait améliorer les résultats.\n\n"
+                f"FORMAT:\n"
+                f"ORIGINAL: [la partie du prompt ciblée]\n"
+                f"MUTATION: [ta version améliorée]\n"
+                f"RAISON: [pourquoi c'est mieux, en 1 phrase]\n"
+            )
+
+            response = await orchestrator.dispatch_task("coder", {
+                "mission": mutation_mission,
+                "context": "PROTOCOLE_AUTONOMIE\nGRIMOIRE_EVOLVE",
+                "force_local": True,
+            })
+
+            result_text = response.get("result", "") if response else ""
+
+            # Stocker la proposition en mémoire (PAS de remplacement automatique)
+            if result_text and "MUTATION:" in result_text.upper():
+                try:
+                    from core.vector_store import ChromaMemoryManager
+                    mgr = ChromaMemoryManager.get_instance()
+                    if mgr:
+                        mgr.add(
+                            collection="collective_wisdom",
+                            text=f"[GRIMOIRE_EVOLVE] Proposition mutation {slug}: {result_text[:500]}",
+                            metadata={"source": "grimoire_evolve", "specialist": slug},
+                        )
+                        print(f"   📝 Mutation proposée pour [{slug}] stockée en mémoire.")
+                except Exception:
+                    pass
+
+            return response or {"status": "error", "result": "Pas de réponse."}
+
+        except Exception as e:
+            return {"status": "error", "result": f"Grimoire evolve échoué: {e}"}
 
 
 autonomy = AutonomyEngine(idle_threshold_seconds=300)

@@ -10,13 +10,62 @@ Usage:
 """
 
 import argparse
+import atexit
 import json
 import os
+import psutil
+import signal
 import sys
 import logging
 from pathlib import Path
 
 logger = logging.getLogger("LoRATrainer")
+
+# --- Protection anti-double-instance et RAM ---
+
+LOCK_FILE = Path(__file__).parent.parent / "memory" / "lora_trainer.lock"
+MIN_FREE_RAM_GB = 12  # RAM libre minimale pour charger un modèle 12B 4-bit
+
+
+def _cleanup_lock():
+    """Supprime le fichier lock à la sortie."""
+    try:
+        LOCK_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _check_single_instance():
+    """Refuse de démarrer si une autre instance tourne déjà."""
+    if LOCK_FILE.exists():
+        try:
+            old_pid = int(LOCK_FILE.read_text().strip())
+            if psutil.pid_exists(old_pid):
+                proc = psutil.Process(old_pid)
+                if proc.is_running() and "lora_trainer" in " ".join(proc.cmdline()):
+                    print(f"ERREUR: lora_trainer déjà en cours (PID {old_pid}). "
+                          f"Tuez-le d'abord ou supprimez {LOCK_FILE}")
+                    sys.exit(1)
+        except (ValueError, psutil.NoSuchProcess, psutil.AccessDenied):
+            pass  # PID invalide ou processus mort — lock périmé, on continue
+    # Écrire notre PID
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LOCK_FILE.write_text(str(os.getpid()))
+    atexit.register(_cleanup_lock)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # atexit se déclenche sur SIGTERM
+
+
+def _check_free_ram():
+    """Vérifie qu'il y a assez de RAM libre avant de charger le modèle."""
+    mem = psutil.virtual_memory()
+    free_gb = mem.available / (1024 ** 3)
+    total_gb = mem.total / (1024 ** 3)
+    used_pct = mem.percent
+    print(f"RAM: {free_gb:.1f} GB libres / {total_gb:.1f} GB total ({used_pct:.0f}% utilisé)")
+    if free_gb < MIN_FREE_RAM_GB:
+        print(f"ERREUR: Pas assez de RAM libre ({free_gb:.1f} GB < {MIN_FREE_RAM_GB} GB minimum).")
+        print("Fermez des applications ou réduisez la taille du modèle.")
+        sys.exit(1)
 
 # --- Configuration par défaut ---
 
@@ -340,6 +389,10 @@ def main():
     if not os.path.isfile(args.dataset):
         print(f"ERREUR: Dataset introuvable: {args.dataset}")
         sys.exit(1)
+
+    # --- Protections anti-surcharge ---
+    _check_single_instance()
+    _check_free_ram()
 
     print("=" * 60)
     print(f"  QLoRA Fine-Tuning — Prométhée [{args.name}]")

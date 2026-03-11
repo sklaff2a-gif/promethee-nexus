@@ -365,9 +365,21 @@ class BaseAgent:
         """
         Exécute la mission et ENVOIE LA RÉPONSE À L'INTERFACE.
         """
+        # Résolution des pointeurs sémantiques (JIT context)
+        memory_refs = task_payload.get("memory_refs", [])
+        if memory_refs:
+            try:
+                from core.semantic_pointer import pointer_store
+                resolved = pointer_store.resolve_many(memory_refs)
+                if resolved:
+                    existing_ctx = task_payload.get("context", "")
+                    task_payload["context"] = f"{resolved}\n\n{existing_ctx}".strip()
+            except Exception:
+                pass
+
         mission = task_payload.get("mission", "Inconnue")
         self.log_thought(f"Reçoit la mission : {mission[:50]}...", type="thought")
-        
+
         # 1. Génération de la réponse (via Cloud ou Local selon la complexité)
         response_text = await self.generate_content(f"Tu es {self.role}. Mission: {mission}")
         

@@ -156,11 +156,22 @@ class Orchestrator:
                     code_to_apply = task_payload.get("context", "")
 
                     if self._contains_python_code(code_to_apply):
-                        asyncio.create_task(self.dispatch_task("factory", {
-                            "mission": "Applique ce code validé par l'Architecte.",
-                            "context": code_to_apply,
-                            "evolution_spec_id": "BRIDGE_VALIDATED",
-                        }))
+                        # Pointeur sémantique : stocker le code, passer la ref
+                        try:
+                            from core.semantic_pointer import pointer_store
+                            ptr_id = pointer_store.store(code_to_apply, source_agent="architect")
+                            asyncio.create_task(self.dispatch_task("factory", {
+                                "mission": "Applique ce code validé par l'Architecte.",
+                                "memory_refs": [ptr_id],
+                                "evolution_spec_id": "BRIDGE_VALIDATED",
+                            }))
+                        except Exception:
+                            # Fallback classique si le pointer_store échoue
+                            asyncio.create_task(self.dispatch_task("factory", {
+                                "mission": "Applique ce code validé par l'Architecte.",
+                                "context": code_to_apply,
+                                "evolution_spec_id": "BRIDGE_VALIDATED",
+                            }))
                     else:
                         logger.warning("⚠️ [BRIDGE] Validation reçue mais aucun code Python structurel trouvé dans le contexte.")
 
@@ -170,10 +181,19 @@ class Orchestrator:
                 if self._contains_python_code(result_text):
                     logger.info("⚡ DÉCLENCHEMENT ARCHITECTE...")
 
-                    asyncio.create_task(self.dispatch_task("architect", {
-                        "mission": f"VALIDATION REQUISE : {result_text[:100]}...",
-                        "context": result_text
-                    }))
+                    # Pointeur sémantique : stocker le code, passer la ref
+                    try:
+                        from core.semantic_pointer import pointer_store
+                        ptr_id = pointer_store.store(result_text, source_agent=target_slug)
+                        asyncio.create_task(self.dispatch_task("architect", {
+                            "mission": f"VALIDATION REQUISE : {result_text[:100]}...",
+                            "memory_refs": [ptr_id],
+                        }))
+                    except Exception:
+                        asyncio.create_task(self.dispatch_task("architect", {
+                            "mission": f"VALIDATION REQUISE : {result_text[:100]}...",
+                            "context": result_text
+                        }))
 
             return response
         except Exception as e:
