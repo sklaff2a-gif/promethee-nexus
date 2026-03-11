@@ -1085,12 +1085,15 @@ class NeuralTissue:
                     if freq < 0.05:  # Genome < 5% de la population
                         cell.energy += RARITY_ENERGY_BONUS
 
+        # 1f. Index spatial pour lookup voisins O(25) au lieu de O(n)
+        spatial_index = self._build_spatial_index()
+
         # 2. Exécuter chaque cellule + check apoptose
         new_cells = []
         for cell in self.cells:
             if not cell.alive:
                 continue
-            neighbors = self._get_neighbors(cell)
+            neighbors = self._get_neighbors(cell, spatial_index)
 
             # Check apoptose AVANT exécution (réutilise les voisins → 0 surcoût)
             neighbors_alive = sum(1 for n in neighbors if n.alive)
@@ -1311,18 +1314,45 @@ class NeuralTissue:
             for x in range(GRID_SIZE):
                 self.grid[y][x] = min(self.grid[y][x] + overflow[y][x], MAX_GRID_SIGNAL)
 
-    def _get_neighbors(self, cell: NeuralCell) -> List[NeuralCell]:
-        """Retourne les cellules adjacentes (rayon 2, wrap-around)."""
+    def _build_spatial_index(self) -> Dict[tuple, List[NeuralCell]]:
+        """Construit un index (x, y) → List[NeuralCell] pour lookup O(1)."""
+        index: Dict[tuple, List[NeuralCell]] = {}
+        for cell in self.cells:
+            if cell.alive:
+                index.setdefault((cell.x, cell.y), []).append(cell)
+        return index
+
+    def _get_neighbors(self, cell: NeuralCell,
+                       spatial_index: Optional[Dict] = None) -> List[NeuralCell]:
+        """Retourne les cellules adjacentes (rayon 2, wrap-around).
+
+        Si spatial_index est fourni, utilise un lookup O(25) au lieu de O(n).
+        """
+        if spatial_index is None:
+            # Fallback O(n) pour rétrocompatibilité (tests existants)
+            neighbors = []
+            for other in self.cells:
+                if other is cell or not other.alive:
+                    continue
+                dx = abs(other.x - cell.x)
+                dy = abs(other.y - cell.y)
+                dx = min(dx, GRID_SIZE - dx)
+                dy = min(dy, GRID_SIZE - dy)
+                if dx <= 2 and dy <= 2:
+                    neighbors.append(other)
+            return neighbors
+
+        # Lookup spatial O(25) — 5×5 positions dans le rayon 2
         neighbors = []
-        for other in self.cells:
-            if other is cell or not other.alive:
-                continue
-            dx = abs(other.x - cell.x)
-            dy = abs(other.y - cell.y)
-            dx = min(dx, GRID_SIZE - dx)
-            dy = min(dy, GRID_SIZE - dy)
-            if dx <= 2 and dy <= 2:
-                neighbors.append(other)
+        for dx in range(-2, 3):
+            for dy in range(-2, 3):
+                if dx == 0 and dy == 0:
+                    continue
+                nx = (cell.x + dx) % GRID_SIZE
+                ny = (cell.y + dy) % GRID_SIZE
+                for other in spatial_index.get((nx, ny), []):
+                    if other is not cell:
+                        neighbors.append(other)
         return neighbors
 
     def _update_dominant_patterns(self):

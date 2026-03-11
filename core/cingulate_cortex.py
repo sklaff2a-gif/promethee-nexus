@@ -286,6 +286,14 @@ class CingulateCortex:
 
         return max(-1.0, min(1.0, round(bonus, 3)))
 
+    def get_conflict_level(self) -> float:
+        """Niveau de conflit global [0, 1]. 0 = consensus total, 1 = conflit severe."""
+        if not self._active_conflicts:
+            return 0.0
+        max_severity = max(c.get("severity", 0.0) for c in self._active_conflicts)
+        # Normaliser : severity 1.5 (seuil) → 0.3, severity 5.0 → 1.0
+        return min(1.0, max_severity / 5.0)
+
     # --- Contexte ---
 
     def get_conflict_context(self) -> str:

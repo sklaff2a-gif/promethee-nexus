@@ -1962,7 +1962,13 @@ class TestBudgetPostEpuisement:
             "research_query": "test query",
             "subject_key": "test",
         }
-        with patch.dict("sys.modules", {"core.psyche": MagicMock(psyche=mock_psyche)}), \
+        # Forcer le cingulate à signaler un conflit pour bypass le council virtuel
+        mock_cingulate = MagicMock()
+        mock_cingulate.get_conflict_level.return_value = 0.5  # > VIRTUAL_COUNCIL_THRESHOLD
+        with patch.dict("sys.modules", {
+                 "core.psyche": MagicMock(psyche=mock_psyche),
+                 "core.cingulate_cortex": MagicMock(cingulate=mock_cingulate),
+             }), \
              patch("core.autonomy_engine.orchestrator") as mock_orch:
             mock_orch.dispatch_council = AsyncMock(return_value={
                 "status": "consensus",

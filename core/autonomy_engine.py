@@ -166,6 +166,9 @@ EXPLORATION_INTENTS = {
 }
 EXPLORATION_MULTIPLIER = 1.5          # Les intents exploratoires reçoivent 1.5x le bonus
 
+# Council virtuel : seuil de conflit cingulate sous lequel on virtualise
+VIRTUAL_COUNCIL_THRESHOLD = 0.3       # Conflit < 0.3 = consensus évident → pas de LLM
+
 # Mode sieste : routines autorisées (0-LLM uniquement) et intervalle entre routines
 NAP_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
 NAP_SLEEP_INTERVAL = 300  # 5 min entre routines en sieste
@@ -2349,6 +2352,91 @@ class AutonomyEngine:
         path = _rng.choice(interesting_paths)
         return {"action": "read_file", "path": path, "label": f"Relecture {path}"}
 
+    def _try_virtual_council(self, topic: dict, mission: str):
+        """Tente un council virtuel (0 LLM) si le cingulate ne détecte pas de conflit.
+
+        Retourne un dict résultat si virtualisé, None si le council LLM est nécessaire.
+        """
+        try:
+            from core.cingulate_cortex import cingulate
+            conflict_level = cingulate.get_conflict_level()
+        except Exception:
+            return None  # Cingulate inaccessible → fallback LLM
+
+        if conflict_level >= VIRTUAL_COUNCIL_THRESHOLD:
+            logger.info(f"[COUNCIL] Conflit {conflict_level:.2f} >= {VIRTUAL_COUNCIL_THRESHOLD} → council LLM")
+            return None
+
+        # Pas de conflit significatif → verdict déterministe
+        # Construire le verdict à partir du scoring breakdown le plus récent
+        verdict_line = "VERDICT: MAINTENIR"
+        summary_parts = []
+
+        # Analyser l'historique récent pour détecter des tendances
+        recent = self.routine_history[-10:]
+        if recent:
+            intent_counts = {}
+            for h in recent:
+                i = h.get("intent", "")
+                intent_counts[i] = intent_counts.get(i, 0) + 1
+
+            # Identifier la routine la plus fréquente (potentiellement en stagnation)
+            most_common = max(intent_counts, key=intent_counts.get)
+            mc_count = intent_counts[most_common]
+            if mc_count >= 4:
+                summary_parts.append(
+                    f"{most_common} exécutée {mc_count}x sur les 10 dernières routines — "
+                    f"risque de stagnation"
+                )
+                # Suggérer de déprioriser la routine dominante
+                verdict_line = f"VERDICT: DEPRIORISER {most_common}"
+
+            # Identifier les routines absentes qui pourraient manquer
+            all_intents = {
+                "EXPANSION_CODE", "VEILLE_SILENCIEUSE", "ROADMAP_RESEARCH",
+                "SECURITY_AUDIT", "MEMORY_CONSOLIDATION",
+            }
+            missing = all_intents - set(intent_counts.keys())
+            if missing:
+                absent = ", ".join(sorted(missing)[:3])
+                summary_parts.append(f"Routines absentes récemment : {absent}")
+
+        if not summary_parts:
+            summary_parts.append("Aucun conflit détecté entre les organes. Le système fonctionne en harmonie.")
+
+        summary = " | ".join(summary_parts)
+        final_summary = f"[COUNCIL VIRTUEL] Consensus déterministe (conflit={conflict_level:.2f}). {summary}. {verdict_line}"
+
+        result = {
+            "status": "consensus",
+            "virtual": True,
+            "final_summary": final_summary,
+            "result": final_summary,
+            "transcript": [{
+                "round": 0,
+                "agent": "cingulate_cortex",
+                "content": final_summary,
+                "virtual": True,
+            }],
+            "conflict_level": conflict_level,
+        }
+
+        print(f"   ⚡ COUNCIL VIRTUEL (conflit={conflict_level:.2f}): {summary[:80]}")
+        logger.info(f"[COUNCIL] Virtualisé — conflit {conflict_level:.2f}, verdict: {verdict_line}")
+
+        # Publier l'événement pour que le reste du pipeline fonctionne
+        try:
+            import asyncio
+            asyncio.get_event_loop().create_task(bus.publish("COUNCIL_END", {
+                "status": "consensus",
+                "virtual": True,
+                "summary": final_summary,
+            }))
+        except Exception:
+            pass
+
+        return result
+
     async def _execute_council_debate(self) -> dict:
         """Lance un débat autonome Council : Recherche web → Débat éclairé.
         En mode dégradé (budget reserve), réduit à 2 participants, 3 tours, sans pré-recherche."""
@@ -2511,15 +2599,20 @@ class AutonomyEngine:
                 "Si aucun changement n'est nécessaire, utilisez VERDICT: MAINTENIR."
             )
 
-        print(f"   🗣️ COUNCIL DEBATE: {topic['participants']} — {topic['mission'][:80]}")
-        council_max_rounds = 3 if degraded else 5
-        result = await orchestrator.dispatch_council(
-            participants=topic["participants"],
-            mission=f"[DÉBAT AUTONOME] {mission}",
-            max_rounds=council_max_rounds,
-        )
+        # --- Council virtuel : si pas de conflit, verdict déterministe (0 LLM) ---
+        virtual_result = self._try_virtual_council(topic, mission)
+        if virtual_result is not None:
+            result = virtual_result
+        else:
+            print(f"   🗣️ COUNCIL DEBATE: {topic['participants']} — {topic['mission'][:80]}")
+            council_max_rounds = 3 if degraded else 5
+            result = await orchestrator.dispatch_council(
+                participants=topic["participants"],
+                mission=f"[DÉBAT AUTONOME] {mission}",
+                max_rounds=council_max_rounds,
+            )
         # Flag pour override du coût dans le tracking post-exécution
-        self._council_degraded = degraded
+        self._council_degraded = degraded or (virtual_result is not None)
         result["participants"] = topic["participants"]
         # Injecter "result" pour le scoring qualité (Council retourne final_summary, pas result)
         if "result" not in result:

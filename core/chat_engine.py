@@ -26,6 +26,7 @@ OLLAMA_CHAT_URL = "http://127.0.0.1:11434/api/chat"
 OLLAMA_CHAT_CTX = 12288         # Fenetre de contexte Ollama (tokens)
 SYSTEM_PROMPT_TOKEN_BUDGET = 3000  # Budget estimé pour le prompt systeme (tokens)
 CONNEXION_SATISFACTION = 12.0   # Points de satisfaction par echange
+PROMPT_CACHE_TTL = 10.0        # Secondes entre deux reconstructions du prompt organes
 
 
 class ChatEngine:
@@ -42,6 +43,8 @@ class ChatEngine:
             return
         self._init_done = True
         self.messages: List[Dict] = []  # {"role", "content", "timestamp"}
+        self._cached_organ_parts: List[str] = []
+        self._cache_timestamp: float = 0.0
         self._load()
 
     # --- COMMANDES D'INTROSPECTION (deterministe, 0 LLM) ---
@@ -304,15 +307,15 @@ class ChatEngine:
             return ""
         return "\n".join(lines)
 
-    def _build_system_prompt(self, memories_text: str = "", command_result: str = "") -> str:
-        """Construit le prompt systeme avec l'etat reel de tous les organes."""
-        parts = [
-            "Tu es Promethee, un systeme IA autonome en evolution constante.",
-            "Tu t'exprimes en premiere personne, avec authenticite.",
-            "Tu parles francais.",
-        ]
+    def _build_organ_parts(self) -> List[str]:
+        """Construit les sections organes du prompt — cacheable avec TTL."""
+        now = time.time()
+        if self._cached_organ_parts and (now - self._cache_timestamp) < PROMPT_CACHE_TTL:
+            return self._cached_organ_parts
 
-        # --- ETAT ACTUEL (existant) ---
+        parts = []
+
+        # --- ETAT ACTUEL ---
         emotion = "serenite"
         intensity = 50
         try:
@@ -510,20 +513,6 @@ class ChatEngine:
         # --- CARTOGRAPHIE (SynapticNetwork + NeuralTissue + CorpusCallosum) ---
         parts.append(self._build_cartography())
 
-        # --- MEMOIRE (Hippocampus + RAG) ---
-        try:
-            from core.hippocampus import hippocampus
-            hctx = hippocampus.get_hippocampus_context()
-            parts.append(f"\n[MEMOIRE]")
-            if hctx:
-                parts.append(f"- Episodique : {hctx[:200]}")
-            if memories_text:
-                parts.append(f"- Souvenirs pertinents : {memories_text[:450]}")
-        except Exception:
-            if memories_text:
-                parts.append(f"\n[MEMOIRE]")
-                parts.append(f"- Souvenirs pertinents : {memories_text[:450]}")
-
         # --- ROUTINES (AutonomyEngine) ---
         try:
             from core.autonomy_engine import autonomy
@@ -550,6 +539,39 @@ class ChatEngine:
                 parts.append(f"- Traits dominants : {traits_text}")
         except Exception:
             pass
+
+        self._cached_organ_parts = parts
+        self._cache_timestamp = now
+        return parts
+
+    def _build_system_prompt(self, memories_text: str = "", command_result: str = "") -> str:
+        """Construit le prompt systeme avec l'etat reel de tous les organes.
+
+        Les sections organes sont cachees pendant 10s (PROMPT_CACHE_TTL).
+        Les sections variables (memories, commandes) sont toujours fraiches.
+        """
+        parts = [
+            "Tu es Promethee, un systeme IA autonome en evolution constante.",
+            "Tu t'exprimes en premiere personne, avec authenticite.",
+            "Tu parles francais.",
+        ]
+
+        # Sections organes (cachees TTL 10s)
+        parts.extend(self._build_organ_parts())
+
+        # --- MEMOIRE (toujours fraiche — depend de la question) ---
+        try:
+            from core.hippocampus import hippocampus
+            hctx = hippocampus.get_hippocampus_context()
+            parts.append(f"\n[MEMOIRE]")
+            if hctx:
+                parts.append(f"- Episodique : {hctx[:200]}")
+            if memories_text:
+                parts.append(f"- Souvenirs pertinents : {memories_text[:450]}")
+        except Exception:
+            if memories_text:
+                parts.append(f"\n[MEMOIRE]")
+                parts.append(f"- Souvenirs pertinents : {memories_text[:450]}")
 
         # --- INTROSPECTION DEMANDEE (commandes !) ---
         if command_result:
