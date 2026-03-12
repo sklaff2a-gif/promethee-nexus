@@ -91,11 +91,35 @@ def check_environment():
         sys.exit(1)
 
     gpu_name = torch.cuda.get_device_name(0)
-    vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
-    print(f"GPU: {gpu_name} ({vram_gb:.1f} GB VRAM)")
+    vram_total = torch.cuda.get_device_properties(0).total_memory / 1e9
+    vram_free = (torch.cuda.get_device_properties(0).total_memory
+                 - torch.cuda.memory_reserved(0)) / 1e9
+    print(f"GPU: {gpu_name} ({vram_total:.1f} GB VRAM total)")
     print(f"PyTorch: {torch.__version__}")
     print(f"CUDA: {torch.version.cuda}")
-    return vram_gb
+
+    # Vérifier la VRAM disponible via nvidia-smi (plus fiable que torch)
+    try:
+        import subprocess as sp
+        result = sp.run(
+            ["nvidia-smi", "--query-gpu=memory.used,memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            parts = result.stdout.strip().split(",")
+            used_mb = int(parts[0].strip())
+            total_mb = int(parts[1].strip())
+            free_gb = (total_mb - used_mb) / 1024
+            print(f"VRAM libre (nvidia-smi): {free_gb:.1f} GB / {total_mb/1024:.1f} GB")
+            if free_gb < 10.0:
+                print(f"ATTENTION: Seulement {free_gb:.1f} GB VRAM libres. "
+                      f"Le training 12B 4-bit nécessite ~14 GB. "
+                      f"Risque de CUDA OOM.")
+    except Exception:
+        pass
+
+    return vram_total
 
 
 def load_dataset_chatml(dataset_path: str) -> list:
@@ -141,13 +165,23 @@ def try_unsloth(args, dataset_path: str) -> bool:
     from datasets import Dataset
 
     # Charger le modèle
-    print(f"Chargement du modèle {args.base_model} (4-bit)...")
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=args.base_model,
-        max_seq_length=args.max_seq_length,
-        dtype=torch.float16,
-        load_in_4bit=True,
-    )
+    # bfloat16 obligatoire pour Gemma3 (float16 → fallback float32 = 2x plus lent)
+    print(f"Chargement du modèle {args.base_model} (4-bit, bfloat16)...")
+    try:
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=args.base_model,
+            max_seq_length=args.max_seq_length,
+            dtype=torch.bfloat16,
+            load_in_4bit=True,
+        )
+    except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+        err_msg = str(e)
+        if "out of memory" in err_msg.lower() or "CUDA" in err_msg:
+            print(f"ERREUR CUDA OOM: Pas assez de VRAM pour charger le modèle.")
+            print(f"  Detail: {err_msg[:200]}")
+            print(f"  Solution: Fermez Ollama ou attendez qu'il libère la VRAM.")
+            sys.exit(2)  # Code 2 = OOM (distingué de code 1 générique)
+        raise
 
     # Configurer LoRA
     model = FastLanguageModel.get_peft_model(
@@ -187,7 +221,8 @@ def try_unsloth(args, dataset_path: str) -> bool:
         logging_steps=1,
         save_strategy="epoch",
         eval_strategy="epoch",
-        fp16=True,
+        bf16=True,  # bfloat16 natif RTX 50 series (float16 → float32 fallback = 2x lent)
+        fp16=False,
         optim="adamw_8bit",
         seed=42,
         max_seq_length=args.max_seq_length,
@@ -204,7 +239,7 @@ def try_unsloth(args, dataset_path: str) -> bool:
     )
 
     # Entraînement
-    print(f"\nDébut de l'entraînement ({args.epochs} epochs)...")
+    print(f"\nDébut de l'entraînement ({args.epochs} epochs, bfloat16)...")
     result = trainer.train()
     print(f"Training terminé. Loss finale: {result.training_loss:.4f}")
 
@@ -214,18 +249,29 @@ def try_unsloth(args, dataset_path: str) -> bool:
     tokenizer.save_pretrained(adapter_path)
     print(f"Adapter sauvegardé dans {adapter_path}")
 
-    # Exporter en GGUF si possible
+    # Exporter en GGUF si possible, sinon merge en safetensors
+    gguf_dir = os.path.join(output_dir, "gguf")
     try:
         print("Export GGUF...")
         model.save_pretrained_gguf(
-            os.path.join(output_dir, "gguf"),
+            gguf_dir,
             tokenizer,
             quantization_method="q4_k_m",
         )
-        print(f"GGUF exporté dans {output_dir}/gguf/")
+        print(f"GGUF exporté dans {gguf_dir}")
     except Exception as e:
         print(f"Export GGUF non disponible: {e}")
-        print("Utilisez llama.cpp pour convertir manuellement.")
+        print("Merge du modèle complet en safetensors (pour ollama --quantize)...")
+        try:
+            model.save_pretrained_merged(
+                gguf_dir,
+                tokenizer,
+                save_method="merged_16bit",
+            )
+            print(f"Modèle mergé dans {gguf_dir}")
+        except Exception as e2:
+            print(f"ERREUR merge: {e2}")
+            print("Le déploiement Ollama devra être fait manuellement.")
 
     return True
 
@@ -241,11 +287,11 @@ def train_with_transformers(args, dataset_path: str):
     print(f"\n=== Mode Transformers + PEFT ===")
     print(f"Chargement du modèle {args.base_model} (4-bit)...")
 
-    # Quantization config
+    # Quantization config — bfloat16 obligatoire pour Gemma3
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_compute_dtype=torch.bfloat16,
         bnb_4bit_use_double_quant=True,
     )
 
@@ -258,7 +304,7 @@ def train_with_transformers(args, dataset_path: str):
         args.base_model,
         quantization_config=bnb_config,
         device_map="auto",
-        torch_dtype=torch.float16,
+        torch_dtype=torch.bfloat16,
     )
 
     model = prepare_model_for_kbit_training(model)
@@ -303,7 +349,8 @@ def train_with_transformers(args, dataset_path: str):
         logging_steps=1,
         save_strategy="epoch",
         eval_strategy="epoch",
-        fp16=True,
+        bf16=True,
+        fp16=False,
         optim="adamw_torch",
         seed=42,
         max_seq_length=args.max_seq_length,
@@ -323,11 +370,23 @@ def train_with_transformers(args, dataset_path: str):
     result = trainer.train()
     print(f"Training terminé. Loss finale: {result.training_loss:.4f}")
 
-    # Sauvegarder
+    # Sauvegarder l'adapter
     adapter_path = os.path.join(output_dir, "adapter")
     model.save_pretrained(adapter_path)
     tokenizer.save_pretrained(adapter_path)
     print(f"Adapter sauvegardé dans {adapter_path}")
+
+    # Merge du modèle complet pour déploiement Ollama
+    gguf_dir = os.path.join(output_dir, "gguf")
+    print("Merge du modèle complet en safetensors (pour ollama --quantize)...")
+    try:
+        merged_model = model.merge_and_unload()
+        merged_model.save_pretrained(gguf_dir)
+        tokenizer.save_pretrained(gguf_dir)
+        print(f"Modèle mergé dans {gguf_dir}")
+    except Exception as e:
+        print(f"ERREUR merge: {e}")
+        print("Le déploiement Ollama devra être fait manuellement.")
 
 
 def create_ollama_modelfile(adapter_dir: str, name: str, base_model: str = "gemma3:12b"):
@@ -335,19 +394,19 @@ def create_ollama_modelfile(adapter_dir: str, name: str, base_model: str = "gemm
     gguf_dir = os.path.join(adapter_dir, "gguf")
     adapter_file = None
 
-    # Chercher le fichier GGUF
+    # Chercher le fichier GGUF (chemin relatif au Modelfile)
     if os.path.isdir(gguf_dir):
         for f in os.listdir(gguf_dir):
             if f.endswith(".gguf"):
-                adapter_file = os.path.join(gguf_dir, f)
+                adapter_file = "./gguf/" + f
                 break
 
-    # Chercher un adapter safetensors
+    # Chercher un adapter safetensors (chemin relatif au Modelfile)
     safetensors_dir = os.path.join(adapter_dir, "adapter")
     if adapter_file is None and os.path.isdir(safetensors_dir):
         for f in os.listdir(safetensors_dir):
             if f.endswith(".safetensors"):
-                adapter_file = safetensors_dir
+                adapter_file = "./adapter"
                 break
 
     if adapter_file is None:

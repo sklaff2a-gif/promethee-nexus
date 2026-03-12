@@ -56,7 +56,7 @@ TRAINING_ROTATION = ["strategist", "coder", "researcher", "writer"]
 MIN_DATASET_SIZE = 30           # Minimum d'exemples pour lancer un training
 MIN_NEW_DATA_RATIO = 0.20       # 20% de nouvelles donnees minimum
 MIN_HOURS_BETWEEN_TRAINING = 12 # Cooldown entre deux trainings du meme agent
-MAX_TRAINING_TIMEOUT = 3600     # 60 minutes max pour un training (seconds) — 12B: load ~5min + train ~10min + GGUF export ~20min
+MAX_TRAINING_TIMEOUT = 7200     # 2h max pour un training (seconds) — 12B bf16: load ~1min + train ~30min + GGUF export ~20min
 
 # Noms des modeles Ollama
 OLLAMA_MODEL_PREFIX = "promethee-"
@@ -73,6 +73,7 @@ class LoRAAutoTrainer:
         self._training_in_progress: bool = False
         self._training_agent: Optional[str] = None
         self._consecutive_timeouts: int = 0
+        self._consecutive_failures: int = 0
 
     # ================================================================
     # ETAT PERSISTANT
@@ -291,10 +292,11 @@ class LoRAAutoTrainer:
                     "output": output[-2000:],  # Garder les derniers 2000 chars
                 }
             else:
-                logger.error(f"[LORA] Training {agent_name} echoue (code={proc.returncode})")
+                error_type = "CUDA OOM" if proc.returncode == 2 else f"Exit code {proc.returncode}"
+                logger.error(f"[LORA] Training {agent_name} echoue ({error_type})")
                 return {
                     "success": False,
-                    "error": f"Exit code {proc.returncode}",
+                    "error": error_type,
                     "output": output[-2000:],
                 }
 
@@ -376,7 +378,7 @@ class LoRAAutoTrainer:
             )
             stdout, _ = await asyncio.wait_for(
                 proc.communicate(),
-                timeout=600,  # 10 min max pour l'import
+                timeout=1800,  # 30 min max pour merge+quantize 24 GB
             )
             output = stdout.decode("utf-8", errors="replace") if stdout else ""
 
@@ -423,6 +425,9 @@ class LoRAAutoTrainer:
                 if resp.status_code != 200:
                     return False
                 models = resp.json().get("models", [])
+                if not models:
+                    logger.info("[LORA] Aucun modele Ollama charge")
+                    return True
                 for m in models:
                     name = m.get("name", "")
                     if name:
@@ -436,6 +441,44 @@ class LoRAAutoTrainer:
         except Exception as e:
             logger.warning(f"[LORA] Echec dechargement Ollama: {e}")
             return False
+
+    async def _wait_for_vram(self, min_free_gb: float = 12.0,
+                              timeout_s: int = 30) -> bool:
+        """Attend que la VRAM soit suffisamment libre pour le training.
+
+        Poll nvidia-smi toutes les 2 secondes pendant max timeout_s.
+        Retourne True si la VRAM est libre, False si timeout.
+        """
+        import subprocess as sp
+        for attempt in range(timeout_s // 2):
+            try:
+                result = sp.run(
+                    ["nvidia-smi", "--query-gpu=memory.used,memory.total",
+                     "--format=csv,noheader,nounits"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0:
+                    parts = result.stdout.strip().split(",")
+                    used_mb = int(parts[0].strip())
+                    total_mb = int(parts[1].strip())
+                    free_gb = (total_mb - used_mb) / 1024
+                    logger.info(
+                        f"[LORA] VRAM: {used_mb} MB utilises / {total_mb} MB "
+                        f"total ({free_gb:.1f} GB libres) "
+                        f"[tentative {attempt + 1}]"
+                    )
+                    if free_gb >= min_free_gb:
+                        return True
+            except Exception as e:
+                logger.warning(f"[LORA] nvidia-smi erreur: {e}")
+                return True  # Pas de nvidia-smi = on tente quand meme
+            await asyncio.sleep(2)
+
+        logger.warning(
+            f"[LORA] VRAM insuffisante apres {timeout_s}s d'attente "
+            f"(besoin de {min_free_gb:.0f} GB libres)"
+        )
+        return False
 
     # ================================================================
     # PIPELINE COMPLET
@@ -465,30 +508,24 @@ class LoRAAutoTrainer:
                 "threshold_reason": f"Training {self._training_agent} deja en cours",
             }
 
-        # Anti-boucle : apres 2 timeouts consecutifs, cooldown de 4h
-        if self._consecutive_timeouts >= 2 and not force:
-            state = self._get_agent_state(
-                agent_name or self.get_next_agent()
+        # Anti-boucle : apres 3 echecs consecutifs (timeout OU exit code), cooldown 4h
+        if self._consecutive_failures >= 3 and not force:
+            agent = agent_name or self.get_next_agent()
+            logger.info(
+                f"[LORA] Anti-boucle: {self._consecutive_failures} echecs "
+                f"consecutifs (dont {self._consecutive_timeouts} timeouts). "
+                f"Cooldown 4h."
             )
-            elapsed = time.time() - state.get("last_trained", 0)
-            cooldown_h = 4
-            if elapsed < cooldown_h * 3600:
-                hours_left = (cooldown_h * 3600 - elapsed) / 3600
-                agent = agent_name or self.get_next_agent()
-                logger.info(
-                    f"[LORA] Anti-boucle: {self._consecutive_timeouts} timeouts "
-                    f"consecutifs, cooldown {hours_left:.1f}h"
-                )
-                return {
-                    "agent": agent,
-                    "phase": "anti_loop",
-                    "success": False,
-                    "skipped": True,
-                    "threshold_reason": (
-                        f"Anti-boucle: {self._consecutive_timeouts} timeouts, "
-                        f"cooldown {hours_left:.1f}h"
-                    ),
-                }
+            return {
+                "agent": agent,
+                "phase": "anti_loop",
+                "success": False,
+                "skipped": True,
+                "threshold_reason": (
+                    f"Anti-boucle: {self._consecutive_failures} echecs consecutifs. "
+                    f"Cooldown jusqu'au prochain reset."
+                ),
+            }
 
         start_time = time.time()
 
@@ -528,9 +565,17 @@ class LoRAAutoTrainer:
             self._save_state()
             return result
 
-        # 4. Liberer la GPU
+        # 4. Liberer la GPU et attendre que la VRAM soit libre
         result["phase"] = "unload_gpu"
         await self._unload_ollama_models()
+        vram_ok = await self._wait_for_vram(min_free_gb=12.0, timeout_s=30)
+        if not vram_ok:
+            result["error"] = "VRAM insuffisante apres unload Ollama"
+            logger.error(f"[LORA] {result['error']}")
+            self._consecutive_failures += 1
+            self._advance_rotation()
+            self._save_state()
+            return result
 
         # 5. Training (avec verrou concurrence)
         self._training_in_progress = True
@@ -543,18 +588,29 @@ class LoRAAutoTrainer:
                 result["error"] = train_result.get("error", "Training echoue")
                 result["training_output"] = train_result.get("output", "")
                 logger.error(f"[LORA] Training {agent_name} echoue: {result['error']}")
-                # Compteur timeout
+                # Logger l'output du subprocess pour diagnostic
+                output_tail = train_result.get("output", "")
+                if output_tail:
+                    tail_lines = output_tail.strip().splitlines()[-15:]
+                    logger.error(
+                        f"[LORA] Output {agent_name} (dernières lignes):\n"
+                        + "\n".join(tail_lines)
+                    )
+                # Compteur echecs consecutifs (timeout OU exit code)
+                self._consecutive_failures += 1
                 if train_result.get("error") == "Timeout":
                     self._consecutive_timeouts += 1
-                    logger.warning(
-                        f"[LORA] Timeouts consecutifs: {self._consecutive_timeouts}"
-                    )
+                logger.warning(
+                    f"[LORA] Echecs consecutifs: {self._consecutive_failures} "
+                    f"(dont {self._consecutive_timeouts} timeouts)"
+                )
                 self._advance_rotation()
                 self._save_state()
                 return result
 
-            # Reset compteur timeout sur succes
+            # Reset compteurs sur succes
             self._consecutive_timeouts = 0
+            self._consecutive_failures = 0
             result["loss"] = train_result.get("loss", 0.0)
 
             # 6. Deploiement
