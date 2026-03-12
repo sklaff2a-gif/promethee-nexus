@@ -327,6 +327,11 @@ class NeuralCell:
         self._local_density = local_density if local_density is not None else 1
         self._eff_mutation_rate = mutation_rate
         self._partner_genome = partner_genome
+        # Guard : clamp pointer après mutations inter-tick (exile, pandémie)
+        if not self.genome:
+            self.alive = False
+            return None
+        self.pointer = self.pointer % len(self.genome)
         instruction = self.genome[self.pointer]
         child = self._execute(
             instruction, grid, neighbors,
