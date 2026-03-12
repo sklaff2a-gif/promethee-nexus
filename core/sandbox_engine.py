@@ -5,6 +5,7 @@
 
 import ast
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -39,6 +40,11 @@ _SOURCE_PREFIXES = ("core.", "Agents.", "tools.")
 TEST_TIMEOUT = 120  # secondes
 FRESHNESS_THRESHOLD = 3600  # 1 heure
 
+# --- Cache MD5 (Niveau 3) ---
+SANDBOX_CACHE_FILE = os.path.join(PROJECT_ROOT, "memory", "sandbox_cache.json")
+CACHE_FULL_RUN_INTERVAL = 6 * 3600  # 6h — filet de securite
+CACHE_ENTRY_TTL = 24 * 3600  # 24h — eviction des entrees anciennes
+
 
 # --- Resultat ---
 
@@ -71,6 +77,9 @@ class SandboxEngine:
         self._last_refresh = 0.0
         self._lock = asyncio.Lock()
         self._test_graph = None
+        self._cache = {}
+        self._last_full_run = 0.0
+        self._load_cache()
         self._stats = {
             "total_tests_run": 0,
             "total_passed": 0,
@@ -79,6 +88,7 @@ class SandboxEngine:
             "total_discards": 0,
             "pre_validation_catches": 0,
             "graph_targeted_runs": 0,
+            "cache_hits": 0,
         }
 
     def init(self):
@@ -176,6 +186,9 @@ class SandboxEngine:
 
             # Determiner quels tests lancer (graphe + fallback)
             test_args = ["python", "-m", "pytest", "-x", "--tb=short", "-q"]
+            pair_hash = None
+            selected_tests = None
+            is_full_run = True
             if target_file:
                 test_files = self._select_tests(target_file)
                 if test_files is None:
@@ -183,12 +196,21 @@ class SandboxEngine:
                     test_args.append("tests/")
                 elif test_files:
                     self._stats["graph_targeted_runs"] += 1
+                    selected_tests = test_files
                     for tf in test_files:
                         test_args.append(tf)
+                    is_full_run = False
                 else:
                     test_args.append("tests/")
             else:
                 test_args.append("tests/")
+
+            # Cache MD5 : verifier avant de lancer pytest
+            if selected_tests and target_file:
+                pair_hash = self._compute_pair_hash(target_file, selected_tests)
+                cached = self._cache_lookup(pair_hash)
+                if cached is not None:
+                    return cached
 
             env = os.environ.copy()
             env["PYTHONIOENCODING"] = "utf-8"
@@ -229,11 +251,22 @@ class SandboxEngine:
                 self._stats["total_passed"] += passed
                 self._stats["total_failed"] += failed
 
-                return SandboxResult(
+                result = SandboxResult(
                     success=success, tests_passed=passed, tests_failed=failed,
                     tests_errors=errors, output=output,
                     duration_seconds=duration,
                 )
+
+                # Cache MD5 : stocker le resultat
+                if pair_hash:
+                    self._cache_update(pair_hash, result)
+
+                # Tracker le dernier run complet (filet de securite 6h)
+                if is_full_run:
+                    self._last_full_run = time.time()
+                    self._save_cache()
+
+                return result
 
             except FileNotFoundError:
                 duration = time.time() - start
@@ -302,6 +335,101 @@ class SandboxEngine:
             "last_refresh": self._last_refresh,
             **self._stats,
         }
+
+    # --- CACHE MD5 ---
+
+    def _load_cache(self):
+        """Charge le cache depuis le disque et evince les entrees > 24h."""
+        try:
+            with open(SANDBOX_CACHE_FILE, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            self._cache = {}
+            return
+        self._last_full_run = raw.pop("_last_full_run", 0.0)
+        # Eviction : supprimer les entrees plus vieilles que CACHE_ENTRY_TTL
+        now = time.time()
+        self._cache = {
+            k: v for k, v in raw.items()
+            if isinstance(v, dict) and now - v.get("timestamp", 0) < CACHE_ENTRY_TTL
+        }
+
+    def _save_cache(self):
+        """Persiste le cache sur disque."""
+        try:
+            data = dict(self._cache)
+            data["_last_full_run"] = self._last_full_run
+            os.makedirs(os.path.dirname(SANDBOX_CACHE_FILE), exist_ok=True)
+            with open(SANDBOX_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except OSError as e:
+            logger.warning(f"[SANDBOX_CACHE] Erreur sauvegarde: {e}")
+
+    def _compute_pair_hash(self, source_file: str, test_files: List[str]) -> Optional[str]:
+        """Calcule le hash MD5 de la paire source + tests.
+
+        Returns:
+            'md5_source:md5_test1,md5_test2' ou None si fichier illisible.
+        """
+        # Hash du fichier source
+        source_path = os.path.join(SANDBOX_DIR, source_file)
+        try:
+            with open(source_path, "rb") as f:
+                source_hash = hashlib.md5(f.read()).hexdigest()
+        except OSError:
+            return None
+
+        # Hash de chaque fichier test (tries pour determinisme)
+        test_hashes = []
+        for tf in sorted(test_files):
+            test_path = os.path.join(SANDBOX_DIR, tf)
+            try:
+                with open(test_path, "rb") as f:
+                    test_hashes.append(hashlib.md5(f.read()).hexdigest())
+            except OSError:
+                return None
+
+        return source_hash + ":" + ",".join(test_hashes)
+
+    def _cache_lookup(self, pair_hash: str) -> Optional[SandboxResult]:
+        """Verifie le cache pour un hash donne.
+
+        Retourne SandboxResult si cache hit succes, None sinon.
+        Cache hit echec → retourne None (on relance, le fix a pu atterrir).
+        """
+        if not pair_hash or pair_hash not in self._cache:
+            return None
+
+        entry = self._cache[pair_hash]
+
+        # Seuls les succes sont caches (echecs toujours relances)
+        if not entry.get("success", False):
+            return None
+
+        # Filet de securite : bypass si aucun run complet depuis 6h
+        if time.time() - self._last_full_run > CACHE_FULL_RUN_INTERVAL:
+            return None
+
+        self._stats["cache_hits"] += 1
+        return SandboxResult(
+            success=True,
+            tests_passed=entry.get("tests_passed", 0),
+            tests_failed=0,
+            tests_errors=0,
+            output=f"[CACHE HIT] Tests identiques deja valides (hash: {pair_hash[:16]}...)",
+            duration_seconds=0.0,
+        )
+
+    def _cache_update(self, pair_hash: str, result: SandboxResult):
+        """Met a jour le cache apres un run reel."""
+        if not pair_hash:
+            return
+        self._cache[pair_hash] = {
+            "success": result.success,
+            "tests_passed": result.tests_passed,
+            "timestamp": time.time(),
+        }
+        self._save_cache()
 
     # --- METHODES PRIVEES ---
 

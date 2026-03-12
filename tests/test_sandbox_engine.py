@@ -18,6 +18,7 @@ def isolate_sandbox(tmp_path, monkeypatch):
     sandbox_dir = str(tmp_path / "sandbox")
     monkeypatch.setattr(mod, "SANDBOX_DIR", sandbox_dir)
     monkeypatch.setattr(mod, "PROJECT_ROOT", prod_dir)
+    monkeypatch.setattr(mod, "SANDBOX_CACHE_FILE", str(tmp_path / "sandbox_cache.json"))
 
     # Creer un faux projet production minimal
     os.makedirs(os.path.join(prod_dir, "core"), exist_ok=True)
@@ -290,6 +291,7 @@ class TestStats:
             "total_tests_run", "total_passed", "total_failed",
             "total_promotions", "total_discards",
             "pre_validation_catches", "graph_targeted_runs",
+            "cache_hits",
         }
         assert set(stats.keys()) == expected_keys
 
@@ -484,3 +486,256 @@ class TestParsePytestOutput:
         assert p == 0
         assert f == 0
         assert e == 0
+
+
+# =============================================================
+# CACHE MD5 (Niveau 3)
+# =============================================================
+
+class TestCacheMD5:
+    def test_compute_pair_hash(self, isolate_sandbox):
+        """Le hash combine source + tests."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        h = engine._compute_pair_hash("core/base_agent.py", ["tests/test_base.py"])
+        assert h is not None
+        # Format: md5_source:md5_test
+        parts = h.split(":")
+        assert len(parts) == 2
+        assert len(parts[0]) == 32  # MD5 hex
+        assert len(parts[1]) == 32
+
+    def test_hash_changes_on_content_change(self, isolate_sandbox):
+        """Si le fichier source change, le hash change."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        h1 = engine._compute_pair_hash("core/base_agent.py", ["tests/test_base.py"])
+        # Modifier le source
+        engine.apply_change("core/base_agent.py", "# v2\nclass BaseAgent:\n    x = 1\n")
+        h2 = engine._compute_pair_hash("core/base_agent.py", ["tests/test_base.py"])
+        assert h1 != h2
+
+    def test_hash_none_if_missing_file(self, isolate_sandbox):
+        """Hash None si un fichier n'existe pas."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        h = engine._compute_pair_hash("core/nonexistent.py", ["tests/test_base.py"])
+        assert h is None
+
+    def test_hash_deterministic(self, isolate_sandbox):
+        """Meme fichiers → meme hash."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        h1 = engine._compute_pair_hash("core/base_agent.py", ["tests/test_base.py"])
+        h2 = engine._compute_pair_hash("core/base_agent.py", ["tests/test_base.py"])
+        assert h1 == h2
+
+    def test_cache_lookup_miss(self, isolate_sandbox):
+        """Cache vide → None."""
+        engine = SandboxEngine()
+        result = engine._cache_lookup("abc123:def456")
+        assert result is None
+
+    def test_cache_lookup_hit_success(self, isolate_sandbox):
+        """Cache hit succes → retourne SandboxResult."""
+        engine = SandboxEngine()
+        engine._last_full_run = time.time()  # filet de securite OK
+        engine._cache["hash1"] = {
+            "success": True,
+            "tests_passed": 5,
+            "timestamp": time.time(),
+        }
+        result = engine._cache_lookup("hash1")
+        assert result is not None
+        assert result.success is True
+        assert result.tests_passed == 5
+        assert "CACHE HIT" in result.output
+        assert engine._stats["cache_hits"] == 1
+
+    def test_cache_lookup_ignores_failures(self, isolate_sandbox):
+        """Cache hit echec → None (relancer le test)."""
+        engine = SandboxEngine()
+        engine._last_full_run = time.time()
+        engine._cache["hash_fail"] = {
+            "success": False,
+            "tests_passed": 0,
+            "timestamp": time.time(),
+        }
+        result = engine._cache_lookup("hash_fail")
+        assert result is None
+
+    def test_cache_bypass_after_6h(self, isolate_sandbox):
+        """Cache bypasse si aucun run complet depuis 6h."""
+        engine = SandboxEngine()
+        engine._last_full_run = time.time() - mod.CACHE_FULL_RUN_INTERVAL - 1
+        engine._cache["hash1"] = {
+            "success": True,
+            "tests_passed": 5,
+            "timestamp": time.time(),
+        }
+        result = engine._cache_lookup("hash1")
+        assert result is None  # bypasse malgre le hit
+
+    def test_cache_update_stores_result(self, isolate_sandbox):
+        """_cache_update stocke le resultat et persiste."""
+        engine = SandboxEngine()
+        result = SandboxResult(
+            success=True, tests_passed=10, tests_failed=0,
+            tests_errors=0, output="ok", duration_seconds=1.0,
+        )
+        engine._cache_update("hash_new", result)
+        assert "hash_new" in engine._cache
+        assert engine._cache["hash_new"]["success"] is True
+        assert engine._cache["hash_new"]["tests_passed"] == 10
+        # Fichier persiste
+        import json
+        with open(mod.SANDBOX_CACHE_FILE) as f:
+            data = json.load(f)
+        assert "hash_new" in data
+
+    def test_cache_load_evicts_old(self, isolate_sandbox, tmp_path):
+        """Le chargement evince les entrees > 24h."""
+        import json
+        cache_file = str(tmp_path / "sandbox_cache.json")
+        old_data = {
+            "old_hash": {
+                "success": True,
+                "tests_passed": 1,
+                "timestamp": time.time() - mod.CACHE_ENTRY_TTL - 100,
+            },
+            "fresh_hash": {
+                "success": True,
+                "tests_passed": 2,
+                "timestamp": time.time(),
+            },
+            "_last_full_run": time.time(),
+        }
+        with open(cache_file, "w") as f:
+            json.dump(old_data, f)
+        # Recharger
+        engine = SandboxEngine()
+        engine._load_cache()
+        assert "old_hash" not in engine._cache
+        assert "fresh_hash" in engine._cache
+
+    def test_cache_load_missing_file(self, isolate_sandbox):
+        """Fichier cache manquant → cache vide, pas de crash."""
+        engine = SandboxEngine()
+        engine._cache = {"should_be_cleared": True}
+        engine._load_cache()
+        assert engine._cache == {}
+
+    @pytest.mark.asyncio
+    async def test_run_tests_cache_hit_skips_pytest(self, isolate_sandbox, monkeypatch):
+        """Un cache hit succes skip completement pytest."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        engine._last_full_run = time.time()
+
+        # Injecter un hash connu dans le cache
+        h = engine._compute_pair_hash("core/base_agent.py", ["tests/test_base.py"])
+        assert h is not None
+        engine._cache[h] = {
+            "success": True,
+            "tests_passed": 42,
+            "timestamp": time.time(),
+        }
+
+        # Mock le graphe pour retourner test_base.py
+        from unittest.mock import MagicMock
+        mock_graph = MagicMock()
+        mock_graph.get_relevant_tests.return_value = ["tests/test_base.py"]
+        engine._test_graph = mock_graph
+
+        # Mock subprocess — NE DOIT PAS etre appele
+        call_count = 0
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            class FakeProc:
+                returncode = 0
+                async def communicate(self):
+                    return (b"1 passed", None)
+                def kill(self):
+                    pass
+            return FakeProc()
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", mock_exec)
+        result = await engine.run_tests(target_file="core/base_agent.py")
+        assert result.success is True
+        assert "CACHE HIT" in result.output
+        assert call_count == 0  # pytest PAS appele
+        assert engine._stats["cache_hits"] == 1
+
+    @pytest.mark.asyncio
+    async def test_run_tests_updates_cache_after_run(self, isolate_sandbox, monkeypatch):
+        """Apres un run reel, le cache est mis a jour."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        engine._last_full_run = time.time()
+
+        # Mock le graphe
+        from unittest.mock import MagicMock
+        mock_graph = MagicMock()
+        mock_graph.get_relevant_tests.return_value = ["tests/test_base.py"]
+        engine._test_graph = mock_graph
+
+        # Mock subprocess
+        async def mock_exec(*args, **kwargs):
+            class FakeProc:
+                returncode = 0
+                async def communicate(self):
+                    return (b"3 passed in 0.5s", None)
+                def kill(self):
+                    pass
+            return FakeProc()
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", mock_exec)
+        result = await engine.run_tests(target_file="core/base_agent.py")
+        assert result.success is True
+        # Le cache doit contenir une entree
+        h = engine._compute_pair_hash("core/base_agent.py", ["tests/test_base.py"])
+        assert h in engine._cache
+        assert engine._cache[h]["success"] is True
+        assert engine._cache[h]["tests_passed"] == 3
+
+    @pytest.mark.asyncio
+    async def test_full_run_updates_last_full_run(self, isolate_sandbox, monkeypatch):
+        """Un run complet (sans target_file) met a jour _last_full_run."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        assert engine._last_full_run == 0.0
+
+        async def mock_exec(*args, **kwargs):
+            class FakeProc:
+                returncode = 0
+                async def communicate(self):
+                    return (b"100 passed in 5.0s", None)
+                def kill(self):
+                    pass
+            return FakeProc()
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", mock_exec)
+        await engine.run_tests()  # pas de target_file = run complet
+        assert engine._last_full_run > 0.0
+
+    def test_multiple_test_files_hash(self, isolate_sandbox):
+        """Hash avec plusieurs fichiers tests est deterministe et ordonne."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        # Creer un second fichier test
+        engine.apply_change("tests/test_extra.py", "def test_extra():\n    assert True\n")
+        h1 = engine._compute_pair_hash(
+            "core/base_agent.py",
+            ["tests/test_base.py", "tests/test_extra.py"]
+        )
+        # Ordre inverse → meme hash (tri interne)
+        h2 = engine._compute_pair_hash(
+            "core/base_agent.py",
+            ["tests/test_extra.py", "tests/test_base.py"]
+        )
+        assert h1 == h2
+        # Format: md5_source:md5_test1,md5_test2
+        parts = h1.split(":")
+        assert len(parts) == 2
+        assert "," in parts[1]  # 2 hashes separes par virgule
