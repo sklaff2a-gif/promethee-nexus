@@ -1501,3 +1501,184 @@ class TestPseudoAgentFeedback:
                 "quality_score": 0.8,
             })
             mock_save.assert_not_called()
+
+
+# ============================================================
+# 11. TestRoutingCompiled
+# ============================================================
+
+class TestRoutingCompiled:
+    """Tests pour match_routing / record_routing (Point 4)."""
+
+    def test_keyword_key_deterministic(self, isolate_compiler):
+        c = isolate_compiler
+        k1 = c._keyword_key("analyse du code python sécurité")
+        k2 = c._keyword_key("analyse du code python sécurité")
+        assert k1 == k2
+        assert len(k1) > 0
+
+    def test_keyword_key_sorted(self, isolate_compiler):
+        c = isolate_compiler
+        k = c._keyword_key("alpha beta gamma delta epsilon")
+        parts = k.split(",")
+        assert parts == sorted(parts)
+
+    def test_keyword_key_empty(self, isolate_compiler):
+        c = isolate_compiler
+        k = c._keyword_key("le la les des")
+        assert k == ""
+
+    def test_record_routing(self, isolate_compiler):
+        c = isolate_compiler
+        c.record_routing("analyse sécurité failles vulnerabilite audit", "security")
+        key = c._keyword_key("analyse sécurité failles vulnerabilite audit")
+        assert key in c._routing_history
+        assert c._routing_history[key]["security"] == 1
+
+    def test_record_routing_accumulates(self, isolate_compiler):
+        c = isolate_compiler
+        mission = "analyse sécurité failles vulnerabilite audit"
+        for _ in range(3):
+            c.record_routing(mission, "security")
+        c.record_routing(mission, "infra")
+        key = c._keyword_key(mission)
+        assert c._routing_history[key]["security"] == 3
+        assert c._routing_history[key]["infra"] == 1
+
+    def test_match_routing_no_data(self, isolate_compiler):
+        c = isolate_compiler
+        assert c.match_routing("analyse sécurité failles") is None
+
+    def test_match_routing_not_enough_obs(self, isolate_compiler):
+        from core.neural_compiler import ROUTING_MIN_OBSERVATIONS
+        c = isolate_compiler
+        mission = "analyse sécurité failles vulnerabilite audit"
+        for _ in range(ROUTING_MIN_OBSERVATIONS - 1):
+            c.record_routing(mission, "security")
+        assert c.match_routing(mission) is None
+
+    def test_match_routing_consensus(self, isolate_compiler):
+        from core.neural_compiler import ROUTING_MIN_OBSERVATIONS
+        c = isolate_compiler
+        mission = "analyse sécurité failles vulnerabilite audit"
+        for _ in range(ROUTING_MIN_OBSERVATIONS):
+            c.record_routing(mission, "security")
+        result = c.match_routing(mission)
+        assert result == "security"
+        assert c._routing_compiled == 1
+
+    def test_match_routing_no_consensus(self, isolate_compiler):
+        c = isolate_compiler
+        mission = "analyse sécurité failles vulnerabilite audit"
+        # 3 pour security, 3 pour infra → pas de consensus
+        for _ in range(3):
+            c.record_routing(mission, "security")
+        for _ in range(3):
+            c.record_routing(mission, "infra")
+        assert c.match_routing(mission) is None
+
+    def test_routing_persistence(self, isolate_compiler):
+        from core import neural_compiler as mod
+        c = isolate_compiler
+        mission = "analyse sécurité failles vulnerabilite audit"
+        for _ in range(5):
+            c.record_routing(mission, "security")
+        c._save()
+        # Recharger
+        c2_data = json.load(open(mod.COMPILER_STATE_FILE, encoding="utf-8"))
+        assert "routing_history" in c2_data
+        assert len(c2_data["routing_history"]) > 0
+
+
+# ============================================================
+# 12. TestComplexityCompiled
+# ============================================================
+
+class TestComplexityCompiled:
+    """Tests pour match_complexity / record_complexity (Point 4)."""
+
+    def test_record_complexity_simple(self, isolate_compiler):
+        c = isolate_compiler
+        prompt = "explique bitcoin monnaie crypto definition base"
+        c.record_complexity(prompt, False)
+        key = c._keyword_key(prompt[:500])
+        assert key in c._complexity_history
+        assert c._complexity_history[key]["simple"] == 1
+
+    def test_record_complexity_complex(self, isolate_compiler):
+        c = isolate_compiler
+        prompt = "architecture systeme critique faille securite audit"
+        c.record_complexity(prompt, True)
+        key = c._keyword_key(prompt[:500])
+        assert c._complexity_history[key]["complex"] == 1
+
+    def test_match_complexity_no_data(self, isolate_compiler):
+        c = isolate_compiler
+        assert c.match_complexity("quelque chose inconnu") is None
+
+    def test_match_complexity_not_enough_obs(self, isolate_compiler):
+        from core.neural_compiler import COMPLEXITY_MIN_OBSERVATIONS
+        c = isolate_compiler
+        prompt = "explique bitcoin monnaie crypto definition base"
+        for _ in range(COMPLEXITY_MIN_OBSERVATIONS - 1):
+            c.record_complexity(prompt, False)
+        assert c.match_complexity(prompt) is None
+
+    def test_match_complexity_simple_consensus(self, isolate_compiler):
+        from core.neural_compiler import COMPLEXITY_MIN_OBSERVATIONS
+        c = isolate_compiler
+        prompt = "explique bitcoin monnaie crypto definition base"
+        for _ in range(COMPLEXITY_MIN_OBSERVATIONS):
+            c.record_complexity(prompt, False)
+        result = c.match_complexity(prompt)
+        assert result is False  # Simple → local
+        assert c._complexity_compiled == 1
+
+    def test_match_complexity_complex_consensus(self, isolate_compiler):
+        c = isolate_compiler
+        prompt = "architecture systeme critique faille securite audit"
+        for _ in range(6):
+            c.record_complexity(prompt, True)
+        c.record_complexity(prompt, False)  # 1 outlier
+        result = c.match_complexity(prompt)
+        assert result is True  # Complex → cloud
+        assert c._complexity_compiled == 1
+
+    def test_match_complexity_no_consensus(self, isolate_compiler):
+        c = isolate_compiler
+        prompt = "architecture systeme critique faille securite audit"
+        for _ in range(3):
+            c.record_complexity(prompt, True)
+        for _ in range(3):
+            c.record_complexity(prompt, False)
+        assert c.match_complexity(prompt) is None
+
+    def test_complexity_uses_prompt_prefix(self, isolate_compiler):
+        """La clé est calculée sur les 500 premiers chars."""
+        c = isolate_compiler
+        prefix = "analyse sécurité faille vulnerabilite audit"
+        long_prompt = prefix + " x" * 1000
+        c.record_complexity(long_prompt, False)
+        key = c._keyword_key(long_prompt[:500])
+        assert key in c._complexity_history
+
+    def test_complexity_persistence(self, isolate_compiler):
+        from core import neural_compiler as mod
+        c = isolate_compiler
+        prompt = "explique bitcoin monnaie crypto definition base"
+        for _ in range(5):
+            c.record_complexity(prompt, False)
+        c._save()
+        c2_data = json.load(open(mod.COMPILER_STATE_FILE, encoding="utf-8"))
+        assert "complexity_history" in c2_data
+        assert len(c2_data["complexity_history"]) > 0
+
+    def test_stats_include_routing_complexity(self, isolate_compiler):
+        c = isolate_compiler
+        stats = c.get_stats()
+        assert "routing_patterns" in stats
+        assert "routing_compiled" in stats
+        assert "complexity_patterns" in stats
+        assert "complexity_compiled" in stats
+        assert stats["routing_compiled"] == 0
+        assert stats["complexity_compiled"] == 0

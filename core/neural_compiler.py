@@ -41,6 +41,12 @@ COMPILE_COOLDOWN = 300           # 5 min entre compilations
 FEEDBACK_WINDOW = 600            # 10 min fenêtre feedback (councils longs)
 RULE_MAX_AGE_DAYS = 5            # Règles périmées après 5 jours sans revalidation
 
+# --- Routage et complexité compilés (Point 4) ---
+ROUTING_MIN_OBSERVATIONS = 5     # Observations minimum avant compilation
+ROUTING_CONFIDENCE = 0.80        # 80% consensus pour compiler un routage
+COMPLEXITY_MIN_OBSERVATIONS = 5
+COMPLEXITY_CONFIDENCE = 0.85     # 85% consensus pour compiler une complexité (conservateur)
+
 # --- Agents core (persistants) vs Grimoire (éphémères) ---
 # Seuls les agents core accumulent assez d'observations pour compiler des règles.
 # Les agents Grimoire (éphémères, LRU rotation) polluent le FIFO sans jamais atteindre
@@ -328,6 +334,14 @@ class NeuralCompiler:
         self._total_ab_tests: int = 0
         self._ab_divergences: int = 0
 
+        # Routage et complexité compilés (Point 4)
+        # keyword_key → {agent_name: count} pour routage
+        self._routing_history: Dict[str, Dict[str, int]] = {}
+        # keyword_key → {"simple": count, "complex": count} pour complexité
+        self._complexity_history: Dict[str, Dict[str, int]] = {}
+        self._routing_compiled: int = 0
+        self._complexity_compiled: int = 0
+
         self._load()
         self._subscribe_events()
 
@@ -344,6 +358,10 @@ class NeuralCompiler:
         self._total_llm_calls = 0
         self._total_ab_tests = 0
         self._ab_divergences = 0
+        self._routing_history = {}
+        self._complexity_history = {}
+        self._routing_compiled = 0
+        self._complexity_compiled = 0
 
     @classmethod
     def reset_singleton(cls):
@@ -423,6 +441,12 @@ class NeuralCompiler:
             self._ab_divergences = metrics.get("ab_divergences", 0)
             self._last_compile_time = metrics.get("last_compile_time", 0.0)
 
+            # Routage et complexité compilés
+            self._routing_history = data.get("routing_history", {})
+            self._complexity_history = data.get("complexity_history", {})
+            self._routing_compiled = metrics.get("routing_compiled", 0)
+            self._complexity_compiled = metrics.get("complexity_compiled", 0)
+
             logger.info(
                 f"COMPILER: Chargé {len(self._observations)} observations, "
                 f"{len(self._rules)} règles."
@@ -447,7 +471,11 @@ class NeuralCompiler:
                     "total_ab_tests": self._total_ab_tests,
                     "ab_divergences": self._ab_divergences,
                     "last_compile_time": self._last_compile_time,
+                    "routing_compiled": self._routing_compiled,
+                    "complexity_compiled": self._complexity_compiled,
                 },
+                "routing_history": self._routing_history,
+                "complexity_history": self._complexity_history,
             }
 
             # Observations (sans response_text pour économiser l'espace)
@@ -1009,6 +1037,91 @@ class NeuralCompiler:
                 break
 
     # ================================================================
+    # ROUTAGE ET COMPLEXITÉ COMPILÉS (Point 4)
+    # ================================================================
+
+    @staticmethod
+    def _keyword_key(text: str, top_n: int = 5) -> str:
+        """Extrait les top-N mots-cles et retourne une cle triee deterministe."""
+        keywords = _extract_keywords(text, top_n=top_n)
+        return ",".join(sorted(keywords))
+
+    def record_routing(self, mission: str, agent: str):
+        """Enregistre une decision de routage N2 pour apprentissage."""
+        key = self._keyword_key(mission)
+        if not key:
+            return
+        if key not in self._routing_history:
+            self._routing_history[key] = {}
+        self._routing_history[key][agent] = self._routing_history[key].get(agent, 0) + 1
+        self._maybe_autosave()
+
+    def match_routing(self, mission: str) -> Optional[str]:
+        """Tente de compiler la decision de routage (0 LLM).
+
+        Returns:
+            Nom de l'agent si consensus >= 80%, None sinon.
+        """
+        key = self._keyword_key(mission)
+        if not key or key not in self._routing_history:
+            return None
+        votes = self._routing_history[key]
+        total = sum(votes.values())
+        if total < ROUTING_MIN_OBSERVATIONS:
+            return None
+        best = max(votes, key=votes.get)
+        if votes[best] / total >= ROUTING_CONFIDENCE:
+            self._routing_compiled += 1
+            logger.info(
+                f"COMPILER: Routage compile → {best} "
+                f"({votes[best]}/{total}, key={key[:40]})"
+            )
+            return best
+        return None
+
+    def record_complexity(self, prompt: str, is_complex: bool):
+        """Enregistre une decision de complexite pour apprentissage."""
+        key = self._keyword_key(prompt[:500])
+        if not key:
+            return
+        if key not in self._complexity_history:
+            self._complexity_history[key] = {}
+        label = "complex" if is_complex else "simple"
+        self._complexity_history[key][label] = self._complexity_history[key].get(label, 0) + 1
+        self._maybe_autosave()
+
+    def match_complexity(self, prompt: str) -> Optional[bool]:
+        """Tente de compiler la decision de complexite (0 LLM).
+
+        Returns:
+            False si simple (local), True si complexe (cloud), None si incertain.
+        """
+        key = self._keyword_key(prompt[:500])
+        if not key or key not in self._complexity_history:
+            return None
+        votes = self._complexity_history[key]
+        total = sum(votes.values())
+        if total < COMPLEXITY_MIN_OBSERVATIONS:
+            return None
+        simple = votes.get("simple", 0)
+        if simple / total >= COMPLEXITY_CONFIDENCE:
+            self._complexity_compiled += 1
+            logger.info(
+                f"COMPILER: Complexite compilee → LOCAL "
+                f"({simple}/{total}, key={key[:40]})"
+            )
+            return False
+        complex_count = votes.get("complex", 0)
+        if complex_count / total >= ROUTING_CONFIDENCE:
+            self._complexity_compiled += 1
+            logger.info(
+                f"COMPILER: Complexite compilee → CLOUD "
+                f"({complex_count}/{total}, key={key[:40]})"
+            )
+            return True
+        return None
+
+    # ================================================================
     # MÉTRIQUES
     # ================================================================
 
@@ -1046,6 +1159,10 @@ class NeuralCompiler:
             "ab_tests": self._total_ab_tests,
             "ab_divergences": self._ab_divergences,
             "last_compile": self._last_compile_time,
+            "routing_patterns": len(self._routing_history),
+            "routing_compiled": self._routing_compiled,
+            "complexity_patterns": len(self._complexity_history),
+            "complexity_compiled": self._complexity_compiled,
         }
 
 

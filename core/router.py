@@ -74,10 +74,29 @@ class RouterAgent:
         if any(x in m_low for x in ["roadmap", "vision", "module planif", "planification"]): return "vision"
         if any(x in m_low for x in ["conseil", "débat", "council", "débattre"]): return "conseil"
 
+        # --- NIVEAU 1.5 : ROUTAGE COMPILÉ (Neural Compiler, 0 LLM) ---
+        try:
+            from core.neural_compiler import compiler
+            compiled = compiler.match_routing(mission)
+            if compiled:
+                logger.info(f"ROUTER: Routage compile → {compiled.upper()} (0 LLM)")
+                return compiled
+        except Exception:
+            pass
+
         # --- NIVEAU 2 : AUTO-RÉFLEXION (Appel LLM Local) ---
         # Si aucune règle ne matche, on demande au LLM de trancher
-        logger.info(f"🤔 ROUTER: Ambiguïté détectée sur '{mission[:30]}...'. Analyse Sémantique en cours...")
-        return await RouterAgent._semantic_reflection(mission)
+        logger.info(f"ROUTER: Ambiguite detectee sur '{mission[:30]}...'. Analyse Semantique en cours...")
+        agent = await RouterAgent._semantic_reflection(mission)
+
+        # Enregistrer la decision N2 pour apprentissage du compiler
+        try:
+            from core.neural_compiler import compiler
+            compiler.record_routing(mission, agent)
+        except Exception:
+            pass
+
+        return agent
 
     @staticmethod
     def _normalize(text: str) -> str:

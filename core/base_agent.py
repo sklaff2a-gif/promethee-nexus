@@ -420,6 +420,17 @@ class BaseAgent:
                 self.log_thought("🏠 Mission interne → local forcé (économie Cloud)", type="info")
                 return False
 
+        # Court-circuit : complexité compilée (Neural Compiler, 0 LLM)
+        try:
+            from core.neural_compiler import compiler
+            compiled = compiler.match_complexity(prompt)
+            if compiled is not None:
+                verdict = "CLOUD" if compiled else "LOCAL"
+                self.log_thought(f"Complexite compilee → {verdict} (0 LLM)", type="info")
+                return compiled
+        except Exception:
+            pass
+
         try:
             # On utilise le modèle local pour juger
             eval_model = getattr(Config, "DEFAULT_LOCAL_MODEL", "gemma3:12b")
@@ -441,7 +452,14 @@ class BaseAgent:
             
             verdict = "CLOUD ☁️" if is_complex else "LOCAL 🏠"
             self.log_thought(f"⚖️ Jugement de Complexité : {verdict}", type="info")
-            
+
+            # Enregistrer la decision pour apprentissage du compiler
+            try:
+                from core.neural_compiler import compiler
+                compiler.record_complexity(prompt, is_complex)
+            except Exception:
+                pass
+
             return is_complex
         except Exception as e:
             logger.warning(f"[{self.name}] Échec évaluation complexité (fallback local) : {e}")
