@@ -791,6 +791,7 @@ class Council:
             f"{'='*60}\n"
             f"FICHIERS AUTORISÉS (SEULS fichiers que tu peux citer) :\n"
             f"{project_files}\n"
+            f"RÉPERTOIRES INEXISTANTS (ne JAMAIS citer) : core/grimoire/, core/event_bus/, core/capabilities/, core/memory/\n"
             f"Tout fichier NON liste ci-dessus est une HALLUCINATION.\n"
             f"{_council_guardrail()}"
         )

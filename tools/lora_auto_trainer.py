@@ -442,8 +442,8 @@ class LoRAAutoTrainer:
             logger.warning(f"[LORA] Echec dechargement Ollama: {e}")
             return False
 
-    async def _wait_for_vram(self, min_free_gb: float = 12.0,
-                              timeout_s: int = 30) -> bool:
+    async def _wait_for_vram(self, min_free_gb: float = 10.0,
+                              timeout_s: int = 60) -> bool:
         """Attend que la VRAM soit suffisamment libre pour le training.
 
         Poll nvidia-smi toutes les 2 secondes pendant max timeout_s.
@@ -568,7 +568,7 @@ class LoRAAutoTrainer:
         # 4. Liberer la GPU et attendre que la VRAM soit libre
         result["phase"] = "unload_gpu"
         await self._unload_ollama_models()
-        vram_ok = await self._wait_for_vram(min_free_gb=12.0, timeout_s=30)
+        vram_ok = await self._wait_for_vram(min_free_gb=10.0, timeout_s=60)
         if not vram_ok:
             result["error"] = "VRAM insuffisante apres unload Ollama"
             logger.error(f"[LORA] {result['error']}")

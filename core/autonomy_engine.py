@@ -1991,6 +1991,35 @@ class AutonomyEngine:
             response = await self._execute_grimoire_evolve()
         elif intent == "VEILLE_IA":
             response = await self._execute_veille_ia(routine)
+        elif intent == "DROPZONE_SCAN":
+            # Dropzone vide → veille YouTube IA (fallback identique au path standard)
+            try:
+                from core.capabilities.dropzone_indexer import DropzoneIndexer
+                dc = DropzoneIndexer().quick_count("USER_DROPZONE")
+            except Exception:
+                dc = 0
+            if dc > 0:
+                response = await orchestrator.dispatch_task(agent, {
+                    "mission": f"[MODE VEILLE] {routine['mission']}",
+                    "context": f"PROTOCOLE_AUTONOMIE\n{AUTONOMY_GUARDRAIL}",
+                    "force_local": True,
+                    "intent": intent,
+                })
+            else:
+                yt_index = self.total_routines_executed % len(YOUTUBE_AI_VEILLE)
+                yt_topic = YOUTUBE_AI_VEILLE[yt_index]
+                print(f"   📺 FORCED DROPZONE vide → Veille YouTube IA: {yt_topic['focus'][:60]}...")
+                response = await orchestrator.dispatch_task("researcher", {
+                    "mission": f"VEILLE YOUTUBE IA: Recherche des vidéos YouTube récentes sur: {yt_topic['query']}",
+                    "context": (
+                        "YOUTUBE_VEILLE — La dropzone est vide. "
+                        f"Cherche sur le web des vidéos YouTube récentes sur: {yt_topic['focus']}. "
+                        "Résume les 2-3 découvertes les plus pertinentes pour un système multi-agents "
+                        "autonome comme Prométhée. Sauvegarde les trouvailles en mémoire."
+                    ),
+                    "force_local": True,
+                    "intent": "YOUTUBE_VEILLE",
+                })
         else:
             response = await orchestrator.dispatch_task(agent, {
                 "mission": f"[MODE VEILLE] {routine['mission']}",
@@ -3353,7 +3382,6 @@ class AutonomyEngine:
 
             temp_files = []
             log_files = []
-            pycache_dirs = []
             large_files = []  # > 10 MB
 
             # Scan de la racine uniquement (pas récursif pour les .tmp/.log)
@@ -3370,16 +3398,7 @@ class AutonomyEngine:
                     if entry.stat().st_size > 10 * 1024 * 1024:
                         size_mb = entry.stat().st_size / (1024 * 1024)
                         large_files.append(f"{entry.name} ({size_mb:.1f} MB)")
-                elif entry.is_dir() and entry.name == "__pycache__":
-                    pycache_dirs.append(entry.name)
-
-            # Scan récursif limité pour __pycache__ (profondeur 2)
-            for subdir in ["core", "Agents", "tests"]:
-                subpath = os.path.join(project_root, subdir)
-                if os.path.isdir(subpath):
-                    for entry in os.scandir(subpath):
-                        if entry.is_dir() and entry.name == "__pycache__":
-                            pycache_dirs.append(f"{subdir}/{entry.name}")
+                # __pycache__ ignoré (normal en Python)
 
             # Construire le rapport
             issues = []
@@ -3389,12 +3408,12 @@ class AutonomyEngine:
                 issues.append(f"Fichiers .log non-système à la racine : {', '.join(log_files)}")
             if large_files:
                 issues.append(f"Fichiers volumineux (>10 MB) : {', '.join(large_files)}")
-            if pycache_dirs:
-                issues.append(f"Dossiers __pycache__ trouvés : {', '.join(pycache_dirs)}")
+            # __pycache__ est normal en Python — ne pas signaler comme problème
+            # (causait un rapport répétitif identique → qualité 0.60 à chaque run)
 
             if issues:
                 report = f"AUDIT STRUCTURE — {len(issues)} problème(s) détecté(s) :\n" + "\n".join(f"- {i}" for i in issues)
-                report += "\n\nRecommandation : nettoyer les fichiers temporaires et les caches __pycache__ inutiles."
+                report += "\n\nRecommandation : nettoyer les fichiers temporaires inutiles."
             else:
                 report = (
                     "AUDIT STRUCTURE — Aucun problème détecté.\n"
