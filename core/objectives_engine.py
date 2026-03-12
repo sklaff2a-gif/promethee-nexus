@@ -19,6 +19,7 @@ STATE_FILE = os.path.join(
 )
 
 MAX_ACTIVE_OBJECTIVES = 5
+MAX_USER_TOPICS = 3
 
 # Pondération par priorité pour le bonus scoring
 PRIORITY_WEIGHTS = {"high": 1.0, "medium": 0.7, "low": 0.4}
@@ -168,6 +169,7 @@ class ObjectivesEngine:
             return
         self._initialized = True
         self._objectives: List[Dict[str, Any]] = []
+        self._user_topics: List[Dict[str, Any]] = []
         self._subscribed = False
         self._seed_index: int = 0
         self._session_counters: Dict[str, int] = {}
@@ -187,6 +189,7 @@ class ObjectivesEngine:
 
     def reset(self):
         self._objectives = []
+        self._user_topics = []
         self._subscribed = False
         self._initialized = False
         self._seed_index = 0
@@ -596,6 +599,7 @@ class ObjectivesEngine:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self._objectives = data.get("objectives", [])
+            self._user_topics = data.get("user_topics", [])
             self._session_counters = data.get("session_counters", {})
             self._seed_index = data.get("seed_index", 0)
             self._last_counter_reset_day = data.get("last_counter_reset_day", date.today().isoformat())
@@ -607,6 +611,7 @@ class ObjectivesEngine:
         data = {
             "version": "1.0",
             "objectives": self._objectives,
+            "user_topics": self._user_topics,
             "session_counters": self._session_counters,
             "seed_index": self._seed_index,
             "last_counter_reset_day": self._last_counter_reset_day,
@@ -615,6 +620,105 @@ class ObjectivesEngine:
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         os.replace(tmp_path, STATE_FILE)
+
+    # --- User Research Topics ---
+
+    def add_user_topic(self, subject: str) -> Optional[Dict[str, Any]]:
+        """Ajoute un sujet de recherche utilisateur. Crée l'objectif + goal préfrontal liés."""
+        active_topics = [t for t in self._user_topics if t["status"] == "active"]
+        if len(active_topics) >= MAX_USER_TOPICS:
+            logger.warning(f"OBJECTIFS: Max topics utilisateur atteint ({MAX_USER_TOPICS})")
+            return None
+
+        topic_id = f"topic_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        topic = {
+            "id": topic_id,
+            "subject": subject,
+            "created_at": datetime.now().isoformat(),
+            "status": "active",
+            "objective_id": None,
+            "goal_id": None,
+            "research_count": 0,
+        }
+
+        # Créer l'objectif lié (haute priorité, affinités recherche)
+        obj = self.create_objective(
+            title=f"Recherche: {subject[:80]}",
+            obj_type="exploration",
+            priority="high",
+            source="user",
+            criteria={"metric": "total_routines", "operator": ">=", "target": 10},
+            routine_affinities={
+                "VEILLE_SILENCIEUSE": 2.0,
+                "EXPANSION_CODE": 1.0,
+                "COUNCIL_DEBATE": 0.5,
+            },
+            deadline_routines=100,
+        )
+        if obj:
+            topic["objective_id"] = obj["id"]
+
+        # Créer le goal préfrontal (focus scoring)
+        try:
+            from core.prefrontal import prefrontal
+            goal = prefrontal.create_goal(
+                title=f"Recherche: {subject[:80]}",
+                horizon="medium",
+                priority=8.0,
+                steps=[
+                    {"intent": "VEILLE_SILENCIEUSE", "description": f"Rechercher: {subject[:100]}"},
+                    {"intent": "EXPANSION_CODE", "description": f"Intégrer: {subject[:80]}"},
+                ],
+                source="user",
+                cost_estimated=6,
+                drive_alignment={"CURIOSITE": 1.0, "COMPREHENSION": 0.8},
+            )
+            if goal:
+                topic["goal_id"] = getattr(goal, "id", None)
+        except Exception as e:
+            logger.warning(f"OBJECTIFS: Goal préfrontal non créé: {e}")
+
+        self._user_topics.append(topic)
+        self._save()
+        logger.info(f"OBJECTIFS: Topic recherche utilisateur créé [{topic_id}]: {subject}")
+        self._fire_event("USER_TOPIC_CREATED", {"id": topic_id, "subject": subject})
+        return topic
+
+    def get_active_user_topics(self) -> List[Dict[str, Any]]:
+        """Retourne les topics utilisateur actifs."""
+        return [t for t in self._user_topics if t["status"] == "active"]
+
+    def get_user_topic_for_veille(self) -> Optional[str]:
+        """Retourne le sujet du prochain topic actif (rotation). Incrémente research_count."""
+        active = self.get_active_user_topics()
+        if not active:
+            return None
+        # Rotation basée sur le nombre total de recherches
+        total_research = sum(t["research_count"] for t in active)
+        topic = active[total_research % len(active)]
+        topic["research_count"] += 1
+        self._save()
+        return topic["subject"]
+
+    def cancel_user_topic(self, topic_id: str) -> bool:
+        """Annule un topic utilisateur et son objectif lié."""
+        for topic in self._user_topics:
+            if topic["id"] == topic_id and topic["status"] == "active":
+                topic["status"] = "cancelled"
+                # Annuler l'objectif lié
+                if topic.get("objective_id"):
+                    for obj in self._objectives:
+                        if obj["id"] == topic["objective_id"] and obj["status"] == "active":
+                            obj["status"] = "failed"
+                            obj["history"].append({
+                                "timestamp": datetime.now().isoformat(),
+                                "event": "cancelled",
+                                "detail": "Topic utilisateur annulé",
+                            })
+                self._save()
+                logger.info(f"OBJECTIFS: Topic utilisateur annulé [{topic_id}]")
+                return True
+        return False
 
     # --- Utilitaires ---
 

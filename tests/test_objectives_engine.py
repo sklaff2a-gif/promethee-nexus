@@ -570,3 +570,70 @@ class TestDailyObjectiveTemplates:
     def test_templates_unique_metrics(self):
         metrics = [t["criteria"]["metric"] for t in DAILY_OBJECTIVE_TEMPLATES]
         assert len(metrics) == len(set(metrics)), "Métriques en double dans les templates"
+
+
+class TestUserTopics:
+    """Tests des topics de recherche utilisateur."""
+
+    def test_add_user_topic(self, engine):
+        topic = engine.add_user_topic("architectures multi-agents autonomes")
+        assert topic is not None
+        assert topic["subject"] == "architectures multi-agents autonomes"
+        assert topic["status"] == "active"
+        assert topic["research_count"] == 0
+        assert topic["objective_id"] is not None
+
+    def test_add_user_topic_creates_objective(self, engine):
+        engine.add_user_topic("mémoire à long terme LLM")
+        active = engine.get_active_objectives()
+        user_objs = [o for o in active if o["source"] == "user"]
+        assert len(user_objs) == 1
+        assert "mémoire à long terme" in user_objs[0]["title"]
+        assert user_objs[0]["priority"] == "high"
+
+    def test_get_user_topic_for_veille(self, engine):
+        engine.add_user_topic("conscience de soi IA")
+        subject = engine.get_user_topic_for_veille()
+        assert subject == "conscience de soi IA"
+
+    def test_get_user_topic_increments_count(self, engine):
+        engine.add_user_topic("test sujet")
+        engine.get_user_topic_for_veille()
+        engine.get_user_topic_for_veille()
+        topics = engine.get_active_user_topics()
+        assert topics[0]["research_count"] == 2
+
+    def test_get_user_topic_rotation(self, engine):
+        engine.add_user_topic("sujet A")
+        engine.add_user_topic("sujet B")
+        first = engine.get_user_topic_for_veille()
+        second = engine.get_user_topic_for_veille()
+        assert first != second
+        assert {first, second} == {"sujet A", "sujet B"}
+
+    def test_no_user_topic_returns_none(self, engine):
+        assert engine.get_user_topic_for_veille() is None
+
+    def test_cancel_user_topic(self, engine):
+        topic = engine.add_user_topic("sujet à annuler")
+        ok = engine.cancel_user_topic(topic["id"])
+        assert ok
+        assert engine.get_user_topic_for_veille() is None
+        assert len(engine.get_active_user_topics()) == 0
+
+    def test_cancel_nonexistent_topic(self, engine):
+        assert not engine.cancel_user_topic("topic_inexistant")
+
+    def test_max_user_topics(self, engine):
+        from core.objectives_engine import MAX_USER_TOPICS
+        for i in range(MAX_USER_TOPICS):
+            assert engine.add_user_topic(f"sujet {i}") is not None
+        assert engine.add_user_topic("un de trop") is None
+
+    def test_user_topics_persist(self, engine):
+        engine.add_user_topic("sujet persistant")
+        ObjectivesEngine.reset_singleton()
+        engine2 = ObjectivesEngine()
+        topics = engine2.get_active_user_topics()
+        assert len(topics) == 1
+        assert topics[0]["subject"] == "sujet persistant"

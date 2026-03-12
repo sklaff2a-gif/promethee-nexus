@@ -913,6 +913,38 @@ async def api_create_objective(request: Request):
         raise HTTPException(status_code=409, detail="Création échouée")
     return {"status": "created", "objective": obj}
 
+@app.post("/api/research-topic", dependencies=[Depends(verify_token)])
+async def api_add_research_topic(request: Request):
+    """Ajoute un sujet de recherche utilisateur — oriente les routines VEILLE."""
+    data = await request.json()
+    subject = data.get("subject", "").strip()
+    if not subject or len(subject) < 3:
+        raise HTTPException(status_code=400, detail="Sujet trop court (min 3 caractères)")
+    if len(subject) > 200:
+        raise HTTPException(status_code=400, detail="Sujet trop long (max 200 caractères)")
+    topic = objectives_engine.add_user_topic(subject)
+    if topic is None:
+        raise HTTPException(status_code=409, detail="Maximum de topics atteint (3)")
+    await bus.publish("THOUGHT_STREAM", {
+        "agent": "SYSTEM",
+        "content": f"Nouvel objectif de recherche: {subject}",
+        "type": "success",
+    })
+    return {"status": "created", "topic": topic}
+
+@app.get("/api/research-topics")
+async def api_research_topics():
+    """Retourne les topics de recherche utilisateur actifs."""
+    return {"topics": objectives_engine.get_active_user_topics()}
+
+@app.delete("/api/research-topic/{topic_id}", dependencies=[Depends(verify_token)])
+async def api_cancel_research_topic(topic_id: str):
+    """Annule un topic de recherche utilisateur."""
+    ok = objectives_engine.cancel_user_topic(topic_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Topic non trouvé ou déjà annulé")
+    return {"status": "cancelled", "id": topic_id}
+
 @app.post("/api/reboot", dependencies=[Depends(verify_token)])
 async def api_reboot(request: Request):
     """Redémarrage propre : bloque les nouvelles missions, flush, exit(65)."""

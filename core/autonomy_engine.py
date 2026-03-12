@@ -655,9 +655,19 @@ class AutonomyEngine:
             if len(self.recent_context) > 5: self.recent_context.pop(0)
 
     def _get_routines(self) -> list:
-        # Rotation du sujet de veille silencieuse
-        veille_index = self.total_routines_executed % len(VEILLE_TOPICS)
-        veille_mission = f"[MODE VEILLE] {VEILLE_TOPICS[veille_index]}"
+        # Topic utilisateur prioritaire pour la veille
+        user_topic = None
+        try:
+            from core.objectives_engine import objectives as obj_engine
+            user_topic = obj_engine.get_user_topic_for_veille()
+        except Exception:
+            pass
+
+        if user_topic:
+            veille_mission = f"[MODE VEILLE] Recherche approfondie sur: {user_topic}. Trouve des informations recentes, techniques et pratiques."
+        else:
+            veille_index = self.total_routines_executed % len(VEILLE_TOPICS)
+            veille_mission = f"[MODE VEILLE] {VEILLE_TOPICS[veille_index]}"
 
         # Rotation du sujet de veille IA
         veille_ia_index = self.total_routines_executed % len(VEILLE_IA_TOPICS)
