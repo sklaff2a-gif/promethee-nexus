@@ -47,6 +47,13 @@ ROUTING_CONFIDENCE = 0.80        # 80% consensus pour compiler un routage
 COMPLEXITY_MIN_OBSERVATIONS = 5
 COMPLEXITY_CONFIDENCE = 0.85     # 85% consensus pour compiler une complexité (conservateur)
 
+# --- Prédiction sandbox (Niveau 5) ---
+SANDBOX_PREDICT_THRESHOLD = 0.95       # Seuil de confiance pour prédire (skip sandbox)
+SANDBOX_PREDICT_MIN_OBSERVATIONS = 10  # Minimum d'observations avant prédiction
+SANDBOX_PREDICT_PRECISION_FLOOR = 0.95 # Précision minimale, sinon remonter le seuil
+SANDBOX_PREDICT_THRESHOLD_HIGH = 0.98  # Seuil remonté si précision insuffisante
+SANDBOX_PREDICT_MAX_HISTORY = 200      # FIFO par clé de prédiction
+
 # --- Agents core (persistants) vs Grimoire (éphémères) ---
 # Seuls les agents core accumulent assez d'observations pour compiler des règles.
 # Les agents Grimoire (éphémères, LRU rotation) polluent le FIFO sans jamais atteindre
@@ -342,6 +349,13 @@ class NeuralCompiler:
         self._routing_compiled: int = 0
         self._complexity_compiled: int = 0
 
+        # Prédiction sandbox (Niveau 5)
+        # sandbox_key → {"success": count, "fail": count}
+        self._sandbox_history: Dict[str, Dict[str, int]] = {}
+        self._sandbox_predicted: int = 0
+        self._sandbox_verified: int = 0
+        self._sandbox_wrong: int = 0
+
         self._load()
         self._subscribe_events()
 
@@ -362,6 +376,10 @@ class NeuralCompiler:
         self._complexity_history = {}
         self._routing_compiled = 0
         self._complexity_compiled = 0
+        self._sandbox_history = {}
+        self._sandbox_predicted = 0
+        self._sandbox_verified = 0
+        self._sandbox_wrong = 0
 
     @classmethod
     def reset_singleton(cls):
@@ -447,6 +465,12 @@ class NeuralCompiler:
             self._routing_compiled = metrics.get("routing_compiled", 0)
             self._complexity_compiled = metrics.get("complexity_compiled", 0)
 
+            # Prédiction sandbox
+            self._sandbox_history = data.get("sandbox_history", {})
+            self._sandbox_predicted = metrics.get("sandbox_predicted", 0)
+            self._sandbox_verified = metrics.get("sandbox_verified", 0)
+            self._sandbox_wrong = metrics.get("sandbox_wrong", 0)
+
             logger.info(
                 f"COMPILER: Chargé {len(self._observations)} observations, "
                 f"{len(self._rules)} règles."
@@ -473,9 +497,13 @@ class NeuralCompiler:
                     "last_compile_time": self._last_compile_time,
                     "routing_compiled": self._routing_compiled,
                     "complexity_compiled": self._complexity_compiled,
+                    "sandbox_predicted": self._sandbox_predicted,
+                    "sandbox_verified": self._sandbox_verified,
+                    "sandbox_wrong": self._sandbox_wrong,
                 },
                 "routing_history": self._routing_history,
                 "complexity_history": self._complexity_history,
+                "sandbox_history": self._sandbox_history,
             }
 
             # Observations (sans response_text pour économiser l'espace)
@@ -1122,6 +1150,144 @@ class NeuralCompiler:
         return None
 
     # ================================================================
+    # PRÉDICTION SANDBOX (Niveau 5)
+    # ================================================================
+
+    @staticmethod
+    def _sandbox_key(agent: str, target_file: str, change_type: str) -> str:
+        """Construit une cle deterministe pour la prediction sandbox.
+
+        Features encodees dans la cle:
+        - agent : qui a genere le changement
+        - target_file : quel fichier est modifie
+        - change_type : type de changement (refactor, feature, fix, etc.)
+        """
+        # Normaliser le chemin
+        normalized = target_file.replace("\\", "/")
+        basename = os.path.basename(normalized)
+        name = os.path.splitext(basename)[0]
+        return f"{agent}:{name}:{change_type}"
+
+    def record_sandbox_outcome(self, agent: str, target_file: str,
+                                change_type: str, success: bool):
+        """Enregistre le resultat reel d'un run sandbox pour apprentissage.
+
+        Args:
+            agent: Agent qui a genere le changement
+            target_file: Fichier modifie (chemin relatif)
+            change_type: Type de changement (refactor, feature, fix, evolution, etc.)
+            success: True si les tests ont passe
+        """
+        key = self._sandbox_key(agent, target_file, change_type)
+        if key not in self._sandbox_history:
+            self._sandbox_history[key] = {"success": 0, "fail": 0}
+        entry = self._sandbox_history[key]
+        if success:
+            entry["success"] += 1
+        else:
+            entry["fail"] += 1
+
+        # FIFO : limiter la taille de l'historique par cle
+        total = entry["success"] + entry["fail"]
+        if total > SANDBOX_PREDICT_MAX_HISTORY:
+            # Diviser par 2 (decay progressif)
+            entry["success"] = entry["success"] // 2
+            entry["fail"] = entry["fail"] // 2
+
+        self._maybe_autosave()
+
+    def predict_sandbox_outcome(self, agent: str, target_file: str,
+                                 change_type: str, diff_size: int = 0,
+                                 hour: int = -1) -> Optional[bool]:
+        """Predit le resultat du sandbox de maniere deterministe (0 LLM).
+
+        6 features utilisees:
+        1. agent — historique de succes de cet agent
+        2. target_file — historique de succes sur ce fichier
+        3. change_type — type de changement
+        4. diff_size — taille du diff (non utilise dans la cle, mais penalite si gros)
+        5. hour — heure du jour (non utilise dans la cle, mais facteur de fiabilite)
+        6. precision globale — auto-ajustement du seuil
+
+        Returns:
+            True si prediction succes (skip sandbox), None sinon.
+            Ne retourne JAMAIS False (on ne predit pas l'echec, on relance).
+        """
+        key = self._sandbox_key(agent, target_file, change_type)
+        if key not in self._sandbox_history:
+            return None
+
+        entry = self._sandbox_history[key]
+        total = entry["success"] + entry["fail"]
+        if total < SANDBOX_PREDICT_MIN_OBSERVATIONS:
+            return None
+
+        success_rate = entry["success"] / total
+
+        # Seuil adaptatif : si la precision globale est mauvaise, remonter
+        threshold = self._get_sandbox_threshold()
+
+        if success_rate < threshold:
+            return None
+
+        # Penalite diff_size : les gros diffs sont moins previsibles
+        if diff_size > 500:
+            # Gros diff → demander encore plus de confiance
+            adjusted_threshold = min(0.99, threshold + 0.03)
+            if success_rate < adjusted_threshold:
+                return None
+
+        self._sandbox_predicted += 1
+        logger.info(
+            f"COMPILER: Sandbox predit SUCCES "
+            f"({entry['success']}/{total}, key={key[:50]})"
+        )
+        return True
+
+    def verify_sandbox_prediction(self, agent: str, target_file: str,
+                                   change_type: str, actual_success: bool):
+        """Compare la prediction avec le resultat reel (feedback loop).
+
+        Appele quand promote() force un run complet sur un fichier
+        qui avait ete predit comme succes.
+        """
+        self._sandbox_verified += 1
+        if not actual_success:
+            self._sandbox_wrong += 1
+            logger.warning(
+                f"COMPILER: Prediction sandbox INCORRECTE pour "
+                f"{agent}:{target_file}:{change_type} (predit succes, reellement echec)"
+            )
+        self._maybe_autosave()
+
+    def _get_sandbox_threshold(self) -> float:
+        """Retourne le seuil adaptatif pour la prediction sandbox.
+
+        Si la precision globale < 95%, remonte le seuil a 0.98.
+        """
+        if self._sandbox_verified < 5:
+            return SANDBOX_PREDICT_THRESHOLD
+
+        precision = 1.0 - (self._sandbox_wrong / self._sandbox_verified)
+        if precision < SANDBOX_PREDICT_PRECISION_FLOOR:
+            return SANDBOX_PREDICT_THRESHOLD_HIGH
+        return SANDBOX_PREDICT_THRESHOLD
+
+    def get_sandbox_stats(self) -> dict:
+        """Metriques de la prediction sandbox."""
+        precision = 0.0
+        if self._sandbox_verified > 0:
+            precision = 1.0 - (self._sandbox_wrong / self._sandbox_verified)
+        return {
+            "patterns": len(self._sandbox_history),
+            "predicted": self._sandbox_predicted,
+            "verified": self._sandbox_verified,
+            "wrong": self._sandbox_wrong,
+            "precision": round(precision, 4),
+            "threshold": self._get_sandbox_threshold(),
+        }
+
+    # ================================================================
     # MÉTRIQUES
     # ================================================================
 
@@ -1163,6 +1329,7 @@ class NeuralCompiler:
             "routing_compiled": self._routing_compiled,
             "complexity_patterns": len(self._complexity_history),
             "complexity_compiled": self._complexity_compiled,
+            "sandbox_prediction": self.get_sandbox_stats(),
         }
 
 

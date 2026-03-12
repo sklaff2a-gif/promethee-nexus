@@ -57,6 +57,7 @@ class SandboxResult:
     tests_errors: int
     output: str
     duration_seconds: float
+    predicted: bool = False  # True si le resultat est une prediction (pas de run reel)
 
 
 class SandboxEngine:
@@ -79,6 +80,7 @@ class SandboxEngine:
         self._test_graph = None
         self._cache = {}
         self._last_full_run = 0.0
+        self._last_was_predicted = False  # Garde-fou promote()
         self._load_cache()
         self._stats = {
             "total_tests_run": 0,
@@ -89,6 +91,7 @@ class SandboxEngine:
             "pre_validation_catches": 0,
             "graph_targeted_runs": 0,
             "cache_hits": 0,
+            "prediction_hits": 0,
         }
 
     def init(self):
@@ -205,6 +208,13 @@ class SandboxEngine:
             else:
                 test_args.append("tests/")
 
+            # Prediction compilee (Niveau 5) : si confiance elevee, skip sandbox
+            if target_file and not is_full_run:
+                predicted = self._try_prediction(target_file)
+                if predicted is not None:
+                    self._last_was_predicted = True
+                    return predicted
+
             # Cache MD5 : verifier avant de lancer pytest
             if selected_tests and target_file:
                 pair_hash = self._compute_pair_hash(target_file, selected_tests)
@@ -246,6 +256,9 @@ class SandboxEngine:
                 passed, failed, errors = self._parse_pytest_output(output)
                 success = proc.returncode == 0
 
+                # Run reel termine → reset le flag prediction
+                self._last_was_predicted = False
+
                 # Mettre a jour les stats
                 self._stats["total_tests_run"] += passed + failed + errors
                 self._stats["total_passed"] += passed
@@ -260,6 +273,10 @@ class SandboxEngine:
                 # Cache MD5 : stocker le resultat
                 if pair_hash:
                     self._cache_update(pair_hash, result)
+
+                # Feedback loop sandbox prediction (Niveau 5)
+                if target_file:
+                    self._record_sandbox_feedback(target_file, success)
 
                 # Tracker le dernier run complet (filet de securite 6h)
                 if is_full_run:
@@ -279,6 +296,10 @@ class SandboxEngine:
     def promote(self, relative_path: str) -> bool:
         """Copie un fichier sandbox vers la production avec backup .bak.
 
+        IMPORTANT: L'appelant DOIT avoir fait un run_tests() reel AVANT d'appeler
+        promote(). Si le dernier run_tests() etait une prediction (predicted=True),
+        promote() refuse la promotion et demande un run reel.
+
         Args:
             relative_path: Chemin relatif (ex: core/foo.py)
 
@@ -290,6 +311,14 @@ class SandboxEngine:
 
         if not os.path.isfile(sandbox_file):
             logger.warning(f"[SANDBOX] Fichier inexistant dans sandbox: {relative_path}")
+            return False
+
+        # GARDE-FOU: verifier que le dernier run n'etait pas une prediction
+        if self._last_was_predicted:
+            logger.warning(
+                f"[SANDBOX] Promotion REFUSEE pour {relative_path}: "
+                "dernier run etait une prediction. Relancer run_tests() en mode reel."
+            )
             return False
 
         try:
@@ -430,6 +459,85 @@ class SandboxEngine:
             "timestamp": time.time(),
         }
         self._save_cache()
+
+    # --- PREDICTION COMPILEE (Niveau 5) ---
+
+    def _try_prediction(self, target_file: str) -> Optional[SandboxResult]:
+        """Tente de predire le resultat sandbox via le neural_compiler.
+
+        Returns:
+            SandboxResult(predicted=True) si prediction succes, None sinon.
+        """
+        try:
+            from core.neural_compiler import compiler
+            agent, change_type = self._extract_change_metadata(target_file)
+            predicted = compiler.predict_sandbox_outcome(
+                agent=agent,
+                target_file=target_file,
+                change_type=change_type,
+            )
+            if predicted is True:
+                self._stats["prediction_hits"] += 1
+                return SandboxResult(
+                    success=True,
+                    tests_passed=0,
+                    tests_failed=0,
+                    tests_errors=0,
+                    output=f"[PREDICTION] Succes predit par neural_compiler (agent={agent}, type={change_type})",
+                    duration_seconds=0.0,
+                    predicted=True,
+                )
+        except Exception as e:
+            logger.debug(f"[SANDBOX] Prediction echouee: {e}")
+        return None
+
+    def _record_sandbox_feedback(self, target_file: str, success: bool):
+        """Enregistre le resultat reel d'un run pour la boucle d'apprentissage."""
+        try:
+            from core.neural_compiler import compiler
+            agent, change_type = self._extract_change_metadata(target_file)
+            compiler.record_sandbox_outcome(agent, target_file, change_type, success)
+        except Exception as e:
+            logger.debug(f"[SANDBOX] Feedback prediction echoue: {e}")
+
+    def _verify_prediction(self, target_file: str, actual_success: bool):
+        """Verifie la prediction lors d'un promote() (feedback loop)."""
+        try:
+            from core.neural_compiler import compiler
+            agent, change_type = self._extract_change_metadata(target_file)
+            compiler.verify_sandbox_prediction(agent, target_file, change_type, actual_success)
+        except Exception:
+            pass
+
+    def _extract_change_metadata(self, target_file: str) -> tuple:
+        """Extrait l'agent et le type de changement depuis le contexte.
+
+        Heuristique basee sur le chemin du fichier.
+        Returns:
+            (agent_name, change_type)
+        """
+        normalized = target_file.replace("\\", "/")
+
+        # Deviner l'agent depuis le chemin
+        agent = "unknown"
+        if "Agents/" in normalized:
+            basename = os.path.basename(normalized)
+            name = os.path.splitext(basename)[0]
+            if name.endswith("_agent"):
+                agent = name.replace("_agent", "")
+        elif "core/" in normalized:
+            agent = "evolution"  # La plupart des changements core viennent d'evolution
+
+        # Deviner le type de changement
+        change_type = "evolution"  # defaut
+        if "test" in normalized.lower():
+            change_type = "test"
+        elif "config" in normalized.lower():
+            change_type = "config"
+        elif "grimoire" in normalized.lower():
+            change_type = "grimoire"
+
+        return agent, change_type
 
     # --- METHODES PRIVEES ---
 

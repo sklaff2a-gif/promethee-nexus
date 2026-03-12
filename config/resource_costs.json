@@ -82,5 +82,9 @@
   "GRIMOIRE_EVOLVE": {
     "cost": 3,
     "description": "Mutation prompt Grimoire: lecture + 1-2 appels LLM local"
+  },
+  "VEILLE_IA": {
+    "cost": 2,
+    "description": "Veille écosystème IA: recherche web + synthèse LLM local"
   }
 }

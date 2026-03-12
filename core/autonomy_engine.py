@@ -147,7 +147,7 @@ INTROSPECTIVE_INTENTS = {
     "REFACTOR_RANDOM", "SECURITY_AUDIT", "EXPANSION_CODE",
 }
 EXTROVERTED_INTENTS = {
-    "VEILLE_SILENCIEUSE", "DROPZONE_SCAN", "ROADMAP_RESEARCH", "ROADMAP_SPEC",
+    "VEILLE_SILENCIEUSE", "VEILLE_IA", "DROPZONE_SCAN", "ROADMAP_RESEARCH", "ROADMAP_SPEC",
 }
 EXTROVERSION_STREAK_THRESHOLD = 3   # Apres 3 routines introspectives consecutives
 EXTROVERSION_BONUS_PER_STREAK = 0.8 # Bonus par routine au-dela du seuil
@@ -160,7 +160,7 @@ STAGNATION_MIN_HISTORY = 5            # Minimum d'historique pour évaluer
 NOVELTY_BONUS_BASE = 1.0              # Bonus base pour intents non-récents
 NOVELTY_BONUS_MAX = 3.0               # Bonus max (stagnation sévère)
 EXPLORATION_INTENTS = {
-    "EXPANSION_CODE", "CREATIVE_PLAY", "VEILLE_SILENCIEUSE",
+    "EXPANSION_CODE", "CREATIVE_PLAY", "VEILLE_SILENCIEUSE", "VEILLE_IA",
     "ROADMAP_RESEARCH", "ROADMAP_SPEC", "GRIMOIRE_EVOLVE",
     "COUNCIL_DEBATE", "DROPZONE_SCAN",
 }
@@ -225,6 +225,49 @@ VEILLE_TOPICS = [
     "Cherche une technique de gestion d'erreurs robuste en Python async.",
     "Cherche un outil Python utile pour le monitoring système (psutil, watchdog).",
     "Cherche une astuce FastAPI pour améliorer les performances ou la sécurité.",
+]
+
+VEILLE_IA_TOPICS = [
+    {
+        "query": "new Ollama models released 2026 local LLM",
+        "focus": "nouveaux modèles Ollama/llama.cpp sortis récemment",
+        "actionable": "Comparer avec nos modèles actuels (qwen3:4b, gemma3:12b). Recommander un upgrade si pertinent.",
+    },
+    {
+        "query": "multi-agent AI framework autonomous system 2026",
+        "focus": "frameworks multi-agents IA autonomes (CrewAI, AutoGen, LangGraph)",
+        "actionable": "Identifier des patterns architecturaux applicables à Prométhée.",
+    },
+    {
+        "query": "local LLM fine-tuning LoRA QLoRA techniques 2026",
+        "focus": "techniques de fine-tuning local (LoRA, QLoRA, Unsloth)",
+        "actionable": "Trouver des améliorations pour notre pipeline QLoRA existant.",
+    },
+    {
+        "query": "RAG vector database ChromaDB optimization 2026",
+        "focus": "optimisations RAG et bases vectorielles (ChromaDB, alternatives)",
+        "actionable": "Identifier des techniques pour améliorer notre mémoire vectorielle.",
+    },
+    {
+        "query": "AI agent self-improvement autonomous learning loop 2026",
+        "focus": "systèmes IA auto-améliorants et boucles d'apprentissage autonomes",
+        "actionable": "Trouver des mécanismes d'auto-amélioration applicables à notre evolution pipeline.",
+    },
+    {
+        "query": "AI consciousness emergence artificial general intelligence 2026",
+        "focus": "recherches sur la conscience artificielle et l'émergence comportementale",
+        "actionable": "Identifier des concepts applicables à notre architecture organique (desire, psyche, inner_voice).",
+    },
+    {
+        "query": "prompt engineering techniques system prompt optimization 2026",
+        "focus": "techniques avancées de prompt engineering et optimisation",
+        "actionable": "Trouver des améliorations pour nos guardrails anti-hallucination et prompts agents.",
+    },
+    {
+        "query": "MCP model context protocol AI tools plugins 2026",
+        "focus": "protocole MCP et écosystème d'outils/plugins pour agents IA",
+        "actionable": "Identifier des outils MCP pertinents pour étendre les capacités de Prométhée.",
+    },
 ]
 
 YOUTUBE_AI_VEILLE = [
@@ -366,6 +409,7 @@ CONTEXT_KEYWORDS = {
     "AUTO_FUZZING": ["fuzz", "test", "edge case", "crash", "robustesse", "exception", "bug"],
     "CREATIVE_PLAY": ["créatif", "association", "analogie", "exploration", "idée", "hypothèse"],
     "GRIMOIRE_EVOLVE": ["grimoire", "prompt", "mutation", "amélioration", "formulation", "optimiser"],
+    "VEILLE_IA": ["intelligence artificielle", "modèle", "LLM", "agent", "IA", "veille", "écosystème"],
 }
 
 
@@ -615,6 +659,10 @@ class AutonomyEngine:
         veille_index = self.total_routines_executed % len(VEILLE_TOPICS)
         veille_mission = f"[MODE VEILLE] {VEILLE_TOPICS[veille_index]}"
 
+        # Rotation du sujet de veille IA
+        veille_ia_index = self.total_routines_executed % len(VEILLE_IA_TOPICS)
+        veille_ia_topic = VEILLE_IA_TOPICS[veille_ia_index]
+
         return [
             {"agent": "evolution", "intent": "EXPANSION_CODE", "mission": "[MODE VEILLE] Croise les connaissances internes. Decouvre des patterns et connexions entre domaines."},
             {"agent": "architect", "intent": "AUDIT_STRUCTURE", "mission": "Vérifie qu'aucun fichier temporaire (.tmp, .log) ne traîne à la racine."},
@@ -633,6 +681,7 @@ class AutonomyEngine:
             {"agent": "_auto_fuzzing", "intent": "AUTO_FUZZING", "mission": "Fuzz-test une fonction aléatoire du projet pour trouver des bugs cachés."},
             {"agent": "_creative_play", "intent": "CREATIVE_PLAY", "mission": "Association libre : croise deux concepts éloignés pour découvrir des connexions inattendues."},
             {"agent": "_grimoire_evolve", "intent": "GRIMOIRE_EVOLVE", "mission": "Mute un prompt du Grimoire et compare les résultats pour trouver de meilleures formulations."},
+            {"agent": "researcher", "intent": "VEILLE_IA", "mission": f"[VEILLE IA] Recherche: {veille_ia_topic['focus']}. {veille_ia_topic['actionable']}"},
         ]
 
     def _persist_state(self):
@@ -1480,6 +1529,8 @@ class AutonomyEngine:
             response = await self._execute_creative_play()
         elif intent == "GRIMOIRE_EVOLVE":
             response = await self._execute_grimoire_evolve()
+        elif intent == "VEILLE_IA":
+            response = await self._execute_veille_ia(routine)
         elif intent == "DROPZONE_SCAN" and dropzone_count == 0:
             # Dropzone vide → veille YouTube IA (rotation des sujets)
             yt_index = self.total_routines_executed % len(YOUTUBE_AI_VEILLE)
@@ -1938,6 +1989,8 @@ class AutonomyEngine:
             response = await self._execute_creative_play()
         elif intent == "GRIMOIRE_EVOLVE":
             response = await self._execute_grimoire_evolve()
+        elif intent == "VEILLE_IA":
+            response = await self._execute_veille_ia(routine)
         else:
             response = await orchestrator.dispatch_task(agent, {
                 "mission": f"[MODE VEILLE] {routine['mission']}",
@@ -2393,7 +2446,7 @@ class AutonomyEngine:
 
             # Identifier les routines absentes qui pourraient manquer
             all_intents = {
-                "EXPANSION_CODE", "VEILLE_SILENCIEUSE", "ROADMAP_RESEARCH",
+                "EXPANSION_CODE", "VEILLE_SILENCIEUSE", "VEILLE_IA", "ROADMAP_RESEARCH",
                 "SECURITY_AUDIT", "MEMORY_CONSOLIDATION",
             }
             missing = all_intents - set(intent_counts.keys())
@@ -2593,7 +2646,7 @@ class AutonomyEngine:
             mission += (
                 "\n\nIMPORTANT : Votre conclusion DOIT inclure une ligne :\n"
                 "VERDICT: PRIORISER [routine] ou DEPRIORISER [routine] ou MAINTENIR\n"
-                "Routines possibles : EXPANSION_CODE, VEILLE_SILENCIEUSE, SECURITY_AUDIT, "
+                "Routines possibles : EXPANSION_CODE, VEILLE_SILENCIEUSE, VEILLE_IA, SECURITY_AUDIT, "
                 "REFACTOR_RANDOM, COUNCIL_DEBATE, MEMORY_CONSOLIDATION, ROADMAP_RESEARCH, "
                 "ROADMAP_SPEC, SOLILOQUE_INTERNE, AUDIT_STRUCTURE, GRIMOIRE_INVOKE.\n"
                 "Si aucun changement n'est nécessaire, utilisez VERDICT: MAINTENIR."
@@ -3148,6 +3201,11 @@ class AutonomyEngine:
                 logger.warning(
                     f"[NAP/LORA] Echec {agent}: {result.get('error', '?')}"
                 )
+                # Logger l'output du training pour diagnostic
+                training_output = result.get("training_output", "")
+                if training_output:
+                    tail = "\n".join(training_output.strip().splitlines()[-10:])
+                    logger.warning(f"[NAP/LORA] Output training:\n{tail}")
         except Exception as e:
             logger.debug(f"[NAP/LORA] LoRA auto-training indisponible: {e}")
 
@@ -3877,6 +3935,97 @@ else:
     # ================================================================
     # CHANTIER 3 : CREATIVE PLAY — associations libres inter-concepts
     # ================================================================
+
+    async def _execute_veille_ia(self, routine: dict) -> dict:
+        """Veille IA active : recherche web sur l'écosystème IA, synthèse et mémorisation.
+
+        Objectif: Donner à Prométhée une conscience de son environnement technologique.
+        Le researcher cherche sur le web, synthétise, et les découvertes sont stockées
+        en mémoire + publiées sur le bus pour que les autres organes réagissent.
+        Coût: 2pt (recherche web + 1 appel LLM pour synthèse).
+        """
+        try:
+            veille_ia_index = self.total_routines_executed % len(VEILLE_IA_TOPICS)
+            topic = VEILLE_IA_TOPICS[veille_ia_index]
+
+            print(f"   🔭 VEILLE IA: {topic['focus'][:70]}...")
+
+            mission = (
+                f"[VEILLE IA] Recherche sur le web: {topic['query']}\n"
+                f"Focus: {topic['focus']}\n"
+                f"Objectif actionnable: {topic['actionable']}\n\n"
+                f"INSTRUCTIONS:\n"
+                f"- Cherche des informations RÉCENTES (2025-2026) sur ce sujet.\n"
+                f"- Résume les 2-3 découvertes les plus pertinentes pour un système multi-agents autonome.\n"
+                f"- Pour chaque découverte, indique si c'est applicable à Prométhée et comment.\n"
+                f"- Si tu trouves quelque chose d'immédiatement actionnable, commence par 'ACTIONNABLE:'\n"
+                f"- Sauvegarde les trouvailles en mémoire (collection: veille_ia).\n"
+                f"- Réponds en français, maximum 300 mots."
+            )
+
+            response = await orchestrator.dispatch_task("researcher", {
+                "mission": mission,
+                "context": (
+                    "PROTOCOLE_AUTONOMIE\nVEILLE_IA — Tu es le système de veille technologique de Prométhée. "
+                    "Ta mission est de surveiller l'écosystème IA pour identifier des opportunités "
+                    "d'auto-amélioration. Prométhée est un système multi-agents Python/FastAPI/Ollama "
+                    "avec mémoire vectorielle ChromaDB, pipeline Evolution, et architecture organique "
+                    "(cortex, hippocampe, dopamine, etc). Cherche ce qui pourrait nous rendre meilleurs."
+                ),
+                "force_local": True,
+                "intent": "VEILLE_IA",
+            })
+
+            result_text = response.get("result", "") if response else ""
+
+            # Stocker en mémoire vectorielle
+            if result_text and len(result_text) > 50:
+                try:
+                    from core.vector_store import ChromaMemoryManager
+                    mgr = ChromaMemoryManager.get_instance()
+                    if mgr:
+                        mgr.add(
+                            collection="veille_ia",
+                            text=f"[VEILLE_IA] {topic['focus']}: {result_text[:1000]}",
+                            metadata={
+                                "source": "veille_ia",
+                                "topic": topic["focus"],
+                                "query": topic["query"],
+                            },
+                        )
+                except Exception as e:
+                    logger.warning(f"[VEILLE_IA] Stockage mémoire échoué: {e}")
+
+            # Publier sur le bus pour que les organes réagissent
+            is_actionable = "ACTIONNABLE:" in result_text.upper() if result_text else False
+            try:
+                await bus.publish("VEILLE_IA_DISCOVERY", {
+                    "topic": topic["focus"],
+                    "query": topic["query"],
+                    "findings": result_text[:500] if result_text else "",
+                    "actionable": is_actionable,
+                })
+            except Exception:
+                pass
+
+            # Enregistrer dans le journal stratégique
+            try:
+                from core.strategic_journal import journal as strat_journal
+                strat_journal.append_research_entry(
+                    topic=f"[VEILLE IA] {topic['focus']}",
+                    findings=result_text[:500] if result_text else "",
+                    source="Web",
+                )
+            except Exception:
+                pass
+
+            if is_actionable:
+                print(f"   🎯 VEILLE IA: Découverte actionnable détectée!")
+
+            return response or {"status": "error", "result": "Pas de réponse."}
+
+        except Exception as e:
+            return {"status": "error", "result": f"Veille IA échouée: {e}"}
 
     async def _execute_creative_play(self) -> dict:
         """Association libre : croise deux concepts éloignés du réseau synaptique.

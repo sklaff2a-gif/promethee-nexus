@@ -2993,3 +2993,156 @@ class TestAntiStagnation:
         assert exploration_weight >= stability_weight, (
             f"Exploration ({exploration_weight}) < Stabilité ({stability_weight})"
         )
+
+
+# ═══════════════════════════════════════════════════════════
+# TestVeilleIA (12 tests)
+# ═══════════════════════════════════════════════════════════
+
+class TestVeilleIA:
+    """Tests pour la routine VEILLE_IA."""
+
+    def setup_method(self):
+        import core.autonomy_engine as ae
+        ae._scoring_weights_cache = None
+        ae._organ_precision_cache = {}
+
+    def _make_engine(self):
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._last_adaptive_adjustments = {}
+        engine._council_adjustments = {}
+        engine.routine_history = []
+        engine.total_routines_executed = 0
+        engine.daily_budget_used = 0
+        engine.daily_count = 0
+        engine._learning_history = []
+        engine._security_audited_files = []
+        engine._forced_failure_counts = {}
+        engine.is_napping = False
+        engine._nap_started_at = 0
+        engine._nap_renewals_used = 0
+        engine._nap_last_exit = 0
+        engine.last_reset_day = None
+        engine.last_user_interaction = time.time()
+        engine.recent_context = []
+        engine.last_health_check = 0
+        engine.error_streak = 0
+        return engine
+
+    def test_veille_ia_in_routines(self):
+        """VEILLE_IA est présente dans la liste des routines."""
+        engine = self._make_engine()
+        routines = engine._get_routines()
+        intents = [r["intent"] for r in routines]
+        assert "VEILLE_IA" in intents
+
+    def test_veille_ia_agent_is_researcher(self):
+        """VEILLE_IA utilise le researcher agent."""
+        engine = self._make_engine()
+        routines = engine._get_routines()
+        veille_ia = [r for r in routines if r["intent"] == "VEILLE_IA"][0]
+        assert veille_ia["agent"] == "researcher"
+
+    def test_veille_ia_mission_rotates(self):
+        """Le sujet de VEILLE_IA tourne avec total_routines_executed."""
+        engine = self._make_engine()
+        engine.total_routines_executed = 0
+        routines_0 = engine._get_routines()
+        mission_0 = [r for r in routines_0 if r["intent"] == "VEILLE_IA"][0]["mission"]
+
+        engine.total_routines_executed = 1
+        routines_1 = engine._get_routines()
+        mission_1 = [r for r in routines_1 if r["intent"] == "VEILLE_IA"][0]["mission"]
+
+        assert mission_0 != mission_1
+
+    def test_veille_ia_topics_count(self):
+        """Il y a exactement 8 sujets de veille IA."""
+        from core.autonomy_engine import VEILLE_IA_TOPICS
+        assert len(VEILLE_IA_TOPICS) == 8
+
+    def test_veille_ia_topics_structure(self):
+        """Chaque topic a les champs query, focus, actionable."""
+        from core.autonomy_engine import VEILLE_IA_TOPICS
+        for topic in VEILLE_IA_TOPICS:
+            assert "query" in topic
+            assert "focus" in topic
+            assert "actionable" in topic
+            assert len(topic["query"]) > 10
+            assert len(topic["focus"]) > 10
+
+    def test_veille_ia_in_extroverted_intents(self):
+        """VEILLE_IA est classée comme extrovertie."""
+        assert "VEILLE_IA" in EXTROVERTED_INTENTS
+
+    def test_veille_ia_in_exploration_intents(self):
+        """VEILLE_IA est classée comme exploratoire."""
+        assert "VEILLE_IA" in EXPLORATION_INTENTS
+
+    def test_veille_ia_resource_cost(self):
+        """VEILLE_IA coûte 2 points de budget."""
+        assert "VEILLE_IA" in RESOURCE_COSTS
+        assert RESOURCE_COSTS["VEILLE_IA"] == 2
+
+    def test_veille_ia_context_keywords(self):
+        """VEILLE_IA a des mots-clés contextuels."""
+        assert "VEILLE_IA" in CONTEXT_KEYWORDS
+        assert len(CONTEXT_KEYWORDS["VEILLE_IA"]) >= 3
+
+    @pytest.mark.asyncio
+    async def test_execute_veille_ia_success(self):
+        """_execute_veille_ia retourne une réponse du researcher."""
+        engine = self._make_engine()
+        routine = {"agent": "researcher", "intent": "VEILLE_IA", "mission": "test"}
+
+        mock_response = {"status": "success", "result": "Découverte: nouveau modèle Qwen 4B."}
+        mock_dispatch = AsyncMock(return_value=mock_response)
+        mock_bus = AsyncMock()
+
+        with patch("core.autonomy_engine.orchestrator") as mock_orch, \
+             patch("core.autonomy_engine.bus", mock_bus):
+            mock_orch.dispatch_task = mock_dispatch
+            result = await engine._execute_veille_ia(routine)
+
+        assert result["status"] == "success"
+        mock_dispatch.assert_called_once()
+        call_args = mock_dispatch.call_args
+        assert call_args[0][0] == "researcher"
+        assert "VEILLE_IA" in call_args[0][1]["intent"]
+
+    @pytest.mark.asyncio
+    async def test_execute_veille_ia_publishes_event(self):
+        """_execute_veille_ia publie un événement VEILLE_IA_DISCOVERY."""
+        engine = self._make_engine()
+        routine = {"agent": "researcher", "intent": "VEILLE_IA", "mission": "test"}
+
+        mock_response = {"status": "success", "result": "Résultat de la recherche web."}
+        mock_dispatch = AsyncMock(return_value=mock_response)
+        mock_bus = AsyncMock()
+
+        with patch("core.autonomy_engine.orchestrator") as mock_orch, \
+             patch("core.autonomy_engine.bus", mock_bus):
+            mock_orch.dispatch_task = mock_dispatch
+            await engine._execute_veille_ia(routine)
+
+        mock_bus.publish.assert_called()
+        event_name = mock_bus.publish.call_args[0][0]
+        assert event_name == "VEILLE_IA_DISCOVERY"
+
+    @pytest.mark.asyncio
+    async def test_execute_veille_ia_actionable_detection(self):
+        """_execute_veille_ia détecte les découvertes actionnables."""
+        engine = self._make_engine()
+        routine = {"agent": "researcher", "intent": "VEILLE_IA", "mission": "test"}
+
+        mock_response = {"status": "success", "result": "ACTIONNABLE: Nouveau modèle llama4 disponible sur Ollama."}
+        mock_dispatch = AsyncMock(return_value=mock_response)
+        mock_bus = AsyncMock()
+
+        with patch("core.autonomy_engine.orchestrator") as mock_orch, \
+             patch("core.autonomy_engine.bus", mock_bus):
+            mock_orch.dispatch_task = mock_dispatch
+            await engine._execute_veille_ia(routine)
+
+        event_data = mock_bus.publish.call_args[0][1]
+        assert event_data["actionable"] is True

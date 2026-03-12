@@ -292,6 +292,7 @@ class TestStats:
             "total_promotions", "total_discards",
             "pre_validation_catches", "graph_targeted_runs",
             "cache_hits",
+            "prediction_hits",
         }
         assert set(stats.keys()) == expected_keys
 
@@ -739,3 +740,142 @@ class TestCacheMD5:
         parts = h1.split(":")
         assert len(parts) == 2
         assert "," in parts[1]  # 2 hashes separes par virgule
+
+
+# =============================================================
+# PREDICTION SANDBOX (Niveau 5) — 16 tests
+# =============================================================
+
+class TestSandboxPrediction:
+    """Tests pour la prediction compilee dans le sandbox."""
+
+    def test_sandbox_result_predicted_default_false(self):
+        """Par defaut, predicted=False."""
+        r = SandboxResult(True, 5, 0, 0, "ok", 1.0)
+        assert r.predicted is False
+
+    def test_sandbox_result_predicted_true(self):
+        """On peut creer un SandboxResult avec predicted=True."""
+        r = SandboxResult(True, 0, 0, 0, "predicted", 0.0, predicted=True)
+        assert r.predicted is True
+
+    def test_prediction_hits_stat(self, isolate_sandbox):
+        """Le stat prediction_hits est initialise a 0."""
+        engine = SandboxEngine()
+        assert engine._stats["prediction_hits"] == 0
+
+    def test_last_was_predicted_init(self, isolate_sandbox):
+        """_last_was_predicted est False au demarrage."""
+        engine = SandboxEngine()
+        assert engine._last_was_predicted is False
+
+    def test_promote_blocks_after_prediction(self, isolate_sandbox):
+        """promote() refuse si le dernier run etait une prediction."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        engine._last_was_predicted = True
+        result = engine.promote("core/base_agent.py")
+        assert result is False
+
+    def test_promote_allows_after_real_run(self, isolate_sandbox):
+        """promote() autorise si le dernier run n'etait pas une prediction."""
+        engine = SandboxEngine()
+        engine.create_or_refresh()
+        engine._last_was_predicted = False
+        result = engine.promote("core/base_agent.py")
+        assert result is True
+
+    def test_extract_change_metadata_agent(self, isolate_sandbox):
+        """Extraction agent depuis le chemin Agents/."""
+        engine = SandboxEngine()
+        agent, _ = engine._extract_change_metadata("Agents/coder_agent.py")
+        assert agent == "coder"
+
+    def test_extract_change_metadata_core(self, isolate_sandbox):
+        """Les fichiers core/ sont attribues a evolution."""
+        engine = SandboxEngine()
+        agent, _ = engine._extract_change_metadata("core/base_agent.py")
+        assert agent == "evolution"
+
+    def test_extract_change_metadata_type_test(self, isolate_sandbox):
+        """Les fichiers test sont detectes."""
+        engine = SandboxEngine()
+        _, change_type = engine._extract_change_metadata("tests/test_foo.py")
+        assert change_type == "test"
+
+    def test_extract_change_metadata_type_config(self, isolate_sandbox):
+        """Les fichiers config sont detectes."""
+        engine = SandboxEngine()
+        _, change_type = engine._extract_change_metadata("config/settings.json")
+        assert change_type == "config"
+
+    def test_extract_change_metadata_type_default(self, isolate_sandbox):
+        """Le type par defaut est evolution."""
+        engine = SandboxEngine()
+        _, change_type = engine._extract_change_metadata("core/base_agent.py")
+        assert change_type == "evolution"
+
+    def test_try_prediction_no_history(self, isolate_sandbox):
+        """Pas de prediction sans historique."""
+        engine = SandboxEngine()
+        from unittest.mock import patch, MagicMock
+        mock_compiler = MagicMock()
+        mock_compiler.predict_sandbox_outcome.return_value = None
+        with patch("core.sandbox_engine.compiler", mock_compiler, create=True), \
+             patch.dict("sys.modules", {"core.neural_compiler": MagicMock(compiler=mock_compiler)}):
+            result = engine._try_prediction("core/base_agent.py")
+        assert result is None
+
+    def test_try_prediction_success(self, isolate_sandbox):
+        """Prediction succes retourne SandboxResult predicted=True."""
+        engine = SandboxEngine()
+        from unittest.mock import patch, MagicMock
+
+        mock_compiler = MagicMock()
+        mock_compiler.predict_sandbox_outcome.return_value = True
+
+        # Patcher l'import dans le module
+        import sys
+        mock_nc_module = MagicMock()
+        mock_nc_module.compiler = mock_compiler
+        with patch.dict(sys.modules, {"core.neural_compiler": mock_nc_module}):
+            result = engine._try_prediction("core/base_agent.py")
+
+        assert result is not None
+        assert result.predicted is True
+        assert result.success is True
+        assert engine._stats["prediction_hits"] == 1
+
+    def test_record_sandbox_feedback(self, isolate_sandbox):
+        """_record_sandbox_feedback appelle le compiler."""
+        engine = SandboxEngine()
+        from unittest.mock import patch, MagicMock
+        import sys
+
+        mock_compiler = MagicMock()
+        mock_nc_module = MagicMock()
+        mock_nc_module.compiler = mock_compiler
+        with patch.dict(sys.modules, {"core.neural_compiler": mock_nc_module}):
+            engine._record_sandbox_feedback("core/base_agent.py", True)
+
+        mock_compiler.record_sandbox_outcome.assert_called_once()
+
+    def test_verify_prediction(self, isolate_sandbox):
+        """_verify_prediction appelle le compiler."""
+        engine = SandboxEngine()
+        from unittest.mock import patch, MagicMock
+        import sys
+
+        mock_compiler = MagicMock()
+        mock_nc_module = MagicMock()
+        mock_nc_module.compiler = mock_compiler
+        with patch.dict(sys.modules, {"core.neural_compiler": mock_nc_module}):
+            engine._verify_prediction("core/base_agent.py", True)
+
+        mock_compiler.verify_sandbox_prediction.assert_called_once()
+
+    def test_extract_grimoire_type(self, isolate_sandbox):
+        """Les fichiers grimoire sont detectes."""
+        engine = SandboxEngine()
+        _, change_type = engine._extract_change_metadata("core/grimoire/recipe.py")
+        assert change_type == "grimoire"

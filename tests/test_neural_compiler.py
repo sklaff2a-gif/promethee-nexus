@@ -1682,3 +1682,176 @@ class TestComplexityCompiled:
         assert "complexity_compiled" in stats
         assert stats["routing_compiled"] == 0
         assert stats["complexity_compiled"] == 0
+
+
+# ============================================================
+# 12. TestSandboxPrediction — 18 tests
+# ============================================================
+
+class TestSandboxPrediction:
+    """Tests pour predict_sandbox_outcome / record_sandbox_outcome."""
+
+    def test_initial_sandbox_state(self, isolate_compiler):
+        c = isolate_compiler
+        assert c._sandbox_history == {}
+        assert c._sandbox_predicted == 0
+        assert c._sandbox_verified == 0
+        assert c._sandbox_wrong == 0
+
+    def test_sandbox_key_deterministic(self, isolate_compiler):
+        from core.neural_compiler import NeuralCompiler
+        k1 = NeuralCompiler._sandbox_key("coder", "core/base_agent.py", "evolution")
+        k2 = NeuralCompiler._sandbox_key("coder", "core/base_agent.py", "evolution")
+        assert k1 == k2
+
+    def test_sandbox_key_different_agents(self, isolate_compiler):
+        from core.neural_compiler import NeuralCompiler
+        k1 = NeuralCompiler._sandbox_key("coder", "core/base_agent.py", "evolution")
+        k2 = NeuralCompiler._sandbox_key("evolution", "core/base_agent.py", "evolution")
+        assert k1 != k2
+
+    def test_sandbox_key_normalizes_path(self, isolate_compiler):
+        from core.neural_compiler import NeuralCompiler
+        k1 = NeuralCompiler._sandbox_key("coder", "core/base_agent.py", "evolution")
+        k2 = NeuralCompiler._sandbox_key("coder", "core\\base_agent.py", "evolution")
+        assert k1 == k2
+
+    def test_record_sandbox_outcome_creates_entry(self, isolate_compiler):
+        c = isolate_compiler
+        c.record_sandbox_outcome("coder", "core/foo.py", "evolution", True)
+        key = c._sandbox_key("coder", "core/foo.py", "evolution")
+        assert key in c._sandbox_history
+        assert c._sandbox_history[key]["success"] == 1
+        assert c._sandbox_history[key]["fail"] == 0
+
+    def test_record_sandbox_outcome_failure(self, isolate_compiler):
+        c = isolate_compiler
+        c.record_sandbox_outcome("coder", "core/foo.py", "evolution", False)
+        key = c._sandbox_key("coder", "core/foo.py", "evolution")
+        assert c._sandbox_history[key]["fail"] == 1
+
+    def test_record_sandbox_outcome_accumulates(self, isolate_compiler):
+        c = isolate_compiler
+        for _ in range(5):
+            c.record_sandbox_outcome("coder", "core/foo.py", "evolution", True)
+        c.record_sandbox_outcome("coder", "core/foo.py", "evolution", False)
+        key = c._sandbox_key("coder", "core/foo.py", "evolution")
+        assert c._sandbox_history[key]["success"] == 5
+        assert c._sandbox_history[key]["fail"] == 1
+
+    def test_predict_no_history(self, isolate_compiler):
+        c = isolate_compiler
+        result = c.predict_sandbox_outcome("coder", "core/foo.py", "evolution")
+        assert result is None
+
+    def test_predict_insufficient_observations(self, isolate_compiler):
+        c = isolate_compiler
+        for _ in range(3):  # < SANDBOX_PREDICT_MIN_OBSERVATIONS (10)
+            c.record_sandbox_outcome("coder", "core/foo.py", "evolution", True)
+        result = c.predict_sandbox_outcome("coder", "core/foo.py", "evolution")
+        assert result is None
+
+    def test_predict_success_high_rate(self, isolate_compiler):
+        c = isolate_compiler
+        # 20 succes, 0 echecs → taux 100% > seuil 95%
+        for _ in range(20):
+            c.record_sandbox_outcome("coder", "core/foo.py", "evolution", True)
+        result = c.predict_sandbox_outcome("coder", "core/foo.py", "evolution")
+        assert result is True
+        assert c._sandbox_predicted == 1
+
+    def test_predict_fails_low_rate(self, isolate_compiler):
+        c = isolate_compiler
+        # 7 succes, 5 echecs → taux 58% < seuil 95%
+        for _ in range(7):
+            c.record_sandbox_outcome("coder", "core/foo.py", "evolution", True)
+        for _ in range(5):
+            c.record_sandbox_outcome("coder", "core/foo.py", "evolution", False)
+        result = c.predict_sandbox_outcome("coder", "core/foo.py", "evolution")
+        assert result is None
+
+    def test_predict_diff_size_penalty(self, isolate_compiler):
+        c = isolate_compiler
+        # Taux 96% — juste au-dessus du seuil normal
+        for _ in range(24):
+            c.record_sandbox_outcome("coder", "core/foo.py", "evolution", True)
+        c.record_sandbox_outcome("coder", "core/foo.py", "evolution", False)
+        # Sans diff_size → succes
+        assert c.predict_sandbox_outcome("coder", "core/foo.py", "evolution") is True
+        # Avec gros diff → seuil monte a 0.98, 96% < 98%
+        c._sandbox_predicted = 0
+        assert c.predict_sandbox_outcome("coder", "core/foo.py", "evolution", diff_size=600) is None
+
+    def test_verify_prediction_correct(self, isolate_compiler):
+        c = isolate_compiler
+        c.verify_sandbox_prediction("coder", "core/foo.py", "evolution", True)
+        assert c._sandbox_verified == 1
+        assert c._sandbox_wrong == 0
+
+    def test_verify_prediction_wrong(self, isolate_compiler):
+        c = isolate_compiler
+        c.verify_sandbox_prediction("coder", "core/foo.py", "evolution", False)
+        assert c._sandbox_verified == 1
+        assert c._sandbox_wrong == 1
+
+    def test_threshold_adapts_on_bad_precision(self, isolate_compiler):
+        from core.neural_compiler import (
+            SANDBOX_PREDICT_THRESHOLD, SANDBOX_PREDICT_THRESHOLD_HIGH
+        )
+        c = isolate_compiler
+        # Simuler 10 verifications dont 2 incorrectes (precision 80%)
+        c._sandbox_verified = 10
+        c._sandbox_wrong = 2
+        threshold = c._get_sandbox_threshold()
+        assert threshold == SANDBOX_PREDICT_THRESHOLD_HIGH
+        assert threshold > SANDBOX_PREDICT_THRESHOLD
+
+    def test_threshold_stays_normal_on_good_precision(self, isolate_compiler):
+        from core.neural_compiler import SANDBOX_PREDICT_THRESHOLD
+        c = isolate_compiler
+        c._sandbox_verified = 20
+        c._sandbox_wrong = 0  # Precision 100%
+        threshold = c._get_sandbox_threshold()
+        assert threshold == SANDBOX_PREDICT_THRESHOLD
+
+    def test_sandbox_stats(self, isolate_compiler):
+        c = isolate_compiler
+        stats = c.get_sandbox_stats()
+        assert "patterns" in stats
+        assert "predicted" in stats
+        assert "verified" in stats
+        assert "wrong" in stats
+        assert "precision" in stats
+        assert "threshold" in stats
+        assert stats["predicted"] == 0
+
+    def test_sandbox_in_global_stats(self, isolate_compiler):
+        c = isolate_compiler
+        stats = c.get_stats()
+        assert "sandbox_prediction" in stats
+        assert isinstance(stats["sandbox_prediction"], dict)
+
+    def test_sandbox_fifo_decay(self, isolate_compiler):
+        from core.neural_compiler import SANDBOX_PREDICT_MAX_HISTORY
+        c = isolate_compiler
+        # Remplir au-dela de MAX_HISTORY
+        for _ in range(SANDBOX_PREDICT_MAX_HISTORY + 10):
+            c.record_sandbox_outcome("coder", "core/foo.py", "evolution", True)
+        key = c._sandbox_key("coder", "core/foo.py", "evolution")
+        total = c._sandbox_history[key]["success"] + c._sandbox_history[key]["fail"]
+        # Apres decay, total < MAX_HISTORY
+        assert total <= SANDBOX_PREDICT_MAX_HISTORY
+
+    def test_sandbox_persistence(self, isolate_compiler):
+        from core import neural_compiler as nc_mod
+        c = isolate_compiler
+        for _ in range(5):
+            c.record_sandbox_outcome("coder", "core/foo.py", "evolution", True)
+        c._save()
+        data = json.load(open(nc_mod.COMPILER_STATE_FILE, encoding="utf-8"))
+        assert "sandbox_history" in data
+        assert len(data["sandbox_history"]) > 0
+        metrics = data["metrics"]
+        assert "sandbox_predicted" in metrics
+        assert "sandbox_verified" in metrics
+        assert "sandbox_wrong" in metrics
