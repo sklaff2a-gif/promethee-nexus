@@ -3,17 +3,23 @@
 # avant de les deployer en production.
 # 0 LLM, pur deterministe.
 
-import ast
 import asyncio
 import hashlib
 import json
 import os
-import re
 import shutil
 import time
 import logging
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import Optional, List
+
+from core.test_runner import (
+    parse_pytest_output,
+    run_pytest,
+    pre_validate_ast,
+    select_tests_for_file,
+    derive_test_file,
+)
 
 logger = logging.getLogger("SandboxEngine")
 
@@ -32,8 +38,6 @@ EXCLUDE_DIRS = {
 }
 EXCLUDE_EXTENSIONS = {".bak", ".tmp", ".log", ".pyc"}
 
-# Prefixes de modules sources pour la pre-validation
-_SOURCE_PREFIXES = ("core.", "Agents.", "tools.")
 
 # --- Constantes ---
 
@@ -188,7 +192,7 @@ class SandboxEngine:
                     return pre_result
 
             # Determiner quels tests lancer (graphe + fallback)
-            test_args = ["python", "-m", "pytest", "-x", "--tb=short", "-q"]
+            pytest_args = ["-x", "--tb=short", "-q"]
             pair_hash = None
             selected_tests = None
             is_full_run = True
@@ -196,17 +200,16 @@ class SandboxEngine:
                 test_files = self._select_tests(target_file)
                 if test_files is None:
                     # Module hub → run complet
-                    test_args.append("tests/")
+                    pytest_args.append("tests/")
                 elif test_files:
                     self._stats["graph_targeted_runs"] += 1
                     selected_tests = test_files
-                    for tf in test_files:
-                        test_args.append(tf)
+                    pytest_args.extend(test_files)
                     is_full_run = False
                 else:
-                    test_args.append("tests/")
+                    pytest_args.append("tests/")
             else:
-                test_args.append("tests/")
+                pytest_args.append("tests/")
 
             # Prediction compilee (Niveau 5) : si confiance elevee, skip sandbox
             if target_file and not is_full_run:
@@ -222,76 +225,40 @@ class SandboxEngine:
                 if cached is not None:
                     return cached
 
-            env = os.environ.copy()
-            env["PYTHONIOENCODING"] = "utf-8"
+            # Execution via test_runner unifie
+            success, output, passed, failed, errors = await run_pytest(
+                pytest_args, cwd=SANDBOX_DIR, timeout=TEST_TIMEOUT,
+            )
+            duration = time.time() - start
 
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    *test_args,
-                    cwd=SANDBOX_DIR,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    env=env,
-                )
-                try:
-                    stdout, _ = await asyncio.wait_for(
-                        proc.communicate(), timeout=TEST_TIMEOUT
-                    )
-                except asyncio.TimeoutError:
-                    proc.kill()
-                    await proc.communicate()
-                    duration = time.time() - start
-                    return SandboxResult(
-                        success=False, tests_passed=0, tests_failed=0,
-                        tests_errors=0, output="TIMEOUT après {}s".format(TEST_TIMEOUT),
-                        duration_seconds=duration,
-                    )
+            # Run reel termine → reset le flag prediction
+            self._last_was_predicted = False
 
-                output = stdout.decode("utf-8", errors="replace")
-                # Tronquer a 2000 chars
-                if len(output) > 2000:
-                    output = output[:2000] + "\n... (tronque)"
+            # Mettre a jour les stats
+            self._stats["total_tests_run"] += passed + failed + errors
+            self._stats["total_passed"] += passed
+            self._stats["total_failed"] += failed
 
-                duration = time.time() - start
-                passed, failed, errors = self._parse_pytest_output(output)
-                success = proc.returncode == 0
+            result = SandboxResult(
+                success=success, tests_passed=passed, tests_failed=failed,
+                tests_errors=errors, output=output,
+                duration_seconds=duration,
+            )
 
-                # Run reel termine → reset le flag prediction
-                self._last_was_predicted = False
+            # Cache MD5 : stocker le resultat
+            if pair_hash:
+                self._cache_update(pair_hash, result)
 
-                # Mettre a jour les stats
-                self._stats["total_tests_run"] += passed + failed + errors
-                self._stats["total_passed"] += passed
-                self._stats["total_failed"] += failed
+            # Feedback loop sandbox prediction (Niveau 5)
+            if target_file:
+                self._record_sandbox_feedback(target_file, success)
 
-                result = SandboxResult(
-                    success=success, tests_passed=passed, tests_failed=failed,
-                    tests_errors=errors, output=output,
-                    duration_seconds=duration,
-                )
+            # Tracker le dernier run complet (filet de securite 6h)
+            if is_full_run:
+                self._last_full_run = time.time()
+                self._save_cache()
 
-                # Cache MD5 : stocker le resultat
-                if pair_hash:
-                    self._cache_update(pair_hash, result)
-
-                # Feedback loop sandbox prediction (Niveau 5)
-                if target_file:
-                    self._record_sandbox_feedback(target_file, success)
-
-                # Tracker le dernier run complet (filet de securite 6h)
-                if is_full_run:
-                    self._last_full_run = time.time()
-                    self._save_cache()
-
-                return result
-
-            except FileNotFoundError:
-                duration = time.time() - start
-                return SandboxResult(
-                    success=False, tests_passed=0, tests_failed=0,
-                    tests_errors=0, output="python non trouve",
-                    duration_seconds=duration,
-                )
+            return result
 
     def promote(self, relative_path: str) -> bool:
         """Copie un fichier sandbox vers la production avec backup .bak.
@@ -552,7 +519,7 @@ class SandboxEngine:
     def _pre_validate(self, target_file: str):
         """Pre-validation AST du fichier cible (<50ms).
 
-        Verifie la syntaxe et les imports projet.
+        Delegue a test_runner.pre_validate_ast() pour la logique partagee.
         Retourne SandboxResult si erreur, None si OK.
         """
         file_path = os.path.join(SANDBOX_DIR, target_file)
@@ -565,111 +532,43 @@ class SandboxEngine:
         except OSError:
             return None
 
-        # Check 1: Syntaxe
-        try:
-            tree = ast.parse(source)
-        except SyntaxError as e:
+        error = pre_validate_ast(
+            source,
+            check_project_imports=True,
+            search_dirs=[SANDBOX_DIR, PROJECT_ROOT],
+        )
+        if error:
             return SandboxResult(
                 success=False, tests_passed=0, tests_failed=0,
                 tests_errors=1,
-                output=f"[PRE-VALIDATION] SyntaxError ligne {e.lineno}: {e.msg}",
+                output=f"[PRE-VALIDATION] {error}",
                 duration_seconds=0.0,
             )
-
-        # Check 2: Imports projet existants
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                if any(node.module.startswith(p) for p in _SOURCE_PREFIXES):
-                    parts = node.module.split(".")
-                    # Verifier dans le sandbox et en production
-                    candidates = [
-                        os.path.join(SANDBOX_DIR, *parts) + ".py",
-                        os.path.join(SANDBOX_DIR, *parts, "__init__.py"),
-                        os.path.join(PROJECT_ROOT, *parts) + ".py",
-                        os.path.join(PROJECT_ROOT, *parts, "__init__.py"),
-                    ]
-                    if not any(os.path.isfile(c) for c in candidates):
-                        return SandboxResult(
-                            success=False, tests_passed=0, tests_failed=0,
-                            tests_errors=1,
-                            output=f"[PRE-VALIDATION] ImportError: module '{node.module}' introuvable",
-                            duration_seconds=0.0,
-                        )
-
         return None
 
     def _select_tests(self, target_file: str) -> Optional[List[str]]:
         """Selectionne les tests pertinents via le graphe de dependances.
 
+        Delegue a test_runner.select_tests_for_file() pour la logique partagee.
+
         Returns:
             None si module hub (run complet), liste de chemins tests, ou liste vide.
         """
-        # 1. Essayer le graphe de dependances
         graph = self._get_test_graph()
-        relevant = graph.get_relevant_tests(target_file)
-
-        if relevant is None:
-            return None  # Hub module
-
-        if relevant:
-            # Verifier que les fichiers existent dans le sandbox
-            valid = []
-            for tf in relevant:
-                test_path = os.path.join(SANDBOX_DIR, tf)
-                if os.path.isfile(test_path):
-                    valid.append(tf)
-            if valid:
-                return valid
-
-        # 2. Fallback: derivation du nom de test
-        test_file = self._derive_test_file(target_file)
-        if test_file:
-            test_path = os.path.join(SANDBOX_DIR, test_file)
-            if os.path.isfile(test_path):
-                return [test_file]
-
-        return []
+        return select_tests_for_file(
+            target_file,
+            test_graph=graph,
+            verify_existence=True,
+            verify_dir=SANDBOX_DIR,
+        )
 
     def _derive_test_file(self, target_file: str) -> Optional[str]:
-        """Derive le fichier de test associe a un fichier source.
-
-        Ex: core/foo.py → tests/test_foo.py
-            Agents/bar_agent.py → tests/test_bar.py
-        """
-        # Normaliser les separateurs
-        normalized = target_file.replace("\\", "/")
-        basename = os.path.basename(normalized)
-        name, _ = os.path.splitext(basename)
-
-        # Agents/bar_agent.py → test_bar.py
-        if name.endswith("_agent"):
-            name = name  # garder tel quel pour test_bar_agent → test_evolution etc.
-
-        return f"tests/test_{name}.py"
+        """Derive le fichier de test associe a un fichier source."""
+        return derive_test_file(target_file)
 
     def _parse_pytest_output(self, output: str) -> tuple:
-        """Parse la ligne summary de pytest pour extraire passed/failed/errors.
-
-        Returns:
-            (passed, failed, errors)
-        """
-        passed = 0
-        failed = 0
-        errors = 0
-
-        # Pattern: "X passed", "X failed", "X error"
-        m_passed = re.search(r"(\d+) passed", output)
-        m_failed = re.search(r"(\d+) failed", output)
-        m_errors = re.search(r"(\d+) error", output)
-
-        if m_passed:
-            passed = int(m_passed.group(1))
-        if m_failed:
-            failed = int(m_failed.group(1))
-        if m_errors:
-            errors = int(m_errors.group(1))
-
-        return passed, failed, errors
+        """Parse la ligne summary de pytest."""
+        return parse_pytest_output(output)
 
 
 # Singleton

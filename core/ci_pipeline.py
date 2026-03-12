@@ -14,6 +14,11 @@ import sys
 from core.event_bus.bus import bus
 from core.orchestrator import orchestrator
 from core.prompt_templates import TEST_GENERATION_GUARDRAIL
+from core.test_runner import (
+    run_pytest as _test_runner_run_pytest,
+    pre_validate_ast,
+    select_tests_for_file,
+)
 
 logger = logging.getLogger("CIPipeline")
 
@@ -252,24 +257,20 @@ def _recall_successes(filename: str, source_code: str) -> str:
 # --- Pipeline principal ---
 
 async def _run_pytest(test_file: str) -> tuple[bool, str]:
-    """Exécute pytest sur un fichier de test. Retourne (success, output)."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-m", "pytest", test_file, "-v", "--tb=short",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
-        output = stdout.decode("utf-8", errors="replace")
-        return proc.returncode == 0, output
-    except asyncio.TimeoutError:
-        return False, "TIMEOUT: pytest a dépassé 60 secondes"
-    except Exception as e:
-        return False, f"Erreur exécution pytest: {e}"
+    """Exécute pytest sur un fichier de test. Retourne (success, output).
+
+    Delegue a test_runner.run_pytest() pour la logique partagee.
+    """
+    success, output, _p, _f, _e = await _test_runner_run_pytest(
+        [test_file, "-v", "--tb=short"], timeout=60, truncate=0,
+    )
+    return success, output
 
 
 async def run_existing_tests_for_file(filepath: str) -> tuple[bool, str]:
     """Lance les tests existants liés à un fichier source.
+
+    Utilise le graphe de dependances AST + mapping supervise + derivation.
     Retourne (success, output). Si aucun test trouvé → (True, "no tests")."""
     normalized = filepath.replace("\\", "/")
     # Extraire le chemin relatif au projet
@@ -277,16 +278,30 @@ async def run_existing_tests_for_file(filepath: str) -> tuple[bool, str]:
     if normalized.startswith(proj_norm):
         normalized = normalized[len(proj_norm):].lstrip("/")
 
-    # Chercher dans le mapping spécial
-    test_files = _SUPERVISED_TEST_MAP.get(normalized)
-    if test_files:
-        test_files = [os.path.join(PROJECT_ROOT, tf) for tf in test_files]
-    else:
-        # Mapping par défaut : core/foo.py → tests/test_foo.py
-        basename = os.path.basename(normalized.replace("/", os.sep))
-        name_no_ext = basename.replace(".py", "")
-        default_test = os.path.join(PROJECT_ROOT, "tests", f"test_{name_no_ext}.py")
-        test_files = [default_test] if os.path.exists(default_test) else []
+    # Selection unifiee via test_runner (graphe + mapping + derivation)
+    test_graph = _get_ci_test_graph()
+    selected = select_tests_for_file(
+        normalized,
+        test_graph=test_graph,
+        supervised_map=_SUPERVISED_TEST_MAP,
+        project_root=PROJECT_ROOT,
+    )
+
+    # None = module hub → graphe veut un run complet
+    # Pour CI, fallback sur mapping supervise + derivation
+    if selected is None:
+        selected = select_tests_for_file(
+            normalized,
+            supervised_map=_SUPERVISED_TEST_MAP,
+            project_root=PROJECT_ROOT,
+        ) or []
+
+    # Convertir en chemins absolus et filtrer existants
+    test_files = []
+    for tf in selected:
+        abs_path = os.path.join(PROJECT_ROOT, tf) if not os.path.isabs(tf) else tf
+        if os.path.exists(abs_path):
+            test_files.append(abs_path)
 
     if not test_files:
         return True, "Aucun test existant trouvé"
@@ -294,12 +309,29 @@ async def run_existing_tests_for_file(filepath: str) -> tuple[bool, str]:
     # Lancer chaque fichier de test
     all_output = []
     for tf in test_files:
-        if os.path.exists(tf):
-            ok, out = await _run_pytest(tf)
-            all_output.append(out)
-            if not ok:
-                return False, "\n".join(all_output)
+        ok, out = await _run_pytest(tf)
+        all_output.append(out)
+        if not ok:
+            return False, "\n".join(all_output)
     return True, "\n".join(all_output)
+
+
+# Cache du graphe de dependances pour CI
+_ci_test_graph = None
+
+
+def _get_ci_test_graph():
+    """Initialisation lazy du graphe de dependances pour CI."""
+    global _ci_test_graph
+    if _ci_test_graph is None:
+        try:
+            from core.test_graph import TestGraph
+            _ci_test_graph = TestGraph()
+            _ci_test_graph.build()
+        except Exception as e:
+            logger.debug(f"[CI] Graphe de dependances indisponible: {e}")
+            return None
+    return _ci_test_graph
 
 
 async def run_pipeline(filename: str, filepath: str):
@@ -345,11 +377,10 @@ async def run_pipeline(filename: str, filepath: str):
             f"Inspire-toi de ces patterns validés.\n"
         )
 
-    # Validation syntaxique du code SOURCE avant de lancer la génération de tests
-    try:
-        ast.parse(source_code)
-    except SyntaxError as e:
-        detail = f"Code source invalide (SyntaxError ligne {e.lineno}): {e.msg}"
+    # Pre-validation unifiee : syntaxe + imports aliens (via test_runner)
+    validation_error = pre_validate_ast(source_code, check_alien_imports=True)
+    if validation_error:
+        detail = f"Code source invalide: {validation_error}"
         logger.warning(f"[CI/CD] {detail} — pipeline annulé pour {filename}")
         await bus.publish("CI_PIPELINE_RESULT", {
             "filename": filename, "success": False,
@@ -357,22 +388,6 @@ async def run_pipeline(filename: str, filepath: str):
         })
         _rollback(filepath)
         return
-
-    # Validation imports aliens (Django, Flask, etc.) — anti-hallucination
-    try:
-        from Agents.evolution_agent import _detect_alien_imports
-        aliens = _detect_alien_imports(source_code)
-        if aliens:
-            detail = f"Imports aliens détectés ({', '.join(aliens)}) — hallucination LLM probable"
-            logger.warning(f"[CI/CD] {detail} — rollback pour {filename}")
-            await bus.publish("CI_PIPELINE_RESULT", {
-                "filename": filename, "success": False,
-                "detail": detail
-            })
-            _rollback(filepath)
-            return
-    except ImportError:
-        pass  # Si evolution_agent n'est pas dispo, skip ce check
 
     # Contexte d'imports DYNAMIQUE basé sur le fichier réel
     import_hint = _build_import_hint(filename, filepath, source_code)

@@ -798,9 +798,20 @@ async def roadmap_status():
 
 @app.get("/api/sandbox/status")
 async def sandbox_status():
-    """Retourne les statistiques du moteur de test sandbox."""
+    """Retourne les statistiques unifiees du moteur de test (sandbox + CI + graphe)."""
     from core.sandbox_engine import sandbox as sandbox_engine
-    return sandbox_engine.get_stats()
+    from core.test_runner import get_stats as get_runner_stats
+    sandbox_stats = sandbox_engine.get_stats()
+    # Enrichir avec les stats du test_runner unifie
+    sandbox_stats["test_runner"] = get_runner_stats()
+    # Ajouter les stats du graphe de dependances
+    try:
+        graph = sandbox_engine._get_test_graph()
+        if graph:
+            sandbox_stats["test_graph"] = graph.get_stats()
+    except Exception:
+        sandbox_stats["test_graph"] = {"built": False}
+    return sandbox_stats
 
 @app.get("/api/tissue/status")
 async def tissue_status():
