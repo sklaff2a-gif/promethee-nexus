@@ -2518,7 +2518,7 @@ class AutonomyEngine:
                     "intent": "VEILLE_TECHNO",
                 })
                 if res and res.get("status") == "success":
-                    research_context = str(res.get("result", ""))[:2000]
+                    research_context = str(res.get("result", ""))[:800]
                     print(f"   📚 Recherche terminée ({len(research_context)} chars)")
             except Exception as e:
                 logger.warning(f"[COUNCIL] Recherche pré-débat échouée: {e}")
@@ -2539,7 +2539,7 @@ class AutonomyEngine:
             from core.strategic_journal import journal as strat_journal
             journal_context = strat_journal.get_recent_context(3)
             if journal_context:
-                mission += "\n\nMÉMOIRE DES DÉBATS PRÉCÉDENTS :\n" + journal_context
+                mission += "\n\nMÉMOIRE DES DÉBATS PRÉCÉDENTS :\n" + journal_context[:400]
 
             # Mémoire du Président : si ce sujet a déjà été débattu, injecter les conclusions
             subject_key = topic.get("subject_key", "")
@@ -2561,7 +2561,7 @@ class AutonomyEngine:
             from core.self_awareness import awareness
             self_context = awareness.get_self_context()
             if self_context:
-                mission += "\n\nCONSCIENCE DU SYSTÈME :\n" + self_context
+                mission += "\n\nCONSCIENCE DU SYSTÈME :\n" + self_context[:300]
         except Exception as e:
             logger.warning(f"[COUNCIL] Conscience indisponible: {e}")
 
@@ -2605,7 +2605,7 @@ class AutonomyEngine:
             result = virtual_result
         else:
             print(f"   🗣️ COUNCIL DEBATE: {topic['participants']} — {topic['mission'][:80]}")
-            council_max_rounds = 3 if degraded else 5
+            council_max_rounds = 3 if degraded else 4
             result = await orchestrator.dispatch_council(
                 participants=topic["participants"],
                 mission=f"[DÉBAT AUTONOME] {mission}",

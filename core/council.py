@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import logging
@@ -460,13 +461,23 @@ class Council:
                     f"inexistants ({', '.join(unique_h)})"
                 )
 
-        # B. Hors-sujet (mission drift)
-        mission_kw = _extract_keywords(self.mission, top_n=5)
+        # B. Hors-sujet (mission drift) — seuil relâché + cooldown par agent
+        # On ne signale hors-sujet que si ZERO overlap ET max 1 recadrage par agent par débat
+        mission_kw = _extract_keywords(self.mission, top_n=8)
         if mission_kw:
+            # Compter les recadrages hors-sujet déjà émis par agent
+            already_warned = set()
+            for e in self.transcript:
+                if e.get("is_student") and "hors-sujet" in e.get("content", "").lower():
+                    for p in self.participants:
+                        if p.upper() in e.get("content", ""):
+                            already_warned.add(p)
             for entry in prev_entries:
+                if entry["agent"] in already_warned:
+                    continue  # Déjà recadré une fois, on laisse tranquille
                 content_kw = _extract_keywords(entry.get("content", ""), top_n=15)
                 overlap = mission_kw & content_kw
-                if len(overlap) < max(1, len(mission_kw) * 0.2):
+                if len(overlap) == 0:
                     issues.append(
                         f"{entry['agent'].upper()} est hors-sujet"
                     )
@@ -615,7 +626,7 @@ class Council:
             return "(Aucune contribution précédente)"
 
         max_round = max(e["round"] for e in self.transcript)
-        cutoff = max(1, max_round - 1)  # Garder 2 derniers rounds en détail
+        cutoff = max_round  # Garder SEUL le dernier round en détail (8B model-friendly)
 
         lines = []
 
@@ -756,16 +767,17 @@ class Council:
                 f"Cite des fichiers REELS et explique les risques.\n\n"
             )
 
+        # Prompt restructuré : contexte léger en haut, fichiers + guardrail EN FIN (biais de récence 8B)
+        # Tronquer la mission pour éviter l'explosion de contexte
+        mission_display = self.mission
+        if len(mission_display) > 600:
+            mission_display = mission_display[:600] + "..."
+
         return (
             f"Tu participes à un CONSEIL multi-agents.\n"
-            f"LANGUE OBLIGATOIRE : Réponds UNIQUEMENT en français. Pas d'anglais.\n"
+            f"LANGUE OBLIGATOIRE : Réponds UNIQUEMENT en français.\n"
             f"{_COUNCIL_PROJECT_CONTEXT}\n\n"
-            f"{'='*60}\n"
-            f"FICHIERS AUTORISÉS (SEULS fichiers que tu peux citer) :\n"
-            f"{project_files}\n"
-            f"⚠️ Tout fichier NON listé ci-dessus est une HALLUCINATION.\n"
-            f"{'='*60}\n\n"
-            f"MISSION : {self.mission}\n"
+            f"MISSION : {mission_display}\n"
             f"PARTICIPANTS : {', '.join(p.upper() for p in self.participants)}\n"
             f"TOUR : {current_round}/{self.max_rounds}\n"
             f"TON RÔLE : {agent_name.upper()}\n"
@@ -776,7 +788,11 @@ class Council:
             f"{round_instructions}\n"
             f"{president_block}"
             f"{intuition_block}"
-            f"{_council_guardrail()}"  # fichiers deja affiches dans le bloc FICHIERS AUTORISES
+            f"{'='*60}\n"
+            f"FICHIERS AUTORISÉS (SEULS fichiers que tu peux citer) :\n"
+            f"{project_files}\n"
+            f"Tout fichier NON liste ci-dessus est une HALLUCINATION.\n"
+            f"{_council_guardrail()}"
         )
 
     def _build_president_prompt(self, round_num: int) -> str:
@@ -913,8 +929,18 @@ class Council:
                 agent = self.agents[participant]
                 prompt = self._build_prompt(participant, round_num, president_feedback)
 
-                # Appel via generate_content (pas process_task)
-                content = await agent.generate_content(prompt)
+                # Appel via generate_content avec timeout (évite latences 33 min)
+                try:
+                    content = await asyncio.wait_for(
+                        agent.generate_content(prompt),
+                        timeout=90.0  # 90s max par agent
+                    )
+                except asyncio.TimeoutError:
+                    content = (
+                        f"[TIMEOUT] {participant.upper()} n'a pas répondu dans les 90 secondes. "
+                        f"Contribution ignorée pour ce tour."
+                    )
+                    logger.warning(f"[COUNCIL] Timeout 90s pour {participant} au tour {round_num}")
                 content = self._sanitize_file_references(content)
 
                 # Scorer l'argument
