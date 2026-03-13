@@ -63,7 +63,7 @@ class GpuScheduler:
     """
 
     GPU_COOLDOWN_SECONDS = 1.5       # Pause minimale entre deux appels consécutifs
-    GPU_TEMP_MAX = 82                # Température max avant throttle (°C)
+    GPU_TEMP_MAX = 75                # Température max avant throttle (°C) — abaissé de 82 pour stabilité driver 595.79
     GPU_TEMP_CHECK_INTERVAL = 30     # Vérifier la temp GPU max toutes les 30s
 
     def __init__(self):

@@ -46,6 +46,8 @@ from core.autonomy_engine import (
     NOVELTY_BONUS_MAX,
     EXPLORATION_INTENTS,
     EXPLORATION_MULTIPLIER,
+    MAX_DAILY_COUNCILS,
+    COUNCIL_COOLDOWN_MINUTES,
 )
 
 
@@ -2570,7 +2572,8 @@ class TestForcedFailureThreshold:
              patch.object(self.engine, "_get_routines", return_value=routines), \
              patch.object(self.engine, "_execute_audit_structure", new_callable=AsyncMock,
                           return_value={"status": "success", "result": "ok"}), \
-             patch.object(self.engine, "_persist_state"):
+             patch.object(self.engine, "_persist_state"), \
+             patch.dict("sys.modules", {"core.desire_engine": type("M", (), {"desires": type("D", (), {"drives": {}})(), "DRIVE_ROUTINE_AFFINITY": {}})}):
             await self.engine._execute_scored_routine(health)
         # REFACTOR_RANDOM a ete ignore, AUDIT_STRUCTURE executee
         assert self.engine._forced_next_intent == ""
@@ -3146,3 +3149,146 @@ class TestVeilleIA:
 
         event_data = mock_bus.publish.call_args[0][1]
         assert event_data["actionable"] is True
+
+
+# ═══════════════════════════════════════════════════════════
+# TestCouncilLimits — Protection GPU (incident 2026-03-13)
+# ═══════════════════════════════════════════════════════════
+
+class TestCouncilLimits:
+    """Tests des limites quotidiennes et cooldown des councils LLM."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        self.state_path = str(tmp_path / "state.json")
+        with patch("core.autonomy_engine.STATE_FILE", self.state_path):
+            with patch("core.autonomy_engine.AutonomyStatePersistence.load",
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
+                self.engine = AutonomyEngine(idle_threshold_seconds=300)
+        yield
+
+    def _add_council_history(self, count, minutes_ago_start=200):
+        """Ajoute count councils LLM dans l'historique."""
+        for i in range(count):
+            ts = datetime.now() - __import__("datetime").timedelta(minutes=minutes_ago_start - i * 30)
+            self.engine.routine_history.append({
+                "intent": "COUNCIL_DEBATE",
+                "timestamp": ts.isoformat(),
+                "quality": 1.0,
+            })
+
+    @pytest.mark.asyncio
+    async def test_max_daily_councils_blocks(self):
+        """Après MAX_DAILY_COUNCILS councils LLM, les suivants sont virtualisés."""
+        self._add_council_history(MAX_DAILY_COUNCILS)
+        result = await self.engine._execute_council_debate()
+        assert "Limite" in result.get("result", "") or "limite" in result.get("result", "").lower()
+        assert result["status"] == "max_rounds"
+
+    @pytest.mark.asyncio
+    async def test_under_limit_allows_council(self):
+        """Sous la limite, le council LLM est autorisé (atteint le psyche/dispatch)."""
+        self._add_council_history(MAX_DAILY_COUNCILS - 1, minutes_ago_start=300)
+        mock_psyche = MagicMock()
+        mock_psyche.get_debate_index.return_value = 0
+        mock_psyche.select_council_topic.return_value = {
+            "participants": ["strategist", "coder"],
+            "mission": "Test under limit",
+            "needs_research": False, "research_query": None,
+            "subject_key": "test", "verdict_type": "general",
+        }
+        mock_cingulate = MagicMock()
+        mock_cingulate.get_conflict_level.return_value = 0.5
+        with patch.dict("sys.modules", {
+                 "core.psyche": MagicMock(psyche=mock_psyche),
+                 "core.cingulate_cortex": MagicMock(cingulate=mock_cingulate),
+             }), \
+             patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_council = AsyncMock(return_value={
+                "status": "max_rounds", "final_summary": "ok", "transcript": [],
+            })
+            result = await self.engine._execute_council_debate()
+            mock_orch.dispatch_council.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cooldown_blocks_recent_council(self):
+        """Un council LLM trop récent force la virtualisation."""
+        ts = datetime.now() - __import__("datetime").timedelta(minutes=10)
+        self.engine.routine_history.append({
+            "intent": "COUNCIL_DEBATE",
+            "timestamp": ts.isoformat(),
+            "quality": 1.0,
+        })
+        result = await self.engine._execute_council_debate()
+        assert "Cooldown" in result.get("result", "") or "cooldown" in result.get("result", "").lower()
+        assert result["status"] == "max_rounds"
+
+    @pytest.mark.asyncio
+    async def test_cooldown_allows_old_council(self):
+        """Un council vieux de >COUNCIL_COOLDOWN_MINUTES ne bloque pas."""
+        ts = datetime.now() - __import__("datetime").timedelta(minutes=COUNCIL_COOLDOWN_MINUTES + 10)
+        self.engine.routine_history.append({
+            "intent": "COUNCIL_DEBATE",
+            "timestamp": ts.isoformat(),
+            "quality": 1.0,
+        })
+        mock_psyche = MagicMock()
+        mock_psyche.get_debate_index.return_value = 0
+        mock_psyche.select_council_topic.return_value = {
+            "participants": ["strategist", "coder"],
+            "mission": "Test old council ok",
+            "needs_research": False, "research_query": None,
+            "subject_key": "test", "verdict_type": "general",
+        }
+        mock_cingulate = MagicMock()
+        mock_cingulate.get_conflict_level.return_value = 0.5
+        with patch.dict("sys.modules", {
+                 "core.psyche": MagicMock(psyche=mock_psyche),
+                 "core.cingulate_cortex": MagicMock(cingulate=mock_cingulate),
+             }), \
+             patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_council = AsyncMock(return_value={
+                "status": "max_rounds", "final_summary": "ok", "transcript": [],
+            })
+            result = await self.engine._execute_council_debate()
+            mock_orch.dispatch_council.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_virtual_councils_not_counted(self):
+        """Les councils virtuels (virtual=True) ne comptent pas dans la limite."""
+        for i in range(MAX_DAILY_COUNCILS + 2):
+            ts = datetime.now() - __import__("datetime").timedelta(minutes=200 - i * 30)
+            self.engine.routine_history.append({
+                "intent": "COUNCIL_DEBATE",
+                "timestamp": ts.isoformat(),
+                "quality": 1.0,
+                "virtual": True,
+            })
+        # Pas de blocage car tous sont virtuels
+        mock_psyche = MagicMock()
+        mock_psyche.get_debate_index.return_value = 0
+        mock_psyche.select_council_topic.return_value = {
+            "participants": ["strategist", "coder"],
+            "mission": "Test virtual not counted",
+            "needs_research": False, "research_query": None,
+            "subject_key": "test", "verdict_type": "general",
+        }
+        mock_cingulate = MagicMock()
+        mock_cingulate.get_conflict_level.return_value = 0.5
+        with patch.dict("sys.modules", {
+                 "core.psyche": MagicMock(psyche=mock_psyche),
+                 "core.cingulate_cortex": MagicMock(cingulate=mock_cingulate),
+             }), \
+             patch("core.autonomy_engine.orchestrator") as mock_orch:
+            mock_orch.dispatch_council = AsyncMock(return_value={
+                "status": "max_rounds", "final_summary": "ok", "transcript": [],
+            })
+            result = await self.engine._execute_council_debate()
+            mock_orch.dispatch_council.assert_called_once()
+
+    def test_constants_values(self):
+        """Les constantes ont des valeurs raisonnables."""
+        assert MAX_DAILY_COUNCILS >= 2
+        assert MAX_DAILY_COUNCILS <= 5
+        assert COUNCIL_COOLDOWN_MINUTES >= 60
+        assert COUNCIL_COOLDOWN_MINUTES <= 180

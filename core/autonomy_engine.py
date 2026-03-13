@@ -169,6 +169,10 @@ EXPLORATION_MULTIPLIER = 1.5          # Les intents exploratoires reçoivent 1.5
 # Council virtuel : seuil de conflit cingulate sous lequel on virtualise
 VIRTUAL_COUNCIL_THRESHOLD = 0.3       # Conflit < 0.3 = consensus évident → pas de LLM
 
+# Limites Council : éviter la surcharge GPU (incident 2026-03-13)
+MAX_DAILY_COUNCILS = 3                # Max 3 councils LLM par jour (virtuels non comptés)
+COUNCIL_COOLDOWN_MINUTES = 90         # Min 1h30 entre deux councils LLM
+
 # Mode sieste : routines autorisées (0-LLM uniquement) et intervalle entre routines
 NAP_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE"}
 NAP_SLEEP_INTERVAL = 300  # 5 min entre routines en sieste
@@ -2532,6 +2536,34 @@ class AutonomyEngine:
     async def _execute_council_debate(self) -> dict:
         """Lance un débat autonome Council : Recherche web → Débat éclairé.
         En mode dégradé (budget reserve), réduit à 2 participants, 3 tours, sans pré-recherche."""
+        # --- Guard : limite quotidienne de councils LLM (protection GPU) ---
+        llm_councils_today = sum(
+            1 for h in self.routine_history
+            if h.get("intent") == "COUNCIL_DEBATE"
+            and not h.get("virtual", False)
+        )
+        if llm_councils_today >= MAX_DAILY_COUNCILS:
+            logger.info(f"[COUNCIL] Limite atteinte ({llm_councils_today}/{MAX_DAILY_COUNCILS} councils LLM/jour). Virtualisation forcée.")
+            print(f"   ⚡ COUNCIL LIMITE: {llm_councils_today}/{MAX_DAILY_COUNCILS} councils LLM/jour — virtualisation forcée")
+            self._council_degraded = True  # Coût réduit (pas de LLM)
+            return {"status": "max_rounds", "result": f"[COUNCIL VIRTUEL] Limite quotidienne atteinte ({MAX_DAILY_COUNCILS} councils). Prochains councils virtualisés.", "final_summary": "Limite councils atteinte."}
+
+        # --- Guard : cooldown entre councils LLM ---
+        for h in reversed(self.routine_history):
+            if h.get("intent") == "COUNCIL_DEBATE" and not h.get("virtual", False) and "timestamp" in h:
+                try:
+                    last_council = datetime.fromisoformat(h["timestamp"])
+                    minutes_ago = (datetime.now() - last_council).total_seconds() / 60
+                    if minutes_ago < COUNCIL_COOLDOWN_MINUTES:
+                        remaining = int(COUNCIL_COOLDOWN_MINUTES - minutes_ago)
+                        logger.info(f"[COUNCIL] Cooldown actif — dernier council il y a {minutes_ago:.0f}min (min {COUNCIL_COOLDOWN_MINUTES}min). Skip.")
+                        print(f"   ⏳ COUNCIL COOLDOWN: {remaining}min restantes — virtualisation forcée")
+                        self._council_degraded = True  # Coût réduit (pas de LLM)
+                        return {"status": "max_rounds", "result": f"[COUNCIL VIRTUEL] Cooldown actif ({remaining}min restantes).", "final_summary": "Cooldown council actif."}
+                except (ValueError, TypeError):
+                    pass
+                break
+
         # Détection mode dégradé
         degraded = self.daily_budget_used >= (DAILY_BUDGET_POINTS - BUDGET_RESERVE_POINTS)
         # --- Guard : skip si trop de specs Council en attente ---

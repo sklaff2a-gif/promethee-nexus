@@ -934,14 +934,14 @@ class Council:
                 try:
                     content = await asyncio.wait_for(
                         agent.generate_content(prompt),
-                        timeout=90.0  # 90s max par agent
+                        timeout=45.0  # 45s max par agent (était 90s — trop de GPU gaspillé sur timeouts)
                     )
                 except asyncio.TimeoutError:
                     content = (
-                        f"[TIMEOUT] {participant.upper()} n'a pas répondu dans les 90 secondes. "
+                        f"[TIMEOUT] {participant.upper()} n'a pas répondu dans les 45 secondes. "
                         f"Contribution ignorée pour ce tour."
                     )
-                    logger.warning(f"[COUNCIL] Timeout 90s pour {participant} au tour {round_num}")
+                    logger.warning(f"[COUNCIL] Timeout 45s pour {participant} au tour {round_num}")
                 content = self._sanitize_file_references(content)
 
                 # Scorer l'argument

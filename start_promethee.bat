@@ -2,6 +2,15 @@
 chcp 65001 >nul
 title PROMETHEE - Nexus V11
 
+:: Bridage GPU : power cap 250W (83%) pour stabilite driver
+echo [GPU] Application du power cap 250W...
+nvidia-smi -pl 250 >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [GPU] Power cap nécessite les droits admin - tentative élevée...
+    powershell -Command "Start-Process nvidia-smi -ArgumentList '-pl 250' -Verb RunAs -Wait" >nul 2>&1
+)
+echo [GPU] Power cap appliqué.
+
 echo ============================================
 echo        PROMETHEE - Systeme Multi-Agents
 echo ============================================
