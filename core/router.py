@@ -181,6 +181,7 @@ class RouterAgent:
                 "model": model,
                 "prompt": prompt,
                 "stream": False,
+                "think": False,
                 "options": {
                     "temperature": 0.0,
                     "num_predict": 800,

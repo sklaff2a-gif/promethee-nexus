@@ -37,6 +37,15 @@ except ImportError:
 
 logger = logging.getLogger("BaseAgent")
 
+# ── Strip thinking tags (Qwen3.5, DeepSeek-R1, etc.) ───────────────────────
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+def _strip_thinking_tags(text: str) -> str:
+    """Retire les blocs <think>...</think> des modeles thinking (Qwen3.5, DeepSeek-R1)."""
+    if not text or "<think>" not in text:
+        return text
+    return _THINK_RE.sub("", text).strip()
+
 
 # ── GPU Scheduler — File d'attente stricte pour protéger le GPU ─────────────
 class _GpuAccess:
@@ -965,12 +974,13 @@ class BaseAgent:
                 except Exception:
                     _temperature = 0.7
                 _num_ctx = getattr(Config, "AGENT_NUM_CTX", {}).get(self.name, getattr(Config, "AGENT_NUM_CTX", {}).get("default", 8192))
-                payload = { "model": model, "prompt": prompt, "stream": False, "options": { "temperature": _temperature, "num_ctx": _num_ctx } }
+                payload = { "model": model, "prompt": prompt, "stream": False, "think": False, "options": { "temperature": _temperature, "num_ctx": _num_ctx } }
                 async with httpx.AsyncClient() as client:
                     response = await client.post(url, json=payload, timeout=300)
                 if response.status_code == 200:
                     self._ollama_record_success()
-                    return response.json().get("response", "Ollama vide.")
+                    raw = response.json().get("response", "Ollama vide.")
+                    return _strip_thinking_tags(raw)
                 else: return f"Erreur OLLAMA: {response.status_code}"
         except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
             self._ollama_record_timeout()
@@ -998,7 +1008,7 @@ class BaseAgent:
                 except Exception:
                     _temperature = 0.7
                 _num_ctx = getattr(Config, "AGENT_NUM_CTX", {}).get(self.name, getattr(Config, "AGENT_NUM_CTX", {}).get("default", 8192))
-                payload = { "model": model, "prompt": prompt, "stream": True, "options": { "temperature": _temperature, "num_ctx": _num_ctx } }
+                payload = { "model": model, "prompt": prompt, "stream": True, "think": False, "options": { "temperature": _temperature, "num_ctx": _num_ctx } }
 
                 # Signal de début
                 await bus.publish("AGENT_STREAM", {
@@ -1038,7 +1048,7 @@ class BaseAgent:
                 "agent": self.name, "stream_id": stream_id,
                 "chunk": "", "done": True, "status": "end"
             })
-            return full_text or "Ollama vide."
+            return _strip_thinking_tags(full_text) or "Ollama vide."
 
         except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
             self._ollama_record_timeout()
@@ -1050,7 +1060,7 @@ class BaseAgent:
                 })
             except Exception:
                 pass
-            return full_text or "ÉCHEC TOTAL SYSTÈME."
+            return _strip_thinking_tags(full_text) or "ÉCHEC TOTAL SYSTÈME."
         except Exception as e:
             logger.error(f"[{self.name}] Erreur streaming Ollama ({type(e).__name__}): {e}")
             # Toujours envoyer le signal de fin pour fermer la bulle frontend

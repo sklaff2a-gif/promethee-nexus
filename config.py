@@ -52,17 +52,18 @@ class Config:
 
     # Configuration Locale (Ollama)
     OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-    DEFAULT_LOCAL_MODEL = "promethee-general"  # Modèle local par défaut (guardrails bakés)
+    DEFAULT_LOCAL_MODEL = "qwen3.5:9b"  # Qwen3.5 9B — bat gpt-oss-120B, 6.6GB, 262K ctx
     ROUTER_MODEL = "qwen3:4b"  # Modèle léger dédié au routage sémantique (N2)
     AGENT_SPECIFIC_LOCAL_MODELS = {
-        "coder": "promethee-coder",
-        "factory": "qwen3:8b",           # Exécuteur simple, pas de LLM critique
-        "infra": "qwen3:8b",
-        "security": "promethee-security",
-        "writer": "promethee-general",
-        "strategist": "promethee-strategist",
-        "architect": "promethee-architect",
-        "researcher": "promethee-researcher",
+        "coder": "qwen2.5-coder:14b",    # Spécialiste code natif (remplace promethee-coder)
+        "factory": "qwen3.5:9b",         # Upgrade de qwen3:8b — +50% benchmarks
+        "infra": "qwen3.5:9b",           # Upgrade de qwen3:8b
+        "security": "promethee-security", # Fine-tune conservé (guardrails sécurité bakés)
+        "writer": "qwen3.5:9b",          # Upgrade de promethee-general
+        "strategist": "promethee-strategist",  # Fine-tune conservé (personnalité bakée)
+        "architect": "promethee-architect",    # Fine-tune conservé (validation bakée)
+        "researcher": "qwen3.5:9b",      # Upgrade — multimodal + 262K contexte
+        "evolution": "qwen2.5-coder:14b", # Spécialiste code pour le pipeline evolution
     }
 
     # Contexte par agent (override le num_ctx du Modelfile si besoin)

@@ -296,6 +296,7 @@ class CuriosityReflex:
                             "model": model,
                             "prompt": question,
                             "stream": False,
+                            "think": False,
                             "options": {"temperature": 0.3, "num_predict": 512},
                         },
                         timeout=60.0,

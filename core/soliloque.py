@@ -279,6 +279,7 @@ class SoliloqueEngine:
                     "model": COMPANION_MODEL,
                     "messages": messages,
                     "stream": False,
+                    "think": False,
                     "options": {"temperature": 0.65, "num_ctx": 8192},
                 }
                 async with httpx.AsyncClient() as client:
@@ -330,6 +331,7 @@ class SoliloqueEngine:
                     "model": REFLECT_MODEL,
                     "prompt": prompt,
                     "stream": False,
+                    "think": False,
                     "options": {"temperature": 0.6, "num_ctx": 4096, "num_predict": 256},
                 }
                 async with httpx.AsyncClient() as client:
