@@ -139,6 +139,39 @@ def _find_closest_file(path: str) -> str:
     return candidates[0]
 
 
+def _dedup_repetitive_text(content: str) -> str:
+    """Detecte et tronque les reponses LLM qui repetent le meme paragraphe en boucle.
+    Incident 2026-03-13 : strategist copiait le meme bloc 4 fois dans une seule reponse."""
+    if len(content) < 200:
+        return content
+    # Decouper en paragraphes non-vides
+    paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
+    if len(paragraphs) < 3:
+        return content
+    # Detecter les paragraphes quasi-identiques (mots communs > 80%)
+    seen = []
+    unique_paragraphs = []
+    for p in paragraphs:
+        words = set(p.lower().split())
+        is_dup = False
+        for seen_words in seen:
+            if not words or not seen_words:
+                continue
+            overlap = len(words & seen_words) / max(len(words), len(seen_words))
+            if overlap > 0.8:
+                is_dup = True
+                break
+        if not is_dup:
+            unique_paragraphs.append(p)
+            seen.append(words)
+        # else: paragraphe duplique, on le jette
+    if len(unique_paragraphs) < len(paragraphs):
+        dropped = len(paragraphs) - len(unique_paragraphs)
+        logger.info(f"[COUNCIL] Anti-boucle : {dropped} paragraphes repetitifs supprimes")
+        return "\n\n".join(unique_paragraphs)
+    return content
+
+
 def _score_argument(content: str) -> dict:
     """Score un argument de Council sur des critères objectifs.
     Retourne {"score": 0.0-1.0, "confidence": 0.0-1.0, "breakdown": {...}}."""
@@ -930,6 +963,15 @@ class Council:
                 agent = self.agents[participant]
                 prompt = self._build_prompt(participant, round_num, president_feedback)
 
+                # Forcer le modèle base pour les councils (les LoRA spécialisés sont trop lents
+                # et produisent du texte répétitif en débat — incident 2026-03-13)
+                agent._force_local_next = True
+                _saved_model = getattr(agent, "_council_model_override", None)
+                from config import Config
+                agent._council_model_override = Config.DEFAULT_LOCAL_MODEL
+                _orig_specific = Config.AGENT_SPECIFIC_LOCAL_MODELS.get(participant)
+                Config.AGENT_SPECIFIC_LOCAL_MODELS[participant] = Config.DEFAULT_LOCAL_MODEL
+
                 # Appel via generate_content avec timeout (évite latences 33 min)
                 try:
                     content = await asyncio.wait_for(
@@ -942,7 +984,14 @@ class Council:
                         f"Contribution ignorée pour ce tour."
                     )
                     logger.warning(f"[COUNCIL] Timeout 45s pour {participant} au tour {round_num}")
+                finally:
+                    # Restaurer le modèle spécifique de l'agent après l'appel council
+                    if _orig_specific is not None:
+                        Config.AGENT_SPECIFIC_LOCAL_MODELS[participant] = _orig_specific
+                    elif participant in Config.AGENT_SPECIFIC_LOCAL_MODELS:
+                        del Config.AGENT_SPECIFIC_LOCAL_MODELS[participant]
                 content = self._sanitize_file_references(content)
+                content = _dedup_repetitive_text(content)
 
                 # Scorer l'argument
                 arg_score = _score_argument(content)

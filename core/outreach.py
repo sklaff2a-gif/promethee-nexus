@@ -32,6 +32,7 @@ OUTREACH_STATE_FILE = Path(os.path.join(PROJECT_ROOT, "memory", "outreach_state.
 
 MAX_PER_HOUR = 5
 MAX_PER_DAY = 15
+MAX_DIGEST_PER_DAY = 6               # max 6 digests/jour (1 toutes les 4h)
 MAX_PENDING = 20
 CONNEXION_MODULATOR_THRESHOLD = 40   # deprivation < 40 → queue
 SILENT_HOUR_START = 1                # 1h-7h
@@ -42,11 +43,12 @@ BURST_WINDOW = 60                    # fenetre anti-burst (secondes)
 BURST_MAX = 3                        # max messages par fenetre anti-burst
 
 COOLDOWN_PER_CATEGORY = {
-    "critical": 120,      # 2 min (etait exempt, maintenant rate-limite)
+    "critical": 7200,     # 2h (etait 2min — spam 19 critical/jour, incident 2026-03-13)
     "eureka": 3600,       # 1h
-    "curiosity": 7200,    # 2h
-    "dream": 7200,        # 2h
+    "curiosity": 3600,    # 1h (etait 2h — favoriser les messages interessants)
+    "dream": 3600,        # 1h (etait 2h — favoriser les messages interessants)
     "input_needed": 3600, # 1h
+    "digest": 14400,      # 4h — max 6 digests/jour
 }
 
 # ─── Fallback templates (0 LLM) ─────────────────────────────────────────────
@@ -103,7 +105,7 @@ class OutreachEngine:
 
         self._load()
 
-        # 10 souscriptions bus
+        # 11 souscriptions bus
         bus.subscribe("OLLAMA_UNRESPONSIVE", self._on_ollama_unresponsive)
         bus.subscribe("HYPOTHALAMUS_ALARM", self._on_hypothalamus_alarm)
         bus.subscribe("EUREKA_MOMENT", self._on_eureka_moment)
@@ -113,10 +115,11 @@ class OutreachEngine:
         bus.subscribe("THALAMUS_WAKE_SUMMARY", self._on_thalamus_wake)
         bus.subscribe("SENSORIUM_RECOVERY", self._on_sensorium_recovery)
         bus.subscribe("CINGULATE_CONFLICT", self._on_cingulate_conflict)
+        bus.subscribe("EVOLUTION_INSIGHT", self._on_evolution_insight)
         bus.subscribe("USER_CHAT", self._on_user_chat)
         bus.subscribe("AUTONOMY_HEARTBEAT", self._on_heartbeat)
 
-        logger.info("OutreachEngine initialise — 10 triggers + heartbeat actifs.")
+        logger.info("OutreachEngine initialise — 11 triggers + heartbeat actifs.")
 
     # ─── Filtres en cascade ──────────────────────────────────────────────────
 
@@ -306,6 +309,16 @@ class OutreachEngine:
         """Draine la file d'attente en un message digest."""
         if not self._pending_queue:
             return
+        # Cap quotidien de digests
+        digest_today = sum(1 for m in self._message_log if m.get("category") == "digest")
+        if digest_today >= MAX_DIGEST_PER_DAY:
+            logger.debug(f"OUTREACH: Digest cap atteint ({digest_today}/{MAX_DIGEST_PER_DAY}), skip.")
+            self._pending_queue.clear()
+            return
+        # Cooldown digest (4h entre deux)
+        if self._is_on_cooldown("digest"):
+            logger.debug("OUTREACH: Digest cooldown actif, skip.")
+            return
         items = list(self._pending_queue)
         self._pending_queue.clear()
 
@@ -372,9 +385,9 @@ class OutreachEngine:
             self._enqueue("eureka", context)
 
     async def _on_curiosity_learning(self, event: dict):
-        """CURIOSITY_LEARNING → curiosity si quality > 0.7."""
+        """CURIOSITY_LEARNING → curiosity si quality > 0.5 (abaisse de 0.7 pour favoriser le signal)."""
         quality = event.get("quality", 0)
-        if quality <= 0.7:
+        if quality <= 0.5:
             return
         context = {
             "sujet": event.get("subject", event.get("topic", "sujet inconnu")),
@@ -427,6 +440,21 @@ class OutreachEngine:
             asyncio.create_task(self._compose_and_deliver("dream", context))
         elif decision == "queue":
             self._enqueue("dream", context)
+
+    async def _on_evolution_insight(self, event: dict):
+        """EVOLUTION_INSIGHT → curiosity si anomalies >= 3 (synthese de connaissances interessante)."""
+        anomalies = event.get("anomalies", 0)
+        if anomalies < 3:
+            return
+        context = {
+            "sujet": event.get("insight", event.get("text", "synthese de connaissances")),
+            "anomalies": anomalies,
+        }
+        decision = self._apply_filters("curiosity", "EVOLUTION_INSIGHT", context)
+        if decision == "pass":
+            asyncio.create_task(self._compose_and_deliver("curiosity", context))
+        elif decision == "queue":
+            self._enqueue("curiosity", context)
 
     async def _on_cingulate_conflict(self, event: dict):
         """CINGULATE_CONFLICT → input_needed si severity > 0.6."""
