@@ -698,6 +698,13 @@ class AutonomyEngine:
             {"agent": "_creative_play", "intent": "CREATIVE_PLAY", "mission": "Association libre : croise deux concepts éloignés pour découvrir des connexions inattendues."},
             {"agent": "_grimoire_evolve", "intent": "GRIMOIRE_EVOLVE", "mission": "Mute un prompt du Grimoire et compare les résultats pour trouver de meilleures formulations."},
             {"agent": "researcher", "intent": "VEILLE_IA", "mission": f"[VEILLE IA] Recherche: {veille_ia_topic['focus']}. {veille_ia_topic['actionable']}"},
+            # --- Emploi du temps scolaire ---
+            {"agent": "_school_class", "intent": "SCHOOL_CODE_REVIEW", "mission": ""},
+            {"agent": "_school_class", "intent": "SCHOOL_RESEARCH", "mission": ""},
+            {"agent": "_school_class", "intent": "SCHOOL_WORKSHOP", "mission": ""},
+            {"agent": "_school_class", "intent": "SCHOOL_CREATION", "mission": ""},
+            {"agent": "_school_class", "intent": "SCHOOL_BULLETIN", "mission": ""},
+            {"agent": "_school_class", "intent": "SCHOOL_FREE_TIME", "mission": ""},
         ]
 
     def _persist_state(self):
@@ -993,6 +1000,14 @@ class AutonomyEngine:
                 if intent in EXPLORATION_INTENTS:
                     bonus *= EXPLORATION_MULTIPLIER
                 breakdown["stagnation"] = round(bonus, 3)
+        # Emploi du temps scolaire (bonus massif pendant le creneau correspondant)
+        try:
+            from core.school_schedule import schedule
+            school_raw = schedule.compute_schedule_bonus(intent)
+            if school_raw != 0.0:
+                breakdown["school"] = round(_normalize_bonus(school_raw, "school"), 3)
+        except Exception:
+            pass
         return breakdown
 
     def get_status(self) -> dict:
@@ -1547,6 +1562,8 @@ class AutonomyEngine:
             response = await self._execute_grimoire_evolve()
         elif intent == "VEILLE_IA":
             response = await self._execute_veille_ia(routine)
+        elif intent.startswith("SCHOOL_"):
+            response = await self._execute_school_class(routine, intent)
         elif intent == "DROPZONE_SCAN" and dropzone_count == 0:
             # Dropzone vide → veille YouTube IA (rotation des sujets)
             yt_index = self.total_routines_executed % len(YOUTUBE_AI_VEILLE)
@@ -2007,6 +2024,8 @@ class AutonomyEngine:
             response = await self._execute_grimoire_evolve()
         elif intent == "VEILLE_IA":
             response = await self._execute_veille_ia(routine)
+        elif intent.startswith("SCHOOL_"):
+            response = await self._execute_school_class(routine, intent)
         elif intent == "DROPZONE_SCAN":
             # Dropzone vide → veille YouTube IA (fallback identique au path standard)
             try:
@@ -4003,6 +4022,52 @@ else:
     # ================================================================
     # CHANTIER 3 : CREATIVE PLAY — associations libres inter-concepts
     # ================================================================
+
+    async def _execute_school_class(self, routine: dict, intent: str) -> dict:
+        """Execute un cours scolaire : dispatch agent + evaluation professeur."""
+        try:
+            from core.school_schedule import schedule
+        except ImportError:
+            return {"status": "skipped", "result": "SchoolSchedule non disponible."}
+
+        slot = intent.replace("SCHOOL_", "")
+        info = schedule.get_current_slot_info()
+        agent_name = schedule.get_slot_agent(slot)
+        prompt = schedule.get_slot_prompt(slot)
+
+        if not prompt:
+            return {"status": "skipped", "result": f"Pas de prompt pour le creneau {slot}."}
+
+        print(f"   📚 ECOLE: Cours {slot} — Agent {agent_name}")
+
+        # Dispatch au vrai agent
+        response = await orchestrator.dispatch_task(agent_name, {
+            "mission": prompt,
+            "context": f"PROTOCOLE_SCOLAIRE\n{schedule.get_schedule_context()}",
+            "force_local": True,
+            "intent": intent,
+        })
+
+        # Evaluation par le professeur
+        if response and response.get("status") == "success":
+            deliverable = str(response.get("result", ""))
+            try:
+                professor = orchestrator.agents.get("professor")
+                if professor:
+                    eval_result = await professor.evaluate(deliverable, slot, info.get("subject", ""))
+                    schedule.record_deliverable(slot, intent, {
+                        "grade": eval_result["grade"],
+                        "feedback": eval_result["feedback"],
+                        "result_preview": deliverable[:200],
+                    })
+                    grade = eval_result["grade"]
+                    print(f"   📝 NOTE: {grade:.1f}/10 — {eval_result['feedback'][:80]}")
+                    if eval_result.get("challenge"):
+                        print(f"   🎯 DEFI: {eval_result['challenge'][:100]}")
+            except Exception as e:
+                logger.warning(f"[SCHOOL] Evaluation echouee: {e}")
+
+        return response or {"status": "error", "result": "Dispatch echoue."}
 
     async def _execute_veille_ia(self, routine: dict) -> dict:
         """Veille IA active : recherche web sur l'écosystème IA, synthèse et mémorisation.

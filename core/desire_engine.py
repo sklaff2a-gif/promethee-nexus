@@ -94,6 +94,9 @@ EVENT_IMPACT: Dict[str, Any] = {
     "CURIOSITY_SATISFIED":    {"CURIOSITE": -12, "COMPREHENSION": -8},
     # Sensorium hardware (Sprint 4 Sensorium)
     "HARDWARE_CRISIS":        {"STABILITE": +15, "CURIOSITE": -5, "CREATION": -5},
+    # Ecole — notes du professeur
+    "SCHOOL_GRADE_HIGH":      {"MAITRISE": -12, "CROISSANCE": -5, "COMPREHENSION": -3},
+    "SCHOOL_GRADE_LOW":       {"MAITRISE": +8, "CROISSANCE": +5},
 }
 
 # --- Seuil de qualité par intent pour considérer un succès ---
@@ -219,10 +222,17 @@ class DesireEngine:
         # Sensorium hardware (Sprint 4 Sensorium)
         bus.subscribe("SENSORIUM_THERMAL_CRITICAL", self._on_hardware_crisis)
         bus.subscribe("SENSORIUM_SUFFOCATION", self._on_hardware_crisis)
+        # Ecole — notes du professeur
+        bus.subscribe("SCHOOL_GRADE_RECEIVED", self._on_school_grade)
 
     async def _on_hardware_crisis(self, event: dict):
         """Hardware en crise → STABILITE monte, CURIOSITE et CREATION baissent."""
         self.on_event("HARDWARE_CRISIS", {})
+
+    async def _on_school_grade(self, event: dict):
+        """Note scolaire → nourrit MAITRISE et CROISSANCE."""
+        event_type = event.get("event_type", "SCHOOL_GRADE_LOW")
+        self.on_event(event_type, event)
 
     async def _on_curiosity_learning(self, event: dict):
         """Un reflexe de curiosite resolu satisfait CURIOSITE et COMPREHENSION."""

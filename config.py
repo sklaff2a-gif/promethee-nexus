@@ -46,6 +46,8 @@ class Config:
         "factory":    [MODELS["FAST"]],
         "infra":      [MODELS["FAST"]],
         "security":   [MODELS["FAST"]],
+        # Evaluateur → Pro (plus intelligent que l'eleve)
+        "professor":  [MODELS["SMART"], MODELS["FAST"]],
         # Fallback global
         "default":    [MODELS["FAST"]],
     }
@@ -64,6 +66,7 @@ class Config:
         "architect": "promethee-architect",    # Fine-tune conservé (validation bakée)
         "researcher": "qwen3.5:9b",      # Upgrade — multimodal + 262K contexte
         "evolution": "qwen2.5-coder:14b", # Spécialiste code pour le pipeline evolution
+        "professor": "qwen3.5:9b",       # Evaluation locale (Cloud en primaire via routing)
     }
 
     # Contexte par agent (override le num_ctx du Modelfile si besoin)
@@ -78,6 +81,7 @@ class Config:
         "infra": 8192,
         "factory": 8192,
         "formatter": 8192,
+        "professor": 8192,
         "default": 8192,
     }
     

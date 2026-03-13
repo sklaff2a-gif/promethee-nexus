@@ -76,6 +76,7 @@ def _import_organ_fallback(name: str) -> Optional[Any]:
         "objectives": ("core.objectives_engine", "objectives"),
         "hippocampus": ("core.hippocampus", "hippocampus"),
         "temporal": ("core.temporal_lobe", "temporal"),
+        "school": ("core.school_schedule", "schedule"),
     }
     mapping = _ORGAN_MAP.get(name)
     if not mapping:

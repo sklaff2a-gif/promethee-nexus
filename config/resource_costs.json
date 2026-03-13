@@ -86,5 +86,29 @@
   "VEILLE_IA": {
     "cost": 2,
     "description": "Veille écosystème IA: recherche web + synthèse LLM local"
+  },
+  "SCHOOL_CODE_REVIEW": {
+    "cost": 3,
+    "description": "Code review scolaire: 1 appel LLM local + évaluation professeur Cloud"
+  },
+  "SCHOOL_RESEARCH": {
+    "cost": 3,
+    "description": "Recherche scolaire: synthèse LLM local + évaluation Cloud"
+  },
+  "SCHOOL_WORKSHOP": {
+    "cost": 4,
+    "description": "Atelier scolaire: génération code LLM + évaluation Cloud"
+  },
+  "SCHOOL_CREATION": {
+    "cost": 2,
+    "description": "Création libre scolaire: 1 appel LLM + évaluation Cloud"
+  },
+  "SCHOOL_BULLETIN": {
+    "cost": 2,
+    "description": "Bulletin auto-évaluation: 1 appel LLM local + évaluation Cloud"
+  },
+  "SCHOOL_FREE_TIME": {
+    "cost": 2,
+    "description": "Temps libre scolaire: 1 appel LLM local"
   }
 }

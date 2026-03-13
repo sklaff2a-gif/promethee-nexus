@@ -224,6 +224,7 @@ AGENTS_CONFIG = [
     ("researcher", "DivineResearcher", "researcher_agent"),
     ("formatter", "DivineFormatter", "formatter_agent"), # <--- AJOUT VITAL : L'Agent Formatter
     ("vision", "DivineVision", "vision_agent"),
+    ("professor", "ProfessorAgent", "professor_agent"),
 ]
 
 async def _on_smart_restart(data: dict):
@@ -442,6 +443,14 @@ async def lifespan(app: FastAPI):
 
     # --- Smart Restart via bus (propre, pas de sys.exit dans une Task) ---
     bus.subscribe("SMART_RESTART_REQUESTED", _on_smart_restart)
+
+    # --- Emploi du temps scolaire ---
+    try:
+        from core.school_schedule import schedule as school_schedule
+        school_schedule.init()
+        print(f"   📚 ECOLE: Creneau={school_schedule.get_current_slot()}, jour #{school_schedule._total_school_days}")
+    except Exception as e:
+        print(f"   [WARN] SchoolSchedule: {e}")
 
     talk_logger.start()
     interface_logger.start()

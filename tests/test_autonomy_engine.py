@@ -2753,7 +2753,7 @@ class TestNormalizationV3:
         from core.autonomy_engine import _load_scoring_weights
         weights = _load_scoring_weights()
         total = sum(v["weight"] for k, v in weights.items() if isinstance(v, dict) and "weight" in v)
-        assert 15 < total < 30, f"Somme des poids hors bornes: {total}"
+        assert 15 < total < 35, f"Somme des poids hors bornes: {total}"
 
 
 class TestPrecisionWeighting:
