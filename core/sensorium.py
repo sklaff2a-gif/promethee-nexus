@@ -44,10 +44,10 @@ EMA_ALPHAS = {
 }
 
 # --- Anti-oscillation (Sprint 5 Sensorium) ---
-OSCILLATION_AMPLITUDE_THRESHOLD = 0.2   # Amplitude min pour detecter
-OSCILLATION_PERIOD_THRESHOLD = 20       # Ticks max pour considerer comme oscillation
+OSCILLATION_AMPLITUDE_THRESHOLD = 0.35  # Amplitude min pour detecter (etait 0.2 — trop sensible, 97 detections/jour)
+OSCILLATION_PERIOD_THRESHOLD = 30       # Ticks min pour considerer comme oscillation (etait 20 — 40s trop court)
 OSCILLATION_DAMPING = 0.5               # Facteur d'amortissement EMA alpha
-OSCILLATION_HYSTERESIS_TICKS = 10       # Rester amorti N ticks apres fin oscillation
+OSCILLATION_HYSTERESIS_TICKS = 5        # Rester amorti N ticks apres fin oscillation (etait 10 — overlap)
 
 # --- Parametres sigmoide : (midpoint, k, inverted) ---
 # inverted=True signifie que haute valeur brute = bas sens normalise

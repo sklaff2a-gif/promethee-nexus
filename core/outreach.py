@@ -209,9 +209,11 @@ class OutreachEngine:
         if self._is_burst_limited():
             return "queue"
 
-        # Critical : skip filtres classiques, mais respecte son propre cooldown
+        # Critical : skip filtres classiques, mais respecte cooldown + limite journaliere
         if category == "critical":
             if self._is_on_cooldown(category):
+                return "queue"
+            if self._daily_count >= MAX_PER_DAY:
                 return "queue"
             # Reserve le cooldown immediatement
             self._last_per_category[category] = time.time()
@@ -443,12 +445,13 @@ class OutreachEngine:
 
     async def _on_evolution_insight(self, event: dict):
         """EVOLUTION_INSIGHT → curiosity si anomalies >= 3 (synthese de connaissances interessante)."""
-        anomalies = event.get("anomalies", 0)
-        if anomalies < 3:
+        raw_anomalies = event.get("anomalies", 0)
+        anomaly_count = len(raw_anomalies) if isinstance(raw_anomalies, list) else int(raw_anomalies or 0)
+        if anomaly_count < 3:
             return
         context = {
             "sujet": event.get("insight", event.get("text", "synthese de connaissances")),
-            "anomalies": anomalies,
+            "anomalies": anomaly_count,
         }
         decision = self._apply_filters("curiosity", "EVOLUTION_INSIGHT", context)
         if decision == "pass":
