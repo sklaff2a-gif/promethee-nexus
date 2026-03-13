@@ -167,7 +167,9 @@ EXPLORATION_INTENTS = {
 EXPLORATION_MULTIPLIER = 1.5          # Les intents exploratoires reçoivent 1.5x le bonus
 
 # Council virtuel : seuil de conflit cingulate sous lequel on virtualise
-VIRTUAL_COUNCIL_THRESHOLD = 0.3       # Conflit < 0.3 = consensus évident → pas de LLM
+# Seuil relevé de 0.3→0.8 : virtualiser par défaut, LLM uniquement si conflit fort
+# Les councils LLM 8B sont stériles (0% consensus, hallucinations, boucles textuelles)
+VIRTUAL_COUNCIL_THRESHOLD = 0.8
 
 # Limites Council : éviter la surcharge GPU (incident 2026-03-13)
 MAX_DAILY_COUNCILS = 3                # Max 3 councils LLM par jour (virtuels non comptés)
@@ -3407,6 +3409,11 @@ class AutonomyEngine:
 
     async def _execute_audit_structure(self) -> dict:
         """Audit structure réel : scanne le filesystem pour fichiers temporaires/orphelins."""
+        # Cap quotidien : max 3 AUDIT_STRUCTURE/jour (était 11+, score 0.67, quasi-identiques)
+        audit_today = sum(1 for h in self.routine_history if h.get("intent") == "AUDIT_STRUCTURE")
+        if audit_today >= 3:
+            logger.info(f"[AUTONOMY] AUDIT_STRUCTURE cap atteint ({audit_today}/3 aujourd'hui), skip.")
+            return {"status": "skipped", "result": f"Cap quotidien atteint ({audit_today}/3)."}
         # Rafraîchir le cache de structure projet (anti-hallucination basé sur des données fraîches)
         try:
             from core.prompt_templates import reset_project_structure_cache

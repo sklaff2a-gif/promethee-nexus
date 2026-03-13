@@ -36,6 +36,7 @@ _STOPWORDS = frozenset({
 })
 
 # Mots techniques indicateurs de contenu informatif
+# Inclut termes français (le système pense en français) + domaine neurosciences simulées
 _TECHNICAL_WORDS = frozenset({
     "python", "async", "await", "import", "class", "def", "function",
     "agent", "orchestrator", "router", "bus", "event", "pipeline",
@@ -49,6 +50,15 @@ _TECHNICAL_WORDS = frozenset({
     "evolution", "spec", "catalog", "deploy", "rollback",
     "council", "consensus", "debate", "grimoire",
     "prometheus", "promethee", "nexus", "sentinel",
+    # Termes français du domaine
+    "routine", "autonomie", "conscience", "synaptique", "neuronal",
+    "pulsion", "dopamine", "reptilien", "prefrontal", "thalamus",
+    "hypothalamus", "amygdale", "insula", "cingulaire", "cortex",
+    "consolidation", "memoire", "apprentissage", "pattern", "anomalie",
+    "synthese", "analyse", "architecture", "module", "singleton",
+    "scoring", "seuil", "budget", "cooldown", "throttle",
+    "fichier", "fonction", "methode", "variable", "parametre",
+    "strategie", "objectif", "priorite", "conflit", "resonance",
 })
 
 
@@ -126,10 +136,12 @@ def evaluate(text: str, metadata: dict = None,
             "quality_score": 0.1,
         }
 
-    # 3. Densite informationnelle < 10% (quand le texte est long)
+    # 3. Densite informationnelle (quand le texte est long)
+    # Seuil abaisse de 0.02→0.01 : le système pense en français, les mots
+    # techniques anglais sont dilues. Ancien seuil rejetait quasi-tout.
     density = _info_density(stripped)
     words_count = len(stripped.split())
-    if words_count > 30 and density < 0.02:
+    if words_count > 30 and density < 0.01:
         return {
             "accept": False,
             "reason": f"densite informationnelle trop basse ({density:.3f})",

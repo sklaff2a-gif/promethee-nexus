@@ -806,6 +806,15 @@ class Council:
         if len(mission_display) > 600:
             mission_display = mission_display[:600] + "..."
 
+        # Garde anti-code pour le coder (il génère du code halluciné au lieu de débattre)
+        coder_guard = ""
+        if agent_name == "coder":
+            coder_guard = (
+                "\n⛔ INTERDIT : NE GÉNÈRE PAS DE CODE (pas de ```python, pas de class, pas de def).\n"
+                "Tu es ici pour DÉBATTRE et CRITIQUER, pas pour coder.\n"
+                "Exprime tes idées en TEXTE, cite des fichiers EXISTANTS, propose des ACTIONS.\n"
+            )
+
         return (
             f"Tu participes à un CONSEIL multi-agents.\n"
             f"LANGUE OBLIGATOIRE : Réponds UNIQUEMENT en français.\n"
@@ -827,6 +836,7 @@ class Council:
             f"RÉPERTOIRES INEXISTANTS (ne JAMAIS citer) : core/grimoire/, core/event_bus/, core/capabilities/, core/memory/\n"
             f"Tout fichier NON liste ci-dessus est une HALLUCINATION.\n"
             f"{_council_guardrail()}"
+            f"{coder_guard}"
         )
 
     def _build_president_prompt(self, round_num: int) -> str:

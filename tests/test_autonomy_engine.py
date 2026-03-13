@@ -1964,9 +1964,9 @@ class TestBudgetPostEpuisement:
             "research_query": "test query",
             "subject_key": "test",
         }
-        # Forcer le cingulate à signaler un conflit pour bypass le council virtuel
+        # Forcer le cingulate à signaler un conflit fort pour bypass le council virtuel (seuil 0.8)
         mock_cingulate = MagicMock()
-        mock_cingulate.get_conflict_level.return_value = 0.5  # > VIRTUAL_COUNCIL_THRESHOLD
+        mock_cingulate.get_conflict_level.return_value = 0.9  # > VIRTUAL_COUNCIL_THRESHOLD (0.8)
         with patch.dict("sys.modules", {
                  "core.psyche": MagicMock(psyche=mock_psyche),
                  "core.cingulate_cortex": MagicMock(cingulate=mock_cingulate),
@@ -3198,7 +3198,7 @@ class TestCouncilLimits:
             "subject_key": "test", "verdict_type": "general",
         }
         mock_cingulate = MagicMock()
-        mock_cingulate.get_conflict_level.return_value = 0.5
+        mock_cingulate.get_conflict_level.return_value = 0.9
         with patch.dict("sys.modules", {
                  "core.psyche": MagicMock(psyche=mock_psyche),
                  "core.cingulate_cortex": MagicMock(cingulate=mock_cingulate),
@@ -3241,7 +3241,7 @@ class TestCouncilLimits:
             "subject_key": "test", "verdict_type": "general",
         }
         mock_cingulate = MagicMock()
-        mock_cingulate.get_conflict_level.return_value = 0.5
+        mock_cingulate.get_conflict_level.return_value = 0.9
         with patch.dict("sys.modules", {
                  "core.psyche": MagicMock(psyche=mock_psyche),
                  "core.cingulate_cortex": MagicMock(cingulate=mock_cingulate),
@@ -3274,7 +3274,7 @@ class TestCouncilLimits:
             "subject_key": "test", "verdict_type": "general",
         }
         mock_cingulate = MagicMock()
-        mock_cingulate.get_conflict_level.return_value = 0.5
+        mock_cingulate.get_conflict_level.return_value = 0.9
         with patch.dict("sys.modules", {
                  "core.psyche": MagicMock(psyche=mock_psyche),
                  "core.cingulate_cortex": MagicMock(cingulate=mock_cingulate),
