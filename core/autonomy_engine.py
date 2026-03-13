@@ -148,6 +148,7 @@ INTROSPECTIVE_INTENTS = {
 }
 EXTROVERTED_INTENTS = {
     "VEILLE_SILENCIEUSE", "VEILLE_IA", "DROPZONE_SCAN", "ROADMAP_RESEARCH", "ROADMAP_SPEC",
+    "VISUAL_OBSERVATION",
 }
 EXTROVERSION_STREAK_THRESHOLD = 3   # Apres 3 routines introspectives consecutives
 EXTROVERSION_BONUS_PER_STREAK = 0.8 # Bonus par routine au-dela du seuil
@@ -162,7 +163,7 @@ NOVELTY_BONUS_MAX = 3.0               # Bonus max (stagnation sévère)
 EXPLORATION_INTENTS = {
     "EXPANSION_CODE", "CREATIVE_PLAY", "VEILLE_SILENCIEUSE", "VEILLE_IA",
     "ROADMAP_RESEARCH", "ROADMAP_SPEC", "GRIMOIRE_EVOLVE",
-    "COUNCIL_DEBATE", "DROPZONE_SCAN",
+    "COUNCIL_DEBATE", "DROPZONE_SCAN", "VISUAL_OBSERVATION",
 }
 EXPLORATION_MULTIPLIER = 1.5          # Les intents exploratoires reçoivent 1.5x le bonus
 
@@ -416,6 +417,7 @@ CONTEXT_KEYWORDS = {
     "CREATIVE_PLAY": ["créatif", "association", "analogie", "exploration", "idée", "hypothèse"],
     "GRIMOIRE_EVOLVE": ["grimoire", "prompt", "mutation", "amélioration", "formulation", "optimiser"],
     "VEILLE_IA": ["intelligence artificielle", "modèle", "LLM", "agent", "IA", "veille", "écosystème"],
+    "VISUAL_OBSERVATION": ["photo", "image", "visuel", "observer", "regarder", "voir"],
 }
 
 
@@ -426,7 +428,8 @@ class RoutineScorer:
     def score_routines(routines: list, recent_context: list, routine_history: list,
                        dropzone_count: int = 0, health_verdict: str = "GO",
                        personality_bias: dict = None,
-                       cloud_in_cooldown: bool = False) -> list:
+                       cloud_in_cooldown: bool = False,
+                       photo_count: int = 0) -> list:
         """
         Retourne une liste de (routine, score) triée par score décroissant.
         personality_bias: dict optionnel {intent: float} provenant de PsycheEngine.
@@ -455,6 +458,10 @@ class RoutineScorer:
 
             # Reactivity bonus : fichiers en dropzone
             if intent == "DROPZONE_SCAN" and dropzone_count > 0:
+                score += 3.0
+
+            # Reactivity bonus : photos non vues
+            if intent == "VISUAL_OBSERVATION" and photo_count > 0:
                 score += 3.0
 
             # Repetition penalty : basée sur le TOTAL d'occurrences récentes (fenêtre 10)
@@ -684,6 +691,7 @@ class AutonomyEngine:
             {"agent": "architect", "intent": "AUDIT_STRUCTURE", "mission": "Vérifie qu'aucun fichier temporaire (.tmp, .log) ne traîne à la racine."},
             {"agent": "researcher", "intent": "VEILLE_SILENCIEUSE", "mission": veille_mission},
             {"agent": "researcher", "intent": "DROPZONE_SCAN", "mission": "dropzone: Scanne la dropzone pour de nouveaux fichiers."},
+            {"agent": "_visual_observation", "intent": "VISUAL_OBSERVATION", "mission": "Observe une photo de la dropzone et decris ce que tu vois."},
             {"agent": "_council", "intent": "COUNCIL_DEBATE", "mission": "Débat autonome entre agents."},
             {"agent": "_grimoire", "intent": "GRIMOIRE_INVOKE", "mission": "Invoque un agent éphémère du Grimoire."},
             {"agent": "security", "intent": "SECURITY_AUDIT", "mission": "Audite un module aléatoire du projet pour des vulnérabilités (injection, eval, subprocess, fichiers non sanitisés)."},
@@ -1067,6 +1075,14 @@ class AutonomyEngine:
         except Exception:
             dropzone_count = 0
 
+        # Compter les photos non vues
+        photo_count = 0
+        try:
+            from core.visual_cortex import vision as visual_cortex
+            photo_count = visual_cortex.get_photo_count()
+        except Exception:
+            pass
+
         # Personality bias (PSYCHE)
         personality_bias = {}
         try:
@@ -1096,6 +1112,7 @@ class AutonomyEngine:
             health_verdict=health["verdict"],
             personality_bias=personality_bias,
             cloud_in_cooldown=cloud_in_cooldown,
+            photo_count=photo_count,
         )
 
         # --- Bonus objectifs (normalisé) ---
@@ -1562,6 +1579,8 @@ class AutonomyEngine:
             response = await self._execute_grimoire_evolve()
         elif intent == "VEILLE_IA":
             response = await self._execute_veille_ia(routine)
+        elif intent == "VISUAL_OBSERVATION":
+            response = await self._execute_visual_observation()
         elif intent.startswith("SCHOOL_"):
             response = await self._execute_school_class(routine, intent)
         elif intent == "DROPZONE_SCAN" and dropzone_count == 0:
@@ -2024,6 +2043,8 @@ class AutonomyEngine:
             response = await self._execute_grimoire_evolve()
         elif intent == "VEILLE_IA":
             response = await self._execute_veille_ia(routine)
+        elif intent == "VISUAL_OBSERVATION":
+            response = await self._execute_visual_observation()
         elif intent.startswith("SCHOOL_"):
             response = await self._execute_school_class(routine, intent)
         elif intent == "DROPZONE_SCAN":
@@ -4022,6 +4043,37 @@ else:
     # ================================================================
     # CHANTIER 3 : CREATIVE PLAY — associations libres inter-concepts
     # ================================================================
+
+    async def _execute_visual_observation(self) -> dict:
+        """Observe une photo de USER_DROPZONE/photos/ et reagit emotionnellement."""
+        try:
+            from core.visual_cortex import vision as visual_cortex
+        except ImportError:
+            return {"status": "skipped", "result": "VisualCortex non disponible."}
+
+        stats = visual_cortex.scan_photos()
+        if stats["total"] == 0:
+            return {"status": "skipped", "result": "Aucune photo dans USER_DROPZONE/photos/."}
+
+        print(f"   👁️ VISION: {stats['unseen']} nouvelles / {stats['total']} photos")
+
+        observation = await visual_cortex.observe()
+        if not observation:
+            return {"status": "skipped", "result": "Observation impossible (limite session ou pas de photo)."}
+
+        emotion = observation.get("emotion", "?")
+        is_revisit = observation.get("is_revisit", False)
+        photo = observation.get("photo_path", "?")
+        obs_text = observation.get("observation", "")[:200]
+
+        print(f"   {'🔄' if is_revisit else '🖼️'} Photo: {photo}")
+        print(f"   💭 Emotion: {emotion}")
+        print(f"   📝 {obs_text}...")
+
+        return {
+            "status": "success",
+            "result": f"Observation visuelle ({emotion}): {obs_text}",
+        }
 
     async def _execute_school_class(self, routine: dict, intent: str) -> dict:
         """Execute un cours scolaire : dispatch agent + evaluation professeur."""

@@ -15,7 +15,11 @@ class DropzoneIndexer:
         "config": [".json", ".yaml", ".yml", ".toml", ".ini"],
         "docs": [".md", ".txt", ".rst"],
         "data": [".csv", ".xml", ".sql"],
+        "image": [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"],
     }
+
+    # Dossiers a exclure du scan standard (les images sont gerees par VisualCortex)
+    _EXCLUDED_DIRS = {"photos"}
 
     PROJECT_MARKERS = [
         "requirements.txt",
@@ -50,12 +54,13 @@ class DropzoneIndexer:
 
             for dirpath, dirnames, filenames in os.walk(project_root):
                 abs_dir = os.path.abspath(dirpath)
-                # Ignorer processed/ et dossiers cachés
-                if abs_dir.startswith(processed_dir) or os.path.basename(dirpath).startswith("."):
+                # Ignorer processed/, photos/ et dossiers cachés
+                dirname = os.path.basename(dirpath)
+                if abs_dir.startswith(processed_dir) or dirname.startswith(".") or dirname in self._EXCLUDED_DIRS:
                     dirnames.clear()
                     continue
-                # Élaguer les sous-dossiers cachés
-                dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+                # Élaguer les sous-dossiers cachés et exclus
+                dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in self._EXCLUDED_DIRS]
 
                 for fname in filenames:
                     filepath = os.path.join(dirpath, fname)
@@ -119,11 +124,12 @@ class DropzoneIndexer:
 
         for dirpath, dirnames, filenames in os.walk(root_path):
             abs_dir = os.path.abspath(dirpath)
-            # Ignorer processed/ et dossiers cachés
-            if abs_dir.startswith(processed_dir) or os.path.basename(dirpath).startswith("."):
+            dirname = os.path.basename(dirpath)
+            # Ignorer processed/, photos/ et dossiers cachés
+            if abs_dir.startswith(processed_dir) or dirname.startswith(".") or dirname in self._EXCLUDED_DIRS:
                 dirnames.clear()
                 continue
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in self._EXCLUDED_DIRS]
 
             markers_found = [m for m in self.PROJECT_MARKERS if m in filenames]
             if markers_found and abs_dir not in seen_roots:
@@ -182,10 +188,11 @@ class DropzoneIndexer:
 
         for dirpath, dirnames, filenames in os.walk(root_path):
             abs_dir = os.path.abspath(dirpath)
-            if abs_dir.startswith(processed_dir) or os.path.basename(dirpath).startswith("."):
+            dirname = os.path.basename(dirpath)
+            if abs_dir.startswith(processed_dir) or dirname.startswith(".") or dirname in self._EXCLUDED_DIRS:
                 dirnames.clear()
                 continue
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in self._EXCLUDED_DIRS]
             count += len(filenames)
 
         return count

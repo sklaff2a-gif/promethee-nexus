@@ -959,7 +959,7 @@ class BaseAgent:
             "gpu_scheduler": gpu_scheduler.get_stats(),
         }
 
-    async def _call_ollama(self, prompt: str, model: str) -> str:
+    async def _call_ollama(self, prompt: str, model: str, images: list = None) -> str:
         # Circuit breaker : bloquer immédiatement si Ollama est non-responsive
         if self._ollama_circuit_is_open():
             remaining = int(self._ollama_circuit_open_until - time.time())
@@ -975,6 +975,8 @@ class BaseAgent:
                     _temperature = 0.7
                 _num_ctx = getattr(Config, "AGENT_NUM_CTX", {}).get(self.name, getattr(Config, "AGENT_NUM_CTX", {}).get("default", 8192))
                 payload = { "model": model, "prompt": prompt, "stream": False, "think": False, "options": { "temperature": _temperature, "num_ctx": _num_ctx } }
+                if images:
+                    payload["images"] = images
                 async with httpx.AsyncClient() as client:
                     response = await client.post(url, json=payload, timeout=300)
                 if response.status_code == 200:
