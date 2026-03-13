@@ -273,7 +273,8 @@ class SoliloqueEngine:
             from core.base_agent import BaseAgent
             import httpx
 
-            async with BaseAgent._get_ollama_semaphore():
+            from core.base_agent import gpu_scheduler
+            async with gpu_scheduler.access("soliloque_companion"):
                 payload = {
                     "model": COMPANION_MODEL,
                     "messages": messages,
@@ -323,7 +324,8 @@ class SoliloqueEngine:
                 f"Exprime ce que tu ressens vraiment."
             )
 
-            async with BaseAgent._get_ollama_semaphore():
+            from core.base_agent import gpu_scheduler
+            async with gpu_scheduler.access("soliloque_reflect"):
                 payload = {
                     "model": REFLECT_MODEL,
                     "prompt": prompt,

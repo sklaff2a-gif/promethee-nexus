@@ -37,6 +37,153 @@ except ImportError:
 
 logger = logging.getLogger("BaseAgent")
 
+
+# ── GPU Scheduler — File d'attente stricte pour protéger le GPU ─────────────
+class _GpuAccess:
+    """Context manager pour un accès exclusif au GPU."""
+    __slots__ = ("_scheduler", "_caller")
+
+    def __init__(self, scheduler, caller="unknown"):
+        self._scheduler = scheduler
+        self._caller = caller
+
+    async def __aenter__(self):
+        await self._scheduler.acquire(self._caller)
+        return self
+
+    async def __aexit__(self, *args):
+        self._scheduler.release()
+
+
+class GpuScheduler:
+    """File d'attente GPU — sérialise les appels Ollama et protège le GPU.
+
+    Remplace l'ancien Semaphore(2) par un Lock strict (1 seul appel à la fois)
+    + cooldown inter-appels + monitoring température GPU.
+    """
+
+    GPU_COOLDOWN_SECONDS = 1.5       # Pause minimale entre deux appels consécutifs
+    GPU_TEMP_MAX = 82                # Température max avant throttle (°C)
+    GPU_TEMP_CHECK_INTERVAL = 30     # Vérifier la temp GPU max toutes les 30s
+
+    def __init__(self):
+        self._lock = None
+        self._loop_id = None
+        self._queue_depth = 0
+        self._last_call_end = 0.0
+        self._last_temp_check = 0.0
+        self._last_gpu_temp = 0
+        self._total_calls = 0
+        self._total_wait_time = 0.0
+        self._current_agent = None
+
+    def _ensure_lock(self):
+        """Crée/recrée le Lock si l'event loop a changé (Smart Restart)."""
+        try:
+            loop_id = id(asyncio.get_running_loop())
+        except RuntimeError:
+            return asyncio.Lock()
+        if self._lock is None or self._loop_id != loop_id:
+            self._lock = asyncio.Lock()
+            self._loop_id = loop_id
+        return self._lock
+
+    async def _check_gpu_temp(self) -> int:
+        """Vérifie la température GPU via nvidia-smi (rate-limited)."""
+        now = time.time()
+        if now - self._last_temp_check < self.GPU_TEMP_CHECK_INTERVAL:
+            return self._last_gpu_temp
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "nvidia-smi", "--query-gpu=temperature.gpu",
+                "--format=csv,noheader,nounits",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            temp = int(stdout.decode().strip())
+            self._last_gpu_temp = temp
+            self._last_temp_check = now
+            return temp
+        except Exception:
+            return self._last_gpu_temp
+
+    async def acquire(self, caller: str = "unknown"):
+        """Acquiert l'accès exclusif au GPU avec cooldown et monitoring."""
+        self._queue_depth += 1
+        if self._queue_depth > 1:
+            logger.info(
+                f"[GPU_QUEUE] {caller} en file d'attente "
+                f"(position {self._queue_depth}, occupé par {self._current_agent})"
+            )
+
+        start = time.time()
+        lock = self._ensure_lock()
+        await lock.acquire()
+        wait = time.time() - start
+        self._total_wait_time += wait
+        self._total_calls += 1
+        self._current_agent = caller
+
+        # Cooldown entre appels — laisser le GPU souffler
+        elapsed = time.time() - self._last_call_end
+        if elapsed < self.GPU_COOLDOWN_SECONDS and self._last_call_end > 0:
+            await asyncio.sleep(self.GPU_COOLDOWN_SECONDS - elapsed)
+
+        # Vérification température GPU
+        temp = await self._check_gpu_temp()
+        if temp >= self.GPU_TEMP_MAX:
+            logger.warning(f"[GPU_QUEUE] GPU à {temp}°C (max {self.GPU_TEMP_MAX}) — attente refroidissement...")
+            while temp >= self.GPU_TEMP_MAX - 5:  # Hystérésis 5°C
+                await asyncio.sleep(10)
+                temp = await self._check_gpu_temp()
+            logger.info(f"[GPU_QUEUE] GPU refroidi à {temp}°C — reprise")
+
+        if wait > 0.5:
+            logger.info(
+                f"[GPU_QUEUE] {caller} accède au GPU "
+                f"(attendu {wait:.1f}s, {self._queue_depth - 1} en attente)"
+            )
+
+    def release(self):
+        """Libère l'accès au GPU."""
+        self._last_call_end = time.time()
+        self._queue_depth -= 1
+        self._current_agent = None
+        lock = self._ensure_lock()
+        lock.release()
+
+    def access(self, caller: str = "unknown"):
+        """Retourne un context manager pour accéder au GPU."""
+        return _GpuAccess(self, caller)
+
+    def get_stats(self) -> dict:
+        """Statistiques pour le monitoring."""
+        return {
+            "queue_depth": self._queue_depth,
+            "current_agent": self._current_agent,
+            "total_calls": self._total_calls,
+            "avg_wait_s": round(self._total_wait_time / max(1, self._total_calls), 2),
+            "last_gpu_temp": self._last_gpu_temp,
+        }
+
+    def reset(self):
+        """Reset pour les tests."""
+        self._lock = None
+        self._loop_id = None
+        self._queue_depth = 0
+        self._last_call_end = 0.0
+        self._last_temp_check = 0.0
+        self._last_gpu_temp = 0
+        self._total_calls = 0
+        self._total_wait_time = 0.0
+        self._current_agent = None
+
+
+# Singleton global
+gpu_scheduler = GpuScheduler()
+
+
 class BaseAgent:
     """
     Classe Mère V22.0 - Full Architecture + Budget Cloud + Cooldown 429
@@ -56,10 +203,9 @@ class BaseAgent:
     _daily_cloud_calls_evolution = 0
     MAX_DAILY_EVOLUTION_CLOUD = 40  # Evolution peut utiliser max 40 appels Pro/jour
 
-    # Sémaphore global : limite les appels Ollama concurrents (évite saturation RAM/CPU)
-    _ollama_semaphore = None  # Initialisé lazily (nécessite une event loop)
-    _ollama_loop_id = None    # Détecte si l'event loop a changé (Smart Restart)
-    MAX_CONCURRENT_OLLAMA = 2
+    # GPU Scheduler : file d'attente stricte — 1 seul appel Ollama à la fois
+    # (remplace l'ancien Semaphore(2) qui laissait le GPU se faire saturer)
+    MAX_CONCURRENT_OLLAMA = 1  # Conservé pour backward compat, mais ignoré par le scheduler
 
     # Circuit Breaker Ollama — protection anti-GPU-hang
     _ollama_consecutive_timeouts = 0       # Compteur de ReadTimeout consécutifs
@@ -753,15 +899,13 @@ class BaseAgent:
 
     @classmethod
     def _get_ollama_semaphore(cls):
-        """Initialisation lazy du sémaphore. Recréé si l'event loop a changé."""
-        try:
-            loop_id = id(asyncio.get_running_loop())
-        except RuntimeError:
-            return asyncio.Semaphore(cls.MAX_CONCURRENT_OLLAMA)
-        if cls._ollama_semaphore is None or cls._ollama_loop_id != loop_id:
-            cls._ollama_semaphore = asyncio.Semaphore(cls.MAX_CONCURRENT_OLLAMA)
-            cls._ollama_loop_id = loop_id
-        return cls._ollama_semaphore
+        """Retourne le GPU scheduler (backward compat pour les appelants externes).
+
+        Les appelants internes (base_agent) utilisent gpu_scheduler.access(self.name)
+        pour un meilleur logging. Les appelants externes (chat_engine, curiosity_reflex,
+        soliloque) passent par cette méthode qui retourne un context manager anonyme.
+        """
+        return gpu_scheduler.access("external")
 
     @classmethod
     def _ollama_circuit_is_open(cls) -> bool:
@@ -803,6 +947,7 @@ class BaseAgent:
             "consecutive_timeouts": cls._ollama_consecutive_timeouts,
             "blocked_until": cls._ollama_circuit_open_until,
             "last_success": cls._ollama_last_success,
+            "gpu_scheduler": gpu_scheduler.get_stats(),
         }
 
     async def _call_ollama(self, prompt: str, model: str) -> str:
@@ -812,7 +957,7 @@ class BaseAgent:
             logger.warning(f"[{self.name}] Circuit breaker Ollama actif — skip ({remaining}s restantes)")
             return "OLLAMA CIRCUIT BREAKER: GPU probablement bloqué, attente récupération."
         try:
-            async with self._get_ollama_semaphore():
+            async with gpu_scheduler.access(self.name):
                 url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
                 try:
                     from core.cardiac_engine import heart
@@ -845,7 +990,7 @@ class BaseAgent:
         stream_id = str(uuid.uuid4())[:8]
         full_text = ""
         try:
-            async with self._get_ollama_semaphore():
+            async with gpu_scheduler.access(self.name):
                 url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
                 try:
                     from core.cardiac_engine import heart

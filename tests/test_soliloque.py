@@ -299,8 +299,11 @@ class TestDialogue:
     async def test_chat_exception(self, isolate_soliloque):
         """_chat retourne None sur exception."""
         s = isolate_soliloque
-        with patch("core.base_agent.BaseAgent") as MockBA:
-            MockBA._get_ollama_semaphore.side_effect = Exception("timeout")
+        with patch("core.base_agent.gpu_scheduler") as mock_sched:
+            mock_ctx = MagicMock()
+            mock_ctx.__aenter__ = AsyncMock(side_effect=Exception("timeout"))
+            mock_ctx.__aexit__ = AsyncMock()
+            mock_sched.access.return_value = mock_ctx
             result = await s._chat([{"role": "user", "content": "test"}])
         assert result is None
 
@@ -336,8 +339,11 @@ class TestDialogue:
     async def test_reflect_exception(self, isolate_soliloque):
         """_reflect retourne None sur exception."""
         s = isolate_soliloque
-        with patch("core.base_agent.BaseAgent") as MockBA:
-            MockBA._get_ollama_semaphore.side_effect = Exception("error")
+        with patch("core.base_agent.gpu_scheduler") as mock_sched:
+            mock_ctx = MagicMock()
+            mock_ctx.__aenter__ = AsyncMock(side_effect=Exception("error"))
+            mock_ctx.__aexit__ = AsyncMock()
+            mock_sched.access.return_value = mock_ctx
             result = await s._reflect([], "etat_emotionnel")
         assert result is None
 

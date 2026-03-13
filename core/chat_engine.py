@@ -658,7 +658,8 @@ class ChatEngine:
         # 4. Streaming via httpx
         full_response = ""
         try:
-            async with BaseAgent._get_ollama_semaphore():
+            from core.base_agent import gpu_scheduler
+            async with gpu_scheduler.access("chat_stream"):
                 # Publier le debut du stream
                 await bus.publish("CHAT_STREAM", {
                     "stream_id": stream_id,
@@ -826,7 +827,8 @@ class ChatEngine:
         ]
 
         try:
-            async with BaseAgent._get_ollama_semaphore():
+            from core.base_agent import gpu_scheduler
+            async with gpu_scheduler.access("chat_compose"):
                 payload = {
                     "model": CHAT_MODEL,
                     "messages": ollama_messages,

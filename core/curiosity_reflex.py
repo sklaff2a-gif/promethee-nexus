@@ -287,8 +287,8 @@ class CuriosityReflex:
             model = Config.ROUTER_MODEL  # qwen3:4b — leger et rapide
             url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
 
-            sem = BaseAgent._get_ollama_semaphore()
-            async with sem:
+            from core.base_agent import gpu_scheduler
+            async with gpu_scheduler.access("curiosity_reflex"):
                 async with httpx.AsyncClient() as client:
                     resp = await client.post(
                         url,
