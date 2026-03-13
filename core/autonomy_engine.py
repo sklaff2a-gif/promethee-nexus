@@ -3047,8 +3047,10 @@ class AutonomyEngine:
             pass
         # 3. Rêve — consolidation synaptique + stimulation cellulaire
         await self._execute_dream_routine()
-        # 4. LoRA Auto-Training — fine-tuning nocturne (GPU libre pendant le nap)
-        await self._execute_lora_training()
+        # 4. LoRA Auto-Training — DESACTIVE tant que les fine-tunes ne sont pas migres sur qwen3.5:9b
+        # Les anciens fine-tunes (gemma3:12b base) sont obsoletes, trainer dessus gaspille la VRAM.
+        # Reactiver quand le pipeline QLoRA sera adapte pour qwen3.5:9b comme base.
+        # await self._execute_lora_training()
 
     async def _execute_dream_routine(self):
         """Micro-routine de rêve : consolide les synapses, nourrit le tissu neural.
