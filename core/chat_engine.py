@@ -4,6 +4,7 @@
 
 import json
 import os
+import re
 import time
 import logging
 import uuid
@@ -933,6 +934,7 @@ class ChatEngine:
                     "model": CHAT_MODEL,
                     "messages": ollama_messages,
                     "stream": True,
+                    "think": False,
                     "options": {"temperature": 0.7, "num_ctx": OLLAMA_CHAT_CTX, "num_predict": -1},
                 }
 
@@ -981,13 +983,17 @@ class ChatEngine:
             })
             return None
 
-        if not full_response.strip():
+        # Nettoyer les blocs <think> residuels (qwen3.5 peut en generer malgre think=False)
+        full_response = re.sub(r"<think>.*?</think>", "", full_response, flags=re.DOTALL).strip()
+
+        if not full_response:
+            logger.warning("CHAT: Reponse vide apres nettoyage <think>")
             return None
 
         # 5. Ajouter la reponse assistant a l'historique
         self.messages.append({
             "role": "assistant",
-            "content": full_response.strip(),
+            "content": full_response,
             "timestamp": time.time(),
         })
 
