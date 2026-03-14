@@ -46,6 +46,7 @@ class ChatEngine:
         self.messages: List[Dict] = []  # {"role", "content", "timestamp"}
         self._cached_organ_parts: List[str] = []
         self._cache_timestamp: float = 0.0
+        self._last_subfolder_hint: Optional[str] = None  # Memorise le dernier dossier photo demande
         self._load()
 
     # --- COMMANDES D'INTROSPECTION (deterministe, 0 LLM) ---
@@ -320,6 +321,7 @@ class ChatEngine:
         """Detecte si le message demande d'observer des photos.
 
         Seuil de 2 mots-cles visuels OU 1 mot-cle + conversation recente sur les photos.
+        Detecte aussi les demandes de suite ("la suivante", "encore", "decris").
         """
         msg_lower = message.lower()
         visual_keywords = ["photo", "image", "regarde", "observe", "voir", "vois",
@@ -327,19 +329,26 @@ class ChatEngine:
         photo_keywords = ["famille", "picture", "selfie", "cliche", "cliché"]
         action_keywords = ["essayer", "essaie", "tente", "teste", "montre-moi",
                            "fais-le", "vas-y", "go", "lance"]
+        # Mots qui impliquent "montre-moi la suite" dans un contexte photo
+        followup_keywords = ["suivante", "prochaine", "autre", "encore",
+                             "décris", "decris", "décrit", "decrit",
+                             "continue", "enchaine", "enchaîne"]
         count = sum(1 for kw in visual_keywords if kw in msg_lower)
         count += sum(1 for kw in photo_keywords if kw in msg_lower)
         if count >= 2:
             return True
         # Contexte conversationnel : si les 5 derniers messages parlent de photos,
-        # un seul mot-cle d'action ou visuel suffit
-        if count >= 1 or any(kw in msg_lower for kw in action_keywords):
+        # un seul mot-cle d'action, visuel OU de suite suffit
+        all_triggers = count >= 1 or any(kw in msg_lower for kw in action_keywords)
+        followup_trigger = any(kw in msg_lower for kw in followup_keywords)
+        if all_triggers or followup_trigger:
             recent_text = " ".join(
                 m["content"].lower() for m in self.messages[-5:]
                 if m.get("role") == "user"
             )
             photo_in_context = any(kw in recent_text for kw in
-                                   ["photo", "image", "regarde", "voir", "famille"])
+                                   ["photo", "image", "regarde", "voir", "famille",
+                                    "paysage", "observe"])
             if photo_in_context:
                 return True
         return False
@@ -358,12 +367,18 @@ class ChatEngine:
         logger.info(f"CHAT: Demande visuelle detectee, {stats['unseen']} nouvelles / {stats['total']} photos")
 
         # Extraire le sous-dossier demande par l'utilisateur (famille, paysage, etc.)
+        # Si pas de mention explicite, reutiliser le dernier sous-dossier demande
         subfolder = None
         msg_lower = user_message.lower()
         for folder_hint in ["famille", "paysage", "nature", "voyage", "art", "sport"]:
             if folder_hint in msg_lower:
                 subfolder = folder_hint
                 break
+        if subfolder:
+            self._last_subfolder_hint = subfolder
+        elif self._last_subfolder_hint:
+            subfolder = self._last_subfolder_hint
+            logger.info(f"CHAT: Reutilisation sous-dossier precedent: '{subfolder}'")
 
         observation = await visual_cortex.observe(subfolder_hint=subfolder)
         if not observation:
