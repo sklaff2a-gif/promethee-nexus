@@ -896,7 +896,10 @@ class ChatEngine:
             "je ne peux pas voir", "je ne peux pas visualiser",
             "je ne peux pas *voir*", "je ne peux pas *visualiser*",
             "pas la capacité d'accéder", "pas la capacité de visualiser",
-            "modèle de langage texte",
+            "modèle de langage texte", "traitement textuel",
+            "transparent sur mes limites", "environnement textuel",
+            "je ne dispose pas", "sans accès direct",
+            "limitation technique",
         ]
         for msg in recent:
             content = msg["content"]
