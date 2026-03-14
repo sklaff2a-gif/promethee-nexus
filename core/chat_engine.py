@@ -315,16 +315,33 @@ class ChatEngine:
         except ImportError:
             return "Systeme de salaire non disponible."
 
-    @staticmethod
-    def _is_visual_request(message: str) -> bool:
-        """Detecte si le message demande d'observer des photos."""
+    def _is_visual_request(self, message: str) -> bool:
+        """Detecte si le message demande d'observer des photos.
+
+        Seuil de 2 mots-cles visuels OU 1 mot-cle + conversation recente sur les photos.
+        """
         msg_lower = message.lower()
         visual_keywords = ["photo", "image", "regarde", "observe", "voir", "vois",
                            "montre", "dropzone", "vision", "visuel"]
         photo_keywords = ["famille", "picture", "selfie", "cliche", "cliché"]
+        action_keywords = ["essayer", "essaie", "tente", "teste", "montre-moi",
+                           "fais-le", "vas-y", "go", "lance"]
         count = sum(1 for kw in visual_keywords if kw in msg_lower)
         count += sum(1 for kw in photo_keywords if kw in msg_lower)
-        return count >= 2
+        if count >= 2:
+            return True
+        # Contexte conversationnel : si les 5 derniers messages parlent de photos,
+        # un seul mot-cle d'action ou visuel suffit
+        if count >= 1 or any(kw in msg_lower for kw in action_keywords):
+            recent_text = " ".join(
+                m["content"].lower() for m in self.messages[-5:]
+                if m.get("role") == "user"
+            )
+            photo_in_context = any(kw in recent_text for kw in
+                                   ["photo", "image", "regarde", "voir", "famille"])
+            if photo_in_context:
+                return True
+        return False
 
     async def _trigger_visual_observation(self, user_message: str) -> str:
         """Declenche le cortex visuel et retourne l'observation comme contexte."""
@@ -835,7 +852,12 @@ class ChatEngine:
         # 3c. Detecter les demandes visuelles et declencher le cortex
         visual_context = ""
         if not parsed and self._is_visual_request(user_message):
+            logger.info("CHAT: Demande visuelle detectee, declenchement cortex visuel...")
             visual_context = await self._trigger_visual_observation(user_message)
+            if visual_context:
+                logger.info(f"CHAT: Observation visuelle obtenue ({len(visual_context)} chars)")
+            else:
+                logger.warning("CHAT: Cortex visuel n'a rien retourne (pas de photos ou erreur)")
 
         system_prompt = self._build_system_prompt(memories_text, command_result, visual_context)
         ollama_messages = [{"role": "system", "content": system_prompt}]

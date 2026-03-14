@@ -23,6 +23,9 @@ logger = logging.getLogger("VisualCortex")
 
 # --- Constantes ---
 
+# Modele multimodal dedie a la vision (doit supporter les images)
+VISION_MODEL = "llama3.2-vision:11b"
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 
 # Dossier des photos dans la dropzone
@@ -332,12 +335,8 @@ class VisualCortex:
     # --- Appel Ollama Vision ---
 
     async def _call_ollama_vision(self, prompt: str, image_b64: str) -> str:
-        """Appel Ollama avec une image en base64."""
-        try:
-            from config import Config
-            model = getattr(Config, "DEFAULT_LOCAL_MODEL", "qwen3.5:9b")
-        except ImportError:
-            model = "qwen3.5:9b"
+        """Appel Ollama avec une image en base64 via le modele multimodal."""
+        model = VISION_MODEL
 
         # Utiliser le GpuScheduler si disponible
         try:
