@@ -419,6 +419,12 @@ CONTEXT_KEYWORDS = {
     "GRIMOIRE_EVOLVE": ["grimoire", "prompt", "mutation", "amélioration", "formulation", "optimiser"],
     "VEILLE_IA": ["intelligence artificielle", "modèle", "LLM", "agent", "IA", "veille", "écosystème"],
     "VISUAL_OBSERVATION": ["photo", "image", "visuel", "observer", "regarder", "voir"],
+    "SCHOOL_CODE_REVIEW": ["revue", "review", "code", "audit", "qualité", "bugs"],
+    "SCHOOL_RESEARCH": ["recherche", "étude", "synthèse", "apprendre", "sujet", "technique"],
+    "SCHOOL_WORKSHOP": ["atelier", "workshop", "implémenter", "pratiquer", "exercice", "spec"],
+    "SCHOOL_CREATION": ["création", "créatif", "écrire", "inventer", "poème", "art"],
+    "SCHOOL_BULLETIN": ["bulletin", "bilan", "évaluation", "note", "progrès", "résumé"],
+    "SCHOOL_FREE_TIME": ["libre", "choix", "explorer", "curiosité", "méditer", "improviser"],
 }
 
 
@@ -1021,12 +1027,12 @@ class AutonomyEngine:
                 if intent in EXPLORATION_INTENTS:
                     bonus *= EXPLORATION_MULTIPLIER
                 breakdown["stagnation"] = round(bonus, 3)
-        # Emploi du temps scolaire (bonus massif pendant le creneau correspondant)
+        # Emploi du temps scolaire (bonus BRUT, bypass normalisation)
         try:
             from core.school_schedule import schedule
             school_raw = schedule.compute_schedule_bonus(intent)
             if school_raw != 0.0:
-                breakdown["school"] = round(_normalize_bonus(school_raw, "school"), 3)
+                breakdown["school"] = round(school_raw, 3)
         except Exception:
             pass
         return breakdown
@@ -1440,13 +1446,17 @@ class AutonomyEngine:
                                 f"bonus nouveauté: {len(novelty_effects)} intents")
 
         # --- Emploi du temps scolaire (Couche 26) ---
-        # Bonus massif pendant le creneau correspondant — force les SCHOOL_ intents
+        # Bonus BRUT (bypass normalisation) pendant le creneau correspondant
+        # +5.0 exact match, +2.0 adjacent — comme le rituel hebdomadaire (+15.0 brut)
         try:
             from core.school_schedule import schedule
+            current_slot = schedule.get_current_slot()
             for i, (routine, s) in enumerate(scored):
                 school_bonus = schedule.compute_schedule_bonus(routine["intent"])
                 if school_bonus != 0.0:
-                    scored[i] = (routine, s + _normalize_bonus(school_bonus, "school"))
+                    scored[i] = (routine, s + school_bonus)
+            if current_slot != "SLEEP":
+                logger.info(f"[SCHOOL] Creneau actif: {current_slot}, bonus brut applique")
         except Exception:
             pass
 
