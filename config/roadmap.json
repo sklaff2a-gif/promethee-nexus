@@ -529,7 +529,7 @@
       "phase_name": "VIRTUALISATION LLM",
       "display": "lora_pipeline",
       "description": "Pipeline LoRA — fine-tuning local de modeles, generation de datasets, evaluation automatique",
-      "status": "ready",
+      "status": "implemented",
       "specs": [
         "SPEC_STRUCTURED: En tant qu'architecte logiciel pour Prométhée, voici les spécifications techniques structurées pour le module `lora_pipeline`:\n\n**1. Responsabilités principales:**\n\n*   Orchestrer le fine-tuning LoRA de modèles LLM locaux.\n*   Gérer la génération dynamique de datasets via ChromaDB.\n*   Intégrer les adapters LoRA fusionnés dans le pipeline Prométhée, notamment via Ollama.\n*   Automatiser l'évaluation des modèles fine-tunés avec l'API Gemini (FastAPI).\n*   Optimiser l'utilisation des ressources matérielles (AMD Ryzen AI NPU/IGPU si disponibles).\n\n**2. Interface publique (méthodes clés):**\n\n*   `generate_dataset(prompt_template: str, num_samples: int) -> ChromaDBCollection`: Génère un dataset local à partir d'un template de prompt.\n*   `fine_tune_lora(model_name: str, dataset: ChromaDBCollection, rank: int = 8) -> LoRALayer`: Effectue le fine-tuning LoRA.\n*   `merge_adapters(model_name: str, lora_layer: LoRALayer) -> str`: Fusionne les adapters LoRA avec le modèle Ollama.\n*   `evaluate_model(model_name: str, test_prompts: list[str]) -> dict`: Évalue le modèle fine-tune avec un ensemble de prompts test.\n\n**3. Événements bus à publier/souscrire:**\n\n*   **Publier:** `dataset_generated(dataset_id: str)`: Indique la génération d'un nouveau dataset.\n*   **Publier:** `lora_tuning_completed(model_name: str, rank: int)`: Signalise la fin du fine-tuning LoRA.\n*   **Publier:** `model_evaluated(model_name: str, evaluation_results: dict)`: Notifie l'évaluation d'un modèle.\n*   **Souscrire:** `model_request(model_name: str)`: Demande à l'agent `evolution_agent` de préparer un modèle.\n\n**4. Dépendances et connexions:**\n\n*   **`core.neural_compiler`**:  Utilisé pour l'intégration des adapters dans Ollama.\n*   **`Agents.evolution_agent`**:  Dépend du `evolution_agent` pour la gestion des modèles et les cycles de mise à jour.\n*   **`ChromaDB`**:  Utilisé pour la génération et la gestion des datasets.\n*   **`Ollama`**:  Pour l'exécution des modèles et la fusion des adapters.\n*   **`FastAPI`**: Pour l'appel à l'API Gemini (évaluation).\n\n**5. Critères de validation:**\n\n*   Le dataset généré doit être diversifié et représentatif des tâches visées.\n*   Le fine-tuning LoRA doit se terminer sans erreur et dans un délai raisonnable.\n*   L'évaluation du modèle doit démontrer une amélioration des performances par rapport au modèle de base.\n*   L'intégration des adapters dans Ollama doit être transparente et sans impact négatif sur les performances.\n*   L'utilisation des ressources matérielles (GPU/NPU) doit être optimisée."
       ],
@@ -546,7 +546,7 @@
         "Agents.evolution_agent"
       ],
       "created_at": "2026-03-01T00:00:00",
-      "updated_at": "2026-03-10T04:57:15"
+      "updated_at": "2026-03-14T17:19:45"
     },
     {
       "id": "modelfile_generator",
@@ -703,6 +703,718 @@
       ],
       "created_at": "2026-03-01T00:00:00",
       "updated_at": "2026-03-11T11:13:45"
+    },
+    {
+      "id": "orchestrator",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "orchestrator",
+      "description": "Singleton dispatch -- routage des taches vers les agents, kill switch, monitoring",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.orchestrator",
+        "core.router",
+        "core.base_agent"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "base_agent",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "base_agent",
+      "description": "Classe mere de tous les agents -- generation LLM, cascade cloud, memoire, escalade",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.base_agent",
+        "core.gpu_scheduler"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "router",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "router",
+      "description": "RouterAgent V2.4 -- routage multi-niveaux (Grimoire-First, mots-cles, semantique LLM)",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.router",
+        "core.orchestrator"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "autonomy_engine",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "autonomy_engine",
+      "description": "Moteur autonome -- scoring de routines, budget, cycles idle, rituel hebdomadaire",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.autonomy_engine",
+        "core.desire_engine",
+        "core.prefrontal"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "chat_engine",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "chat_engine",
+      "description": "Dialogue humain-IA -- streaming WebSocket, cortex visuel, enrichissement emotionnel",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.chat_engine",
+        "core.visual_cortex",
+        "core.cardiac_engine"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "evolution_catalog",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "evolution_catalog",
+      "description": "Catalogue de specs d evolution -- singleton, suivi tentatives/difficulte/status",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.evolution_catalog",
+        "Agents.evolution_agent"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "council",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "council",
+      "description": "Debats multi-tours entre agents -- consensus, journal, extraction d actions",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.council",
+        "core.council_analytics"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "code_smith",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "code_smith",
+      "description": "Transformations deterministes AST+texte -- 9 types, 17 specs Phase A, registre decorateurs",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.code_smith",
+        "Agents.evolution_agent"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "prompt_templates",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "prompt_templates",
+      "description": "Guardrails anti-hallucination -- suffixes de prompt, structure projet, frameworks interdits",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.prompt_templates",
+        "Agents.coder_agent"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "gpu_scheduler",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "gpu_scheduler",
+      "description": "File d attente GPU stricte -- lock unique Ollama, cooldown, monitoring temperature, throttle 75C",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.base_agent",
+        "core.chat_engine",
+        "core.soliloque"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "sandbox_engine",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "sandbox_engine",
+      "description": "Execution isolee de code -- bac a sable securise, timeout, validation AST",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.sandbox_engine",
+        "Agents.evolution_agent"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "summoner",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "summoner",
+      "description": "Chargeur dynamique de grimoires -- isolation, validation chemins, modules specialises",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.summoner",
+        "core.orchestrator"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "vector_store",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "vector_store",
+      "description": "Abstraction ChromaDB -- client vectoriel persistant, memoire a long terme",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.vector_store",
+        "core.memory_gatekeeper"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "experience_registry",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "experience_registry",
+      "description": "Registre d experience evolution -- historique tentatives, contexte retry, feedback",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.experience_registry",
+        "Agents.evolution_agent"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "dropzone_pipeline",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "dropzone_pipeline",
+      "description": "Pipeline d ingestion -- traitement des fichiers deposes dans USER_DROPZONE",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.dropzone_pipeline",
+        "Agents.researcher_agent"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "patch_engine",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "patch_engine",
+      "description": "Application et rollback de patchs -- modification de code securisee",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.patch_engine",
+        "Agents.factory_agent"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "photo_salary",
+      "phase": 1,
+      "phase_name": "FONDATIONS",
+      "display": "photo_salary",
+      "description": "Systeme de salaire hebdomadaire -- scoring taches, rituel introspection",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.photo_salary",
+        "core.autonomy_engine"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "cardiac_engine",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "cardiac_engine",
+      "description": "Coeur emotionnel -- BPM, HRV, coherence, marqueurs somatiques, modulation ANS",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.cardiac_engine",
+        "core.desire_engine",
+        "core.inner_voice"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "desire_engine",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "desire_engine",
+      "description": "7 pulsions primordiales homeostatiques -- deprivation, resonance PSYCHE, bonus scoring",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.desire_engine",
+        "core.autonomy_engine",
+        "core.psyche"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "dopamine_system",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "dopamine_system",
+      "description": "Renforcement (Schultz 1997) -- erreur de prediction de recompense, bonus motivation",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.dopamine_system",
+        "core.autonomy_engine"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "hippocampus",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "hippocampus",
+      "description": "Memoire episodique -- episodes narratifs avec contexte emotionnel, continuite au restart",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.hippocampus",
+        "core.synaptic_network"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "synaptic_network",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "synaptic_network",
+      "description": "Cortex associatif Hebbian -- graphe persistant, consolidation onirique, oscillations",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.synaptic_network",
+        "core.hippocampus",
+        "core.spreading_activation"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "prefrontal",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "prefrontal",
+      "description": "Cortex prefrontal -- objectifs, memoire de travail, controle attention, inhibition, strategie",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.prefrontal",
+        "core.autonomy_engine",
+        "core.objectives_engine"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "reptilian_core",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "reptilian_core",
+      "description": "Tronc cerebral -- detection menaces, reflexes survie, adrenaline, watchdog systeme",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.reptilian_core",
+        "core.cardiac_engine"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "psyche",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "psyche",
+      "description": "Personnalite dynamique -- 7 traits par agent faconnes par l experience et les debats",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.psyche",
+        "core.desire_engine",
+        "core.council"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "inner_voice",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "inner_voice",
+      "description": "Voix interieure Broca/Wernicke -- flux de conscience, identite narrative, workspace global",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.inner_voice",
+        "core.cardiac_engine",
+        "core.prefrontal"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "self_awareness",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "self_awareness",
+      "description": "Introspection -- synthese PSYCHE, autonomie, sante, journal, snapshot conscience",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.self_awareness",
+        "core.psyche",
+        "core.autonomy_engine"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "visual_cortex",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "visual_cortex",
+      "description": "Cortex visuel -- llama3.2-vision, observation de photos, anti-degeneration, truncation",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.visual_cortex",
+        "core.chat_engine"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "soliloque",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "soliloque",
+      "description": "Monologue interne socratique -- dialogue multi-tours pour auto-exploration",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.soliloque",
+        "core.inner_voice"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "corpus_callosum",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "corpus_callosum",
+      "description": "Corps calleux -- integration inter-hemispherique, synchronisation organes bilateraux",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.corpus_callosum"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "circadian_rhythm",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "circadian_rhythm",
+      "description": "Rythme circadien -- modulation d activite selon l heure, cycles eveil/sommeil",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.circadian_rhythm",
+        "core.autonomy_engine"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "temporal_lobe",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "temporal_lobe",
+      "description": "Lobe temporal -- reconnaissance de patterns, associations semantiques",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.temporal_lobe",
+        "core.hippocampus"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "spreading_activation",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "spreading_activation",
+      "description": "Propagation d activation -- rappel associatif a travers le reseau synaptique",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.spreading_activation",
+        "core.synaptic_network"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "organ_registry",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "organ_registry",
+      "description": "Registre des organes neuraux -- enumeration, initialisation, health checks",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.organ_registry"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "memory_gatekeeper",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "memory_gatekeeper",
+      "description": "Filtre qualite memoire RAG -- bruit, doublons bigram, densite informationnelle",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.memory_gatekeeper",
+        "core.vector_store"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "objectives_engine",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "objectives_engine",
+      "description": "Gestion d objectifs hierarchiques -- decomposition en sous-objectifs, progression",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.objectives_engine",
+        "core.prefrontal"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
+    },
+    {
+      "id": "semantic_pointer",
+      "phase": 2,
+      "phase_name": "ORGANES",
+      "display": "semantic_pointer",
+      "description": "Pointeurs semantiques -- representation abstraite de connaissances",
+      "status": "implemented",
+      "specs": [],
+      "depends_on": [],
+      "estimated_cost": 0,
+      "completion_criteria": [],
+      "research_topics": [],
+      "connects_to": [
+        "core.semantic_pointer",
+        "core.synaptic_network"
+      ],
+      "created_at": "2026-03-14T17:19:45",
+      "updated_at": "2026-03-14T17:19:45"
     }
   ]
 }
