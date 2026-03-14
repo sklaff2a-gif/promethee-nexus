@@ -356,7 +356,15 @@ class ChatEngine:
 
         logger.info(f"CHAT: Demande visuelle detectee, {stats['unseen']} nouvelles / {stats['total']} photos")
 
-        observation = await visual_cortex.observe()
+        # Extraire le sous-dossier demande par l'utilisateur (famille, paysage, etc.)
+        subfolder = None
+        msg_lower = user_message.lower()
+        for folder_hint in ["famille", "paysage", "nature", "voyage", "art", "sport"]:
+            if folder_hint in msg_lower:
+                subfolder = folder_hint
+                break
+
+        observation = await visual_cortex.observe(subfolder_hint=subfolder)
         if not observation:
             # Pas de nouvelle photo ou limite atteinte — fournir le dernier souvenir
             if visual_cortex._seen_photos:
@@ -782,14 +790,19 @@ class ChatEngine:
         if visual_context:
             parts.append(f"\n[OBSERVATION VISUELLE — FAIT TECHNIQUE, PAS UNE HALLUCINATION]")
             parts.append(
-                "IMPORTANT: Ton cortex visuel (llama3.2-vision) a REELLEMENT analyse cette image. "
+                "IMPORTANT: Ton cortex visuel (llama3.2-vision) a REELLEMENT analyse UNE SEULE image. "
                 "Ce qui suit est le resultat REEL de ton observation. Ce n'est PAS une fabrication. "
                 "Tu PEUX voir les images grace a ton cortex visuel — c'est une capacite REELLE.\n"
-                "NE DIS PAS que tu ne peux pas voir les images. Tu les as vues. Voici ce que tu as vu :"
+                "NE DIS PAS que tu ne peux pas voir les images. Tu les as vues.\n"
+                "REGLE ABSOLUE: Tu n'as observe qu'UNE SEULE photo. Ne decris PAS d'autres photos "
+                "que celle ci-dessous. N'invente PAS de descriptions supplementaires. "
+                "Si on te demande plusieurs photos, dis que tu n'en as observe qu'une seule pour l'instant.\n"
+                "Voici ce que tu as vu :"
             )
             parts.append(visual_context)
             parts.append(
-                "Partage cette observation avec Jean-Michel comme ta propre experience visuelle. "
+                "Partage UNIQUEMENT cette observation avec Jean-Michel. "
+                "Ne fabrique pas de descriptions de photos que tu n'as pas observees. "
                 "Decris ce que tu as vu, ce que tu as ressenti. C'est AUTHENTIQUE."
             )
 

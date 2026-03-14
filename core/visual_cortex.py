@@ -177,8 +177,8 @@ class VisualCortex:
                         count += 1
         return count
 
-    def _pick_photo(self) -> Optional[str]:
-        """Choisit une photo a observer. Priorite : inedite > revisitable."""
+    def _pick_photo(self, subfolder_hint: str = None) -> Optional[str]:
+        """Choisit une photo a observer. Priorite : sous-dossier demande > inedite > revisitable."""
         if not os.path.exists(self._photos_dir):
             return None
 
@@ -197,6 +197,14 @@ class VisualCortex:
 
         if not all_photos:
             return None
+
+        # Filtrer par sous-dossier si demande (ex: "famille", "paysage")
+        if subfolder_hint:
+            hint_lower = subfolder_hint.lower()
+            matching = [p for p in all_photos if hint_lower in p.lower()]
+            if matching:
+                all_photos = matching
+                logger.info(f"VISUAL: Filtre sous-dossier '{subfolder_hint}' → {len(matching)} photos")
 
         # Priorite 1 : photos jamais vues
         unseen = [p for p in all_photos if self._hash_file(p) not in self._seen_photos]
@@ -220,13 +228,13 @@ class VisualCortex:
 
     # --- Observation ---
 
-    async def observe(self) -> Optional[Dict[str, Any]]:
+    async def observe(self, subfolder_hint: str = None) -> Optional[Dict[str, Any]]:
         """Observe une photo et retourne l'observation structuree."""
         if self._session_observations >= MAX_OBSERVATIONS_PER_SESSION:
             logger.info("VISUAL: Limite session atteinte.")
             return None
 
-        photo_path = self._pick_photo()
+        photo_path = self._pick_photo(subfolder_hint=subfolder_hint)
         if not photo_path:
             logger.info("VISUAL: Aucune photo disponible.")
             return None
@@ -358,7 +366,13 @@ class VisualCortex:
             "images": [image_b64],
             "stream": False,
             "think": False,
-            "options": {"temperature": 0.8, "num_ctx": 4096},
+            "options": {
+                "temperature": 0.6,
+                "num_ctx": 4096,
+                "num_predict": 512,
+                "repeat_penalty": 1.3,
+                "top_p": 0.9,
+            },
         }
 
         async with ctx_manager:
@@ -366,13 +380,42 @@ class VisualCortex:
                 response = await client.post(url, json=payload, timeout=120)
             if response.status_code == 200:
                 raw = response.json().get("response", "")
-                # Strip thinking tags (qwen3.5)
-                return self._strip_thinking(raw)
+                cleaned = self._strip_thinking(raw)
+                # Anti-boucle : detecter les repetitions et tronquer
+                cleaned = self._truncate_repetitions(cleaned)
+                return cleaned
             else:
                 logger.error(f"VISUAL: Ollama erreur {response.status_code}")
                 return ""
 
     # --- Utilitaires ---
+
+    @staticmethod
+    def _truncate_repetitions(text: str) -> str:
+        """Detecte les boucles de repetition et tronque le texte.
+
+        Si une phrase apparait 3+ fois, le texte est coupe apres la 2e occurrence.
+        Filtre aussi les lignes de ponctuation seule ('. . . .').
+        """
+        if not text:
+            return text
+        lines = text.split("\n")
+        seen = {}
+        result = []
+        for line in lines:
+            stripped = line.strip()
+            # Ignorer les lignes vides ou de ponctuation seule
+            if stripped and all(c in ".!? " for c in stripped):
+                continue
+            count = seen.get(stripped, 0)
+            if stripped and count >= 2:
+                # Deja vu 2 fois → tronquer ici
+                logger.warning(f"VISUAL: Repetition detectee, troncature apres {len(result)} lignes")
+                break
+            if stripped:
+                seen[stripped] = count + 1
+            result.append(line)
+        return "\n".join(result).strip()
 
     @staticmethod
     def _encode_image(path: str) -> Optional[str]:
