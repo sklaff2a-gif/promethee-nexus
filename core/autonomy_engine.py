@@ -144,7 +144,7 @@ def reload_organ_precision():
 INTROSPECTIVE_INTENTS = {
     "COUNCIL_DEBATE", "SOLILOQUE_INTERNE", "SELF_INSPECT",
     "MEMORY_CLEANUP", "MEMORY_CONSOLIDATION", "AUDIT_STRUCTURE",
-    "REFACTOR_RANDOM", "SECURITY_AUDIT", "EXPANSION_CODE",
+    "REFACTOR_RANDOM", "SECURITY_AUDIT", "EXPANSION_CODE", "EXPANSION_CATALOG",
 }
 EXTROVERTED_INTENTS = {
     "VEILLE_SILENCIEUSE", "VEILLE_IA", "DROPZONE_SCAN", "ROADMAP_RESEARCH", "ROADMAP_SPEC",
@@ -161,7 +161,7 @@ STAGNATION_MIN_HISTORY = 5            # Minimum d'historique pour évaluer
 NOVELTY_BONUS_BASE = 1.0              # Bonus base pour intents non-récents
 NOVELTY_BONUS_MAX = 3.0               # Bonus max (stagnation sévère)
 EXPLORATION_INTENTS = {
-    "EXPANSION_CODE", "CREATIVE_PLAY", "VEILLE_SILENCIEUSE", "VEILLE_IA",
+    "EXPANSION_CODE", "EXPANSION_CATALOG", "CREATIVE_PLAY", "VEILLE_SILENCIEUSE", "VEILLE_IA",
     "ROADMAP_RESEARCH", "ROADMAP_SPEC", "GRIMOIRE_EVOLVE",
     "COUNCIL_DEBATE", "DROPZONE_SCAN", "VISUAL_OBSERVATION",
 }
@@ -400,6 +400,7 @@ class SystemHealthCheck:
 
 CONTEXT_KEYWORDS = {
     "EXPANSION_CODE": ["code", "optimiser", "refactor", "bug", "python", "fonction"],
+    "EXPANSION_CATALOG": ["catalog", "spec", "implementer", "pipeline", "darwin", "evolution"],
     "AUDIT_STRUCTURE": ["fichier", "structure", "nettoyer", "organiser", "tmp", "log"],
     "VEILLE_SILENCIEUSE": ["recherche", "apprendre", "astuce", "documentation", "veille"],
     "DROPZONE_SCAN": ["dropzone", "fichier", "import", "ingestion", "upload"],
@@ -496,11 +497,11 @@ class RoutineScorer:
             score -= min(recency_penalty, 6.0)
 
             # Health penalty : si DEGRADED, pénaliser les routines lourdes
-            if health_verdict == "DEGRADED" and intent == "EXPANSION_CODE":
+            if health_verdict == "DEGRADED" and intent in ("EXPANSION_CODE", "EXPANSION_CATALOG"):
                 score -= 1.5
 
             # Cloud cooldown penalty : pénaliser les routines qui hallucinent en local
-            if cloud_in_cooldown and intent in ("EXPANSION_CODE", "REFACTOR_RANDOM"):
+            if cloud_in_cooldown and intent in ("EXPANSION_CODE", "EXPANSION_CATALOG", "REFACTOR_RANDOM"):
                 score -= 10.0
 
             # Personality bias (PSYCHE) : bonus/malus basé sur les traits du système (clampé [-2, +2])
@@ -688,6 +689,7 @@ class AutonomyEngine:
 
         return [
             {"agent": "evolution", "intent": "EXPANSION_CODE", "mission": "[MODE VEILLE] Croise les connaissances internes. Decouvre des patterns et connexions entre domaines."},
+            {"agent": "evolution", "intent": "EXPANSION_CATALOG", "mission": "[MODE VEILLE] [CATALOG] Selectionne une spec du catalogue et tente de l'implementer."},
             {"agent": "architect", "intent": "AUDIT_STRUCTURE", "mission": "Vérifie qu'aucun fichier temporaire (.tmp, .log) ne traîne à la racine."},
             {"agent": "researcher", "intent": "VEILLE_SILENCIEUSE", "mission": veille_mission},
             {"agent": "researcher", "intent": "DROPZONE_SCAN", "mission": "dropzone: Scanne la dropzone pour de nouveaux fichiers."},
@@ -2182,7 +2184,7 @@ class AutonomyEngine:
 
         # 2. Vérifier santé système
         if self.last_health_check and isinstance(self.last_health_check, dict):
-            if self.last_health_check.get("verdict") == "NO_GO" and intent in ("EXPANSION_CODE", "GRIMOIRE_INVOKE"):
+            if self.last_health_check.get("verdict") == "NO_GO" and intent in ("EXPANSION_CODE", "EXPANSION_CATALOG", "GRIMOIRE_INVOKE"):
                 return f"veto: santé NO_GO, routine risquée {intent} reportée"
 
         # 2b. ROADMAP STRATÉGIQUE — les intents roadmap bypass le veto préfrontal
@@ -2531,7 +2533,7 @@ class AutonomyEngine:
 
             # Identifier les routines absentes qui pourraient manquer
             all_intents = {
-                "EXPANSION_CODE", "VEILLE_SILENCIEUSE", "VEILLE_IA", "ROADMAP_RESEARCH",
+                "EXPANSION_CODE", "EXPANSION_CATALOG", "VEILLE_SILENCIEUSE", "VEILLE_IA", "ROADMAP_RESEARCH",
                 "SECURITY_AUDIT", "MEMORY_CONSOLIDATION",
             }
             missing = all_intents - set(intent_counts.keys())
@@ -2759,7 +2761,7 @@ class AutonomyEngine:
             mission += (
                 "\n\nIMPORTANT : Votre conclusion DOIT inclure une ligne :\n"
                 "VERDICT: PRIORISER [routine] ou DEPRIORISER [routine] ou MAINTENIR\n"
-                "Routines possibles : EXPANSION_CODE, VEILLE_SILENCIEUSE, VEILLE_IA, SECURITY_AUDIT, "
+                "Routines possibles : EXPANSION_CODE, EXPANSION_CATALOG, VEILLE_SILENCIEUSE, VEILLE_IA, SECURITY_AUDIT, "
                 "REFACTOR_RANDOM, COUNCIL_DEBATE, MEMORY_CONSOLIDATION, ROADMAP_RESEARCH, "
                 "ROADMAP_SPEC, SOLILOQUE_INTERNE, AUDIT_STRUCTURE, GRIMOIRE_INVOKE.\n"
                 "Si aucun changement n'est nécessaire, utilisez VERDICT: MAINTENIR."

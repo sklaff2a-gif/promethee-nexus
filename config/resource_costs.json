@@ -6,6 +6,10 @@
     "cost": 5,
     "description": "Evolution pipeline complet: sélection LLM + génération code + Architect + Formatter + Factory"
   },
+  "EXPANSION_CATALOG": {
+    "cost": 5,
+    "description": "Pipeline Darwin catalog: sélection spec + génération code + AST + sandbox + Architect"
+  },
   "COUNCIL_DEBATE": {
     "cost": 12,
     "cost_degraded": 4,

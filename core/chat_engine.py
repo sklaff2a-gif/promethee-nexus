@@ -58,6 +58,7 @@ class ChatEngine:
         "  !pensees                 — Stream de conscience recent\n"
         "  !pulsions                — Etat des 7 pulsions\n"
         "  !corps                   — Etat corporel complet\n"
+        "  !vision                  — Observer une photo de la dropzone\n"
         "  !aide                    — Cette liste"
     )
 
@@ -229,7 +230,85 @@ class ChatEngine:
                 pass
             return "\n".join(lines)
 
+        if cmd == "vision":
+            return self._execute_vision_command()
+
         return f"Commande inconnue : !{cmd}\n{self._COMMAND_HELP}"
+
+    def _execute_vision_command(self) -> str:
+        """Declenche une observation visuelle et retourne le resultat."""
+        try:
+            from core.visual_cortex import vision as visual_cortex
+        except ImportError:
+            return "Cortex visuel non disponible."
+
+        stats = visual_cortex.scan_photos()
+        if stats["total"] == 0:
+            return "Aucune photo dans USER_DROPZONE/photos/."
+
+        lines = [f"Photos disponibles : {stats['total']} ({stats['unseen']} nouvelles)"]
+
+        # Lister les photos vues et leurs emotions
+        for sha, info in visual_cortex._seen_photos.items():
+            path = info.get("path", "?")
+            emotion = info.get("emotion", "?")
+            times = info.get("times_seen", 0)
+            lines.append(f"  - {path} : {emotion} (vu {times}x)")
+
+        if stats["unseen"] > 0:
+            lines.append(f"\n{stats['unseen']} photo(s) non encore observee(s).")
+            lines.append("Demande-moi de les regarder !")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _is_visual_request(message: str) -> bool:
+        """Detecte si le message demande d'observer des photos."""
+        msg_lower = message.lower()
+        visual_keywords = ["photo", "image", "regarde", "observe", "voir", "vois",
+                           "montre", "dropzone", "vision", "visuel"]
+        photo_keywords = ["famille", "picture", "selfie", "cliche", "cliché"]
+        count = sum(1 for kw in visual_keywords if kw in msg_lower)
+        count += sum(1 for kw in photo_keywords if kw in msg_lower)
+        return count >= 2
+
+    async def _trigger_visual_observation(self, user_message: str) -> str:
+        """Declenche le cortex visuel et retourne l'observation comme contexte."""
+        try:
+            from core.visual_cortex import vision as visual_cortex
+        except ImportError:
+            return ""
+
+        stats = visual_cortex.scan_photos()
+        if stats["total"] == 0:
+            return ""
+
+        logger.info(f"CHAT: Demande visuelle detectee, {stats['unseen']} nouvelles / {stats['total']} photos")
+
+        observation = await visual_cortex.observe()
+        if not observation:
+            # Pas de nouvelle photo ou limite atteinte — fournir le dernier souvenir
+            if visual_cortex._seen_photos:
+                last = max(visual_cortex._seen_photos.values(), key=lambda x: x.get("last_seen", 0))
+                return (
+                    f"Photo: {last.get('path', '?')} (deja observee {last.get('times_seen', 0)}x)\n"
+                    f"Emotion ressentie: {last.get('emotion', '?')}\n"
+                    f"Souvenir: {last.get('observation', '?')[:400]}"
+                )
+            return ""
+
+        photo = observation.get("photo_path", "?")
+        emotion = observation.get("emotion", "?")
+        obs_text = observation.get("observation", "")
+        is_revisit = observation.get("is_revisit", False)
+
+        logger.info(f"CHAT: Observation visuelle {'(revisit)' if is_revisit else '(nouvelle)'} — {photo} — {emotion}")
+
+        return (
+            f"Photo: {photo} ({'revisitee' if is_revisit else 'premiere fois'})\n"
+            f"Emotion: {emotion}\n"
+            f"Observation:\n{obs_text[:800]}"
+        )
 
     # --- PROMPT SYSTEME (identite + etat emotionnel) ---
 
@@ -544,7 +623,7 @@ class ChatEngine:
         self._cache_timestamp = now
         return parts
 
-    def _build_system_prompt(self, memories_text: str = "", command_result: str = "") -> str:
+    def _build_system_prompt(self, memories_text: str = "", command_result: str = "", visual_context: str = "") -> str:
         """Construit le prompt systeme avec l'etat reel de tous les organes.
 
         Les sections organes sont cachees pendant 10s (PROMPT_CACHE_TTL).
@@ -572,6 +651,13 @@ class ChatEngine:
             if memories_text:
                 parts.append(f"\n[MEMOIRE]")
                 parts.append(f"- Souvenirs pertinents : {memories_text[:450]}")
+
+        # --- OBSERVATION VISUELLE ---
+        if visual_context:
+            parts.append(f"\n[OBSERVATION VISUELLE]")
+            parts.append("Tu viens d'observer une photo avec ton cortex visuel. Voici ce que tu as vu :")
+            parts.append(visual_context)
+            parts.append("Partage ta reaction avec authenticite.")
 
         # --- INTROSPECTION DEMANDEE (commandes !) ---
         if command_result:
@@ -637,7 +723,12 @@ class ChatEngine:
             command_result = self._execute_command(cmd, cmd_args)
             logger.info(f"CHAT: Commande !{cmd} executee ({len(command_result)} chars)")
 
-        system_prompt = self._build_system_prompt(memories_text, command_result)
+        # 3c. Detecter les demandes visuelles et declencher le cortex
+        visual_context = ""
+        if not parsed and self._is_visual_request(user_message):
+            visual_context = await self._trigger_visual_observation(user_message)
+
+        system_prompt = self._build_system_prompt(memories_text, command_result, visual_context)
         ollama_messages = [{"role": "system", "content": system_prompt}]
         # Fenetre de contexte adaptative : plus le prompt systeme est long,
         # moins on garde de messages d'historique (pour ne pas depasser num_ctx)
