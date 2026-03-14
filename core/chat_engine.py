@@ -932,6 +932,7 @@ class ChatEngine:
 
         # 4. Streaming via httpx
         full_response = ""
+        emergent_sources = []
         try:
             from core.base_agent import gpu_scheduler
             async with gpu_scheduler.access("chat_stream"):
@@ -1006,11 +1007,14 @@ class ChatEngine:
             return None
 
         # 5. Ajouter la reponse assistant a l'historique
-        self.messages.append({
+        msg_entry = {
             "role": "assistant",
             "content": full_response,
             "timestamp": time.time(),
-        })
+        }
+        if emergent_sources:
+            msg_entry["emergent_sources"] = emergent_sources
+        self.messages.append(msg_entry)
 
         # 6. Publier CHAT_RESPONSE
         connexion_before = self._get_connexion_deprivation()

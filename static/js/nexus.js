@@ -360,7 +360,7 @@ function toggleChatPanel() {
     }
 }
 
-function addChatMessage(sender, text, type) {
+function addChatMessage(sender, text, type, emergentSources) {
     const div = document.createElement('div');
     let htmlContent = "";
     if (text && text.includes('```')) {
@@ -376,6 +376,11 @@ function addChatMessage(sender, text, type) {
     if (type === 'user') {
         div.className = 'msg-chat-user';
         div.innerHTML = `<div>${htmlContent}</div>`;
+    } else if (emergentSources && emergentSources.length > 0) {
+        // Style emergent — pensees authentiques de Promethee (organes actifs)
+        div.className = 'msg-chat-emergent';
+        const sourcesText = emergentSources.join(', ');
+        div.innerHTML = `<span class="emergent-badge">[PROMETHEE — ${sourcesText}]</span><div>${htmlContent}</div>`;
     } else {
         div.className = 'msg-chat-bot';
         div.innerHTML = `<span class="font-bold text-xs mb-1 block opacity-50" style="color:#ffa500;">[PROMETHEE]</span><div>${htmlContent}</div>`;
@@ -415,7 +420,8 @@ function loadChatHistory() {
                 addChatMessage(
                     msg.role === 'user' ? 'VOUS' : 'PROMETHEE',
                     msg.content,
-                    msg.role === 'user' ? 'user' : 'bot'
+                    msg.role === 'user' ? 'user' : 'bot',
+                    msg.emergent_sources || null
                 );
             });
         })
