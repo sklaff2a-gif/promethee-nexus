@@ -104,8 +104,8 @@ class Config:
     # --- MODE NUIT (modèles réduits pour éviter crash GPU) ---
     NIGHT_MODE = os.getenv("NIGHT_MODE", "0") == "1"
     NIGHT_MODE_LOCAL_MODELS = {
-        "coder": "qwen3:14b",
-        "strategist": "gemma3:12b",
+        "coder": "qwen2.5-coder:14b",
+        "strategist": "qwen3.5:9b",
     }
     # Limite de taille modèle local (0 = pas de limite). Ex: 16 pour bloquer les 30b sur 16GB VRAM.
     MAX_LOCAL_MODEL_SIZE = int(os.getenv("MAX_LOCAL_MODEL_SIZE", "16"))
