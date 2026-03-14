@@ -230,6 +230,7 @@ class TestSelfInspectIntegration:
         engine._last_routine_time = 0
         engine._last_grimoire_slug = None
         engine._current_council_subject = ""
+        engine._weekly_ritual_pending = False
         return engine
 
     def test_choose_inspect_target_first_call(self):

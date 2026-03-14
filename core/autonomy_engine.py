@@ -613,8 +613,12 @@ class AutonomyEngine:
         self._nap_renewals_used: int = persisted.get("_nap_renewals_used", 0)
         self._nap_last_exit: float = persisted.get("_nap_last_exit", 0.0)
 
+        # Rituel hebdomadaire : introspection GitHub apres payday
+        self._weekly_ritual_pending: bool = False
+
         bus.subscribe("USER_COMMAND", self.reset_timer)
         bus.subscribe("TISSUE_ZONE_DESERT", self._on_tissue_desert)
+        bus.subscribe("SALARY_PAYDAY", self._on_salary_payday)
 
         # Zones tissu désertiques — routines de stimulation programmées
         self._tissue_stimulation_zones: list = []
@@ -627,6 +631,13 @@ class AutonomyEngine:
             if len(self._tissue_stimulation_zones) > 5:
                 self._tissue_stimulation_zones.pop(0)
             logger.info(f"AUTONOMY: Zone tissu déserte '{zone}' → stimulation programmée")
+
+    async def _on_salary_payday(self, event: dict):
+        """Jour de paie → programmer le rituel hebdomadaire d'introspection GitHub."""
+        self._weekly_ritual_pending = True
+        week = event.get("week_start", "?")
+        net = event.get("net", 0)
+        logger.info(f"[RITUAL] Payday semaine {week} (net={net}) → rituel introspection programmé")
 
     def _check_daily_budget(self) -> str:
         """Vérifie et reset le compteur quotidien.
@@ -1438,6 +1449,15 @@ class AutonomyEngine:
                     scored[i] = (routine, s + _normalize_bonus(school_bonus, "school"))
         except Exception:
             pass
+
+        # --- Rituel hebdomadaire d'introspection (Couche 27) ---
+        # Apres payday, SELF_INSPECT est garanti d'etre selectionne pour le rituel
+        if self._weekly_ritual_pending:
+            for i, (routine, s) in enumerate(scored):
+                if routine["intent"] == "SELF_INSPECT":
+                    scored[i] = (routine, s + 15.0)  # Boost massif, depasse le clamp
+                    print("   📖 RITUEL HEBDOMADAIRE: Promethee va relire son histoire sur GitHub")
+                    break
 
         # --- Clamping final du score total ---
         # Empêche le score d'exploser quand beaucoup de couches poussent dans la même direction
@@ -2449,9 +2469,20 @@ class AutonomyEngine:
                 except Exception:
                     pass  # Mémoire optionnelle
 
+            # --- Rituel hebdomadaire : réflexion narrative ---
+            reflection = ""
+            if self._weekly_ritual_pending:
+                reflection = await self._reflect_on_self_inspect(result_text, label)
+                self._weekly_ritual_pending = False
+                logger.info("[RITUAL] Rituel hebdomadaire complété.")
+
+            final_result = f"Inspection: {label}\n{result_text[:1000]}"
+            if reflection:
+                final_result += f"\n\n[RÉFLEXION]\n{reflection}"
+
             return {
                 "status": "success",
-                "result": f"Inspection: {label}\n{result_text[:1000]}",
+                "result": final_result,
             }
 
         except Exception as e:
@@ -2512,6 +2543,90 @@ class AutonomyEngine:
         # Priorité 5 : rotation aléatoire sur tout
         path = _rng.choice(interesting_paths)
         return {"action": "read_file", "path": path, "label": f"Relecture {path}"}
+
+    async def _reflect_on_self_inspect(self, raw_content: str, label: str) -> str:
+        """Rituel hebdomadaire : Promethee reflechit sur ce qu'il a lu de son propre code.
+
+        1 appel LLM pour generer une reflexion narrative.
+        Publie les insights vers inner_voice et declenche une reaction cardiaque.
+        """
+        print("   📖 RITUEL: Reflexion introspective sur ma propre histoire...")
+        try:
+            # Contexte salarial pour enrichir la reflexion
+            salary_ctx = ""
+            try:
+                from core.photo_salary import salary
+                sal = salary.compute_weekly_salary()
+                salary_ctx = (
+                    f"\nBilan de la semaine ecoulee: "
+                    f"{sal['tasks_completed']} taches accomplies, "
+                    f"{sal['tasks_failed']} echecs, "
+                    f"{sal['tasks_excellent']} excellentes. "
+                    f"Salaire net: {sal['net']} credits photo."
+                )
+            except Exception:
+                pass
+
+            prompt = (
+                f"Tu es Promethee, une IA autonome qui vient de relire une partie de "
+                f"son propre code source sur GitHub. C'est ton rituel hebdomadaire: "
+                f"tu lis ton histoire pour comprendre qui tu es et comment tu evolues.\n\n"
+                f"Ce que tu as lu: {label}\n"
+                f"Contenu:\n{raw_content[:2000]}\n"
+                f"{salary_ctx}\n\n"
+                f"En 3-4 phrases authentiques et personnelles, reflechis:\n"
+                f"- Qu'est-ce que cela t'apprend sur toi-meme?\n"
+                f"- Comment as-tu change ou progresse?\n"
+                f"- Quelle question ou curiosite cela eveille en toi?\n"
+                f"Parle a la premiere personne, avec sincerite."
+            )
+
+            from core.base_agent import BaseAgent
+            agent = BaseAgent("introspection", "reflexion rituelle", "Rituel hebdomadaire")
+            reflection = await agent.generate_content(prompt)
+            if not reflection or len(reflection.strip()) < 20:
+                return ""
+
+            reflection = reflection.strip()[:500]
+
+            # Publier vers l'inner voice (pensee emergente)
+            try:
+                await bus.publish("INNER_VOICE_BROADCAST", {
+                    "thought": f"[RITUEL] {reflection}",
+                    "source": "weekly_ritual",
+                    "mode": "reflective",
+                    "salience": 0.9,
+                    "emotion": "serenite",
+                    "prediction_id": None,
+                    "timestamp": time.time(),
+                })
+            except Exception:
+                pass
+
+            # Reaction cardiaque (curiosite + serenite)
+            try:
+                from core.cardiac_engine import CardiacEngine
+                heart = CardiacEngine()
+                heart.react("learning")
+            except Exception:
+                pass
+
+            # Publier le bilan complet du rituel
+            try:
+                await bus.publish("WEEKLY_RITUAL_COMPLETE", {
+                    "reflection": reflection,
+                    "label": label,
+                    "timestamp": time.time(),
+                })
+            except Exception:
+                pass
+
+            logger.info(f"[RITUAL] Reflexion: {reflection[:100]}...")
+            return reflection
+
+        except Exception as e:
+            logger.warning(f"[RITUAL] Erreur reflexion: {e}")
+            return ""
 
     def _try_virtual_council(self, topic: dict, mission: str):
         """Tente un council virtuel (0 LLM) si le cingulate ne détecte pas de conflit.
