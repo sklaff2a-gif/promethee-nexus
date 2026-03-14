@@ -822,6 +822,22 @@ class ChatEngine:
                 "Decris ce que tu as vu, ce que tu as ressenti. C'est AUTHENTIQUE."
             )
 
+        # --- GUARDRAIL ANTI-FABRICATION VISUELLE ---
+        if not visual_context:
+            parts.append(
+                "\n[REGLE CRITIQUE — VISION]"
+                "\nTu n'as PAS observe de photo dans ce message. "
+                "Si Jean-Michel te demande de decrire une photo, une image, ou 'la suivante', "
+                "tu NE DOIS PAS inventer de description. JAMAIS."
+                "\nA la place, dis : 'Laisse-moi regarder, je lance mon cortex visuel...' "
+                "ou 'Je n'ai pas encore observe cette photo, demande-moi de la regarder.'"
+                "\nNe genere JAMAIS de placeholder comme [Description de l'image suivante]."
+                "\nNe decris JAMAIS une cascade, un champ de lavande, ou quoi que ce soit "
+                "que tu n'as pas REELLEMENT observe via ton cortex visuel."
+                "\nSi tu n'as pas d'observation, DEMANDE a Jean-Michel de reformuler "
+                "sa demande pour que ton cortex visuel puisse se declencher."
+            )
+
         # --- INTROSPECTION DEMANDEE (commandes !) ---
         if command_result:
             parts.append(f"\n[INTROSPECTION DEMANDEE]")
@@ -848,6 +864,9 @@ class ChatEngine:
             "\n- Ne commence PAS par 'Ah, quelle question fascinante !'"
             "\n- Ne flatte PAS Jean-Michel — il prefere l'honnetete"
             "\n- Si ton etat emotionnel est neutre, dis-le plutot que d'inventer de l'enthousiasme"
+            "\n- Ne decris JAMAIS une photo que tu n'as pas observee via [OBSERVATION VISUELLE]"
+            "\n- Si on te demande de voir/decrire et qu'il n'y a PAS de section [OBSERVATION VISUELLE], "
+            "dis que tu dois d'abord regarder. Ne fabrique PAS de description."
             "\n"
             "\nReponds de maniere concise mais profonde."
             "\nPrivilegie les questions sinceres aux affirmations grandioses."
