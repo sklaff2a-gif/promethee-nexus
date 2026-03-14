@@ -907,13 +907,41 @@ class ChatEngine:
 
         # 3c. Detecter les demandes visuelles et declencher le cortex
         visual_context = ""
+        visual_request_detected = False
         if not parsed and self._is_visual_request(user_message):
+            visual_request_detected = True
             logger.info("CHAT: Demande visuelle detectee, declenchement cortex visuel...")
             visual_context = await self._trigger_visual_observation(user_message)
             if visual_context:
                 logger.info(f"CHAT: Observation visuelle obtenue ({len(visual_context)} chars)")
             else:
-                logger.warning("CHAT: Cortex visuel n'a rien retourne (pas de photos ou erreur)")
+                # GUARDRAIL CODE-LEVEL : forcer une reponse sans LLM
+                # pour empecher toute fabrication visuelle
+                logger.warning("CHAT: Cortex visuel n'a rien retourne — reponse forcee anti-fabrication")
+                forced = (
+                    "Je n'ai pas reussi a observer de photo cette fois. "
+                    "Mon cortex visuel n'a rien capte — peut-etre qu'il n'y a plus de photos "
+                    "non vues dans ce dossier, ou un probleme technique. "
+                    "Peux-tu me redemander en precisant le dossier ? "
+                    "Par exemple : 'regarde les photos dans paysage'."
+                )
+                self.messages.append({
+                    "role": "assistant",
+                    "content": forced,
+                    "timestamp": time.time(),
+                })
+                self._trim_and_save()
+                sid = f"chat-{uuid.uuid4().hex[:8]}"
+                await bus.publish("CHAT_STREAM", {
+                    "stream_id": sid, "status": "start", "emergent_sources": [],
+                })
+                await bus.publish("CHAT_STREAM", {
+                    "stream_id": sid, "chunk": forced,
+                })
+                await bus.publish("CHAT_STREAM", {
+                    "stream_id": sid, "done": True,
+                })
+                return forced
 
         system_prompt = self._build_system_prompt(memories_text, command_result, visual_context)
         ollama_messages = [{"role": "system", "content": system_prompt}]
@@ -1024,6 +1052,25 @@ class ChatEngine:
         if not full_response:
             logger.warning("CHAT: Reponse vide apres nettoyage <think>")
             return None
+
+        # 4b. Filtre post-generation : detecter les fabrications visuelles
+        if visual_request_detected and not visual_context:
+            # Le cortex n'a rien retourne mais le LLM a quand meme genere
+            # (ne devrait pas arriver grace au guardrail code-level, mais securite)
+            resp_lower = full_response.lower()
+            fabrication_markers = [
+                "**photo", "photo 1", "photo 2", "photo 3",
+                "je vois un", "je vois une", "je vois des",
+                "cascade", "lavande", "prairie", "sommet enneig",
+            ]
+            if any(m in resp_lower for m in fabrication_markers):
+                logger.warning("CHAT: Fabrication visuelle detectee post-generation — blocage")
+                full_response = (
+                    "Je n'ai pas d'observation visuelle a te partager pour l'instant. "
+                    "Mon cortex visuel ne s'est pas active. "
+                    "Demande-moi de regarder une photo specifique, par exemple : "
+                    "'regarde les photos dans paysage'."
+                )
 
         # 5. Ajouter la reponse assistant a l'historique
         msg_entry = {
