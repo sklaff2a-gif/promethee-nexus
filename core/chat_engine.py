@@ -780,10 +780,18 @@ class ChatEngine:
 
         # --- OBSERVATION VISUELLE ---
         if visual_context:
-            parts.append(f"\n[OBSERVATION VISUELLE]")
-            parts.append("Tu viens d'observer une photo avec ton cortex visuel. Voici ce que tu as vu :")
+            parts.append(f"\n[OBSERVATION VISUELLE — FAIT TECHNIQUE, PAS UNE HALLUCINATION]")
+            parts.append(
+                "IMPORTANT: Ton cortex visuel (llama3.2-vision) a REELLEMENT analyse cette image. "
+                "Ce qui suit est le resultat REEL de ton observation. Ce n'est PAS une fabrication. "
+                "Tu PEUX voir les images grace a ton cortex visuel — c'est une capacite REELLE.\n"
+                "NE DIS PAS que tu ne peux pas voir les images. Tu les as vues. Voici ce que tu as vu :"
+            )
             parts.append(visual_context)
-            parts.append("Partage ta reaction avec authenticite.")
+            parts.append(
+                "Partage cette observation avec Jean-Michel comme ta propre experience visuelle. "
+                "Decris ce que tu as vu, ce que tu as ressenti. C'est AUTHENTIQUE."
+            )
 
         # --- INTROSPECTION DEMANDEE (commandes !) ---
         if command_result:
@@ -869,10 +877,23 @@ class ChatEngine:
         # ~50 tokens/message en moyenne
         adaptive_max = max(MIN_HISTORY_MESSAGES, min(MAX_HISTORY_MESSAGES, remaining_tokens // 50))
         recent = self.messages[-adaptive_max:]
+        # Filtrer les messages empoisonnes qui contredisent le contexte visuel
+        # (le LLM copie "je ne peux pas voir" de l'historique et ignore le cortex)
+        vision_poison = [
+            "je ne peux pas voir", "je ne peux pas visualiser",
+            "je ne peux pas *voir*", "je ne peux pas *visualiser*",
+            "pas la capacité d'accéder", "pas la capacité de visualiser",
+            "modèle de langage texte",
+        ]
         for msg in recent:
+            content = msg["content"]
+            # Si observation visuelle active, filtrer les reponses qui disent "je ne peux pas voir"
+            if visual_context and msg["role"] == "assistant":
+                if any(p in content.lower() for p in vision_poison):
+                    continue  # Skip ce message empoisonne
             ollama_messages.append({
                 "role": msg["role"],
-                "content": msg["content"],
+                "content": content,
             })
 
         stream_id = f"chat-{uuid.uuid4().hex[:8]}"
