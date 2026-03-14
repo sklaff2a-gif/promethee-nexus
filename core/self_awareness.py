@@ -1142,6 +1142,15 @@ class SelfAwarenessEngine:
         except Exception:
             pass
 
+        # Salaire visuel (motivation par recompense)
+        try:
+            from core.photo_salary import salary
+            salary_narrative = salary.get_narrative()
+            if salary_narrative:
+                parts.append(f"[SALAIRE] {salary_narrative}")
+        except Exception:
+            pass
+
         return " ".join(parts)
 
     # --- Accesseurs ---

@@ -59,6 +59,8 @@ class ChatEngine:
         "  !pulsions                — Etat des 7 pulsions\n"
         "  !corps                   — Etat corporel complet\n"
         "  !vision                  — Observer une photo de la dropzone\n"
+        "  !salaire                 — Etat du salaire visuel\n"
+        "  !souhait <categorie>     — Ajouter un souhait photo\n"
         "  !aide                    — Cette liste"
     )
 
@@ -233,6 +235,14 @@ class ChatEngine:
         if cmd == "vision":
             return self._execute_vision_command()
 
+        if cmd == "salaire":
+            return self._execute_salary_command()
+
+        if cmd == "souhait":
+            if not args:
+                return "Usage : !souhait <categorie>\nExemple : !souhait nature"
+            return self._execute_wish_command(" ".join(args))
+
         return f"Commande inconnue : !{cmd}\n{self._COMMAND_HELP}"
 
     def _execute_vision_command(self) -> str:
@@ -260,6 +270,50 @@ class ChatEngine:
             lines.append("Demande-moi de les regarder !")
 
         return "\n".join(lines)
+
+    def _execute_salary_command(self) -> str:
+        """Affiche l'etat du salaire visuel."""
+        try:
+            from core.photo_salary import salary
+            status = salary.get_status()
+            sp = status.get("salary_projection", {})
+            wishlist = status.get("wishlist", [])
+            lines = [
+                f"Credits restants : {status.get('credits', 0)}",
+                f"Base hebdomadaire : {sp.get('base', 10)}",
+                f"Bonus qualite : +{sp.get('bonus_quality', 0)}",
+                f"Malus echecs : -{sp.get('malus_echecs', 0)}",
+                f"Salaire net : {sp.get('net', 10)}",
+                f"Taches : {sp.get('tasks_completed', 0)} reussies, {sp.get('tasks_failed', 0)} echouees",
+                f"Photos vues cette semaine : {sp.get('photos_consumed', 0)}",
+                f"Total gagne : {status.get('total_earned', 0)} | Depense : {status.get('total_spent', 0)}",
+            ]
+            if wishlist:
+                lines.append(f"\nSouhaits : {', '.join(wishlist)}")
+            else:
+                lines.append("\nAucun souhait. Utilise !souhait <categorie> pour en ajouter.")
+            # Historique des dernieres paies
+            history = status.get("salary_history", [])
+            if history:
+                lines.append("\nDernieres paies :")
+                for h in history[-3:]:
+                    lines.append(f"  - Semaine {h.get('week_start', '?')} : net={h.get('net', '?')}, "
+                                 f"photos={h.get('photos_consumed', 0)}")
+            return "\n".join(lines)
+        except ImportError:
+            return "Systeme de salaire non disponible."
+
+    def _execute_wish_command(self, category: str) -> str:
+        """Ajoute un souhait visuel."""
+        try:
+            from core.photo_salary import salary
+            added = salary.add_wish(category)
+            if added:
+                return f"Souhait ajoute : {category}\nMes souhaits : {', '.join(salary.get_wishlist())}"
+            else:
+                return f"'{category}' est deja dans mes souhaits."
+        except ImportError:
+            return "Systeme de salaire non disponible."
 
     @staticmethod
     def _is_visual_request(message: str) -> bool:
@@ -385,6 +439,61 @@ class ChatEngine:
         if len(lines) <= 1:
             return ""
         return "\n".join(lines)
+
+    def _detect_emergent_sources(self) -> List[str]:
+        """Detecte quels organes ont un etat non-neutre (= comportement emergent).
+        Retourne la liste des noms d'organes actifs."""
+        sources = []
+
+        try:
+            from core.cardiac_engine import heart
+            if heart.current_emotion not in ("serenite", "neutre"):
+                sources.append("coeur")
+            if heart.emotional_intensity > 0.6:
+                sources.append("emotion_forte")
+        except Exception:
+            pass
+
+        try:
+            from core.desire_engine import desires
+            urgent = [d.name for d in desires.drives.values() if d.deprivation >= 60]
+            if urgent:
+                sources.append("pulsions")
+        except Exception:
+            pass
+
+        try:
+            from core.inner_voice import voice as iv
+            stream = iv.get_stream(1)
+            if stream:
+                sources.append("voix_interieure")
+        except Exception:
+            pass
+
+        try:
+            from core.prefrontal import prefrontal
+            active = [g for g in prefrontal.goals if g.status == "active"]
+            if active:
+                sources.append("focus")
+        except Exception:
+            pass
+
+        try:
+            from core.reptilian_core import reptile
+            if reptile.threat_level > 2.0:
+                sources.append("alerte")
+        except Exception:
+            pass
+
+        try:
+            from core.photo_salary import salary
+            narrative = salary.get_narrative()
+            if narrative:
+                sources.append("salaire")
+        except Exception:
+            pass
+
+        return sources
 
     def _build_organ_parts(self) -> List[str]:
         """Construit les sections organes du prompt — cacheable avec TTL."""
@@ -751,10 +860,14 @@ class ChatEngine:
         try:
             from core.base_agent import gpu_scheduler
             async with gpu_scheduler.access("chat_stream"):
-                # Publier le debut du stream
+                # Publier le debut du stream (avec sources emergentes)
+                emergent_sources = self._detect_emergent_sources()
+                if visual_context:
+                    emergent_sources.append("vision")
                 await bus.publish("CHAT_STREAM", {
                     "stream_id": stream_id,
                     "status": "start",
+                    "emergent_sources": emergent_sources,
                 })
 
                 payload = {

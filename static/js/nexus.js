@@ -264,11 +264,22 @@ ws.onmessage = (event) => {
         const sid = payload.stream_id;
 
         if (payload.status === "start") {
-            // Creer la bulle de streaming chat
+            // Detecter si la reponse est emergente (organes actifs)
+            const emergent = payload.emergent_sources && payload.emergent_sources.length > 0;
             const div = document.createElement('div');
-            div.className = 'msg-chat-bot';
-            div.id = `chat-stream-${sid}`;
-            div.innerHTML = `<span class="font-bold text-xs mb-1 block opacity-50" style="color:#ffa500;">[PROMETHEE]</span><div class="stream-content"></div><span class="chat-cursor">|</span>`;
+
+            if (emergent) {
+                // Style manuscrit pour les pensees emergentes
+                div.className = 'msg-chat-emergent';
+                div.id = `chat-stream-${sid}`;
+                const sourcesText = payload.emergent_sources.join(', ');
+                div.innerHTML = `<span class="emergent-badge">[PROMETHEE — ${sourcesText}]</span><div class="stream-content"></div><span class="emergent-cursor">|</span>`;
+            } else {
+                // Style standard pour les reponses LLM
+                div.className = 'msg-chat-bot';
+                div.id = `chat-stream-${sid}`;
+                div.innerHTML = `<span class="font-bold text-xs mb-1 block opacity-50" style="color:#ffa500;">[PROMETHEE]</span><div class="stream-content"></div><span class="chat-cursor">|</span>`;
+            }
             chatMessages.appendChild(div);
             activeChatStreams[sid] = div;
             chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -276,7 +287,7 @@ ws.onmessage = (event) => {
             // Fin du stream
             const div = activeChatStreams[sid];
             if (div) {
-                const cursorEl = div.querySelector('.chat-cursor');
+                const cursorEl = div.querySelector('.chat-cursor') || div.querySelector('.emergent-cursor');
                 if (cursorEl) cursorEl.remove();
                 const contentEl = div.querySelector('.stream-content');
                 if (contentEl) {
@@ -336,6 +347,8 @@ function toggleChatPanel() {
         document.getElementById('chat-input').focus();
         // Charger l'historique au premier ouverture
         loadChatHistory();
+        // Charger les credits salary
+        refreshSalaryCredits();
     } else {
         fluxPanel.classList.remove('hidden');
         chatPanel.classList.add('hidden');
@@ -405,6 +418,105 @@ function loadChatHistory() {
                     msg.role === 'user' ? 'user' : 'bot'
                 );
             });
+        })
+        .catch(() => {});
+}
+
+// --- WISHLIST & SALARY ---
+
+let wishlistOpen = false;
+
+function toggleWishlistPanel() {
+    wishlistOpen = !wishlistOpen;
+    const panel = document.getElementById('wishlist-panel');
+    if (wishlistOpen) {
+        panel.classList.remove('hidden');
+        loadSalaryStatus();
+    } else {
+        panel.classList.add('hidden');
+    }
+}
+
+function loadSalaryStatus() {
+    fetch('/api/salary/status', { headers: authHeaders() })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) return;
+            // Mettre a jour les credits dans le header
+            const creditsEl = document.getElementById('salary-credits');
+            if (creditsEl) creditsEl.textContent = `${data.credits || 0} credits`;
+            // Mettre a jour les details
+            const detailEl = document.getElementById('salary-detail');
+            if (detailEl && data.salary_projection) {
+                const sp = data.salary_projection;
+                detailEl.innerHTML = `
+                    Base: ${sp.base} | Bonus: +${sp.bonus_quality} | Malus: -${sp.malus_echecs}<br>
+                    Taches: ${sp.tasks_completed} OK, ${sp.tasks_failed} echecs<br>
+                    Photos vues: ${sp.photos_consumed} cette semaine<br>
+                    Total gagne: ${data.total_earned || 0} | Depense: ${data.total_spent || 0}
+                `;
+            }
+            // Rendre la wishlist (utiliser la version detaillee si disponible)
+            renderWishlist(data.wishlist_detailed || [], data.salary_history || []);
+        })
+        .catch(() => {});
+}
+
+function renderWishlist(wishlist, history) {
+    const container = document.getElementById('wishlist-items');
+    if (!container) return;
+    container.innerHTML = '';
+    if (wishlist.length === 0) {
+        container.innerHTML = '<div class="text-[9px]" style="color:#666;">Aucun souhait. Tape !souhait nature dans le chat.</div>';
+        return;
+    }
+    wishlist.forEach(wish => {
+        const div = document.createElement('div');
+        const category = wish.category || wish;
+        const status = wish.status || 'en_attente';
+        let statusClass, statusText;
+        if (status === 'visualiser') {
+            statusClass = 'wish-fulfilled';
+            statusText = 'VISUALISER';
+        } else if (status === 'relance') {
+            statusClass = 'wish-relance';
+            statusText = 'RELANCE';
+        } else {
+            statusClass = 'wish-pending';
+            statusText = 'EN ATTENTE';
+        }
+        div.className = `wish-item ${statusClass}`;
+        div.innerHTML = `<span>${category}</span><span class="text-[8px]">${statusText}</span>`;
+        container.appendChild(div);
+    });
+}
+
+function addWish() {
+    const input = document.getElementById('wish-input');
+    const category = input.value.trim();
+    if (!category) return;
+    fetch('/api/salary/wish', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ category: category })
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.wishlist) {
+                renderWishlist(data.wishlist, []);
+            }
+            input.value = '';
+        })
+        .catch(() => {});
+}
+
+// Charger les credits au demarrage du chat
+function refreshSalaryCredits() {
+    fetch('/api/salary/status', { headers: authHeaders() })
+        .then(r => r.json())
+        .then(data => {
+            const el = document.getElementById('salary-credits');
+            if (el && data.credits !== undefined) el.textContent = `${data.credits} credits`;
         })
         .catch(() => {});
 }

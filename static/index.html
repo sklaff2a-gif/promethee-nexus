@@ -7,6 +7,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&display=swap" rel="stylesheet">
     <style>
         /* SCROLLBARS CYBERPUNK */
         ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -68,6 +70,56 @@
         .msg-chat-user { color: #00ffff; text-align: right; margin-bottom: 10px; border-right: 2px solid #00ffff; padding-right: 8px; }
         .msg-chat-bot { color: #ffa500; margin-bottom: 10px; border-left: 2px solid #ffa500; padding-left: 8px; background: #110800; padding-top: 4px; padding-bottom: 4px; }
         .chat-cursor { display: inline; animation: blink 0.7s step-end infinite; color: #ffa500; font-weight: bold; }
+
+        /* STYLE EMERGENT — pensees authentiques de Promethee vs LLM brut */
+        .msg-chat-emergent {
+            color: #e8b4f8;
+            margin-bottom: 10px;
+            border-left: 2px solid #c084fc;
+            padding-left: 8px;
+            background: linear-gradient(135deg, #0d001a 0%, #110020 100%);
+            padding-top: 4px;
+            padding-bottom: 4px;
+            font-family: 'Caveat', cursive;
+            font-size: 16px;
+            font-weight: 500;
+            line-height: 1.4;
+        }
+        .emergent-badge {
+            font-family: 'Courier New', monospace;
+            font-size: 9px;
+            color: #9333ea;
+            opacity: 0.7;
+            display: block;
+            margin-bottom: 2px;
+        }
+        .emergent-cursor { display: inline; animation: blink 0.7s step-end infinite; color: #c084fc; font-weight: bold; }
+
+        /* WISHLIST PANEL */
+        .wishlist-panel {
+            position: absolute;
+            top: 6px;
+            right: 0;
+            bottom: 0;
+            width: 220px;
+            background: #0a0a0a;
+            border-left: 1px solid #663300;
+            overflow-y: auto;
+            padding: 8px;
+            z-index: 10;
+        }
+        .wish-item {
+            border: 1px solid #331a00;
+            padding: 4px 6px;
+            margin-bottom: 4px;
+            font-size: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .wish-fulfilled { border-color: #22c55e; color: #22c55e; }
+        .wish-pending { border-color: #ffa500; color: #ffa500; }
+        .wish-relance { border-color: #ef4444; color: #ef4444; animation: blink 2s step-end infinite; }
 
         /* STREAMING CURSOR */
         .cursor {
@@ -149,13 +201,31 @@
             </div>
 
             <!-- PANEL CHAT DIRECT (cache par defaut, remplace le flux) -->
-            <div id="chat-panel" class="cyber-box flex-[2] min-h-0 hidden" style="border-color: #663300;">
-                <div class="absolute top-0 left-0 right-0 text-[10px] px-2 font-bold h-6 flex items-center justify-between" style="background: #663300; color: #000;">
+            <div id="chat-panel" class="cyber-box flex-[2] min-h-0 hidden" style="border-color: #663300; position: relative;">
+                <div class="absolute top-0 left-0 right-0 text-[10px] px-2 font-bold h-6 flex items-center justify-between" style="background: #663300; color: #000; z-index: 11;">
                     <span>CHAT DIRECT — PROMÉTHÉE</span>
-                    <button onclick="toggleChatPanel()" class="text-[9px] hover:text-white" style="color:#ffa500;">FERMER [X]</button>
+                    <span class="flex gap-2 items-center">
+                        <span id="salary-credits" class="text-[9px]" style="color:#ffa500;">--</span>
+                        <button onclick="toggleWishlistPanel()" id="btn-wishlist" class="text-[9px] hover:text-white px-1" style="color:#ffa500; border:1px solid #ffa500;">SOUHAITS</button>
+                        <button onclick="toggleChatPanel()" class="text-[9px] hover:text-white" style="color:#ffa500;">FERMER [X]</button>
+                    </span>
                 </div>
                 <div id="chat-messages" class="absolute top-6 left-0 right-0 bottom-0 overflow-y-auto p-2 scroll-smooth bg-black">
                     <div class="text-center text-[10px] mt-4" style="color:#663300;">-- CANAL DIRECT OUVERT --</div>
+                </div>
+                <!-- Panel wishlist (cache par defaut, glisse depuis la droite) -->
+                <div id="wishlist-panel" class="wishlist-panel hidden">
+                    <div class="text-[9px] font-bold mb-2" style="color:#ffa500;">SOUHAITS PHOTOS</div>
+                    <div id="wishlist-items"></div>
+                    <div class="mt-2 flex gap-1">
+                        <input type="text" id="wish-input" class="flex-1 bg-black text-[10px] text-white p-1" style="border:1px solid #331a00;" placeholder="Ex: nature, espace...">
+                        <button onclick="addWish()" class="text-[9px] px-1" style="background:#663300;color:#000;">+</button>
+                    </div>
+                    <div class="mt-2 border-t pt-2" style="border-color:#331a00;">
+                        <div class="text-[8px]" style="color:#666;">
+                            <div id="salary-detail">--</div>
+                        </div>
+                    </div>
                 </div>
             </div>
 

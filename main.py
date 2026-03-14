@@ -1081,6 +1081,33 @@ async def chat_clear():
     chat_engine.clear_history()
     return {"status": "ok", "message": "Historique efface"}
 
+# --- SALARY (Photo Salary) ---
+
+@app.get("/api/salary/status", dependencies=[Depends(verify_token)])
+async def salary_status():
+    """Status complet du salaire visuel."""
+    try:
+        from core.photo_salary import salary
+        return salary.get_status()
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/api/salary/wish", dependencies=[Depends(verify_token)])
+async def salary_add_wish(request: Request):
+    """Ajoute un souhait visuel a la wishlist."""
+    try:
+        from core.photo_salary import salary
+        data = await request.json()
+        category = data.get("category", "").strip()
+        if not category:
+            raise HTTPException(status_code=400, detail="Categorie vide")
+        added = salary.add_wish(category)
+        return {"status": "ok", "added": added, "wishlist": salary.get_wishlist()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket, token: str = Query(default="")):
     if not verify_ws_token(token):

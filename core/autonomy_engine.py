@@ -1428,6 +1428,17 @@ class AutonomyEngine:
                     logger.info(f"[STAGNATION] Diversité {diversity:.2f} < {STAGNATION_DIVERSITY_THRESHOLD}, "
                                 f"bonus nouveauté: {len(novelty_effects)} intents")
 
+        # --- Emploi du temps scolaire (Couche 26) ---
+        # Bonus massif pendant le creneau correspondant — force les SCHOOL_ intents
+        try:
+            from core.school_schedule import schedule
+            for i, (routine, s) in enumerate(scored):
+                school_bonus = schedule.compute_schedule_bonus(routine["intent"])
+                if school_bonus != 0.0:
+                    scored[i] = (routine, s + _normalize_bonus(school_bonus, "school"))
+        except Exception:
+            pass
+
         # --- Clamping final du score total ---
         # Empêche le score d'exploser quand beaucoup de couches poussent dans la même direction
         scored = [(r, max(FINAL_SCORE_CLAMP_MIN, min(FINAL_SCORE_CLAMP_MAX, s))) for r, s in scored]
@@ -2195,6 +2206,16 @@ class AutonomyEngine:
                 return ""
         except Exception:
             pass
+
+        # 2c. EMPLOI DU TEMPS SCOLAIRE — les SCHOOL_ intents passent pendant leurs heures
+        # Le préfrontal ne doit pas inhiber un cours en cours (les vetos reptilien/somatique/santé restent)
+        if intent.startswith("SCHOOL_"):
+            try:
+                from core.school_schedule import schedule
+                if schedule.compute_schedule_bonus(intent) > 0:
+                    return ""
+            except Exception:
+                pass
 
         # 3. INHIBITION PRÉFRONTALE — arbitrage cognitif
         try:
@@ -4055,11 +4076,26 @@ else:
         except ImportError:
             return {"status": "skipped", "result": "VisualCortex non disponible."}
 
+        # Verifier le salaire visuel (credits-photo)
+        try:
+            from core.photo_salary import salary
+            if not salary.can_observe():
+                credits = salary.get_credits()
+                print(f"   💰 SALAIRE: Plus de credits photo ({credits}). Observation reportee.")
+                return {"status": "skipped", "result": f"Plus de credits photo ({credits}). Travailler pour en gagner !"}
+        except ImportError:
+            pass
+
         stats = visual_cortex.scan_photos()
         if stats["total"] == 0:
             return {"status": "skipped", "result": "Aucune photo dans USER_DROPZONE/photos/."}
 
-        print(f"   👁️ VISION: {stats['unseen']} nouvelles / {stats['total']} photos")
+        # Afficher les credits restants
+        try:
+            from core.photo_salary import salary as _salary
+            print(f"   👁️ VISION: {stats['unseen']} nouvelles / {stats['total']} photos (credits: {_salary.get_credits()})")
+        except Exception:
+            print(f"   👁️ VISION: {stats['unseen']} nouvelles / {stats['total']} photos")
 
         observation = await visual_cortex.observe()
         if not observation:
@@ -4094,12 +4130,19 @@ else:
         if not prompt:
             return {"status": "skipped", "result": f"Pas de prompt pour le creneau {slot}."}
 
-        print(f"   📚 ECOLE: Cours {slot} — Agent {agent_name}")
+        # Afficher le salaire actuel comme motivation
+        salary_ctx = ""
+        try:
+            from core.photo_salary import salary as _salary
+            salary_ctx = f"\n{_salary.get_salary_context()}"
+            print(f"   📚 ECOLE: Cours {slot} — Agent {agent_name} (credits photo: {_salary.get_credits()})")
+        except Exception:
+            print(f"   📚 ECOLE: Cours {slot} — Agent {agent_name}")
 
         # Dispatch au vrai agent
         response = await orchestrator.dispatch_task(agent_name, {
             "mission": prompt,
-            "context": f"PROTOCOLE_SCOLAIRE\n{schedule.get_schedule_context()}",
+            "context": f"PROTOCOLE_SCOLAIRE\n{schedule.get_schedule_context()}{salary_ctx}",
             "force_local": True,
             "intent": intent,
         })
