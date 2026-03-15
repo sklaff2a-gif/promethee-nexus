@@ -1,7 +1,7 @@
 @echo off
 REM ============================================================
-REM  PROMETHEE Auto-Monitor — Cycle autonome toutes les 4 heures
-REM  Lancé par le Planificateur de tâches Windows
+REM  PROMETHEE Agent Correcteur Autonome — Cycle toutes les 4h
+REM  Lance par le Planificateur de taches Windows
 REM ============================================================
 
 setlocal
@@ -9,20 +9,43 @@ set PYTHONIOENCODING=utf-8
 set CLAUDECODE=
 set PROJECT=C:\MesProjets\PROMETHEE_V11_restructuration2026
 
-REM Créer le dossier de rapports s'il n'existe pas
+REM Creer le dossier de rapports s'il n'existe pas
 if not exist "%PROJECT%\logs\autonomous_reports" mkdir "%PROJECT%\logs\autonomous_reports"
 
-REM Horodatage locale-indépendant via PowerShell
+REM Horodatage locale-independant via PowerShell
 for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HH-mm"') do set STAMP=%%i
 set LOGFILE=%PROJECT%\logs\autonomous_reports\%STAMP%.log
 
-echo [%date% %time%] Démarrage cycle autonome PROMETHEE >> "%LOGFILE%"
+REM --- Verrou anti-chevauchement ---
+set LOCKFILE=%PROJECT%\logs\auto_monitor.lock
 
-REM Lancer Claude Code en mode headless avec le prompt du fichier auto_monitor.md
+REM Verifier si un cycle precedent tourne encore
+if exist "%LOCKFILE%" (
+    REM Verifier l'age du verrou (>2h = verrou orphelin)
+    for /f %%a in ('powershell -NoProfile -Command "if (Test-Path '%LOCKFILE%') { $age = (Get-Date) - (Get-Item '%LOCKFILE%').LastWriteTime; if ($age.TotalHours -gt 2) { 'stale' } else { 'active' } } else { 'absent' }"') do set LOCKSTATE=%%a
+    if "!LOCKSTATE!"=="active" (
+        echo [%date% %time%] Cycle precedent encore en cours, abandon >> "%LOGFILE%"
+        goto :end
+    )
+    echo [%date% %time%] Verrou orphelin detecte, nettoyage >> "%LOGFILE%"
+    del "%LOCKFILE%" 2>nul
+)
+
+REM Poser le verrou
+echo %date% %time% > "%LOCKFILE%"
+
+echo [%date% %time%] Demarrage agent correcteur PROMETHEE >> "%LOGFILE%"
+
+REM Lancer Claude Code en mode headless
 cd /d "%PROJECT%"
-claude -p "Lis le fichier auto_monitor.md et exécute le protocole décrit. Sois concis." ^
-  --allowedTools "Bash(PYTHONIOENCODING=utf-8 python:*)" "Bash(python:*)" "Bash(git:*)" "Bash(cp:*)" "Bash(mkdir:*)" "Bash(ls:*)" "Read" "Write" "Edit" "Glob" "Grep" ^
+claude -p "Lis le fichier auto_monitor.md et execute le protocole complet. Sois concis et methodique." ^
+  --allowedTools "Bash(PYTHONIOENCODING=utf-8 python:*)" "Bash(python:*)" "Bash(git:*)" "Bash(cp:*)" "Bash(mkdir:*)" "Bash(ls:*)" "Bash(tail:*)" "Bash(sleep:*)" "Bash(powershell.exe:*)" "Bash(powershell:*)" "Read" "Write" "Edit" "Glob" "Grep" ^
   >> "%LOGFILE%" 2>&1
 
-echo [%date% %time%] Cycle terminé >> "%LOGFILE%"
+echo [%date% %time%] Cycle termine >> "%LOGFILE%"
+
+REM Liberer le verrou
+del "%LOCKFILE%" 2>nul
+
+:end
 endlocal
