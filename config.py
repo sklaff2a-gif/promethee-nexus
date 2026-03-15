@@ -33,21 +33,23 @@ class Config:
     }
 
     # --- STRATÉGIE D'ATTRIBUTION (Cascade de repli) ---
+    # NOTE: gemini-2.5-pro désactivé sur Free Tier (quota=0 depuis ~mars 2026)
+    # Tout le trafic passe par Flash jusqu'à activation Tier 1 (facturation)
     AGENT_MODEL_ROUTING = {
-        # Cerveaux → Pro en premier, Flash en fallback
-        "strategist": [MODELS["SMART"], MODELS["FAST"]],
-        "architect":  [MODELS["SMART"], MODELS["FAST"]],
-        "writer":     [MODELS["SMART"], MODELS["FAST"]],
-        # Spécialistes → Flash par défaut, Pro en escalade (économie budget)
-        "researcher": [MODELS["FAST"], MODELS["SMART"]],
-        "coder":      [MODELS["FAST"], MODELS["SMART"]],
-        "evolution":  [MODELS["SMART"], MODELS["FAST"]],
-        # Ouvriers → Flash uniquement (pas besoin de Pro)
+        # Cerveaux → Flash (Pro désactivé Free Tier)
+        "strategist": [MODELS["FAST"]],
+        "architect":  [MODELS["FAST"]],
+        "writer":     [MODELS["FAST"]],
+        # Spécialistes → Flash uniquement
+        "researcher": [MODELS["FAST"]],
+        "coder":      [MODELS["FAST"]],
+        "evolution":  [MODELS["FAST"]],
+        # Ouvriers → Flash uniquement
         "factory":    [MODELS["FAST"]],
         "infra":      [MODELS["FAST"]],
         "security":   [MODELS["FAST"]],
-        # Evaluateur → Pro (plus intelligent que l'eleve)
-        "professor":  [MODELS["SMART"], MODELS["FAST"]],
+        # Evaluateur → Flash (Pro désactivé Free Tier)
+        "professor":  [MODELS["FAST"]],
         # Fallback global
         "default":    [MODELS["FAST"]],
     }

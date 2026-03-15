@@ -614,6 +614,7 @@ class TestProtectedFilesGuard:
         evo = DivineEvolution()
 
         catalog = EvolutionCatalog()
+        catalog.specs.clear()
         spec = ImprovementSpec(
             id="TEST-CRIT", name="Refactor Orch", description="test",
             category="performance", target_file="core/orchestrator.py",
