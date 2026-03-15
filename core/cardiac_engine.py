@@ -575,6 +575,8 @@ class CardiacEngine:
             bus.subscribe("SENSORIUM_THERMAL_ALERT", self._on_sensorium_thermal_alert)
             bus.subscribe("SENSORIUM_THERMAL_CRITICAL", self._on_sensorium_thermal_critical)
             bus.subscribe("SENSORIUM_SUFFOCATION", self._on_sensorium_suffocation)
+            # SensoriumLoop : ecouter les regles apprises du thalamus
+            bus.subscribe("THALAMUS_RULE_LEARNED", self._on_thalamus_rule)
         except Exception as e:
             logger.warning(f"COEUR: Échec souscription bus: {e}")
 
@@ -622,6 +624,26 @@ class CardiacEngine:
         else:
             self.react("routine_done")
             self.form_somatic_marker(intent, "success", quality, "routine done")
+
+    async def _on_thalamus_rule(self, event: dict):
+        """THALAMUS_RULE_LEARNED : renforcer marqueur somatique visceral.
+
+        SensoriumLoop — ferme le trou thalamus→cardiac.
+        Quand le thalamus cristallise une regle (intent reussi/echoue N fois),
+        le coeur forme/renforce un marqueur somatique pour ancrer l'intuition.
+        """
+        intent = event.get("intent", "")
+        rule_type = event.get("type", "")  # "boost" ou "dampen"
+        action = event.get("action", "")   # "created", "reinforced", "weakened", "removed"
+        if not intent or not rule_type:
+            return
+
+        if rule_type == "boost":
+            # Regle de succes → marqueur somatique positif
+            self.form_somatic_marker(intent, "success", 0.7, f"thalamus rule {action}")
+        elif rule_type == "dampen":
+            # Regle d'echec → marqueur somatique negatif
+            self.form_somatic_marker(intent, "failure", 0.3, f"thalamus rule {action}")
 
     async def _on_council_end(self, event: dict):
         """Council terminé → flow (délibération collective)."""

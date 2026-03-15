@@ -623,6 +623,9 @@ class AutonomyEngine:
         # Rituel hebdomadaire : introspection GitHub apres payday
         self._weekly_ritual_pending: bool = False
 
+        # SensoriumLoop : dernier snapshot post-action pour boucle fermee
+        self._last_feedback_snapshot: dict = {}
+
         bus.subscribe("USER_COMMAND", self.reset_timer)
         bus.subscribe("TISSUE_ZONE_DESERT", self._on_tissue_desert)
         bus.subscribe("SALARY_PAYDAY", self._on_salary_payday)
@@ -933,6 +936,80 @@ class AutonomyEngine:
         # FIFO max 40 (étendu pour l'analyse temporelle)
         if len(self.routine_history) > 40:
             self.routine_history = self.routine_history[-40:]
+
+    async def _publish_sensorium_feedback(self, intent: str, agent: str,
+                                          quality_score: float, status: str):
+        """SensoriumLoop : publie un snapshot post-action unifie.
+
+        Ferme la boucle perception-action : apres que les organes ont reagi
+        a AUTONOMY_ROUTINE_COMPLETE, on collecte leur etat et on publie
+        SENSORIUM_FEEDBACK pour que les organes puissent reagir a l'etat global.
+        """
+        # Court delai pour laisser les handlers reagir a ROUTINE_COMPLETE
+        await asyncio.sleep(0.3)
+
+        snapshot = {}
+        try:
+            from core.cardiac_engine import heart
+            snapshot["cardiac"] = {
+                "bpm": heart.bpm,
+                "emotion": heart.current_emotion,
+                "coherence": heart.compute_coherence(),
+                "ans_balance": heart.ans_balance,
+            }
+        except Exception:
+            snapshot["cardiac"] = None
+
+        try:
+            from core.desire_engine import desires
+            snapshot["desires"] = {
+                name: {
+                    "deprivation": d.deprivation,
+                    "frustration_streak": d.frustration_streak,
+                }
+                for name, d in desires.drives.items()
+            }
+        except Exception:
+            snapshot["desires"] = None
+
+        try:
+            from core.reptilian_core import reptile
+            snapshot["reptilian"] = {
+                "threat_level": reptile.threat_level,
+                "mode": reptile.mode,
+            }
+        except Exception:
+            snapshot["reptilian"] = None
+
+        try:
+            from core.dopamine_system import dopamine
+            snapshot["dopamine"] = {
+                "level": dopamine.level,
+                "baseline": dopamine.baseline,
+            }
+        except Exception:
+            snapshot["dopamine"] = None
+
+        try:
+            from core.corpus_callosum import callosum
+            snapshot["corpus"] = {
+                "cognitive_state": callosum.cognitive_state,
+                "global_coherence": callosum.global_coherence,
+            }
+        except Exception:
+            snapshot["corpus"] = None
+
+        self._last_feedback_snapshot = snapshot
+
+        await bus.publish("SENSORIUM_FEEDBACK", {
+            "intent": intent,
+            "agent": agent,
+            "quality_score": quality_score,
+            "status": status,
+            "organ_snapshot": snapshot,
+            "timestamp": time.time(),
+        })
+        logger.debug(f"[SENSORIUM] Feedback pulse publie (intent={intent}, q={quality_score:.2f})")
 
     def _update_organ_precision(self, intent: str, quality_score: float):
         """Met à jour la fiabilité des organes basée sur le résultat de la routine.
@@ -2010,6 +2087,13 @@ class AutonomyEngine:
                 "quality_score": quality_score,
             })
 
+        # SensoriumLoop : fermer la boucle perception-action
+        try:
+            await self._publish_sensorium_feedback(
+                intent, agent, quality_score, routine_status)
+        except Exception as e:
+            logger.debug(f"[SENSORIUM] Feedback pulse erreur: {e}")
+
         self.daily_count += 1
         self.total_routines_executed += 1
         # Décompter le coût en points de budget (override dégradé si applicable)
@@ -2184,6 +2268,12 @@ class AutonomyEngine:
                 "reason": "post_budget_error",
                 "quality_score": quality,
             })
+
+        # SensoriumLoop : fermer la boucle perception-action (post-budget)
+        try:
+            await self._publish_sensorium_feedback(intent, agent, quality, status)
+        except Exception as e:
+            logger.debug(f"[SENSORIUM] Feedback pulse erreur (post-budget): {e}")
 
         self._persist_state()
 

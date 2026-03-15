@@ -222,6 +222,8 @@ class CorpusCallosum:
         bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
         bus.subscribe("HIPPOCAMPUS_ARC_CREATED", self._on_hippocampus_arc)
         bus.subscribe("TISSUE_PATTERN_EMERGED", self._on_tissue_pattern)
+        # SensoriumLoop : reagir au feedback post-action unifie
+        bus.subscribe("SENSORIUM_FEEDBACK", self._on_sensorium_feedback)
 
     async def start_resonance(self):
         """Boucle async principale — 60s."""
@@ -326,6 +328,46 @@ class CorpusCallosum:
             # Pattern dominant fort → mémoriser dans stats
             self._tissue_frequency = freq
             logger.debug(f"CORPUS CALLOSUM: Pattern tissu neural freq={freq:.2f} capture.")
+
+    async def _on_sensorium_feedback(self, event: dict):
+        """SENSORIUM_FEEDBACK : mini-cycle de resonance immediat.
+
+        SensoriumLoop — au lieu d'attendre le prochain cycle 60s, on re-evalue
+        l'etat cognitif immediatement apres chaque action. Cela ferme la boucle
+        perception-action : le resultat d'une routine modifie l'etat cognitif
+        qui influencera le scoring de la routine suivante.
+        """
+        if not self._alive:
+            return
+
+        # Anti-reentrance : pas de mini-cycle si un cycle complet est en cours
+        if getattr(self, "_resonance_in_progress", False):
+            return
+        self._resonance_in_progress = True
+
+        try:
+            # Mini-cycle : capture + detection + evaluation (pas d'amplification)
+            snapshot = self._capture_organ_states()
+            self._snapshots.append(snapshot)
+            if len(self._snapshots) > MAX_STATE_BUFFER:
+                self._snapshots = self._snapshots[-MAX_STATE_BUFFER:]
+
+            # Re-evaluer coherence et etat cognitif
+            self.global_coherence = self._compute_global_coherence(snapshot)
+            new_state = self._determine_cognitive_state(snapshot)
+            if new_state != self.cognitive_state:
+                self._previous_state = self.cognitive_state
+                self.cognitive_state = new_state
+                self._state_since = time.time()
+                self._stats["state_transitions"] += 1
+                logger.info(
+                    f"CORPUS CALLOSUM: Transition rapide {self._previous_state} → {new_state} "
+                    f"(sensorium feedback, coherence={self.global_coherence:.2f})."
+                )
+        except Exception as e:
+            logger.debug(f"CORPUS CALLOSUM: Erreur mini-cycle sensorium: {e}")
+        finally:
+            self._resonance_in_progress = False
 
     # ============================================================
     # Cycle de Resonance

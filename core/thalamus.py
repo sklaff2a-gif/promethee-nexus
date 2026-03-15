@@ -376,6 +376,8 @@ class Thalamus:
             bus.subscribe("TISSUE_CREATIVITY_SPIKE", self._on_tissue_creativity)
             bus.subscribe("PREFRONTAL_GOAL_COMPLETE", self._on_goal_complete)
             bus.subscribe("NAP_MODE", self._on_nap_mode)
+            # SensoriumLoop : ecouter les changements emotionnels du cardiac
+            bus.subscribe("CARDIAC_EMOTION_CHANGE", self._on_cardiac_emotion)
         except Exception as e:
             logger.warning(f"THALAMUS: Echec souscription bus: {e}")
 
@@ -445,6 +447,40 @@ class Thalamus:
         rule_info = self._observe_routine_outcome(intent, status)
         if rule_info:
             await bus.publish("THALAMUS_RULE_LEARNED", rule_info)
+
+    async def _on_cardiac_emotion(self, data: Dict[str, Any]):
+        """CARDIAC_EMOTION_CHANGE : ajuste saillance selon emotion.
+
+        SensoriumLoop — ferme le trou cardiac→thalamus.
+        Les emotions fortes modulent l'attention : urgence en peur/panique,
+        emergence en enthousiasme/eureka, regulation en serenite.
+        """
+        emotion = data.get("emotion", "")
+        intensity = data.get("intensity", 0.0)
+        if intensity < 0.3:
+            return  # Emotions faibles ignorees
+
+        # Mapping emotion → categorie a booster
+        _EMOTION_CATEGORY = {
+            "peur": "urgence",
+            "panique": "urgence",
+            "frustration": "urgence",
+            "enthousiasme": "emergence",
+            "eureka": "emergence",
+            "flow": "emergence",
+            "serenite": "regulation",
+            "repos": "regulation",
+            "curiosite": "cognition",
+        }
+        cat = _EMOTION_CATEGORY.get(emotion)
+        if not cat:
+            return
+
+        boost = min(0.15, intensity * 0.15)
+        for evt, c in EVENT_CATEGORIES.items():
+            if c == cat:
+                self._scorecard[evt] = min(1.0, self._scorecard[evt] + boost)
+        logger.debug(f"THALAMUS: Emotion cardiac '{emotion}' (i={intensity:.2f}) → boost {cat} +{boost:.3f}")
 
     async def _on_council_end(self, data: Dict[str, Any]):
         """COUNCIL_END : boost deliberation."""

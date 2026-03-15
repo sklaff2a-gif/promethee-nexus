@@ -746,11 +746,11 @@ class TestBusIntegration:
     """Tests souscription bus et handlers."""
 
     def test_subscribe_events(self, isolate_callosum):
-        """init() souscrit aux 13 events (+HIPPOCAMPUS_ARC_CREATED +TISSUE_PATTERN_EMERGED)."""
+        """init() souscrit aux 14 events (+SENSORIUM_FEEDBACK)."""
         isolate_callosum._subscribed = False
         with patch("core.corpus_callosum.bus") as mock_bus:
             isolate_callosum._subscribe_events()
-        assert mock_bus.subscribe.call_count == 13
+        assert mock_bus.subscribe.call_count == 14
         isolate_callosum._subscribed = True  # Cleanup
 
     def test_subscribe_idempotent(self, isolate_callosum):
@@ -759,7 +759,7 @@ class TestBusIntegration:
         with patch("core.corpus_callosum.bus") as mock_bus:
             isolate_callosum._subscribe_events()
             isolate_callosum._subscribe_events()
-        assert mock_bus.subscribe.call_count == 13
+        assert mock_bus.subscribe.call_count == 14
 
     def test_on_reptilian_alert_freeze(self, isolate_callosum):
         """FREEZE declenche transition immediate en crisis."""
