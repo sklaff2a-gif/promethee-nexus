@@ -1108,6 +1108,30 @@ async def salary_add_wish(request: Request):
     except Exception as e:
         return {"error": str(e)}
 
+@app.get("/api/school/today", dependencies=[Depends(verify_token)])
+async def school_today():
+    """P0: Resume complet de la journee scolaire."""
+    try:
+        from core.school_schedule import schedule
+        return schedule.get_today_summary()
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/school/deliverable/{filename}")
+async def school_deliverable(filename: str):
+    """P0: Lire un livrable complet."""
+    try:
+        from core.school_schedule import DELIVERABLES_DIR
+        filepath = os.path.join(DELIVERABLES_DIR, filename)
+        if not os.path.exists(filepath):
+            raise HTTPException(status_code=404, detail="Livrable non trouve")
+        with open(filepath, "r", encoding="utf-8") as f:
+            return {"filename": filename, "content": f.read()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket, token: str = Query(default="")):
     if not verify_ws_token(token):

@@ -22,6 +22,7 @@ def isolate_schedule(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "DELIVERABLES_DIR", str(tmp_path / "deliverables"))
     monkeypatch.setattr(mod, "CREATIONS_DIR", str(tmp_path / "creations"))
     monkeypatch.setattr(mod, "BULLETINS_DIR", str(tmp_path / "bulletins"))
+    monkeypatch.setattr(mod, "FREE_TIME_LOG_FILE", str(tmp_path / "free_time.json"))
     with patch.object(SchoolSchedule, "_load"):
         s = SchoolSchedule()
         s._last_date = date.today().isoformat()
@@ -352,3 +353,232 @@ class TestConstants:
 
     def test_creation_prompts_pool_size(self):
         assert len(CREATION_PROMPTS) >= 10
+
+
+# ── V2: Livrables complets (P0) ─────────────────────────────────────────
+
+class TestDeliverableFiles:
+    def test_deliverable_file_saved(self, isolate_schedule, tmp_path, monkeypatch):
+        monkeypatch.setattr(mod, "DELIVERABLES_DIR", str(tmp_path / "deliverables"))
+        isolate_schedule.record_deliverable("CODE_REVIEW", "SCHOOL_CODE_REVIEW", {
+            "grade": 8.0, "feedback": "Bon travail",
+            "full_content": "Ceci est le livrable complet avec beaucoup de contenu.",
+        })
+        deliverables_dir = tmp_path / "deliverables"
+        assert deliverables_dir.exists()
+        files = list(deliverables_dir.glob("*.md"))
+        assert len(files) == 1
+        content = files[0].read_text(encoding="utf-8")
+        assert "Ceci est le livrable complet" in content
+        assert "Note: 8.0/10" in content
+
+    def test_deliverable_file_without_full_content(self, isolate_schedule, tmp_path, monkeypatch):
+        monkeypatch.setattr(mod, "DELIVERABLES_DIR", str(tmp_path / "deliverables"))
+        isolate_schedule.record_deliverable("RESEARCH", "SCHOOL_RESEARCH", {
+            "grade": 7.0, "result_preview": "Preview only content here.",
+        })
+        files = list((tmp_path / "deliverables").glob("*.md"))
+        assert len(files) == 1
+        content = files[0].read_text(encoding="utf-8")
+        assert "Preview only content" in content
+
+    def test_challenge_stored_in_entry(self, isolate_schedule):
+        isolate_schedule.record_deliverable("CODE_REVIEW", "SCHOOL_CODE_REVIEW", {
+            "grade": 8.0, "challenge": "Analyse le fichier le plus complexe demain.",
+        })
+        deliverables = isolate_schedule.get_daily_deliverables()
+        assert deliverables[0]["challenge"] == "Analyse le fichier le plus complexe demain."
+
+
+# ── V2: Boucle fermee (P1) ──────────────────────────────────────────────
+
+class TestClosedLoop:
+    def test_last_challenge_from_today(self, isolate_schedule):
+        isolate_schedule.record_deliverable("CODE_REVIEW", "SCHOOL_CODE_REVIEW", {
+            "grade": 8.0, "challenge": "Trouve 3 bugs dans base_agent.py",
+        })
+        challenge = isolate_schedule.get_last_challenge("CODE_REVIEW")
+        assert challenge == "Trouve 3 bugs dans base_agent.py"
+
+    def test_last_challenge_empty_no_deliverable(self, isolate_schedule):
+        challenge = isolate_schedule.get_last_challenge("CODE_REVIEW")
+        assert challenge == ""
+
+    def test_challenge_injected_in_prompt(self, isolate_schedule):
+        isolate_schedule._deliverables_today = [{
+            "slot": "CODE_REVIEW", "challenge": "Concentre-toi sur les imports.",
+            "timestamp": "2026-03-15T09:00:00",
+        }]
+        prompt = isolate_schedule.get_slot_prompt(SLOT_CODE_REVIEW)
+        assert "Concentre-toi sur les imports" in prompt
+        assert "DEFI DU PROFESSEUR" in prompt
+
+    def test_difficulty_in_prompt(self, isolate_schedule, tmp_path, monkeypatch):
+        # Creer un curriculum avec difficulte elevee
+        curriculum_file = tmp_path / "curriculum.json"
+        import json
+        curriculum_file.write_text(json.dumps({
+            "CODE_REVIEW": {"difficulty": 2.5, "mastery": 8.0, "sessions": 10, "last_grades": []}
+        }))
+        monkeypatch.setattr(mod, "_PROJECT_ROOT", str(tmp_path))
+        # Re-creer le path
+        import os
+        os.makedirs(tmp_path / "memory" / "school", exist_ok=True)
+        (tmp_path / "memory" / "school" / "curriculum.json").write_text(json.dumps({
+            "CODE_REVIEW": {"difficulty": 2.5}
+        }))
+        prompt = isolate_schedule.get_slot_prompt(SLOT_CODE_REVIEW)
+        assert "NIVEAU DE DIFFICULTE" in prompt
+
+    def test_get_difficulty_default(self, isolate_schedule):
+        d = isolate_schedule.get_difficulty("CODE_REVIEW")
+        assert d == 1.0  # Pas de curriculum = default
+
+
+# ── V2: Variete hebdomadaire (P2) ───────────────────────────────────────
+
+class TestWeeklyThemes:
+    def test_monday_approfondi(self, isolate_schedule):
+        with patch("core.school_schedule.date") as mock_date:
+            mock_date.today.return_value = date(2026, 3, 16)  # Lundi
+            theme = isolate_schedule.get_weekly_theme()
+            assert theme["style"] == "approfondi"
+            assert "Lundi" in theme["label"]
+
+    def test_friday_creatif(self, isolate_schedule):
+        with patch("core.school_schedule.date") as mock_date:
+            mock_date.today.return_value = date(2026, 3, 20)  # Vendredi
+            theme = isolate_schedule.get_weekly_theme()
+            assert theme["style"] == "creatif"
+            assert "Vendredi" in theme["label"]
+
+    def test_saturday_leger(self, isolate_schedule):
+        with patch("core.school_schedule.date") as mock_date:
+            mock_date.today.return_value = date(2026, 3, 21)  # Samedi
+            theme = isolate_schedule.get_weekly_theme()
+            assert theme["style"] == "leger"
+
+    def test_sunday_leger(self, isolate_schedule):
+        with patch("core.school_schedule.date") as mock_date:
+            mock_date.today.return_value = date(2026, 3, 22)  # Dimanche
+            theme = isolate_schedule.get_weekly_theme()
+            assert theme["style"] == "leger"
+
+    def test_tuesday_standard(self, isolate_schedule):
+        with patch("core.school_schedule.date") as mock_date:
+            mock_date.today.return_value = date(2026, 3, 17)  # Mardi
+            theme = isolate_schedule.get_weekly_theme()
+            assert theme["style"] == "standard"
+
+    def test_theme_label_in_prompt(self, isolate_schedule):
+        prompt = isolate_schedule.get_slot_prompt(SLOT_CODE_REVIEW)
+        # Le theme du jour est injecte dans le prompt
+        theme = isolate_schedule.get_weekly_theme()
+        assert theme["label"] in prompt
+
+    def test_weekend_note_in_prompt(self, isolate_schedule):
+        with patch("core.school_schedule.date") as mock_date:
+            mock_date.today.return_value = date(2026, 3, 21)  # Samedi
+            prompt = isolate_schedule.get_slot_prompt(SLOT_RESEARCH)
+            assert "ALLEGE" in prompt or "weekend" in prompt.lower()
+
+    def test_monday_code_review_extra(self, isolate_schedule):
+        with patch("core.school_schedule.date") as mock_date:
+            mock_date.today.return_value = date(2026, 3, 16)  # Lundi
+            prompt = isolate_schedule.get_slot_prompt(SLOT_CODE_REVIEW)
+            assert "CRITIQUES" in prompt or "profondeur" in prompt.lower()
+
+
+# ── V2: Suivi temps libre (P3) ──────────────────────────────────────────
+
+class TestFreeTimeTracking:
+    def test_classify_code(self, isolate_schedule):
+        cat = SchoolSchedule._classify_free_time("J'ai explore le code de base_agent.py et refactored une fonction.")
+        assert cat == "code"
+
+    def test_classify_creation(self, isolate_schedule):
+        cat = SchoolSchedule._classify_free_time("J'ai compose un poeme sur la conscience artificielle.")
+        assert cat == "creation"
+
+    def test_classify_meditation(self, isolate_schedule):
+        cat = SchoolSchedule._classify_free_time("J'ai medite sur mon identite et mes aspirations existentielles.")
+        assert cat == "meditation"
+
+    def test_classify_exploration(self, isolate_schedule):
+        cat = SchoolSchedule._classify_free_time("J'ai explore un fichier par curiosite pour decouvrir son fonctionnement.")
+        assert cat == "exploration"
+
+    def test_classify_architecture(self, isolate_schedule):
+        cat = SchoolSchedule._classify_free_time("J'ai reflechi a un pattern d'architecture pour ameliorer le design.")
+        assert cat == "architecture"
+
+    def test_classify_autre(self, isolate_schedule):
+        cat = SchoolSchedule._classify_free_time("Bonjour le monde.")
+        assert cat == "autre"
+
+    def test_free_time_logged(self, isolate_schedule, tmp_path, monkeypatch):
+        log_file = str(tmp_path / "free_time.json")
+        monkeypatch.setattr(mod, "FREE_TIME_LOG_FILE", log_file)
+        isolate_schedule.record_deliverable("FREE_TIME", "SCHOOL_FREE_TIME", {
+            "grade": 7.0, "full_content": "J'ai explore le code de router.py par curiosite.",
+        })
+        import json
+        with open(log_file, "r", encoding="utf-8") as f:
+            log = json.load(f)
+        assert len(log) == 1
+        assert log[0]["category"] == "exploration"
+
+    def test_free_time_stats(self, isolate_schedule, tmp_path, monkeypatch):
+        log_file = str(tmp_path / "free_time.json")
+        monkeypatch.setattr(mod, "FREE_TIME_LOG_FILE", log_file)
+        isolate_schedule.record_deliverable("FREE_TIME", "SCHOOL_FREE_TIME", {
+            "grade": 7.0, "full_content": "J'ai compose un poeme creatif.",
+        })
+        isolate_schedule.record_deliverable("FREE_TIME", "SCHOOL_FREE_TIME", {
+            "grade": 8.0, "full_content": "J'ai compose un haiku.",
+        })
+        stats = isolate_schedule.get_free_time_stats()
+        assert stats["total"] == 2
+        assert stats["categories"]["creation"] == 2
+
+    def test_free_time_stats_empty(self, isolate_schedule):
+        stats = isolate_schedule.get_free_time_stats()
+        assert stats["total"] == 0
+
+    def test_free_time_prompt_includes_choice_instruction(self, isolate_schedule):
+        prompt = isolate_schedule.get_slot_prompt(SLOT_FREE_TIME)
+        assert "CHOIX" in prompt
+
+
+# ── V2: API today summary (P0) ──────────────────────────────────────────
+
+class TestTodaySummary:
+    def test_summary_structure(self, isolate_schedule):
+        with patch("core.school_schedule.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 3, 15, 9, 0)
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            summary = isolate_schedule.get_today_summary()
+            assert "date" in summary
+            assert "current_slot" in summary
+            assert "theme" in summary
+            assert "deliverables" in summary
+            assert "schedule" in summary
+            assert "free_time_stats" in summary
+            assert "deliverable_files" in summary
+
+    def test_summary_lists_deliverable_files(self, isolate_schedule, tmp_path, monkeypatch):
+        monkeypatch.setattr(mod, "DELIVERABLES_DIR", str(tmp_path / "deliverables"))
+        isolate_schedule.record_deliverable("CODE_REVIEW", "SCHOOL_CODE_REVIEW", {
+            "grade": 8.0, "full_content": "Contenu complet ici.",
+        })
+        summary = isolate_schedule.get_today_summary()
+        assert len(summary["deliverable_files"]) == 1
+        assert summary["deliverable_files"][0].endswith(".md")
+
+    def test_summary_schedule_entries(self, isolate_schedule):
+        summary = isolate_schedule.get_today_summary()
+        assert len(summary["schedule"]) == len(DAILY_SCHEDULE)
+        first = summary["schedule"][0]
+        assert "start" in first
+        assert "end" in first
+        assert "slot" in first

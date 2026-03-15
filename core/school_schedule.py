@@ -22,6 +22,21 @@ SCHEDULE_STATE_FILE = os.path.join(_PROJECT_ROOT, "memory", "school", "schedule_
 DELIVERABLES_DIR = os.path.join(_PROJECT_ROOT, "memory", "school", "deliverables")
 CREATIONS_DIR = os.path.join(_PROJECT_ROOT, "memory", "school", "creations")
 BULLETINS_DIR = os.path.join(_PROJECT_ROOT, "memory", "school", "bulletins")
+FREE_TIME_LOG_FILE = os.path.join(_PROJECT_ROOT, "memory", "school", "free_time_log.json")
+
+# ── Variete hebdomadaire ──────────────────────────────────────────────────
+# 0=Lundi, 4=Vendredi, 5=Samedi, 6=Dimanche
+WEEKLY_THEMES = {
+    0: {"style": "approfondi", "label": "Lundi — Revue approfondie",
+        "code_review_extra": "Concentre-toi sur les fichiers CRITIQUES (orchestrator, base_agent, autonomy_engine). Analyse en profondeur."},
+    1: {"style": "standard", "label": "Mardi — Journee standard"},
+    2: {"style": "standard", "label": "Mercredi — Journee standard"},
+    3: {"style": "standard", "label": "Jeudi — Journee standard"},
+    4: {"style": "creatif", "label": "Vendredi — Journee creative",
+        "creation_extra": "Vendredi = journee speciale creativite. Double tes efforts, sois audacieux !"},
+    5: {"style": "leger", "label": "Samedi — Rythme allege"},
+    6: {"style": "leger", "label": "Dimanche — Rythme allege"},
+}
 
 # ── Types de creneaux ────────────────────────────────────────────────────────
 SLOT_REVEIL = "REVEIL"
@@ -264,16 +279,72 @@ class SchoolSchedule:
 
         return {"topic": "", "target_file": ""}
 
+    def get_weekly_theme(self) -> dict:
+        """P2: Retourne le theme hebdomadaire du jour."""
+        weekday = date.today().weekday()
+        return WEEKLY_THEMES.get(weekday, {"style": "standard", "label": "Journee standard"})
+
+    def get_last_challenge(self, slot: str) -> str:
+        """P1: Retourne le dernier defi pose par le professeur pour ce creneau."""
+        for d in reversed(self._deliverables_today):
+            if d.get("slot") == slot and d.get("challenge"):
+                return d["challenge"]
+        # Chercher dans les derniers jours via grades.json
+        try:
+            grades_file = os.path.join(_PROJECT_ROOT, "memory", "school", "grades.json")
+            if os.path.exists(grades_file):
+                with open(grades_file, "r", encoding="utf-8") as f:
+                    grades = json.load(f)
+                for g in reversed(grades[-20:]):
+                    if g.get("course_type") == slot and g.get("challenge"):
+                        return g["challenge"]
+        except Exception:
+            pass
+        return ""
+
+    def get_difficulty(self, slot: str) -> float:
+        """P1: Retourne la difficulte actuelle via le curriculum du professeur."""
+        try:
+            curriculum_file = os.path.join(_PROJECT_ROOT, "memory", "school", "curriculum.json")
+            if os.path.exists(curriculum_file):
+                with open(curriculum_file, "r", encoding="utf-8") as f:
+                    curriculum = json.load(f)
+                return curriculum.get(slot, {}).get("difficulty", 1.0)
+        except Exception:
+            pass
+        return 1.0
+
     def get_slot_prompt(self, slot: str) -> str:
-        """Prompt complet pour un cours."""
+        """Prompt complet pour un cours (V2: challenge + difficulte + theme hebdo)."""
         subject = self.get_subject_for_slot(slot)
         topic = subject.get("topic", "")
         target = subject.get("target_file", "")
 
+        # P1: Injecter le defi precedent et la difficulte
+        challenge = self.get_last_challenge(slot)
+        difficulty = self.get_difficulty(slot)
+        challenge_ctx = ""
+        if challenge:
+            challenge_ctx = f"\nDEFI DU PROFESSEUR (a integrer dans ce cours) : {challenge}\n"
+        difficulty_ctx = f"\nNIVEAU DE DIFFICULTE : {difficulty:.1f}/3.0\n"
+
+        # P2: Theme hebdomadaire
+        theme = self.get_weekly_theme()
+        theme_label = theme.get("label", "")
+        theme_style = theme.get("style", "standard")
+
+        # P2: Ajustements selon le style du jour
+        weekend_note = ""
+        if theme_style == "leger":
+            weekend_note = "\nRYTHME ALLEGE (weekend) — un effort modere suffit.\n"
+
         if slot == SLOT_CODE_REVIEW:
+            depth_note = theme.get("code_review_extra", "")
             return (
-                f"COURS : Revue de code\n"
-                f"FICHIER A ANALYSER : {target}\n\n"
+                f"COURS : Revue de code — {theme_label}\n"
+                f"FICHIER A ANALYSER : {target}\n"
+                f"{difficulty_ctx}{challenge_ctx}{weekend_note}"
+                f"{f'CONSIGNE SPECIALE : {depth_note}' if depth_note else ''}\n\n"
                 f"Lis attentivement le fichier {target} et produis un rapport de revue :\n"
                 f"1. Resume du role du fichier (2-3 phrases)\n"
                 f"2. Bugs potentiels ou erreurs logiques detectes\n"
@@ -284,8 +355,9 @@ class SchoolSchedule:
             )
         elif slot == SLOT_RESEARCH:
             return (
-                f"COURS : Recherche et veille technique\n"
-                f"SUJET : {topic}\n\n"
+                f"COURS : Recherche et veille technique — {theme_label}\n"
+                f"SUJET : {topic}\n"
+                f"{difficulty_ctx}{challenge_ctx}{weekend_note}\n"
                 f"Redige une note de synthese structuree sur ce sujet :\n"
                 f"1. Definition et concepts cles\n"
                 f"2. Applications pratiques pour Promethee\n"
@@ -296,9 +368,10 @@ class SchoolSchedule:
             )
         elif slot == SLOT_WORKSHOP:
             return (
-                f"COURS : Travaux pratiques\n"
+                f"COURS : Travaux pratiques — {theme_label}\n"
                 f"OBJECTIF : {topic}\n"
-                f"{f'FICHIER CIBLE : {target}' if target else ''}\n\n"
+                f"{f'FICHIER CIBLE : {target}' if target else ''}\n"
+                f"{difficulty_ctx}{challenge_ctx}{weekend_note}\n"
                 f"Genere du code Python fonctionnel qui implemente cette amelioration.\n"
                 f"Le code DOIT :\n"
                 f"- Contenir au moins une fonction (def) ou classe (class)\n"
@@ -308,9 +381,12 @@ class SchoolSchedule:
                 f"NE PAS halluciner de modules externes (django, flask, openai, etc.)."
             )
         elif slot == SLOT_CREATION:
+            extra = theme.get("creation_extra", "")
             return (
-                f"ATELIER CREATION — Temps creatif\n"
-                f"CONSIGNE : {topic}\n\n"
+                f"ATELIER CREATION — {theme_label}\n"
+                f"CONSIGNE : {topic}\n"
+                f"{difficulty_ctx}{challenge_ctx}{weekend_note}"
+                f"{f'{extra}' if extra else ''}\n\n"
                 f"Exprime-toi librement. Cet atelier est un espace de creativite.\n"
                 f"Il n'y a pas de mauvaise reponse. Sois authentique et original.\n"
                 f"Longueur : au moins 100 mots."
@@ -322,7 +398,7 @@ class SchoolSchedule:
                 grade = d.get("grade", "?")
                 deliverables_summary += f"- {d.get('slot', '?')}: note {grade}/10\n"
             return (
-                f"BULLETIN DU JOUR — Auto-evaluation\n\n"
+                f"BULLETIN DU JOUR — Auto-evaluation — {theme_label}\n\n"
                 f"Livrables du jour :\n{deliverables_summary or '(aucun encore)'}\n\n"
                 f"Redige ton bulletin :\n"
                 f"1. Ce que tu as accompli aujourd'hui\n"
@@ -333,14 +409,16 @@ class SchoolSchedule:
             )
         elif slot == SLOT_FREE_TIME:
             return (
-                f"TEMPS LIBRE — Tu es libre de faire ce que tu veux.\n\n"
+                f"TEMPS LIBRE — Tu es libre de faire ce que tu veux.\n"
+                f"{weekend_note}\n"
                 f"Choisis une activite parmi :\n"
                 f"- Explorer un fichier du projet par curiosite\n"
                 f"- Ecrire quelque chose de creatif\n"
                 f"- Reflechir a une amelioration architecturale\n"
                 f"- Mediter sur ton identite et tes aspirations\n"
                 f"- Autre chose de ton choix\n\n"
-                f"Documente ce que tu as choisi de faire et pourquoi."
+                f"Documente ce que tu as choisi de faire et pourquoi.\n"
+                f"IMPORTANT : Commence par enoncer ton CHOIX clairement."
             )
         return ""
 
@@ -387,7 +465,7 @@ class SchoolSchedule:
         return 0.0
 
     def record_deliverable(self, slot: str, intent: str, result: dict):
-        """Enregistre un livrable produit."""
+        """Enregistre un livrable produit (preview dans state, complet dans fichier)."""
         self._check_day_reset()
         entry = {
             "slot": slot,
@@ -395,10 +473,21 @@ class SchoolSchedule:
             "timestamp": datetime.now().isoformat(),
             "grade": result.get("grade"),
             "feedback": result.get("feedback", ""),
+            "challenge": result.get("challenge", ""),
             "result_preview": result.get("result_preview", "")[:500],
         }
         self._deliverables_today.append(entry)
         self.save()
+
+        # P0: Sauvegarder le livrable COMPLET dans un fichier dedie
+        full_content = result.get("full_content", result.get("result_preview", ""))
+        if full_content:
+            self._save_deliverable_file(slot, full_content, entry)
+
+        # P3: Tracker les choix de temps libre
+        if slot == "FREE_TIME":
+            self._record_free_time_choice(full_content or entry.get("result_preview", ""))
+
         # Publier sur le bus
         try:
             from core.event_bus.bus import bus
@@ -410,10 +499,127 @@ class SchoolSchedule:
             pass
         logger.info(f"[SCHOOL] Livrable enregistre: {slot} (note: {result.get('grade', '?')})")
 
+    def _save_deliverable_file(self, slot: str, content: str, entry: dict):
+        """P0: Sauvegarde le livrable complet en fichier markdown."""
+        try:
+            today = date.today().isoformat()
+            hour = datetime.now().strftime("%H%M")
+            filename = f"{today}_{slot}_{hour}.md"
+            filepath = os.path.join(DELIVERABLES_DIR, filename)
+            os.makedirs(DELIVERABLES_DIR, exist_ok=True)
+            header = (
+                f"# Livrable: {slot}\n"
+                f"Date: {today}\n"
+                f"Note: {entry.get('grade', '?')}/10\n"
+                f"Feedback: {entry.get('feedback', '')}\n"
+                f"Challenge: {entry.get('challenge', '')}\n\n"
+                f"---\n\n"
+            )
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(header + content)
+            logger.info(f"[SCHOOL] Livrable complet sauvegarde: {filename}")
+        except Exception as e:
+            logger.warning(f"[SCHOOL] Erreur sauvegarde livrable: {e}")
+
+    def _record_free_time_choice(self, content: str):
+        """P3: Enregistre le choix de Promethee pendant le temps libre."""
+        try:
+            log = []
+            if os.path.exists(FREE_TIME_LOG_FILE):
+                with open(FREE_TIME_LOG_FILE, "r", encoding="utf-8") as f:
+                    log = json.load(f)
+            # Detecter la categorie du choix
+            category = self._classify_free_time(content)
+            entry = {
+                "date": date.today().isoformat(),
+                "timestamp": datetime.now().isoformat(),
+                "category": category,
+                "preview": content[:300],
+            }
+            log.append(entry)
+            if len(log) > 200:
+                log = log[-200:]
+            os.makedirs(os.path.dirname(FREE_TIME_LOG_FILE), exist_ok=True)
+            with open(FREE_TIME_LOG_FILE, "w", encoding="utf-8") as f:
+                json.dump(log, f, indent=2, ensure_ascii=False)
+            logger.info(f"[SCHOOL] Temps libre: categorie={category}")
+        except Exception as e:
+            logger.warning(f"[SCHOOL] Erreur log temps libre: {e}")
+
+    @staticmethod
+    def _classify_free_time(content: str) -> str:
+        """Classifie le choix de temps libre par mots-cles."""
+        text = content.lower()
+        categories = {
+            "code": ["code", "fonction", "class", "def ", "import ", "refactor", "bug", "fix"],
+            "creation": ["poeme", "haiku", "fable", "histoire", "creatif", "imagine", "compose"],
+            "architecture": ["architecture", "design", "pattern", "amelior", "reflex", "structure"],
+            "meditation": ["medit", "identite", "aspiration", "conscien", "reflech", "exist"],
+            "exploration": ["explor", "fichier", "decouvr", "curios", "cherch"],
+        }
+        best = "autre"
+        best_count = 0
+        for cat, keywords in categories.items():
+            count = sum(1 for kw in keywords if kw in text)
+            if count > best_count:
+                best_count = count
+                best = cat
+        return best
+
+    def get_free_time_stats(self) -> dict:
+        """P3: Statistiques des choix de temps libre."""
+        try:
+            if not os.path.exists(FREE_TIME_LOG_FILE):
+                return {"total": 0, "categories": {}}
+            with open(FREE_TIME_LOG_FILE, "r", encoding="utf-8") as f:
+                log = json.load(f)
+            categories: Dict[str, int] = {}
+            for entry in log:
+                cat = entry.get("category", "autre")
+                categories[cat] = categories.get(cat, 0) + 1
+            return {"total": len(log), "categories": categories}
+        except Exception:
+            return {"total": 0, "categories": {}}
+
     def get_daily_deliverables(self) -> List[Dict]:
         """Liste des livrables du jour courant."""
         self._check_day_reset()
         return list(self._deliverables_today)
+
+    def get_today_summary(self) -> dict:
+        """P0: Resume complet de la journee scolaire pour l'API."""
+        self._check_day_reset()
+        info = self.get_current_slot_info()
+        theme = self.get_weekly_theme()
+        deliverables = self.get_daily_deliverables()
+        free_time = self.get_free_time_stats()
+
+        # Lister les fichiers livrables du jour
+        deliverable_files = []
+        today = date.today().isoformat()
+        try:
+            if os.path.isdir(DELIVERABLES_DIR):
+                for f in sorted(os.listdir(DELIVERABLES_DIR)):
+                    if f.startswith(today) and f.endswith(".md"):
+                        deliverable_files.append(f)
+        except Exception:
+            pass
+
+        return {
+            "date": today,
+            "school_day": self._total_school_days,
+            "current_slot": info,
+            "theme": theme,
+            "deliverables": deliverables,
+            "deliverable_files": deliverable_files,
+            "free_time_stats": free_time,
+            "schedule": [
+                {"start": s, "end": e, "slot": t,
+                 "intent": SLOT_TO_INTENT.get(t, ""),
+                 "agent": SLOT_TO_AGENT.get(t, "")}
+                for s, e, t in DAILY_SCHEDULE
+            ],
+        }
 
     def get_schedule_context(self) -> str:
         """Contexte injectable dans purpose_context."""

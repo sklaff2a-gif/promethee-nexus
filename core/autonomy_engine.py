@@ -4282,6 +4282,8 @@ else:
                     schedule.record_deliverable(slot, intent, {
                         "grade": eval_result["grade"],
                         "feedback": eval_result["feedback"],
+                        "challenge": eval_result.get("challenge", ""),
+                        "full_content": deliverable,
                         "result_preview": deliverable[:200],
                     })
                     grade = eval_result["grade"]
