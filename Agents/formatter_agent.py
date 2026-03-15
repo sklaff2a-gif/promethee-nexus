@@ -119,9 +119,14 @@ class DivineFormatter(BaseAgent):
         # Le code Evolution a déjà été validé (AST, aliens, structural, Architect).
         # Pas besoin de le passer par le LLM local qui le tronque à 2000 chars.
         evo_spec_id = task_payload.get("evolution_spec_id")
+        explicit_target = task_payload.get("target_file")
         if evo_spec_id:
             self.log_thought(f"🔀 Pipeline Evolution [{evo_spec_id}] — bypass LLM, extraction déterministe.", type="info")
             det_file, det_code = self._extract_from_context(full_text)
+            # Priorite au target_file explicite transmis par l'Architect
+            if explicit_target and self._is_valid_filename(explicit_target):
+                det_file = explicit_target
+                self.log_thought(f"📎 target_file explicite utilise : {explicit_target}", type="info")
             if det_file and det_code:
                 # Validation syntaxe minimale
                 if det_file.endswith(".py"):

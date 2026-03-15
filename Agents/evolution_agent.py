@@ -51,7 +51,7 @@ _SPEC_OFFTOPIC_THRESHOLD = 2
 _ALIEN_IMPORTS = FORBIDDEN_FRAMEWORKS
 
 # Fichiers existants valides (préfixes) — la spec doit cibler un de ces chemins
-_VALID_TARGET_PREFIXES = ("core/", "Agents/", "config.py", "main.py")
+_VALID_TARGET_PREFIXES = ("core/", "Agents/", "tests/", "config/", "static/", "config.py", "main.py")
 
 # Répertoire racine du projet (pour lire les fichiers cibles)
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -828,6 +828,27 @@ class DivineEvolution(BaseAgent):
         # Tentative 2 : LLM Cloud/Local (si CodeSmith n'a pas produit de résultat)
         micro_mode = False
         if not generated_code or len(generated_code) < 50:
+            # Guard Cloud 429 : si le Cloud est en cooldown, le LLM local echoue
+            # systematiquement pour la generation de code → skip pour economiser le budget
+            import time as _time
+            if BaseAgent._cloud_cooldown_until > 0 and _time.time() < BaseAgent._cloud_cooldown_until:
+                remaining = int(BaseAgent._cloud_cooldown_until - _time.time())
+                reason = f"Cloud en cooldown ({remaining}s restantes) — spec non-CodeSmith skippee"
+                catalog.mark_failed(spec.id, reason)
+                self.log_thought(f"⏳ [{spec.id}] {reason}", type="warning")
+                try:
+                    registry.record(Experience(
+                        id=f"EXP-{datetime.now().strftime('%Y%m%d%H%M%S')}-{spec.id}",
+                        spec_id=spec.id, spec_name=spec.name,
+                        attempt_number=spec.attempts, timestamp=datetime.now().isoformat(),
+                        phase_reached="phase3", outcome="skipped", failure_reason=reason,
+                        code_source="none", code_length=0,
+                        system_mood=ctx["mood"], success_rate_at_attempt=ctx["success_rate"],
+                        error_streak_at_attempt=ctx["error_streak"],
+                    ))
+                except Exception as _e:
+                    logger.debug(f"operation optionnelle echouee: {_e}")
+                return {"status": "warning", "result": f"R.A.S — {reason}"}
             self.log_thought(f"🛠️ Phase 3 : Génération du code via Gemini Cloud [{spec.id}]...", type="info")
 
             # Consulter le registre d'expériences

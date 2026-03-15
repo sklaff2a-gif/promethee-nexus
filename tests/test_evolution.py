@@ -17,6 +17,8 @@ _FAKE_REGISTRY_FILE = os.path.join(tempfile.gettempdir(), "test_evo_registry.jso
 @pytest.fixture(autouse=True)
 def isolate_catalog():
     """Isole le catalogue et le registre d'expériences entre chaque test."""
+    from core.base_agent import BaseAgent
+    BaseAgent._cloud_cooldown_until = 0.0
     if os.path.exists(_FAKE_STATE_FILE):
         os.remove(_FAKE_STATE_FILE)
     if os.path.exists(_FAKE_REGISTRY_FILE):
@@ -28,6 +30,7 @@ def isolate_catalog():
         yield
         EvolutionCatalog.reset_singleton()
         ExperienceRegistry.reset_singleton()
+    BaseAgent._cloud_cooldown_until = 0.0
     if os.path.exists(_FAKE_STATE_FILE):
         os.remove(_FAKE_STATE_FILE)
     if os.path.exists(_FAKE_REGISTRY_FILE):
@@ -216,9 +219,13 @@ class TestCatalogPipelineV6:
 
     @pytest.fixture(autouse=True)
     def disable_protected_files_guard(self):
-        """Désactive le guard fichiers protégés (testé dans TestProtectedFilesGuard)."""
+        """Désactive le guard fichiers protégés et reset cooldown Cloud."""
+        from core.base_agent import BaseAgent
+        old_cooldown = BaseAgent._cloud_cooldown_until
+        BaseAgent._cloud_cooldown_until = 0.0
         with patch("Agents.factory_agent._CRITICAL_FILES", set()):
             yield
+        BaseAgent._cloud_cooldown_until = old_cooldown
 
     @pytest.mark.asyncio
     async def test_catalog_pipeline_selects_spec(self):

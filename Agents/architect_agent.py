@@ -120,7 +120,7 @@ FORMAT DE RÉPONSE :
              prompt_prefix += " [ADMIN OVERRIDE DETECTÉ: Autorisation des modifications système]"
         
         # 2. CONSULTATION MÉMOIRE & LLM
-        jurisprudence = self.recall(context[:50] + " ERROR", limit=1)
+        jurisprudence = self.recall(mission[:200], limit=1)
         
         full_prompt = f"""
         {self.system_instructions}
@@ -192,6 +192,11 @@ FORMAT DE RÉPONSE :
                 spec_id_match = re.search(r'EVOLUTION_SPEC_ID:\s*(\S+)', mission)
                 if spec_id_match:
                     formatter_payload["evolution_spec_id"] = spec_id_match.group(1)
+
+                # Propager target_file si présent (pipeline Evolution → Formatter)
+                target_file_match = re.search(r'Fichier cible:\s*(\S+)', mission)
+                if target_file_match:
+                    formatter_payload["target_file"] = target_file_match.group(1)
 
                 formatter_result = await orchestrator.dispatch_task("formatter", formatter_payload)
                 fmt_status = formatter_result.get("status", "error") if isinstance(formatter_result, dict) else "error"
