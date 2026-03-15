@@ -29,6 +29,14 @@ POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE", "S
 FINAL_SCORE_CLAMP_MIN = -5.0
 FINAL_SCORE_CLAMP_MAX = 25.0
 
+# --- Modele LIF (Leaky Integrate-and-Fire) ---
+# Inspire de Eon Systems (mouche drosophile) : chaque routine maintient un potentiel
+# qui accumule les scores et decroit naturellement (leak). Fire quand seuil atteint.
+LIF_THRESHOLD = 8.0        # Seuil de fire (score moyen routines ~3-5)
+LIF_LEAK_RATE = 0.7        # Decay entre cycles (70% du potentiel conserve)
+LIF_RESET_AFTER_FIRE = 0.0 # Reset a 0 apres fire (periode refractaire)
+LIF_POTENTIAL_CAP = 12.0   # Plafond pour eviter accumulation infinie
+
 # --- Normalisation du scoring V3 ---
 # Chaque bonus brut est normalisé dans [-1,+1] puis multiplié par un poids configurable.
 # Config : config/scoring_weights.json
@@ -626,6 +634,9 @@ class AutonomyEngine:
         # SensoriumLoop : dernier snapshot post-action pour boucle fermee
         self._last_feedback_snapshot: dict = {}
 
+        # LIF (Leaky Integrate-and-Fire) : potentiel par intent {intent: float}
+        self._lif_potentials: dict = persisted.get("lif_potentials", {})
+
         bus.subscribe("USER_COMMAND", self.reset_timer)
         bus.subscribe("TISSUE_ZONE_DESERT", self._on_tissue_desert)
         bus.subscribe("SALARY_PAYDAY", self._on_salary_payday)
@@ -757,6 +768,7 @@ class AutonomyEngine:
             "_nap_started_at": self._nap_started_at,
             "_nap_renewals_used": self._nap_renewals_used,
             "_nap_last_exit": self._nap_last_exit,
+            "lif_potentials": getattr(self, "_lif_potentials", {}),
         }
         AutonomyStatePersistence.save(state)
 
@@ -1010,6 +1022,72 @@ class AutonomyEngine:
             "timestamp": time.time(),
         })
         logger.debug(f"[SENSORIUM] Feedback pulse publie (intent={intent}, q={quality_score:.2f})")
+
+    def _lif_integrate_and_select(self, scored: list) -> list:
+        """Modele Leaky Integrate-and-Fire pour la selection de routine.
+
+        Chaque routine maintient un potentiel persistant qui :
+        1. Decroit naturellement entre cycles (leak)
+        2. Accumule le score courant comme courant d'entree
+        3. Fire quand le potentiel depasse le seuil
+
+        Retourne la liste reordonnee avec les routines qui ont fire en tete.
+        Si aucune ne fire, l'ordre par score est preserve (fallback).
+        """
+        if not scored:
+            return scored
+
+        # 1. LEAK : decroissance de tous les potentiels existants
+        for intent_key in list(self._lif_potentials.keys()):
+            self._lif_potentials[intent_key] *= LIF_LEAK_RATE
+            # Nettoyer les potentiels negligeables
+            if self._lif_potentials[intent_key] < 0.01:
+                del self._lif_potentials[intent_key]
+
+        # 2. INTEGRATE : accumuler le score courant comme courant d'entree
+        for routine, score in scored:
+            intent = routine["intent"]
+            current = self._lif_potentials.get(intent, 0.0)
+            # Le score peut etre negatif — un courant inhibiteur
+            new_potential = current + score
+            # Cap pour eviter accumulation infinie
+            self._lif_potentials[intent] = min(new_potential, LIF_POTENTIAL_CAP)
+
+        # 3. FIRE : identifier les routines au-dessus du seuil
+        fired = []
+        not_fired = []
+        for routine, score in scored:
+            intent = routine["intent"]
+            potential = self._lif_potentials.get(intent, 0.0)
+            if potential >= LIF_THRESHOLD:
+                fired.append((routine, score, potential))
+            else:
+                not_fired.append((routine, score, potential))
+
+        if fired:
+            # Trier les fired par potentiel decroissant (le plus charge fire en premier)
+            fired.sort(key=lambda x: x[2], reverse=True)
+            winner_intent = fired[0][0]["intent"]
+            # RESET : le neurone qui fire retourne au potentiel de repos
+            self._lif_potentials[winner_intent] = LIF_RESET_AFTER_FIRE
+            logger.info(
+                f"[LIF] FIRE: {winner_intent} (potentiel={fired[0][2]:.1f}, "
+                f"seuil={LIF_THRESHOLD})"
+            )
+            # Recomposer la liste : fired d'abord, puis les autres par score
+            result = [(r, s) for r, s, _ in fired] + [(r, s) for r, s, _ in not_fired]
+        else:
+            # Aucun fire → fallback sur l'ordre par score (comportement actuel)
+            result = scored
+            # Log les top potentiels pour debug
+            top = sorted(
+                [(r["intent"], self._lif_potentials.get(r["intent"], 0.0)) for r, _ in scored],
+                key=lambda x: x[1], reverse=True,
+            )[:3]
+            top_str = ", ".join(f"{i}={p:.1f}" for i, p in top)
+            logger.debug(f"[LIF] Pas de fire (top potentiels: {top_str})")
+
+        return result
 
     def _update_organ_precision(self, intent: str, quality_score: float):
         """Met à jour la fiabilité des organes basée sur le résultat de la routine.
@@ -1552,6 +1630,13 @@ class AutonomyEngine:
         # Empêche le score d'exploser quand beaucoup de couches poussent dans la même direction
         scored = [(r, max(FINAL_SCORE_CLAMP_MIN, min(FINAL_SCORE_CLAMP_MAX, s))) for r, s in scored]
         scored.sort(key=lambda x: x[1], reverse=True)
+
+        # --- Modele LIF (Leaky Integrate-and-Fire) ---
+        # Les scores alimentent le potentiel de chaque routine. Fire quand seuil atteint.
+        try:
+            scored = self._lif_integrate_and_select(scored)
+        except Exception as e:
+            logger.debug(f"[LIF] Erreur integration: {e}")
 
         if not scored:
             logger.warning("[AUTONOMY] Aucune routine disponible apres filtrage. Cycle avorte.")

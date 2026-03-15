@@ -495,7 +495,6 @@ class TestBusSubscriptions:
         """Thalamus doit ecouter CARDIAC_EMOTION_CHANGE."""
         t = thalamus_instance
         assert hasattr(t, "_on_cardiac_emotion")
-        # Verifier que la methode est callable
         assert callable(t._on_cardiac_emotion)
 
     def test_cardiac_subscribes_thalamus_rule(self, cardiac_instance):
@@ -509,3 +508,184 @@ class TestBusSubscriptions:
         c = corpus_instance
         assert hasattr(c, "_on_sensorium_feedback")
         assert callable(c._on_sensorium_feedback)
+
+
+# ============================================================
+# Test 6 : Modele LIF (Leaky Integrate-and-Fire)
+# ============================================================
+
+def _make_engine():
+    """Helper : cree un AutonomyEngine minimal pour tester LIF."""
+    from core.autonomy_engine import AutonomyEngine
+    engine = AutonomyEngine.__new__(AutonomyEngine)
+    engine._lif_potentials = {}
+    engine.daily_budget_used = 0
+    engine._council_degraded = False
+    engine._last_feedback_snapshot = {}
+    return engine
+
+
+def _make_routine(intent, agent="strategist"):
+    return {"intent": intent, "agent": agent, "mission": "test"}
+
+
+class TestLIFScoring:
+    """Tests du modele Leaky Integrate-and-Fire pour la selection de routines."""
+
+    def test_first_cycle_no_fire(self):
+        """Premier cycle : les potentiels sont trop bas pour fire."""
+        from core.autonomy_engine import LIF_THRESHOLD
+        engine = _make_engine()
+
+        scored = [
+            (_make_routine("VEILLE_IA"), 5.0),
+            (_make_routine("COUNCIL_DEBATE"), 3.0),
+        ]
+        result = engine._lif_integrate_and_select(scored)
+
+        # Pas de fire au premier cycle (5.0 < seuil 8.0)
+        assert result[0][0]["intent"] == "VEILLE_IA"  # Ordre par score preserve
+        # Les potentiels sont stockes
+        assert engine._lif_potentials["VEILLE_IA"] == 5.0
+        assert engine._lif_potentials["COUNCIL_DEBATE"] == 3.0
+
+    def test_accumulation_fires(self):
+        """Apres plusieurs cycles, un potentiel depasse le seuil et fire."""
+        from core.autonomy_engine import LIF_THRESHOLD, LIF_LEAK_RATE
+        engine = _make_engine()
+
+        scored = [
+            (_make_routine("VEILLE_IA"), 5.0),
+            (_make_routine("COUNCIL_DEBATE"), 3.0),
+        ]
+
+        # Cycle 1 : potentiel = 5.0 (pas de fire)
+        engine._lif_integrate_and_select(scored)
+        assert engine._lif_potentials["VEILLE_IA"] < LIF_THRESHOLD
+
+        # Cycle 2 : potentiel = 5.0 * 0.7 + 5.0 = 8.5 (fire!)
+        result = engine._lif_integrate_and_select(scored)
+        assert result[0][0]["intent"] == "VEILLE_IA"
+        # Apres fire, le potentiel est reset
+        assert engine._lif_potentials["VEILLE_IA"] == 0.0
+
+    def test_leak_decay(self):
+        """Le potentiel decroit entre cycles (leak)."""
+        from core.autonomy_engine import LIF_LEAK_RATE
+        engine = _make_engine()
+        engine._lif_potentials["VEILLE_IA"] = 6.0
+
+        # Cycle avec score 0 → le potentiel leak seulement
+        scored = [(_make_routine("COUNCIL_DEBATE"), 3.0)]
+        engine._lif_integrate_and_select(scored)
+
+        # VEILLE_IA n'est pas dans scored, mais son potentiel a quand meme leak
+        assert engine._lif_potentials["VEILLE_IA"] == pytest.approx(6.0 * LIF_LEAK_RATE, abs=0.01)
+
+    def test_reset_after_fire(self):
+        """Apres un fire, le potentiel est reset (periode refractaire)."""
+        from core.autonomy_engine import LIF_RESET_AFTER_FIRE
+        engine = _make_engine()
+        engine._lif_potentials["VEILLE_IA"] = 10.0  # Au-dessus du seuil
+
+        scored = [(_make_routine("VEILLE_IA"), 1.0)]
+        engine._lif_integrate_and_select(scored)
+
+        assert engine._lif_potentials["VEILLE_IA"] == LIF_RESET_AFTER_FIRE
+
+    def test_potential_cap(self):
+        """Le potentiel ne depasse jamais LIF_POTENTIAL_CAP."""
+        from core.autonomy_engine import LIF_POTENTIAL_CAP
+        engine = _make_engine()
+        engine._lif_potentials["VEILLE_IA"] = 11.0
+
+        scored = [(_make_routine("VEILLE_IA"), 5.0)]
+        engine._lif_integrate_and_select(scored)
+
+        assert engine._lif_potentials["VEILLE_IA"] <= LIF_POTENTIAL_CAP
+
+    def test_negative_score_inhibits(self):
+        """Un score negatif reduit le potentiel (courant inhibiteur)."""
+        engine = _make_engine()
+        engine._lif_potentials["VEILLE_IA"] = 5.0
+
+        scored = [(_make_routine("VEILLE_IA"), -3.0)]
+        engine._lif_integrate_and_select(scored)
+
+        # 5.0 * 0.7 + (-3.0) = 0.5
+        assert engine._lif_potentials["VEILLE_IA"] < 5.0
+
+    def test_cleanup_negligible_potentials(self):
+        """Les potentiels negligeables sont nettoyes."""
+        engine = _make_engine()
+        engine._lif_potentials["OLD_ROUTINE"] = 0.005  # Negligeable
+
+        scored = [(_make_routine("VEILLE_IA"), 3.0)]
+        engine._lif_integrate_and_select(scored)
+
+        assert "OLD_ROUTINE" not in engine._lif_potentials
+
+    def test_empty_scored_noop(self):
+        """Liste vide → retourne vide sans erreur."""
+        engine = _make_engine()
+        result = engine._lif_integrate_and_select([])
+        assert result == []
+
+    def test_multiple_fires_highest_wins(self):
+        """Si plusieurs routines fire, la plus chargee gagne."""
+        engine = _make_engine()
+        engine._lif_potentials["VEILLE_IA"] = 9.0
+        engine._lif_potentials["SECURITY_SCAN"] = 11.0
+
+        scored = [
+            (_make_routine("VEILLE_IA"), 1.0),
+            (_make_routine("SECURITY_SCAN"), 1.0),
+        ]
+        result = engine._lif_integrate_and_select(scored)
+
+        # SECURITY_SCAN a le potentiel le plus eleve → fire en premier
+        # potentiel SECURITY: 11.0 * 0.7 + 1.0 = 8.7
+        # potentiel VEILLE: 9.0 * 0.7 + 1.0 = 7.3 → pas de fire
+        # Seul SECURITY fire
+        assert result[0][0]["intent"] == "SECURITY_SCAN"
+
+    def test_lif_preserves_routine_structure(self):
+        """Le LIF ne modifie pas la structure des routines."""
+        engine = _make_engine()
+        engine._lif_potentials["VEILLE_IA"] = 10.0
+
+        original = _make_routine("VEILLE_IA")
+        scored = [(original, 5.0)]
+        result = engine._lif_integrate_and_select(scored)
+
+        assert result[0][0] is original  # Meme objet
+        assert result[0][1] == 5.0  # Score inchange
+
+    def test_fallback_preserves_score_order(self):
+        """Sans fire, l'ordre par score est preserve."""
+        engine = _make_engine()
+
+        scored = [
+            (_make_routine("VEILLE_IA"), 5.0),
+            (_make_routine("COUNCIL_DEBATE"), 7.0),
+            (_make_routine("SECURITY_SCAN"), 3.0),
+        ]
+        # Tri initial par score
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        result = engine._lif_integrate_and_select(scored)
+
+        # Premier cycle, pas de fire → ordre par score preserve
+        assert result[0][0]["intent"] == "COUNCIL_DEBATE"
+        assert result[1][0]["intent"] == "VEILLE_IA"
+
+    def test_persistance_lif_potentials(self):
+        """Les potentiels LIF survivent entre cycles."""
+        engine = _make_engine()
+
+        scored = [(_make_routine("VEILLE_IA"), 4.0)]
+        engine._lif_integrate_and_select(scored)
+
+        # Simuler un nouveau cycle (les potentiels persistent)
+        assert "VEILLE_IA" in engine._lif_potentials
+        assert engine._lif_potentials["VEILLE_IA"] == 4.0
