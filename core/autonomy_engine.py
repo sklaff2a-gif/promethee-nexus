@@ -425,6 +425,7 @@ CONTEXT_KEYWORDS = {
     "SCHOOL_CREATION": ["création", "créatif", "écrire", "inventer", "poème", "art"],
     "SCHOOL_BULLETIN": ["bulletin", "bilan", "évaluation", "note", "progrès", "résumé"],
     "SCHOOL_FREE_TIME": ["libre", "choix", "explorer", "curiosité", "méditer", "improviser"],
+    "NEURAL_TRAINING": ["réseau", "synaptique", "renforcer", "rappel", "synthèse", "consolider", "hebbian", "connexion"],
 }
 
 
@@ -732,6 +733,7 @@ class AutonomyEngine:
             {"agent": "_school_class", "intent": "SCHOOL_CREATION", "mission": ""},
             {"agent": "_school_class", "intent": "SCHOOL_BULLETIN", "mission": ""},
             {"agent": "_school_class", "intent": "SCHOOL_FREE_TIME", "mission": ""},
+            {"agent": "strategist", "intent": "NEURAL_TRAINING", "mission": "Entraînement neuronal ciblé"},
         ]
 
     def _persist_state(self):
@@ -1618,6 +1620,8 @@ class AutonomyEngine:
             response = await self._execute_auto_fuzzing()
         elif intent == "CREATIVE_PLAY":
             response = await self._execute_creative_play()
+        elif intent == "NEURAL_TRAINING":
+            response = await self._execute_neural_training()
         elif intent == "GRIMOIRE_EVOLVE":
             response = await self._execute_grimoire_evolve()
         elif intent == "VEILLE_IA":
@@ -2082,6 +2086,8 @@ class AutonomyEngine:
             response = await self._execute_auto_fuzzing()
         elif intent == "CREATIVE_PLAY":
             response = await self._execute_creative_play()
+        elif intent == "NEURAL_TRAINING":
+            response = await self._execute_neural_training()
         elif intent == "GRIMOIRE_EVOLVE":
             response = await self._execute_grimoire_evolve()
         elif intent == "VEILLE_IA":
@@ -4473,6 +4479,102 @@ else:
 
         except Exception as e:
             return {"status": "error", "result": f"Creative play échoué: {e}"}
+
+    # ================================================================
+    # NEURAL TRAINING — entraînement ciblé des zones synaptiques faibles
+    # ================================================================
+
+    async def _execute_neural_training(self) -> dict:
+        """Entraînement neuronal ciblé : identifie les zones faibles du réseau
+        synaptique et génère une mission de rappel/synthèse pour les renforcer.
+
+        Satisfait les pulsions CONNEXION et COMPRÉHENSION.
+        Coût: 1 appel LLM local.
+        """
+        import random
+
+        try:
+            from core.synaptic_network import cortex
+            stats = cortex.get_stats()
+
+            # 1. Identifier les noeuds à haute activation mais faible énergie
+            weak_active = []
+            for nid, node in cortex.nodes.items():
+                if (node["activation_count"] > 3
+                        and node["energy"] < 0.3
+                        and node["node_type"] == "memory"
+                        and len(node["concept"]) >= 4):
+                    weak_active.append(node)
+
+            # 2. Identifier les synapses hebbiennes existantes les plus faibles
+            weak_hebbian = []
+            for syn in cortex.synapses.values():
+                if syn["synapse_type"] == "hebbian" and syn["weight"] < 0.3:
+                    src = cortex.nodes.get(syn["source"], {})
+                    tgt = cortex.nodes.get(syn["target"], {})
+                    if src and tgt:
+                        weak_hebbian.append((src["concept"], tgt["concept"], syn["weight"]))
+
+            # 3. Choisir les concepts à exercer
+            exercise_concepts = []
+            if weak_active:
+                random.shuffle(weak_active)
+                exercise_concepts = [n["concept"] for n in weak_active[:5]]
+            if weak_hebbian:
+                random.shuffle(weak_hebbian)
+                for src_c, tgt_c, _ in weak_hebbian[:3]:
+                    if src_c not in exercise_concepts:
+                        exercise_concepts.append(src_c)
+                    if tgt_c not in exercise_concepts:
+                        exercise_concepts.append(tgt_c)
+
+            if len(exercise_concepts) < 2:
+                return {"status": "skipped", "result": "Pas assez de concepts faibles à exercer."}
+
+            # Limiter à 8 concepts
+            exercise_concepts = exercise_concepts[:8]
+            concepts_str = ", ".join(exercise_concepts)
+
+            print(f"   🧠 NEURAL_TRAINING: Exercice sur {len(exercise_concepts)} concepts: {concepts_str[:80]}")
+
+            # 4. Générer la mission de rappel/synthèse
+            mission = (
+                f"[MODE VEILLE] ENTRAÎNEMENT NEURONAL — Rappel et synthèse.\n"
+                f"Voici des concepts issus de ton expérience passée: {concepts_str}\n\n"
+                f"EXERCICE:\n"
+                f"1. Pour chaque concept, rappelle-toi dans quel contexte tu l'as rencontré.\n"
+                f"2. Identifie les LIENS entre ces concepts — quels patterns communs ?\n"
+                f"3. Formule UNE règle générale ou insight que tu retires de cette synthèse.\n\n"
+                f"RÈGLES:\n"
+                f"- Réponds en français, maximum 200 mots.\n"
+                f"- Base-toi sur ton expérience réelle, pas sur des connaissances générales.\n"
+                f"- Commence par 'SYNTHÈSE:' suivi de ton insight principal.\n"
+            )
+
+            response = await orchestrator.dispatch_task("strategist", {
+                "mission": mission,
+                "context": "PROTOCOLE_AUTONOMIE\nNEURAL_TRAINING",
+                "force_local": True,
+            })
+
+            result_text = response.get("result", "") if response else ""
+
+            # 5. Renforcer les connexions entre les concepts exercés
+            reinforced = 0
+            for i in range(len(exercise_concepts)):
+                for j in range(i + 1, len(exercise_concepts)):
+                    src_id = cortex.ensure_node(exercise_concepts[i])
+                    tgt_id = cortex.ensure_node(exercise_concepts[j])
+                    cortex.hebbian_strengthen(src_id, tgt_id, success=True,
+                                              context="neural_training")
+                    reinforced += 1
+
+            print(f"   🧠 NEURAL_TRAINING: {reinforced} connexions hebbiennes renforcées")
+
+            return response or {"status": "error", "result": "Pas de réponse."}
+
+        except Exception as e:
+            return {"status": "error", "result": f"Neural training échoué: {e}"}
 
     # ================================================================
     # CHANTIER 4 : GRIMOIRE EVOLVE — mutation de prompts spécialistes

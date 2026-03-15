@@ -118,5 +118,9 @@
   "VISUAL_OBSERVATION": {
     "cost": 2,
     "description": "Observation visuelle: 1 appel LLM multimodal local (qwen3.5:9b + image base64)"
+  },
+  "NEURAL_TRAINING": {
+    "cost": 2,
+    "description": "Entraînement neuronal ciblé: rappel/synthèse concepts faibles + renforcement hebbian"
   }
 }

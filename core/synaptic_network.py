@@ -1428,8 +1428,18 @@ class SynapticNetwork:
                 if energy_combined > 0.15:
                     key = _synapse_key(nid, target_nid)
                     if key not in self.synapses:
+                        # Noeuds fréquemment activés → connexion hebbian
+                        # (renforce l'apprentissage au lieu du bruit émotionnel)
+                        src_act = self.nodes[nid]["activation_count"]
+                        tgt_act = self.nodes[target_nid]["activation_count"]
+                        if src_act > 5 and tgt_act > 5:
+                            syn_type = "hebbian"
+                            syn_weight = 0.12
+                        else:
+                            syn_type = "emotional"
+                            syn_weight = 0.08
                         self.synapses[key] = _make_synapse(
-                            nid, target_nid, 0.08, "emotional", "dream"
+                            nid, target_nid, syn_weight, syn_type, "dream"
                         )
                         report["dream_connections"] += 1
 
@@ -1476,7 +1486,7 @@ class SynapticNetwork:
             # 4b. PROMOTION : temporal fort → hebbian (apprentissage prouvé par l'usage)
             if (syn["synapse_type"] == "temporal"
                     and syn["weight"] >= 0.7
-                    and syn["formation_count"] >= 50):
+                    and syn["formation_count"] >= 20):
                 syn["synapse_type"] = "hebbian"
                 promoted += 1
         report["promoted_to_hebbian"] = promoted
