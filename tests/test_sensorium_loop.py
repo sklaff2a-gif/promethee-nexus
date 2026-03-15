@@ -865,3 +865,112 @@ class TestHebbianContextual:
         s.hebbian_strengthen(nid_a, nid_b, success=False, context="test")
         weight_after = s.synapses[key]["weight"]
         assert weight_after < weight_before
+
+
+# ============================================================
+# Test 8 : Signaux Descendants
+# ============================================================
+
+class TestDescendingSignals:
+    """Tests des 7 signaux descendants inspires de la mouche drosophile."""
+
+    def test_all_signals_present(self):
+        """Les 7 signaux sont toujours presents."""
+        from core.autonomy_engine import AutonomyEngine
+        engine = _make_engine()
+        engine.is_napping = False
+        engine.error_streak = 0
+
+        signals = engine._compute_descending_signals()
+
+        expected_keys = {"urgence", "exploration", "consolidation",
+                         "creation", "repos", "vigilance", "social"}
+        assert set(signals.keys()) == expected_keys
+
+    def test_signals_bounded_0_1(self):
+        """Tous les signaux sont dans [0, 1]."""
+        engine = _make_engine()
+        engine.is_napping = False
+        engine.error_streak = 0
+
+        signals = engine._compute_descending_signals()
+
+        for k, v in signals.items():
+            assert 0.0 <= v <= 1.0, f"{k}={v} hors bornes"
+
+    def test_error_streak_boosts_urgence(self):
+        """Error streak >= 3 booste le signal urgence."""
+        engine = _make_engine()
+        engine.is_napping = False
+        engine.error_streak = 5
+
+        signals = engine._compute_descending_signals()
+        assert signals["urgence"] >= 0.15 * 5  # min(1.0, 5*0.15) = 0.75
+
+    def test_napping_boosts_repos(self):
+        """Mode sieste booste le signal repos."""
+        engine = _make_engine()
+        engine.is_napping = True
+        engine.error_streak = 0
+
+        signals = engine._compute_descending_signals()
+        assert signals["repos"] >= 0.9
+
+    def test_no_error_no_urgence(self):
+        """Sans erreur ni menace, urgence est basse."""
+        engine = _make_engine()
+        engine.is_napping = False
+        engine.error_streak = 0
+
+        # Pas d'organes disponibles en test → urgence = 0
+        signals = engine._compute_descending_signals()
+        assert signals["urgence"] == 0.0
+
+    def test_format_descending_signals_empty(self):
+        """Signaux tous < 0.2 → chaine vide."""
+        engine = _make_engine()
+        engine.is_napping = False
+        engine.error_streak = 0
+
+        signals = {"urgence": 0.1, "exploration": 0.0, "consolidation": 0.0,
+                   "creation": 0.0, "repos": 0.0, "vigilance": 0.0, "social": 0.0}
+
+        result = engine._format_descending_signals(signals)
+        assert result == ""
+
+    def test_format_descending_signals_active(self):
+        """Signaux actifs → ligne formatee avec mode dominant."""
+        engine = _make_engine()
+
+        signals = {"urgence": 0.8, "exploration": 0.3, "consolidation": 0.0,
+                   "creation": 0.5, "repos": 0.0, "vigilance": 0.0, "social": 0.0}
+
+        result = engine._format_descending_signals(signals)
+        assert "[SIGNAUX DESCENDANTS]" in result
+        assert "Mode dominant: URGENCE" in result
+        assert "URGENCE=80%" in result
+        assert "CREATION=50%" in result
+        assert "EXPLORATION=30%" in result
+
+    def test_format_dominant_is_highest(self):
+        """Le mode dominant est le signal le plus fort."""
+        engine = _make_engine()
+
+        signals = {"urgence": 0.1, "exploration": 0.9, "consolidation": 0.0,
+                   "creation": 0.0, "repos": 0.0, "vigilance": 0.0, "social": 0.0}
+
+        result = engine._format_descending_signals(signals)
+        assert "Mode dominant: EXPLORATION" in result
+
+    def test_signals_resilient_to_import_errors(self):
+        """Signaux calcules sans crash meme si les imports echouent."""
+        engine = _make_engine()
+        engine.is_napping = False
+        engine.error_streak = 0
+
+        # Forcer l'echec de tous les imports d'organes
+        with patch("builtins.__import__", side_effect=ImportError("test")):
+            signals = engine._compute_descending_signals()
+
+        # Tous les signaux doivent etre 0.0 (aucun organe accessible)
+        assert all(v == 0.0 for v in signals.values())

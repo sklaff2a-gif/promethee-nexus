@@ -1013,12 +1013,19 @@ class AutonomyEngine:
 
         self._last_feedback_snapshot = snapshot
 
+        # Signaux descendants dans le feedback
+        try:
+            desc_signals = self._compute_descending_signals()
+        except Exception:
+            desc_signals = {}
+
         await bus.publish("SENSORIUM_FEEDBACK", {
             "intent": intent,
             "agent": agent,
             "quality_score": quality_score,
             "status": status,
             "organ_snapshot": snapshot,
+            "descending_signals": desc_signals,
             "timestamp": time.time(),
         })
         logger.debug(f"[SENSORIUM] Feedback pulse publie (intent={intent}, q={quality_score:.2f})")
@@ -1088,6 +1095,118 @@ class AutonomyEngine:
             logger.debug(f"[LIF] Pas de fire (top potentiels: {top_str})")
 
         return result
+
+    def _compute_descending_signals(self) -> dict:
+        """Signaux descendants : 7 signaux [0,1] resumant l'etat cerebral.
+
+        Inspire des ~7 neurones descendants de la mouche drosophile (Eon Systems)
+        qui condensent toute l'activite cerebrale en commandes motrices.
+        Ces signaux sont un resume executif de l'etat global de Promethee.
+        """
+        signals = {
+            "urgence": 0.0,
+            "exploration": 0.0,
+            "consolidation": 0.0,
+            "creation": 0.0,
+            "repos": 0.0,
+            "vigilance": 0.0,
+            "social": 0.0,
+        }
+
+        # URGENCE : menace reptilienne + emotion peur + erreurs
+        try:
+            from core.reptilian_core import reptile
+            signals["urgence"] = max(signals["urgence"], reptile.threat_level / 10.0)
+        except Exception:
+            pass
+        if self.error_streak >= 3:
+            signals["urgence"] = max(signals["urgence"], min(1.0, self.error_streak * 0.15))
+
+        # EXPLORATION : curiosite + dopamine
+        try:
+            from core.desire_engine import desires
+            cur = desires.drives.get("CURIOSITE")
+            if cur:
+                signals["exploration"] = cur.deprivation / 100.0
+        except Exception:
+            pass
+        try:
+            from core.dopamine_system import dopamine
+            signals["exploration"] *= max(0.3, dopamine.level)
+        except Exception:
+            pass
+
+        # CONSOLIDATION : activite synaptique + nuit
+        try:
+            from core.circadian_rhythm import circadian
+            phase = circadian.current_phase
+            if phase in ("night", "deep_night"):
+                signals["consolidation"] = 0.7
+            elif phase in ("dusk", "dawn"):
+                signals["consolidation"] = 0.4
+        except Exception:
+            pass
+
+        # CREATION : drives CREATION/MAITRISE + dopamine + creative_surge
+        try:
+            from core.desire_engine import desires as _des
+            cre = _des.drives.get("CREATION")
+            mai = _des.drives.get("MAITRISE")
+            dep = max(cre.deprivation if cre else 0, mai.deprivation if mai else 0)
+            signals["creation"] = dep / 100.0
+        except Exception:
+            pass
+        try:
+            from core.corpus_callosum import callosum
+            if callosum.cognitive_state == "creative_surge":
+                signals["creation"] = max(signals["creation"], 0.8)
+        except Exception:
+            pass
+
+        # REPOS : sieste + circadien fatigue + cardiac serenite
+        if getattr(self, "is_napping", False):
+            signals["repos"] = 0.9
+        try:
+            from core.cardiac_engine import heart
+            if heart.current_emotion in ("serenite", "repos"):
+                signals["repos"] = max(signals["repos"], 0.5)
+        except Exception:
+            pass
+
+        # VIGILANCE : health + circuit breaker + security
+        try:
+            from core.base_agent import BaseAgent
+            if BaseAgent._ollama_circuit_is_open():
+                signals["vigilance"] = max(signals["vigilance"], 0.9)
+            elif BaseAgent._ollama_consecutive_timeouts >= 2:
+                signals["vigilance"] = max(signals["vigilance"], 0.5)
+        except Exception:
+            pass
+
+        # SOCIAL : drive CONNEXION
+        try:
+            from core.desire_engine import desires as _des2
+            conn = _des2.drives.get("CONNEXION")
+            if conn:
+                signals["social"] = conn.deprivation / 100.0
+        except Exception:
+            pass
+
+        # Clamper tous les signaux dans [0, 1]
+        for k in signals:
+            signals[k] = round(max(0.0, min(1.0, signals[k])), 2)
+
+        return signals
+
+    def _format_descending_signals(self, signals: dict) -> str:
+        """Formate les signaux descendants en une ligne lisible pour purpose_context."""
+        active = [(k, v) for k, v in signals.items() if v >= 0.2]
+        if not active:
+            return ""
+        active.sort(key=lambda x: x[1], reverse=True)
+        parts = [f"{k.upper()}={v:.0%}" for k, v in active]
+        dominant = active[0][0].upper()
+        return f"[SIGNAUX DESCENDANTS] Mode dominant: {dominant} | {' '.join(parts)}"
 
     def _update_organ_precision(self, intent: str, quality_score: float):
         """Met à jour la fiabilité des organes basée sur le résultat de la routine.
@@ -1195,6 +1314,11 @@ class AutonomyEngine:
         return breakdown
 
     def get_status(self) -> dict:
+        # Signaux descendants pour le status API
+        try:
+            desc_signals = self._compute_descending_signals()
+        except Exception:
+            desc_signals = {}
         return {
             "version": "24.0",
             "is_running": self.is_running,
@@ -1209,6 +1333,7 @@ class AutonomyEngine:
             "last_health_check": self.last_health_check,
             "recent_context": self.recent_context,
             "idle_threshold": self.idle_threshold,
+            "descending_signals": desc_signals,
         }
 
     async def _execute_scored_routine(self, health: dict, budget_status: str = "full"):
@@ -1821,9 +1946,17 @@ class AutonomyEngine:
         else:
             # Injection du purpose_context dans les missions autonomes standard
             purpose_ctx = ""
+            # Signaux descendants : resume executif de l'etat cerebral
+            try:
+                _desc_signals = self._compute_descending_signals()
+                _desc_line = self._format_descending_signals(_desc_signals)
+                if _desc_line:
+                    purpose_ctx = _desc_line + "\n"
+            except Exception:
+                _desc_signals = {}
             try:
                 from core.self_awareness import awareness
-                purpose_ctx = awareness.get_purpose_context()
+                purpose_ctx += awareness.get_purpose_context()
             except Exception:
                 pass
             # Contexte délibératif (objectifs préfrontaux)
