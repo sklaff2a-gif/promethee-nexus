@@ -689,3 +689,179 @@ class TestLIFScoring:
         # Simuler un nouveau cycle (les potentiels persistent)
         assert "VEILLE_IA" in engine._lif_potentials
         assert engine._lif_potentials["VEILLE_IA"] == 4.0
+
+
+# ============================================================
+# Test 7 : Renforcement Hebbian contextuel
+# ============================================================
+
+@pytest.fixture
+def synaptic_instance(tmp_path, monkeypatch):
+    from core import synaptic_network as smod
+    from core.synaptic_network import SynapticNetwork
+    SynapticNetwork.reset_singleton()
+    monkeypatch.setattr(smod, "STATE_FILE", str(tmp_path / "syn.json"))
+    with patch.object(SynapticNetwork, "_load"):
+        s = SynapticNetwork()
+        smod.cortex = s
+    yield s
+    SynapticNetwork.reset_singleton()
+
+
+class TestHebbianContextual:
+    """Renforcement Hebbian : intent ↔ etat cognitif."""
+
+    @pytest.mark.asyncio
+    async def test_success_creates_cognitive_state_node(self, synaptic_instance):
+        """Routine reussie cree un noeud cogstate et le renforce."""
+        s = synaptic_instance
+        from core.synaptic_network import _make_node_id
+
+        await s._on_routine_complete({
+            "intent": "VEILLE_IA",
+            "status": "success",
+            "quality_score": 0.8,
+            "result": "Decouverte interessante sur les transformers et architectures modernes",
+            "cognitive_context": {
+                "cognitive_state": "flow",
+                "dominant_drive": "CURIOSITE",
+                "cardiac_emotion": "enthousiasme",
+            },
+        })
+
+        # Noeud cogstate:flow doit exister
+        flow_nid = _make_node_id("cogstate:flow")
+        assert flow_nid in s.nodes
+        assert s.nodes[flow_nid]["concept"] == "cogstate:flow"
+
+        # Synapse intent → cogstate:flow doit exister
+        intent_nid = _make_node_id("VEILLE_IA")
+        from core.synaptic_network import _synapse_key
+        key = _synapse_key(intent_nid, flow_nid)
+        assert key in s.synapses
+        assert s.synapses[key]["weight"] > 0
+
+    @pytest.mark.asyncio
+    async def test_success_creates_drive_node(self, synaptic_instance):
+        """Routine reussie cree un noeud drive et le renforce."""
+        s = synaptic_instance
+        from core.synaptic_network import _make_node_id
+
+        await s._on_routine_complete({
+            "intent": "VEILLE_IA",
+            "status": "success",
+            "quality_score": 0.8,
+            "result": "Article sur les reseaux de neurones et leur evolution recente",
+            "cognitive_context": {
+                "dominant_drive": "CURIOSITE",
+            },
+        })
+
+        drive_nid = _make_node_id("drive:curiosite")
+        assert drive_nid in s.nodes
+
+    @pytest.mark.asyncio
+    async def test_success_creates_emotion_node(self, synaptic_instance):
+        """Routine reussie cree un noeud emotion et le renforce."""
+        s = synaptic_instance
+        from core.synaptic_network import _make_node_id
+
+        await s._on_routine_complete({
+            "intent": "VEILLE_IA",
+            "status": "success",
+            "quality_score": 0.8,
+            "result": "Analyse des comportements emergents dans les systemes complexes",
+            "cognitive_context": {
+                "cardiac_emotion": "enthousiasme",
+            },
+        })
+
+        emo_nid = _make_node_id("emotion:enthousiasme")
+        assert emo_nid in s.nodes
+
+    @pytest.mark.asyncio
+    async def test_failure_does_not_create_context_nodes(self, synaptic_instance):
+        """Routine en echec ne cree PAS de noeuds contextuels (anti-bruit)."""
+        s = synaptic_instance
+        from core.synaptic_network import _make_node_id
+
+        initial_nodes = len(s.nodes)
+
+        await s._on_routine_complete({
+            "intent": "VEILLE_IA",
+            "status": "error",
+            "quality_score": 0.1,
+            "result": "Error: connection refused",
+            "cognitive_context": {
+                "cognitive_state": "crisis",
+                "dominant_drive": "STABILITE",
+            },
+        })
+
+        # En echec, _on_routine_complete retourne early (quality < 0.3)
+        # Pas de noeuds contextuels crees
+        flow_nid = _make_node_id("cogstate:crisis")
+        assert flow_nid not in s.nodes
+
+    @pytest.mark.asyncio
+    async def test_no_context_graceful(self, synaptic_instance):
+        """Sans cognitive_context, pas d'erreur."""
+        s = synaptic_instance
+
+        await s._on_routine_complete({
+            "intent": "VEILLE_IA",
+            "status": "success",
+            "quality_score": 0.8,
+            "result": "Resultat tres interessant sur le machine learning et les reseaux neuronaux",
+        })
+
+        # Pas de crash, intent node cree normalement
+        from core.synaptic_network import _make_node_id
+        intent_nid = _make_node_id("VEILLE_IA")
+        assert intent_nid in s.nodes
+
+    @pytest.mark.asyncio
+    async def test_repeated_success_strengthens_synapse(self, synaptic_instance):
+        """Succes repetes renforcent la synapse intent ↔ etat."""
+        s = synaptic_instance
+        from core.synaptic_network import _make_node_id, _synapse_key
+
+        event = {
+            "intent": "VEILLE_IA",
+            "status": "success",
+            "quality_score": 0.9,
+            "result": "Excellent article sur les architectures neuronales et le deep learning",
+            "cognitive_context": {"cognitive_state": "flow"},
+        }
+
+        await s._on_routine_complete(event)
+        intent_nid = _make_node_id("VEILLE_IA")
+        flow_nid = _make_node_id("cogstate:flow")
+        key = _synapse_key(intent_nid, flow_nid)
+        weight_1 = s.synapses[key]["weight"]
+
+        # Deuxieme succes → poids augmente
+        await s._on_routine_complete(event)
+        weight_2 = s.synapses[key]["weight"]
+        assert weight_2 > weight_1
+
+    @pytest.mark.asyncio
+    async def test_anti_hebb_direct(self, synaptic_instance):
+        """Anti-hebb direct : hebbian_strengthen avec success=False affaiblit la synapse."""
+        s = synaptic_instance
+        from core.synaptic_network import _make_node_id, _synapse_key
+
+        # Creer deux noeuds avec energie connue
+        nid_a = s.ensure_node("test_intent_alpha", "event", 0.6, ["test"])
+        nid_b = s.ensure_node("cogstate:exploration", "affect", 0.5, ["test"])
+
+        # Renforcer la synapse (succes)
+        s.hebbian_strengthen(nid_a, nid_b, success=True, context="test")
+        key = _synapse_key(nid_a, nid_b)
+        weight_before = s.synapses[key]["weight"]
+        assert weight_before > 0
+
+        # Anti-hebb (echec)
+        s.hebbian_strengthen(nid_a, nid_b, success=False, context="test")
+        weight_after = s.synapses[key]["weight"]
+        assert weight_after < weight_before

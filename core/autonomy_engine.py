@@ -2154,6 +2154,27 @@ class AutonomyEngine:
         if intent == "COUNCIL_DEBATE" and response:
             participants = response.get("participants", [])
         routine_status = "success" if response and response.get("status") in ("success", "consensus") and quality_score >= 0.3 else "error"
+
+        # Hebbian : capturer le contexte cognitif pour l'apprentissage contextuel
+        cognitive_context = {}
+        try:
+            from core.corpus_callosum import callosum as _cc
+            cognitive_context["cognitive_state"] = _cc.cognitive_state
+        except Exception:
+            pass
+        try:
+            from core.desire_engine import desires as _des
+            dominant = max(_des.drives.values(), key=lambda d: d.deprivation, default=None)
+            if dominant:
+                cognitive_context["dominant_drive"] = dominant.name
+        except Exception:
+            pass
+        try:
+            from core.cardiac_engine import heart as _heart
+            cognitive_context["cardiac_emotion"] = _heart.current_emotion
+        except Exception:
+            pass
+
         await bus.publish("AUTONOMY_ROUTINE_COMPLETE", {
             "intent": intent,
             "agent": agent,
@@ -2162,6 +2183,7 @@ class AutonomyEngine:
             "quality_score": quality_score,
             "result": result_preview,
             "scoring_breakdown": getattr(self, "_last_scoring_breakdown", {}),
+            "cognitive_context": cognitive_context,
         })
         # Publier ROUTINE_FAILED pour les organes qui ecoutent les echecs
         if routine_status == "error":
@@ -2336,6 +2358,27 @@ class AutonomyEngine:
         participants = []
         if intent == "COUNCIL_DEBATE" and response:
             participants = response.get("participants", [])
+
+        # Hebbian : contexte cognitif (post-budget)
+        cognitive_context = {}
+        try:
+            from core.corpus_callosum import callosum as _cc
+            cognitive_context["cognitive_state"] = _cc.cognitive_state
+        except Exception:
+            pass
+        try:
+            from core.desire_engine import desires as _des
+            dominant = max(_des.drives.values(), key=lambda d: d.deprivation, default=None)
+            if dominant:
+                cognitive_context["dominant_drive"] = dominant.name
+        except Exception:
+            pass
+        try:
+            from core.cardiac_engine import heart as _heart
+            cognitive_context["cardiac_emotion"] = _heart.current_emotion
+        except Exception:
+            pass
+
         await bus.publish("AUTONOMY_ROUTINE_COMPLETE", {
             "intent": intent,
             "agent": agent,
@@ -2344,6 +2387,7 @@ class AutonomyEngine:
             "quality_score": quality,
             "result": result_preview,
             "scoring_breakdown": getattr(self, "_last_scoring_breakdown", {}),
+            "cognitive_context": cognitive_context,
         })
         # Publier ROUTINE_FAILED pour les organes qui ecoutent les echecs
         if status == "error":

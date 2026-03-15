@@ -1080,10 +1080,56 @@ class SynapticNetwork:
             except ImportError:
                 pass
 
+            # --- Renforcement Hebbian contextuel ---
+            # "Cells that fire together wire together" : associer l'intent
+            # a l'etat cognitif dans lequel il a ete execute.
+            # Permet d'apprendre que certaines routines reussissent mieux
+            # dans certains etats (flow, crisis, exploration, etc.)
+            cog_ctx = event.get("cognitive_context", {})
+            hebbian_context_links = 0
+
+            if cog_ctx.get("cognitive_state"):
+                state_nid = self.ensure_node(
+                    f"cogstate:{cog_ctx['cognitive_state']}", "affect",
+                    0.4, ["hebbian"],
+                )
+                if state_nid and intent_nid:
+                    self.hebbian_strengthen(
+                        intent_nid, state_nid, success=success,
+                        context=f"hebbian:{intent}<>{cog_ctx['cognitive_state']}",
+                    )
+                    hebbian_context_links += 1
+
+            if cog_ctx.get("dominant_drive"):
+                drive_ctx_nid = self.ensure_node(
+                    f"drive:{cog_ctx['dominant_drive'].lower()}", "affect",
+                    0.4, ["hebbian"],
+                )
+                if drive_ctx_nid and intent_nid:
+                    self.hebbian_strengthen(
+                        intent_nid, drive_ctx_nid, success=success,
+                        context=f"hebbian:{intent}<>{cog_ctx['dominant_drive']}",
+                    )
+                    hebbian_context_links += 1
+
+            if cog_ctx.get("cardiac_emotion"):
+                emo_nid = self.ensure_node(
+                    f"emotion:{cog_ctx['cardiac_emotion']}", "affect",
+                    0.4, ["hebbian"],
+                )
+                if emo_nid and intent_nid:
+                    self.hebbian_strengthen(
+                        intent_nid, emo_nid, success=success,
+                        context=f"hebbian:{intent}<>{cog_ctx['cardiac_emotion']}",
+                    )
+                    hebbian_context_links += 1
+
             logger.info(
                 f"SYNAPSE: Routine '{intent}' -> +1 noeud, "
                 f"{len(concept_nids)} concepts, "
-                f"{len(concept_nids)} liens ({len(self.nodes)} noeuds, "
+                f"{len(concept_nids)} liens, "
+                f"{hebbian_context_links} ctx hebbiens "
+                f"({len(self.nodes)} noeuds, "
                 f"{len(self.synapses)} synapses total)"
             )
         except Exception as e:
