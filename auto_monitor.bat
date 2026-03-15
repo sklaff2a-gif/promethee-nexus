@@ -36,10 +36,10 @@ echo %date% %time% > "%LOCKFILE%"
 
 echo [%date% %time%] Demarrage agent correcteur PROMETHEE >> "%LOGFILE%"
 
-REM Lancer Claude Code en mode headless
-cd /d "%PROJECT%"
-claude -p "Lis le fichier auto_monitor.md et execute le protocole complet. Sois concis et methodique." ^
-  --allowedTools "Bash(PYTHONIOENCODING=utf-8 python:*)" "Bash(python:*)" "Bash(git:*)" "Bash(cp:*)" "Bash(mkdir:*)" "Bash(ls:*)" "Bash(tail:*)" "Bash(sleep:*)" "Bash(powershell.exe:*)" "Bash(powershell:*)" "Read" "Write" "Edit" "Glob" "Grep" ^
+REM Lancer Claude Code en mode headless — Session autonome complete
+cd /d "C:\Users\redla\projetclaude"
+claude -p "Execute /session claude — session autonome complete. Sois concis et methodique." ^
+  --allowedTools "Bash(PYTHONIOENCODING=utf-8 python:*)" "Bash(python:*)" "Bash(git:*)" "Bash(cp:*)" "Bash(mkdir:*)" "Bash(ls:*)" "Bash(tail:*)" "Bash(sleep:*)" "Bash(powershell.exe:*)" "Bash(powershell:*)" "Bash(nvidia-smi:*)" "Read" "Write" "Edit" "Glob" "Grep" ^
   >> "%LOGFILE%" 2>&1
 
 echo [%date% %time%] Cycle termine >> "%LOGFILE%"
