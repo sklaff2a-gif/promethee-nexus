@@ -9,6 +9,7 @@ set PYTHONIOENCODING=utf-8
 set CLAUDECODE=
 set PROJECT=C:\MesProjets\PROMETHEE_V11_restructuration2026
 set WORKDIR=C:\Users\redla\projetclaude
+set CLAUDE=C:\Users\redla\.local\bin\claude.exe
 
 REM Creer le dossier de rapports s'il n'existe pas
 if not exist "%PROJECT%\logs\autonomous_reports" mkdir "%PROJECT%\logs\autonomous_reports"
@@ -38,7 +39,7 @@ echo [%date% %time%] Demarrage agent correcteur PROMETHEE >> "%LOGFILE%"
 
 REM Lancer Claude Code — lit le protocole depuis un fichier
 cd /d "%WORKDIR%"
-claude -p "Lis le fichier PROMETHEE_V11_restructuration2026\auto_session_protocol.md et execute le protocole complet." ^
+"%CLAUDE%" -p "Lis le fichier PROMETHEE_V11_restructuration2026\auto_session_protocol.md et execute le protocole complet." ^
   --allowedTools "Bash(PYTHONIOENCODING=utf-8 python:*)" "Bash(python:*)" "Bash(git:*)" "Bash(cp:*)" "Bash(mkdir:*)" "Bash(ls:*)" "Bash(tail:*)" "Bash(sleep:*)" "Bash(powershell.exe:*)" "Bash(powershell:*)" "Bash(nvidia-smi:*)" "Read" "Write" "Edit" "Glob" "Grep" ^
   >> "%LOGFILE%" 2>&1
 
