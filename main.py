@@ -327,6 +327,11 @@ async def lifespan(app: FastAPI):
     callosum_task = asyncio.create_task(callosum.start_resonance())
     print(f"   🌉 CORPUS CALLOSUM: Pont inter-organes actif (coherence={callosum.global_coherence:.2f}).")
 
+    # --- BRAIN VM (Machine Virtuelle Cerebrale) ---
+    from core.brain_vm import brain
+    brain.start()
+    print(f"   🧬 BRAIN VM: Machine virtuelle cerebrale activee (tick #{brain.tick_count}).")
+
     # --- HIPPOCAMPE (Mémoire Épisodique) ---
     from core.hippocampus import hippocampus
     hippocampus.init()
@@ -787,6 +792,15 @@ async def connectivity_status():
     try:
         from core.connectivity_matrix import matrix
         return matrix.get_matrix_summary()
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/api/brain/status")
+async def brain_status():
+    """Retourne l'etat de la machine virtuelle cerebrale (Brain VM)."""
+    try:
+        from core.brain_vm import brain
+        return brain.get_status()
     except Exception as e:
         return {"error": str(e)}
 
