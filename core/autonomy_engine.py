@@ -1019,6 +1019,14 @@ class AutonomyEngine:
         except Exception:
             desc_signals = {}
 
+        # Proprioception : carte du territoire cognitif (neural tissue)
+        territory_map = {}
+        try:
+            from core.neural_tissue import tissue
+            territory_map = tissue.get_territory_map()
+        except Exception:
+            pass
+
         await bus.publish("SENSORIUM_FEEDBACK", {
             "intent": intent,
             "agent": agent,
@@ -1026,6 +1034,7 @@ class AutonomyEngine:
             "status": status,
             "organ_snapshot": snapshot,
             "descending_signals": desc_signals,
+            "territory_map": territory_map,
             "timestamp": time.time(),
         })
         logger.debug(f"[SENSORIUM] Feedback pulse publie (intent={intent}, q={quality_score:.2f})")
@@ -1195,6 +1204,30 @@ class AutonomyEngine:
             conn = _des2.drives.get("CONNEXION")
             if conn:
                 signals["social"] = conn.deprivation / 100.0
+        except Exception:
+            pass
+
+        # PROPRIOCEPTION : enrichir les signaux avec le territoire tissue
+        try:
+            from core.neural_tissue import tissue
+            territory = tissue.get_territory_map()
+            if territory:
+                # Zone threat haute → renforce urgence
+                threat_zone = territory.get("threat", {})
+                if threat_zone.get("activity", 0) > 0.5:
+                    signals["urgence"] = max(signals["urgence"], threat_zone["activity"])
+                # Zone creativity haute → renforce creation
+                crea_zone = territory.get("creativity", {})
+                if crea_zone.get("activity", 0) > 0.3:
+                    signals["creation"] = max(signals["creation"], crea_zone["activity"] * 0.8)
+                # Zone stability haute → renforce consolidation
+                stab_zone = territory.get("stability", {})
+                if stab_zone.get("activity", 0) > 0.5:
+                    signals["consolidation"] = max(signals["consolidation"], stab_zone["activity"] * 0.6)
+                # Zone cognition haute → renforce exploration
+                cogn_zone = territory.get("cognition", {})
+                if cogn_zone.get("activity", 0) > 0.3:
+                    signals["exploration"] = max(signals["exploration"], cogn_zone["activity"] * 0.5)
         except Exception:
             pass
 

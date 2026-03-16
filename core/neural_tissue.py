@@ -1461,6 +1461,25 @@ class NeuralTissue:
         """Retourne les signaux de zone (shallow copy)."""
         return dict(self._zone_signals)
 
+    def get_territory_map(self) -> Dict[str, Dict[str, float]]:
+        """Carte proprioceptive du territoire cognitif.
+
+        Retourne un snapshot minimal des 9 zones avec 3 metriques [0,1] chacune.
+        Inspire de la proprioception : Promethee "ressent" son territoire.
+        """
+        territory = {}
+        for zone_name, sig in self._zone_signals.items():
+            activity = sig.get("activity", 0.0)
+            energy = sig.get("energy", 0.0)
+            density = sig.get("density", 0.0)
+            # Normaliser dans [0, 1] (activity peut depasser 1.0)
+            territory[zone_name] = {
+                "activity": round(min(1.0, max(0.0, activity)), 2),
+                "energy": round(min(1.0, max(0.0, energy)), 2),
+                "density": round(min(1.0, max(0.0, density)), 2),
+            }
+        return territory
+
     def get_zone_dominants(self) -> Dict[str, Dict[str, Any]]:
         """Retourne le génome dominant par zone et son profil comportemental."""
         result = {}

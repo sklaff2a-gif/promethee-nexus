@@ -996,3 +996,130 @@ class TestDescendingSignals:
 
         # Tous les signaux doivent etre 0.0 (aucun organe accessible)
         assert all(v == 0.0 for v in signals.values())
+
+
+# ============================================================
+# Test 9 : Incarnation Virtuelle (Proprioception Territoire)
+# ============================================================
+
+class TestTerritoryMap:
+    """Tests de la carte proprioceptive du territoire cognitif."""
+
+    def test_territory_map_structure(self, tmp_path, monkeypatch):
+        """get_territory_map retourne les 9 zones avec 3 metriques."""
+        from core import neural_tissue as tmod
+        from core.neural_tissue import NeuralTissue
+        NeuralTissue.reset_singleton()
+        monkeypatch.setattr(tmod, "TISSUE_STATE_FILE", str(tmp_path / "tissue.json"))
+        with patch.object(NeuralTissue, "_load"):
+            t = NeuralTissue()
+
+        # Simuler des zones avec des signaux
+        t._zone_signals = {
+            "creativity": {"activity": 0.8, "energy": 0.6, "density": 0.4, "diversity": 0.3},
+            "cognition": {"activity": 0.5, "energy": 0.7, "density": 0.5, "diversity": 0.2},
+            "threat": {"activity": 0.1, "energy": 0.2, "density": 0.3, "diversity": 0.1},
+        }
+
+        territory = t.get_territory_map()
+
+        assert "creativity" in territory
+        assert "cognition" in territory
+        assert "threat" in territory
+        # Chaque zone a 3 metriques
+        for zone in territory.values():
+            assert "activity" in zone
+            assert "energy" in zone
+            assert "density" in zone
+            assert 0.0 <= zone["activity"] <= 1.0
+            assert 0.0 <= zone["energy"] <= 1.0
+            assert 0.0 <= zone["density"] <= 1.0
+
+        NeuralTissue.reset_singleton()
+
+    def test_territory_map_empty_zones(self, tmp_path, monkeypatch):
+        """Sans zones, retourne dict vide."""
+        from core import neural_tissue as tmod
+        from core.neural_tissue import NeuralTissue
+        NeuralTissue.reset_singleton()
+        monkeypatch.setattr(tmod, "TISSUE_STATE_FILE", str(tmp_path / "tissue.json"))
+        with patch.object(NeuralTissue, "_load"):
+            t = NeuralTissue()
+        t._zone_signals = {}
+
+        territory = t.get_territory_map()
+        assert territory == {}
+        NeuralTissue.reset_singleton()
+
+    def test_territory_clamps_values(self, tmp_path, monkeypatch):
+        """Les valeurs sont clampees dans [0, 1]."""
+        from core import neural_tissue as tmod
+        from core.neural_tissue import NeuralTissue
+        NeuralTissue.reset_singleton()
+        monkeypatch.setattr(tmod, "TISSUE_STATE_FILE", str(tmp_path / "tissue.json"))
+        with patch.object(NeuralTissue, "_load"):
+            t = NeuralTissue()
+        t._zone_signals = {
+            "emotion": {"activity": 2.5, "energy": -0.3, "density": 1.5},
+        }
+
+        territory = t.get_territory_map()
+        assert territory["emotion"]["activity"] == 1.0  # Clampe
+        assert territory["emotion"]["energy"] == 0.0     # Clampe
+        assert territory["emotion"]["density"] == 1.0     # Clampe
+        NeuralTissue.reset_singleton()
+
+
+class TestDescendingSignalsWithTerritory:
+    """Les signaux descendants integrent le territoire tissue."""
+
+    def test_threat_zone_boosts_urgence(self):
+        """Zone threat active booste le signal urgence."""
+        engine = _make_engine()
+        engine.is_napping = False
+        engine.error_streak = 0
+
+        mock_tissue = MagicMock()
+        mock_tissue.get_territory_map.return_value = {
+            "threat": {"activity": 0.8, "energy": 0.5, "density": 0.3},
+            "creativity": {"activity": 0.1, "energy": 0.2, "density": 0.1},
+        }
+
+        with patch.dict(sys.modules, {"core.neural_tissue": MagicMock(tissue=mock_tissue)}):
+            signals = engine._compute_descending_signals()
+
+        assert signals["urgence"] >= 0.8
+
+    def test_creativity_zone_boosts_creation(self):
+        """Zone creativity active booste le signal creation."""
+        engine = _make_engine()
+        engine.is_napping = False
+        engine.error_streak = 0
+
+        mock_tissue = MagicMock()
+        mock_tissue.get_territory_map.return_value = {
+            "creativity": {"activity": 0.9, "energy": 0.7, "density": 0.5},
+            "threat": {"activity": 0.0, "energy": 0.0, "density": 0.0},
+        }
+
+        with patch.dict(sys.modules, {"core.neural_tissue": MagicMock(tissue=mock_tissue)}):
+            signals = engine._compute_descending_signals()
+
+        assert signals["creation"] >= 0.7  # 0.9 * 0.8 = 0.72
+
+    def test_cognition_zone_boosts_exploration(self):
+        """Zone cognition active booste le signal exploration."""
+        engine = _make_engine()
+        engine.is_napping = False
+        engine.error_streak = 0
+
+        mock_tissue = MagicMock()
+        mock_tissue.get_territory_map.return_value = {
+            "cognition": {"activity": 0.8, "energy": 0.6, "density": 0.4},
+            "threat": {"activity": 0.0, "energy": 0.0, "density": 0.0},
+        }
+
+        with patch.dict(sys.modules, {"core.neural_tissue": MagicMock(tissue=mock_tissue)}):
+            signals = engine._compute_descending_signals()
+
+        assert signals["exploration"] >= 0.3  # 0.8 * 0.5 = 0.4
