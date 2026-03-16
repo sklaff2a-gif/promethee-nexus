@@ -31,6 +31,14 @@ RESONANCE_CYCLES = 4
 STDP_MULTIPLIER = 1.5             # STDP 1.5x plus fort que Hebb classique
 STDP_BUFFER_SIZE = 15             # Taille du buffer STDP (était 50, réduit pour limiter le bruit)
 
+# --- Modele LIF neuronal (Piste 6 bio-inspired) ---
+# Inspire d'Eon Systems : quand un noeud accumule assez d'energie, il "fire"
+# et propage son activation aux noeuds connectes via les synapses ponderees.
+NEURON_FIRE_THRESHOLD = 0.85      # Seuil de fire (energie haute)
+NEURON_RESET_ENERGY = 0.3         # Reset a HOMEOSTATIC_TARGET apres fire
+NEURON_PROPAGATION_FACTOR = 0.3   # Energie transmise aux voisins
+NEURON_MAX_CASCADE_DEPTH = 3      # Max profondeur de cascade
+
 # Noeuds système exclus du STDP — ces noeuds sont activés à chaque cycle
 # par les organes internes et créent du bruit auto-référentiel massif.
 _STDP_EXCLUDED_PREFIXES = frozenset({
@@ -365,10 +373,72 @@ class SynapticNetwork:
                 "energy": round(node["energy"], 3),
             })
 
+        # LIF neuronal : fire si l'energie depasse le seuil
+        if node_id in self.nodes and self.nodes[node_id]["energy"] >= NEURON_FIRE_THRESHOLD:
+            self._lif_fire(node_id, depth=0)
+
         self._record_activation(node_id)
         self._mutations_since_save += 1
         self._auto_save()
         return node_id
+
+    def _lif_fire(self, node_id: str, depth: int = 0):
+        """LIF neuronal : le noeud fire et propage aux voisins.
+
+        Inspire d'Eon Systems (mouche drosophile) : quand un noeud accumule
+        assez d'energie, il fire, propage aux voisins via les poids synaptiques,
+        puis reset son energie (periode refractaire).
+        """
+        if depth >= NEURON_MAX_CASCADE_DEPTH:
+            return
+        if getattr(self, "_lif_firing", False):
+            return  # Anti-reentrance
+        node = self.nodes.get(node_id)
+        if not node:
+            return
+
+        self._lif_firing = True
+        try:
+            fired_energy = node["energy"]
+            concept = node.get("concept", node_id[:8])
+
+            # RESET : periode refractaire
+            node["energy"] = NEURON_RESET_ENERGY
+
+            # PROPAGER : transmettre l'energie aux voisins via synapses
+            propagated = 0
+            for key, syn in self.synapses.items():
+                if syn["weight"] < 0.1:
+                    continue  # Synapse trop faible
+                if "->" not in key:
+                    continue
+                src, tgt = key.split("->", 1)
+                neighbor_id = None
+                if src == node_id:
+                    neighbor_id = tgt
+                elif tgt == node_id:
+                    neighbor_id = src
+                if not neighbor_id or neighbor_id not in self.nodes:
+                    continue
+
+                neighbor = self.nodes[neighbor_id]
+                injection = fired_energy * syn["weight"] * NEURON_PROPAGATION_FACTOR
+                neighbor["energy"] = min(1.0, neighbor["energy"] + injection)
+                propagated += 1
+
+                # Cascade : si le voisin depasse aussi le seuil, il fire
+                if neighbor["energy"] >= NEURON_FIRE_THRESHOLD and depth + 1 < NEURON_MAX_CASCADE_DEPTH:
+                    self._lif_firing = False  # Liberer le verrou pour la cascade
+                    self._lif_fire(neighbor_id, depth + 1)
+                    self._lif_firing = True
+
+            if propagated > 0:
+                logger.info(
+                    f"SYNAPSE LIF: '{concept}' FIRE (e={fired_energy:.2f}) "
+                    f"→ {propagated} voisins (depth={depth})"
+                )
+        finally:
+            self._lif_firing = False
 
     def _enforce_node_limit(self):
         """Supprime les noeuds les moins actifs si > MAX_NODES."""

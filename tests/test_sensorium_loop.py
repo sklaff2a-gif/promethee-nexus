@@ -1123,3 +1123,138 @@ class TestDescendingSignalsWithTerritory:
             signals = engine._compute_descending_signals()
 
         assert signals["exploration"] >= 0.3  # 0.8 * 0.5 = 0.4
+
+
+# ============================================================
+# Test 10 : LIF Neurones Individuels
+# ============================================================
+
+class TestNeuronLIF:
+    """Tests du modele LIF au niveau des noeuds synaptiques."""
+
+    def test_fire_when_threshold_reached(self, synaptic_instance):
+        """Un noeud fire quand son energie depasse le seuil."""
+        s = synaptic_instance
+        from core.synaptic_network import NEURON_FIRE_THRESHOLD, NEURON_RESET_ENERGY
+
+        # Creer un noeud avec energie haute
+        nid = s.ensure_node("test_high_energy", "event", 0.5)
+        s.nodes[nid]["energy"] = 0.9  # Au-dessus du seuil
+
+        # Creer un voisin connecte
+        nid2 = s.ensure_node("test_neighbor_alpha", "memory", 0.3)
+        s.hebbian_strengthen(nid, nid2, success=True, context="test")
+
+        initial_neighbor_energy = s.nodes[nid2]["energy"]
+
+        # Fire manuellement
+        s._lif_fire(nid, depth=0)
+
+        # Le noeud qui fire est reset
+        assert s.nodes[nid]["energy"] == NEURON_RESET_ENERGY
+        # Le voisin a recu de l'energie
+        assert s.nodes[nid2]["energy"] > initial_neighbor_energy
+
+    def test_no_fire_below_threshold(self, synaptic_instance):
+        """Pas de fire si l'energie est sous le seuil."""
+        s = synaptic_instance
+        from core.synaptic_network import NEURON_FIRE_THRESHOLD
+
+        nid = s.ensure_node("test_low_energy_node", "event", 0.3)
+        s.nodes[nid]["energy"] = 0.5  # Sous le seuil
+
+        initial_energy = s.nodes[nid]["energy"]
+        # ensure_node ne devrait pas triggerer de fire
+        s.ensure_node("test_low_energy_node", "event", 0.3)
+        # L'energie augmente de 0.1 mais reste sous 0.85
+        assert s.nodes[nid]["energy"] <= NEURON_FIRE_THRESHOLD
+
+    def test_cascade_limited_by_depth(self, synaptic_instance):
+        """Les cascades sont limitees en profondeur."""
+        s = synaptic_instance
+        from core.synaptic_network import (
+            NEURON_MAX_CASCADE_DEPTH, NEURON_RESET_ENERGY,
+            _make_node_id, _synapse_key,
+        )
+
+        # Creer une chaine A → B → C → D (depth 3)
+        nodes = []
+        for i in range(5):
+            nid = s.ensure_node(f"chain_node_{i}_alpha", "event", 0.5)
+            s.nodes[nid]["energy"] = 0.9  # Tous au-dessus du seuil
+            nodes.append(nid)
+
+        # Connecter en chaine avec synapses fortes
+        for i in range(len(nodes) - 1):
+            s.hebbian_strengthen(nodes[i], nodes[i + 1], success=True, context="chain")
+            # Renforcer la synapse pour garantir la propagation
+            key = _synapse_key(nodes[i], nodes[i + 1])
+            s.synapses[key]["weight"] = 0.8
+
+        # Fire le premier
+        s._lif_fire(nodes[0], depth=0)
+
+        # Le premier a fire (energie reduite par rapport a 0.9)
+        # Note: peut recevoir de l'energie en retour via cascade
+        assert s.nodes[nodes[0]]["energy"] < 0.9
+
+    def test_anti_reentrance(self, synaptic_instance):
+        """Le flag anti-reentrance empeche les boucles infinies."""
+        s = synaptic_instance
+
+        nid = s.ensure_node("reentrance_test_node", "event", 0.5)
+        s.nodes[nid]["energy"] = 0.95
+
+        # Simuler la reentrance
+        s._lif_firing = True
+        s._lif_fire(nid, depth=0)
+        # Le noeud n'est PAS reset (fire bloque)
+        assert s.nodes[nid]["energy"] == 0.95
+        s._lif_firing = False
+
+    def test_fire_triggered_by_ensure_node(self, synaptic_instance):
+        """ensure_node declenche un fire si l'energie depasse le seuil."""
+        s = synaptic_instance
+        from core.synaptic_network import NEURON_FIRE_THRESHOLD, NEURON_RESET_ENERGY
+
+        # Creer un noeud juste sous le seuil
+        nid = s.ensure_node("fire_trigger_testnode", "event", 0.5)
+        s.nodes[nid]["energy"] = 0.80  # Juste sous 0.85
+
+        # Re-activer le noeud : +0.1 → 0.90 > 0.85 → fire!
+        s.ensure_node("fire_trigger_testnode", "event")
+
+        # Apres fire, l'energie est reset
+        assert s.nodes[nid]["energy"] == NEURON_RESET_ENERGY
+
+    def test_weak_synapses_not_propagated(self, synaptic_instance):
+        """Les synapses faibles (< 0.1) ne propagent pas."""
+        s = synaptic_instance
+        from core.synaptic_network import _make_node_id, _synapse_key
+
+        nid1 = s.ensure_node("strong_neuron_test", "event", 0.5)
+        nid2 = s.ensure_node("weak_connected_node", "memory", 0.3)
+
+        # Creer une synapse tres faible
+        key = _synapse_key(nid1, nid2)
+        s.synapses[key] = {"weight": 0.05, "type": "hebbian",
+                           "created_at": time.time(), "last_activated": time.time()}
+
+        s.nodes[nid1]["energy"] = 0.9
+        initial_e2 = s.nodes[nid2]["energy"]
+
+        s._lif_fire(nid1, depth=0)
+
+        # Le voisin n'a PAS recu d'energie (synapse trop faible)
+        assert s.nodes[nid2]["energy"] == initial_e2
+
+    def test_max_depth_zero_still_fires(self, synaptic_instance):
+        """Meme a depth=0, le noeud fire et se reset."""
+        s = synaptic_instance
+        from core.synaptic_network import NEURON_RESET_ENERGY
+
+        nid = s.ensure_node("depth_zero_test_neuron", "event", 0.5)
+        s.nodes[nid]["energy"] = 0.95
+
+        s._lif_fire(nid, depth=0)
+        assert s.nodes[nid]["energy"] == NEURON_RESET_ENERGY
