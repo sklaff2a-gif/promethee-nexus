@@ -297,8 +297,18 @@ class GlobalWorkspace:
     # ============================================================
 
     async def _on_brain_tick(self, event: dict):
-        """BRAIN_TICK : mettre a jour le mode dominant."""
+        """BRAIN_TICK : collecter les organes et mettre a jour la conscience.
+
+        A chaque tick cerebral (30s), le workspace collecte les pensees
+        de tous les organes et fait competir pour la conscience.
+        Ainsi le workspace reste vivant meme entre les routines.
+        """
         self._dominant_mode = event.get("dominant_mode", "")
+        try:
+            self.collect_from_organs()
+            self.compete(self._dominant_mode)
+        except Exception:
+            pass
 
     # ============================================================
     # API

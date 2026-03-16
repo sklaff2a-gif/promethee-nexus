@@ -376,8 +376,18 @@ class SynapticNetwork:
             })
 
         # LIF neuronal : fire si l'energie depasse le seuil
+        # Cooldown par noeud pour eviter les tempetes (min 30s entre fires)
         if node_id in self.nodes and self.nodes[node_id]["energy"] >= NEURON_FIRE_THRESHOLD:
-            self._lif_fire(node_id, depth=0)
+            now = time.time()
+            last_fire = getattr(self, "_lif_last_fire_time", {}).get(node_id, 0)
+            if now - last_fire >= 30.0:
+                if not hasattr(self, "_lif_last_fire_time"):
+                    self._lif_last_fire_time = {}
+                self._lif_last_fire_time[node_id] = now
+                self._lif_fire(node_id, depth=0)
+            else:
+                # Pas de fire mais reset l'energie pour eviter accumulation
+                self.nodes[node_id]["energy"] = NEURON_RESET_ENERGY
 
         self._record_activation(node_id)
         self._mutations_since_save += 1
