@@ -1052,11 +1052,17 @@ class AutonomyEngine:
                 del self._lif_potentials[intent_key]
 
         # 2. INTEGRATE : accumuler le score courant comme courant d'entree
+        # Normaliser le score pour que les bonus bruts (rituel +15, ecole +2.5)
+        # ne fassent pas fire immediatement. Le score est ramene dans [-1, +1]
+        # par rapport au clamp max, puis multiplie par un facteur d'injection.
+        lif_injection_factor = 3.0  # Score max normal (~5) → ~0.6 injecte
         for routine, score in scored:
             intent = routine["intent"]
             current = self._lif_potentials.get(intent, 0.0)
-            # Le score peut etre negatif — un courant inhibiteur
-            new_potential = current + score
+            # Normaliser : score / clamp_max → [-0.2, +1.0] typiquement
+            normalized_score = score / FINAL_SCORE_CLAMP_MAX if FINAL_SCORE_CLAMP_MAX > 0 else 0
+            injection = normalized_score * lif_injection_factor
+            new_potential = current + injection
             # Cap pour eviter accumulation infinie
             self._lif_potentials[intent] = min(new_potential, LIF_POTENTIAL_CAP)
 
