@@ -781,6 +781,15 @@ async def callosum_status():
     from core.corpus_callosum import callosum
     return callosum.get_stats()
 
+@app.get("/api/connectivity/status")
+async def connectivity_status():
+    """Retourne l'etat de la matrice de connectivite inter-organes."""
+    try:
+        from core.connectivity_matrix import matrix
+        return matrix.get_matrix_summary()
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/api/hippocampus/status")
 async def hippocampus_status():
     """Retourne l'etat de la memoire episodique (hippocampe)."""
