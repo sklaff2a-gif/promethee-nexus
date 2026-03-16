@@ -98,6 +98,9 @@ class Episode:
     threat_level: float = 0.0
     # Saillance
     salience: float = 0.0
+    # Causal (WHY — chaine causale deterministe)
+    causal_chain: list = field(default_factory=list)
+    scoring_factors: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -312,7 +315,9 @@ class Hippocampus:
                         agent: str = "", error_streak: int = 0,
                         quality_score: float = 0.0, failure_type: str = "",
                         detail: str = "", daily_count: int = 0,
-                        routine_number: int = 0, budget_used: float = 0.0) -> Optional[Episode]:
+                        routine_number: int = 0, budget_used: float = 0.0,
+                        causal_chain: list = None,
+                        scoring_factors: dict = None) -> Optional[Episode]:
         """Encode un episode si la saillance depasse le seuil."""
         affect = self._capture_affect()
         salience = self._compute_salience(event_type, intent, affect, error_streak)
@@ -351,6 +356,8 @@ class Hippocampus:
             cognitive_state=affect["cognitive_state"],
             threat_level=affect["threat_level"],
             salience=salience,
+            causal_chain=causal_chain or [],
+            scoring_factors=scoring_factors or {},
         )
 
         self._episodes.append(episode)
@@ -450,11 +457,30 @@ class Hippocampus:
     # ─── Handlers bus ────────────────────────────────────────────────────
 
     def _on_routine_complete(self, data):
-        """Handler AUTONOMY_ROUTINE_COMPLETE."""
+        """Handler AUTONOMY_ROUTINE_COMPLETE — enrichi avec rappel causal."""
         if not isinstance(data, dict):
             return
-        success = data.get("success", False)
+        status = data.get("status", "")
+        success = status == "success" or data.get("success", False)
         event_type = "routine_success" if success else "routine_failure"
+
+        # Construire la chaine causale (WHY)
+        scoring_breakdown = data.get("scoring_breakdown", {})
+        cognitive_context = data.get("cognitive_context", {})
+        causal_chain = self._build_causal_chain(
+            intent=data.get("intent", ""),
+            status=status,
+            quality=data.get("quality_score", 0.0),
+            scoring=scoring_breakdown,
+            cog_ctx=cognitive_context,
+            failure_type=data.get("failure_type", ""),
+        )
+        # Top 5 facteurs de scoring (les plus influents)
+        scoring_factors = {}
+        if scoring_breakdown:
+            top = sorted(scoring_breakdown.items(), key=lambda kv: abs(kv[1]), reverse=True)[:5]
+            scoring_factors = {k: round(v, 2) for k, v in top}
+
         self._encode_episode(
             event_type=event_type,
             intent=data.get("intent", ""),
@@ -465,7 +491,68 @@ class Hippocampus:
             daily_count=data.get("daily_count", 0),
             routine_number=data.get("routine_number", 0),
             budget_used=data.get("budget_used", 0.0),
+            causal_chain=causal_chain,
+            scoring_factors=scoring_factors,
         )
+
+    def _build_causal_chain(self, intent: str, status: str, quality: float,
+                            scoring: dict, cog_ctx: dict, failure_type: str) -> list:
+        """Construit la chaine causale deterministe d'un episode.
+
+        Repond a : POURQUOI cette routine a-t-elle ete choisie et
+        POURQUOI a-t-elle reussi/echoue ?
+        """
+        chain = []
+
+        # 1. Etat cognitif au moment de la decision
+        cog_state = cog_ctx.get("cognitive_state", "")
+        if cog_state:
+            chain.append(f"etat: {cog_state}")
+
+        # 2. Pulsion dominante qui a pousse
+        drive = cog_ctx.get("dominant_drive", "")
+        if drive:
+            chain.append(f"pulsion: {drive}")
+
+        # 3. Emotion au moment
+        emotion = cog_ctx.get("cardiac_emotion", "")
+        if emotion:
+            chain.append(f"emotion: {emotion}")
+
+        # 4. Facteurs de scoring dominants (pourquoi CETTE routine)
+        if scoring:
+            positive = sorted(
+                [(k, v) for k, v in scoring.items() if v > 0.2],
+                key=lambda x: x[1], reverse=True,
+            )[:3]
+            if positive:
+                factors = ", ".join(f"{k} +{v:.1f}" for k, v in positive)
+                chain.append(f"facteurs: {factors}")
+
+        # 5. Resultat et raison
+        if status == "success" or quality >= 0.6:
+            chain.append(f"resultat: succes (q={quality:.2f})")
+        else:
+            reason = failure_type or "qualite basse"
+            chain.append(f"resultat: echec ({reason}, q={quality:.2f})")
+
+        return chain
+
+    def get_causal_context(self, n: int = 3) -> str:
+        """Retourne un resume causal des N derniers episodes pour le workspace.
+
+        Permet a Promethee de "se souvenir" pourquoi il a fait ses derniers choix.
+        """
+        recent = [e for e in self._episodes[-n:] if e.causal_chain]
+        if not recent:
+            return ""
+
+        lines = []
+        for ep in recent:
+            chain_str = " → ".join(ep.causal_chain)
+            lines.append(f"[{ep.intent}] {chain_str}")
+
+        return "Rappel causal: " + " | ".join(lines)
 
     def _on_dopamine_surge(self, data):
         """Handler DOPAMINE_SURGE."""

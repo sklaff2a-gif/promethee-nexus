@@ -1404,3 +1404,153 @@ class TestStimulateAPI:
             "CARDIAC_EMOTION_CHANGE",
         }
         assert dangerous.isdisjoint(allowed)
+
+
+# ============================================================
+# Test 12 : Rappel Causal (hippocampus enrichi)
+# ============================================================
+
+@pytest.fixture
+def hippocampus_instance(tmp_path, monkeypatch):
+    from core import hippocampus as hmod
+    from core.hippocampus import Hippocampus
+    Hippocampus.reset_singleton()
+    monkeypatch.setattr(hmod, "HIPPOCAMPUS_STATE_FILE", str(tmp_path / "hippo.json"))
+    with patch.object(Hippocampus, "_load"), \
+         patch.object(Hippocampus, "_subscribe_events"):
+        h = Hippocampus()
+        hmod.hippocampus = h
+    yield h
+    Hippocampus.reset_singleton()
+
+
+class TestCausalRecall:
+    """Tests du rappel causal dans l'hippocampus."""
+
+    def test_build_causal_chain_complete(self, hippocampus_instance):
+        """La chaine causale contient etat, pulsion, emotion, facteurs, resultat."""
+        h = hippocampus_instance
+        chain = h._build_causal_chain(
+            intent="VEILLE_IA",
+            status="success",
+            quality=0.95,
+            scoring={"dopamine": 1.8, "cardiac": 0.7, "desire": 0.5},
+            cog_ctx={"cognitive_state": "flow", "dominant_drive": "CURIOSITE", "cardiac_emotion": "enthousiasme"},
+            failure_type="",
+        )
+
+        assert len(chain) >= 4
+        assert any("flow" in c for c in chain)
+        assert any("CURIOSITE" in c for c in chain)
+        assert any("enthousiasme" in c for c in chain)
+        assert any("succes" in c for c in chain)
+
+    def test_build_causal_chain_failure(self, hippocampus_instance):
+        """La chaine causale capture l'echec et sa raison."""
+        h = hippocampus_instance
+        chain = h._build_causal_chain(
+            intent="EXPANSION_CODE",
+            status="error",
+            quality=0.1,
+            scoring={"dopamine": -1.0},
+            cog_ctx={"cognitive_state": "crisis"},
+            failure_type="hallucination",
+        )
+
+        assert any("echec" in c for c in chain)
+        assert any("hallucination" in c for c in chain)
+        assert any("crisis" in c for c in chain)
+
+    def test_build_causal_chain_empty_context(self, hippocampus_instance):
+        """Sans contexte cognitif, la chaine est minimale."""
+        h = hippocampus_instance
+        chain = h._build_causal_chain(
+            intent="AUDIT",
+            status="success",
+            quality=0.8,
+            scoring={},
+            cog_ctx={},
+            failure_type="",
+        )
+
+        # Au minimum le resultat
+        assert len(chain) >= 1
+        assert any("succes" in c for c in chain)
+
+    def test_on_routine_complete_stores_causal(self, hippocampus_instance):
+        """_on_routine_complete stocke la chaine causale dans l'episode."""
+        h = hippocampus_instance
+
+        # Mocker _capture_affect pour eviter imports organes
+        with patch.object(h, "_capture_affect", return_value={
+            "cardiac_emotion": "flow", "cardiac_bpm": 70.0,
+            "dopamine_level": 0.7, "dominant_drive": "MAITRISE",
+            "drive_deprivation": 60.0, "cognitive_state": "flow",
+            "threat_level": 0.0,
+        }):
+            h._on_routine_complete({
+                "status": "success",
+                "intent": "EXPANSION_CODE",
+                "agent": "evolution",
+                "quality_score": 0.9,
+                "scoring_breakdown": {"dopamine": 1.5, "cardiac": 0.8, "tissue": 0.3},
+                "cognitive_context": {
+                    "cognitive_state": "flow",
+                    "dominant_drive": "MAITRISE",
+                    "cardiac_emotion": "enthousiasme",
+                },
+            })
+
+        # Verifier le dernier episode
+        assert len(h._episodes) >= 1
+        ep = h._episodes[-1]
+        assert len(ep.causal_chain) >= 3
+        assert len(ep.scoring_factors) >= 1
+        assert "dopamine" in ep.scoring_factors
+
+    def test_get_causal_context(self, hippocampus_instance):
+        """get_causal_context retourne un resume des derniers episodes."""
+        h = hippocampus_instance
+        from core.hippocampus import Episode
+
+        h._episodes.append(Episode(
+            intent="VEILLE_IA",
+            causal_chain=["etat: flow", "pulsion: CURIOSITE", "resultat: succes (q=0.9)"],
+        ))
+
+        ctx = h.get_causal_context(n=3)
+        assert "Rappel causal" in ctx
+        assert "VEILLE_IA" in ctx
+        assert "flow" in ctx
+
+    def test_get_causal_context_empty(self, hippocampus_instance):
+        """Sans episodes causaux, retourne vide."""
+        h = hippocampus_instance
+        ctx = h.get_causal_context()
+        assert ctx == ""
+
+    def test_scoring_factors_top5(self, hippocampus_instance):
+        """Les scoring_factors gardent le top 5 par valeur absolue."""
+        h = hippocampus_instance
+
+        with patch.object(h, "_capture_affect", return_value={
+            "cardiac_emotion": "serenite", "cardiac_bpm": 65.0,
+            "dopamine_level": 0.5, "dominant_drive": "STABILITE",
+            "drive_deprivation": 40.0, "cognitive_state": "standard",
+            "threat_level": 0.0,
+        }):
+            h._on_routine_complete({
+                "status": "success",
+                "intent": "AUDIT_STRUCTURE",
+                "agent": "architect",
+                "quality_score": 0.8,
+                "scoring_breakdown": {
+                    "dopamine": 1.5, "cardiac": 0.8, "tissue": 0.3,
+                    "prefrontal": -0.4, "desire": 0.7, "thalamus": 0.1,
+                    "insula": 0.05, "dmn": -0.2,
+                },
+            })
+
+        if h._episodes:
+            ep = h._episodes[-1]
+            assert len(ep.scoring_factors) <= 5
