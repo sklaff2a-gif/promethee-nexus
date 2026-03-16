@@ -1993,124 +1993,44 @@ class AutonomyEngine:
                     purpose_ctx = _desc_line + "\n"
             except Exception:
                 _desc_signals = {}
+
+            # Global Workspace (Baars) : competition pour la conscience
+            # Remplace la concatenation de 16 sources par un filtre intelligent
             try:
-                from core.self_awareness import awareness
-                purpose_ctx += awareness.get_purpose_context()
+                from core.global_workspace import workspace
+                workspace.collect_from_organs()
+                dominant = _desc_signals.get("dominant_mode", "") if isinstance(_desc_signals, dict) else ""
+                # Utiliser le mode dominant des signaux descendants
+                if not dominant and _desc_signals:
+                    active = [(k, v) for k, v in _desc_signals.items() if v >= 0.2]
+                    if active:
+                        dominant = max(active, key=lambda x: x[1])[0]
+                gw_ctx = workspace.get_conscious_context(dominant)
+                if gw_ctx:
+                    purpose_ctx += f"\n{gw_ctx}"
             except Exception:
-                pass
-            # Contexte délibératif (objectifs préfrontaux)
-            try:
-                from core.prefrontal import prefrontal
-                delib_ctx = prefrontal.get_deliberation_context()
-                if delib_ctx:
-                    purpose_ctx += f"\n{delib_ctx}"
-            except Exception:
-                pass
-            # Voix intérieure (flux de conscience)
-            try:
-                from core.inner_voice import voice as inner_voice
-                voice_ctx = inner_voice.get_voice_context()
-                if voice_ctx:
-                    purpose_ctx += f"\n{voice_ctx}"
-            except Exception:
-                pass
-            # Resonance inter-organes (corpus callosum)
-            try:
-                from core.corpus_callosum import callosum
-                cog_ctx = callosum.get_cognitive_context()
-                if cog_ctx:
-                    purpose_ctx += f"\n{cog_ctx}"
-            except Exception:
-                pass
-            # Memoire episodique (hippocampe)
-            try:
-                from core.hippocampus import hippocampus
-                hippo_ctx = hippocampus.get_hippocampus_context()
-                if hippo_ctx:
-                    purpose_ctx += f"\n{hippo_ctx}"
-            except Exception:
-                pass
-            # Roadmap vivante
-            try:
-                from core.roadmap_engine import roadmap as roadmap_engine
-                roadmap_ctx = roadmap_engine.get_roadmap_context()
-                if roadmap_ctx:
-                    purpose_ctx += f"\n{roadmap_ctx}"
-            except Exception:
-                pass
-            # Substrat cellulaire neural
-            try:
-                from core.neural_tissue import tissue
-                tissue_ctx = tissue.get_tissue_context()
-                if tissue_ctx:
-                    purpose_ctx += f"\n{tissue_ctx}"
-            except Exception:
-                pass
-            # Homeostasie (hypothalamus)
-            try:
-                from core.hypothalamus import hypothalamus
-                homeo_ctx = hypothalamus.get_homeostasis_context()
-                if homeo_ctx:
-                    purpose_ctx += f"\n{homeo_ctx}"
-            except Exception:
-                pass
-            # Interoception (insula)
-            try:
-                from core.insula import insula
-                body_ctx = insula.get_body_awareness_context()
-                if body_ctx:
-                    purpose_ctx += f"\n{body_ctx}"
-            except Exception:
-                pass
-            # Conflits (cingulate)
-            try:
-                from core.cingulate_cortex import cingulate
-                conflict_ctx = cingulate.get_conflict_context()
-                if conflict_ctx:
-                    purpose_ctx += f"\n{conflict_ctx}"
-            except Exception:
-                pass
-            # Habitudes (basal ganglia)
-            try:
-                from core.basal_ganglia import ganglia
-                habit_ctx = ganglia.get_habit_context()
-                if habit_ctx:
-                    purpose_ctx += f"\n{habit_ctx}"
-            except Exception:
-                pass
-            # Vagabondage mental (DMN)
-            try:
-                from core.default_mode_network import dmn
-                dmn_ctx = dmn.get_dmn_context()
-                if dmn_ctx:
-                    purpose_ctx += f"\n{dmn_ctx}"
-            except Exception:
-                pass
-            # Incubation cognitive (subconscient asynchrone)
-            try:
-                from core.incubation_cognitive import incubation
-                incub_ctx = incubation.get_incubation_context()
-                if incub_ctx:
-                    purpose_ctx += f"\n{incub_ctx}"
-            except Exception:
-                pass
-            # Reflexe curiosite (apprentissages recents)
-            try:
-                from core.curiosity_reflex import curiosity
-                curio_ctx = curiosity.get_curiosity_context()
-                if curio_ctx:
-                    purpose_ctx += f"\n{curio_ctx}"
-            except Exception:
-                pass
-            # Perception corporelle hardware (sensorium)
-            try:
-                from core.sensorium import sensorium
-                sens_ctx = sensorium.get_sensorium_context()
-                if sens_ctx:
-                    purpose_ctx += f"\n{sens_ctx}"
-            except Exception:
-                pass
-            # Journal intime (continuité narrative entre sessions)
+                # Fallback : ancien systeme de concatenation brute
+                try:
+                    from core.self_awareness import awareness
+                    purpose_ctx += awareness.get_purpose_context()
+                except Exception:
+                    pass
+                try:
+                    from core.prefrontal import prefrontal
+                    delib_ctx = prefrontal.get_deliberation_context()
+                    if delib_ctx:
+                        purpose_ctx += f"\n{delib_ctx}"
+                except Exception:
+                    pass
+                try:
+                    from core.corpus_callosum import callosum
+                    cog_ctx = callosum.get_cognitive_context()
+                    if cog_ctx:
+                        purpose_ctx += f"\n{cog_ctx}"
+                except Exception:
+                    pass
+
+            # Journal intime (continuité narrative — toujours inclus)
             journal_ctx = self.get_dream_journal_context()
             if journal_ctx:
                 purpose_ctx += f"\n{journal_ctx}"

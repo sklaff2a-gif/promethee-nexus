@@ -804,6 +804,15 @@ async def brain_status():
     except Exception as e:
         return {"error": str(e)}
 
+@app.get("/api/workspace/status")
+async def workspace_status():
+    """Retourne l'etat du Global Workspace (conscience)."""
+    try:
+        from core.global_workspace import workspace
+        return workspace.get_status()
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/api/hippocampus/status")
 async def hippocampus_status():
     """Retourne l'etat de la memoire episodique (hippocampe)."""
