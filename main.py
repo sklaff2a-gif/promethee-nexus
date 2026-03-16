@@ -1132,6 +1132,153 @@ async def school_deliverable(filename: str):
     except Exception as e:
         return {"error": str(e)}
 
+# ============================================================
+# API Stimulation — Interface externe des organes (Piste 7 bio-inspired)
+# Inspire de Cortical Labs CL1 "Cortical Cloud" API
+# ============================================================
+
+# Stimuli cardiaques autorises
+_CARDIAC_STIMULI = frozenset({
+    "success", "failure", "eureka", "routine_done", "learning",
+    "council", "idle", "dream", "veto", "creation", "threat",
+    "adrenaline", "sleep_deep", "dawn", "soothe",
+})
+
+# Drives autorises
+_VALID_DRIVES = frozenset({
+    "CURIOSITE", "MAITRISE", "STABILITE", "CONNEXION",
+    "CROISSANCE", "CREATION", "COMPREHENSION",
+})
+
+# Events bus autorises pour stimulation externe
+_ALLOWED_BUS_EVENTS = frozenset({
+    "DOPAMINE_SURGE", "DOPAMINE_DIP", "REPTILIAN_ALERT",
+    "KNOWLEDGE_GAP_DETECTED", "EUREKA_BRIDGE",
+    "CARDIAC_EMOTION_CHANGE",
+})
+
+
+@app.post("/api/stimulate", dependencies=[Depends(verify_token)])
+async def api_stimulate(request: Request):
+    """Stimulation directe des organes de Promethee.
+
+    Body JSON : {target, action, params}
+    Targets : cardiac, desire, reptilian, dopamine, bus
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON invalide")
+
+    target = body.get("target", "")
+    action = body.get("action", "")
+    params = body.get("params", {})
+
+    if not target or not action:
+        raise HTTPException(status_code=400, detail="target et action requis")
+
+    result = {"target": target, "action": action, "status": "ok"}
+
+    try:
+        if target == "cardiac":
+            # Stimulation cardiaque : react(stimulus)
+            stimulus = params.get("stimulus", action)
+            if stimulus not in _CARDIAC_STIMULI:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Stimulus inconnu. Autorises: {sorted(_CARDIAC_STIMULI)}"
+                )
+            from core.cardiac_engine import heart
+            heart.react(stimulus)
+            result["detail"] = f"Cardiac react({stimulus}): emotion={heart.current_emotion}, bpm={heart.bpm:.0f}"
+
+        elif target == "desire":
+            # Stimulation pulsions : satisfy ou frustrate
+            drive = params.get("drive", "").upper()
+            if drive not in _VALID_DRIVES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Drive inconnu. Autorises: {sorted(_VALID_DRIVES)}"
+                )
+            from core.desire_engine import desires
+            if action == "satisfy":
+                d = desires.drives.get(drive)
+                if d:
+                    amount = min(30.0, max(1.0, float(params.get("amount", 10.0))))
+                    d.deprivation = max(0.0, d.deprivation - amount)
+                    d.frustration_streak = 0
+                    result["detail"] = f"Drive {drive} satisfait: deprivation={d.deprivation:.0f}"
+            elif action == "frustrate":
+                d = desires.drives.get(drive)
+                if d:
+                    amount = min(20.0, max(1.0, float(params.get("amount", 10.0))))
+                    d.deprivation = min(100.0, d.deprivation + amount)
+                    d.frustration_streak += 1
+                    result["detail"] = f"Drive {drive} frustre: deprivation={d.deprivation:.0f}"
+            else:
+                raise HTTPException(status_code=400, detail="Actions desire: satisfy, frustrate")
+
+        elif target == "reptilian":
+            # Stimulation reptilienne : set_threat
+            if action == "set_threat":
+                level = min(10.0, max(0.0, float(params.get("level", 5.0))))
+                from core.event_bus.bus import bus as _bus
+                await _bus.publish("REPTILIAN_ALERT", {
+                    "threat_level": level,
+                    "source": "api_stimulate",
+                })
+                result["detail"] = f"Alerte reptilienne publiee: threat={level}"
+            else:
+                raise HTTPException(status_code=400, detail="Actions reptilian: set_threat")
+
+        elif target == "dopamine":
+            # Stimulation dopaminergique via bus
+            from core.event_bus.bus import bus as _bus
+            if action == "surge":
+                magnitude = min(1.0, max(0.1, float(params.get("magnitude", 0.5))))
+                await _bus.publish("DOPAMINE_SURGE", {
+                    "magnitude": magnitude,
+                    "source": "api_stimulate",
+                })
+                result["detail"] = f"Dopamine surge publie: magnitude={magnitude}"
+            elif action == "dip":
+                magnitude = min(1.0, max(0.1, float(params.get("magnitude", 0.3))))
+                await _bus.publish("DOPAMINE_DIP", {
+                    "magnitude": magnitude,
+                    "source": "api_stimulate",
+                })
+                result["detail"] = f"Dopamine dip publie: magnitude={magnitude}"
+            else:
+                raise HTTPException(status_code=400, detail="Actions dopamine: surge, dip")
+
+        elif target == "bus":
+            # Publication directe sur le bus (whitelist)
+            event = params.get("event", "")
+            data = params.get("data", {})
+            if event not in _ALLOWED_BUS_EVENTS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Event non autorise. Autorises: {sorted(_ALLOWED_BUS_EVENTS)}"
+                )
+            from core.event_bus.bus import bus as _bus
+            await _bus.publish(event, data)
+            result["detail"] = f"Event {event} publie sur le bus"
+
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Targets autorises: cardiac, desire, reptilian, dopamine, bus"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        result["status"] = "error"
+        result["detail"] = str(e)
+
+    return result
+
+
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket, token: str = Query(default="")):
     if not verify_ws_token(token):

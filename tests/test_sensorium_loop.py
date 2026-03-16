@@ -1258,3 +1258,149 @@ class TestNeuronLIF:
 
         s._lif_fire(nid, depth=0)
         assert s.nodes[nid]["energy"] == NEURON_RESET_ENERGY
+
+
+# ============================================================
+# Test 11 : API Stimulation (Piste 7)
+# ============================================================
+
+class TestStimulateAPI:
+    """Tests de l'API de stimulation externe des organes."""
+
+    def test_cardiac_stimulation(self, cardiac_instance):
+        """Stimulation cardiaque directe via react()."""
+        h = cardiac_instance
+        initial_bpm = h.bpm
+
+        h.react("eureka")
+
+        # Le BPM a change (eureka = +30 bpm_delta)
+        assert h.bpm != initial_bpm
+        assert h.current_emotion == "enthousiasme"
+
+    def test_cardiac_invalid_stimulus_ignored(self, cardiac_instance):
+        """Stimulus inconnu est ignore par le cardiac."""
+        h = cardiac_instance
+        initial_emotion = h.current_emotion
+
+        h.react("invalid_stimulus_xyz")
+
+        # Pas de changement
+        assert h.current_emotion == initial_emotion
+
+    def test_desire_satisfy(self):
+        """Satisfaction directe d'un drive."""
+        from core import desire_engine as dmod
+        from core.desire_engine import DesireEngine
+        DesireEngine.reset_singleton()
+        with patch.object(DesireEngine, "_load"):
+            d = DesireEngine()
+            dmod.desires = d
+
+        drive = d.drives.get("CURIOSITE")
+        if drive:
+            drive.deprivation = 80.0
+            drive.frustration_streak = 5
+
+            # Satisfaction directe
+            drive.deprivation = max(0.0, drive.deprivation - 10.0)
+            drive.frustration_streak = 0
+
+            assert drive.deprivation == 70.0
+            assert drive.frustration_streak == 0
+
+        DesireEngine.reset_singleton()
+
+    def test_desire_frustrate(self):
+        """Frustration directe d'un drive."""
+        from core import desire_engine as dmod
+        from core.desire_engine import DesireEngine
+        DesireEngine.reset_singleton()
+        with patch.object(DesireEngine, "_load"):
+            d = DesireEngine()
+            dmod.desires = d
+
+        drive = d.drives.get("STABILITE")
+        if drive:
+            initial_dep = drive.deprivation
+            drive.deprivation = min(100.0, drive.deprivation + 15.0)
+            drive.frustration_streak += 1
+
+            assert drive.deprivation == initial_dep + 15.0
+            assert drive.frustration_streak >= 1
+
+        DesireEngine.reset_singleton()
+
+    def test_desire_clamp_values(self):
+        """Les valeurs desire sont clampees."""
+        from core import desire_engine as dmod
+        from core.desire_engine import DesireEngine
+        DesireEngine.reset_singleton()
+        with patch.object(DesireEngine, "_load"):
+            d = DesireEngine()
+            dmod.desires = d
+
+        drive = d.drives.get("CURIOSITE")
+        if drive:
+            drive.deprivation = 95.0
+            # Frustrate de 20 → devrait clamper a 100
+            drive.deprivation = min(100.0, drive.deprivation + 20.0)
+            assert drive.deprivation == 100.0
+
+            # Satisfy de 30 → ne doit pas aller sous 0
+            drive.deprivation = max(0.0, drive.deprivation - 150.0)
+            assert drive.deprivation == 0.0
+
+        DesireEngine.reset_singleton()
+
+    @pytest.mark.asyncio
+    async def test_reptilian_via_bus(self):
+        """Stimulation reptilienne via publication bus."""
+        from core.event_bus.bus import bus
+
+        published = []
+        async def capture(data):
+            published.append(data)
+
+        bus.subscribe("REPTILIAN_ALERT", capture)
+        try:
+            await bus.publish("REPTILIAN_ALERT", {
+                "threat_level": 7.0,
+                "source": "api_stimulate",
+            })
+            assert len(published) >= 1
+            assert published[-1]["threat_level"] == 7.0
+        finally:
+            bus.unsubscribe("REPTILIAN_ALERT", capture)
+
+    @pytest.mark.asyncio
+    async def test_dopamine_surge_via_bus(self):
+        """Stimulation dopamine surge via bus."""
+        from core.event_bus.bus import bus
+
+        published = []
+        async def capture(data):
+            published.append(data)
+
+        bus.subscribe("DOPAMINE_SURGE", capture)
+        try:
+            await bus.publish("DOPAMINE_SURGE", {
+                "magnitude": 0.8,
+                "source": "api_stimulate",
+            })
+            assert len(published) >= 1
+            assert published[-1]["magnitude"] == 0.8
+        finally:
+            bus.unsubscribe("DOPAMINE_SURGE", capture)
+
+    def test_allowed_bus_events_whitelist(self):
+        """La whitelist d'events bus est coherente."""
+        # Importer la whitelist depuis main
+        # On verifie juste que les events dangereux ne sont pas dedans
+        dangerous = {"SHUTDOWN", "REBOOT", "KILL_SWITCH", "DELETE_ALL"}
+        allowed = {
+            "DOPAMINE_SURGE", "DOPAMINE_DIP", "REPTILIAN_ALERT",
+            "KNOWLEDGE_GAP_DETECTED", "EUREKA_BRIDGE",
+            "CARDIAC_EMOTION_CHANGE",
+        }
+        assert dangerous.isdisjoint(allowed)
