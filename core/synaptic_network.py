@@ -36,8 +36,10 @@ STDP_BUFFER_SIZE = 15             # Taille du buffer STDP (était 50, réduit po
 # et propage son activation aux noeuds connectes via les synapses ponderees.
 NEURON_FIRE_THRESHOLD = 0.85      # Seuil de fire (energie haute)
 NEURON_RESET_ENERGY = 0.3         # Reset a HOMEOSTATIC_TARGET apres fire
-NEURON_PROPAGATION_FACTOR = 0.3   # Energie transmise aux voisins
-NEURON_MAX_CASCADE_DEPTH = 3      # Max profondeur de cascade
+NEURON_PROPAGATION_FACTOR = 0.15  # Energie transmise aux voisins (reduit pour eviter tempetes)
+NEURON_MAX_CASCADE_DEPTH = 2      # Max profondeur de cascade (reduit de 3)
+NEURON_MAX_PROPAGATION = 8        # Max voisins propages par fire (evite les hubs)
+NEURON_MIN_SYNAPSE_WEIGHT = 0.3   # Seuil synapse pour propagation (reduit bruit)
 
 # Noeuds système exclus du STDP — ces noeuds sont activés à chaque cycle
 # par les organes internes et créent du bruit auto-référentiel massif.
@@ -405,35 +407,45 @@ class SynapticNetwork:
             # RESET : periode refractaire
             node["energy"] = NEURON_RESET_ENERGY
 
-            # PROPAGER : transmettre l'energie aux voisins via synapses
-            propagated = 0
+            # COLLECTER les voisins eligibles (synapses fortes seulement)
+            candidates = []
+            prefix_out = f"{node_id}->"
             for key, syn in self.synapses.items():
-                if syn["weight"] < 0.1:
-                    continue  # Synapse trop faible
-                if "->" not in key:
+                if syn["weight"] < NEURON_MIN_SYNAPSE_WEIGHT:
                     continue
-                src, tgt = key.split("->", 1)
-                neighbor_id = None
-                if src == node_id:
-                    neighbor_id = tgt
-                elif tgt == node_id:
-                    neighbor_id = src
-                if not neighbor_id or neighbor_id not in self.nodes:
+                if key.startswith(prefix_out):
+                    neighbor_id = key[len(prefix_out):]
+                elif key.endswith(f"->{node_id}"):
+                    neighbor_id = key.split("->", 1)[0]
+                else:
                     continue
+                if neighbor_id in self.nodes:
+                    candidates.append((neighbor_id, syn["weight"]))
 
+            # TRIER par poids et limiter aux top N
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            candidates = candidates[:NEURON_MAX_PROPAGATION]
+
+            # PROPAGER aux top voisins
+            propagated = 0
+            for neighbor_id, weight in candidates:
                 neighbor = self.nodes[neighbor_id]
-                injection = fired_energy * syn["weight"] * NEURON_PROPAGATION_FACTOR
+                injection = fired_energy * weight * NEURON_PROPAGATION_FACTOR
                 neighbor["energy"] = min(1.0, neighbor["energy"] + injection)
                 propagated += 1
 
-                # Cascade : si le voisin depasse aussi le seuil, il fire
-                if neighbor["energy"] >= NEURON_FIRE_THRESHOLD and depth + 1 < NEURON_MAX_CASCADE_DEPTH:
-                    self._lif_firing = False  # Liberer le verrou pour la cascade
-                    self._lif_fire(neighbor_id, depth + 1)
-                    self._lif_firing = True
+            # CASCADE limitee (depth+1, pas de liberation du verrou)
+            if depth + 1 < NEURON_MAX_CASCADE_DEPTH:
+                for neighbor_id, weight in candidates:
+                    neighbor = self.nodes.get(neighbor_id)
+                    if neighbor and neighbor["energy"] >= NEURON_FIRE_THRESHOLD:
+                        self._lif_firing = False
+                        self._lif_fire(neighbor_id, depth + 1)
+                        self._lif_firing = True
+                        break  # Un seul fire en cascade par niveau
 
             if propagated > 0:
-                logger.info(
+                logger.debug(
                     f"SYNAPSE LIF: '{concept}' FIRE (e={fired_energy:.2f}) "
                     f"→ {propagated} voisins (depth={depth})"
                 )

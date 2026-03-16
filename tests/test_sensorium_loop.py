@@ -1141,9 +1141,14 @@ class TestNeuronLIF:
         nid = s.ensure_node("test_high_energy", "event", 0.5)
         s.nodes[nid]["energy"] = 0.9  # Au-dessus du seuil
 
-        # Creer un voisin connecte
+        # Creer un voisin connecte avec synapse forte
         nid2 = s.ensure_node("test_neighbor_alpha", "memory", 0.3)
         s.hebbian_strengthen(nid, nid2, success=True, context="test")
+        # Forcer un poids synaptique au-dessus du seuil de propagation
+        from core.synaptic_network import _synapse_key
+        skey = _synapse_key(nid, nid2)
+        if skey in s.synapses:
+            s.synapses[skey]["weight"] = 0.5
 
         initial_neighbor_energy = s.nodes[nid2]["energy"]
 
