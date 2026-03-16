@@ -1554,3 +1554,88 @@ class TestCausalRecall:
         if h._episodes:
             ep = h._episodes[-1]
             assert len(ep.scoring_factors) <= 5
+
+
+# ============================================================
+# Test 13 : Prediction Contextuelle (RPE + cognitive_state)
+# ============================================================
+
+class TestContextualPrediction:
+    """Tests de la prediction contextuelle dans le systeme dopaminergique."""
+
+    def test_reward_memory_has_cognitive_state(self):
+        """RewardMemory a le champ success_by_cognitive_state."""
+        from core.dopamine_system import RewardMemory
+        mem = RewardMemory()
+        assert hasattr(mem, "success_by_cognitive_state")
+        assert isinstance(mem.success_by_cognitive_state, dict)
+
+    def test_cognitive_state_serialization(self):
+        """success_by_cognitive_state survit a to_dict/from_dict."""
+        from core.dopamine_system import RewardMemory
+        mem = RewardMemory()
+        mem.success_by_cognitive_state = {"flow": [0.9, 0.8], "crisis": [0.3]}
+
+        d = mem.to_dict()
+        assert "success_by_cognitive_state" in d
+        assert d["success_by_cognitive_state"]["flow"] == [0.9, 0.8]
+
+        mem2 = RewardMemory.from_dict(d)
+        assert mem2.success_by_cognitive_state["flow"] == [0.9, 0.8]
+        assert mem2.success_by_cognitive_state["crisis"] == [0.3]
+
+    def test_update_value_stores_cognitive_state(self, tmp_path, monkeypatch):
+        """_update_value stocke le resultat par etat cognitif."""
+        from core import dopamine_system as dmod
+        from core.dopamine_system import DopamineSystem
+        DopamineSystem.reset_singleton()
+        monkeypatch.setattr(dmod, "DOPAMINE_STATE_FILE", str(tmp_path / "dopa.json"))
+        with patch.object(DopamineSystem, "_load"):
+            ds = DopamineSystem()
+            dmod.dopamine = ds
+
+        # Mocker l'etat cognitif
+        with patch("core.dopamine_system._get_cognitive_state", return_value="flow"):
+            ds._update_value("VEILLE_IA", 0.9, 0.4)
+
+        mem = ds.memories.get("VEILLE_IA")
+        assert mem is not None
+        assert "flow" in mem.success_by_cognitive_state
+        assert 0.9 in mem.success_by_cognitive_state["flow"]
+
+        DopamineSystem.reset_singleton()
+
+    def test_prediction_modulated_by_state(self, tmp_path, monkeypatch):
+        """La prediction est modulee par l'etat cognitif."""
+        from core import dopamine_system as dmod
+        from core.dopamine_system import DopamineSystem, RewardMemory
+        DopamineSystem.reset_singleton()
+        monkeypatch.setattr(dmod, "DOPAMINE_STATE_FILE", str(tmp_path / "dopa.json"))
+        with patch.object(DopamineSystem, "_load"):
+            ds = DopamineSystem()
+            dmod.dopamine = ds
+
+        # Creer une memoire avec des resultats differents par etat
+        mem = RewardMemory()
+        mem.expected_reward = 0.5
+        mem.success_by_cognitive_state = {
+            "flow": [0.9, 0.95, 0.85],   # Tres bien en flow
+            "crisis": [0.2, 0.1, 0.15],  # Tres mal en crisis
+        }
+        ds.memories["EXPANSION_CODE"] = mem
+
+        # En flow : prediction haute
+        with patch("core.dopamine_system._get_cognitive_state", return_value="flow"), \
+             patch("core.dopamine_system._get_current_mood", return_value="neutre"), \
+             patch("core.dopamine_system._get_time_bucket", return_value="matin"):
+            pred_flow = ds._get_contextual_prediction(mem)
+
+        # En crisis : prediction basse
+        with patch("core.dopamine_system._get_cognitive_state", return_value="crisis"), \
+             patch("core.dopamine_system._get_current_mood", return_value="neutre"), \
+             patch("core.dopamine_system._get_time_bucket", return_value="matin"):
+            pred_crisis = ds._get_contextual_prediction(mem)
+
+        assert pred_flow > pred_crisis
+
+        DopamineSystem.reset_singleton()

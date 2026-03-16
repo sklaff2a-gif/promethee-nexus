@@ -78,6 +78,15 @@ def _get_current_mood() -> str:
         return "neutre"
 
 
+def _get_cognitive_state() -> str:
+    """Recupere l'etat cognitif courant (corpus callosum)."""
+    try:
+        from core.corpus_callosum import callosum
+        return callosum.cognitive_state or ""
+    except Exception:
+        return ""
+
+
 # --- Data structure ---
 
 @dataclass
@@ -91,6 +100,8 @@ class RewardMemory:
         "nuit": [], "matin": [], "aprem": [], "soir": []
     })
     success_by_mood: Dict[str, List[float]] = field(default_factory=dict)
+    # Prediction contextuelle par etat cognitif (flow/crisis/exploration/...)
+    success_by_cognitive_state: Dict[str, List[float]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -100,6 +111,7 @@ class RewardMemory:
             "reward_history": self.reward_history[-REWARD_HISTORY_MAX:],
             "success_by_bucket": {k: v[-20:] for k, v in self.success_by_bucket.items()},
             "success_by_mood": {k: v[-20:] for k, v in self.success_by_mood.items()},
+            "success_by_cognitive_state": {k: v[-20:] for k, v in self.success_by_cognitive_state.items()},
         }
 
     @classmethod
@@ -113,6 +125,7 @@ class RewardMemory:
         for k in ("nuit", "matin", "aprem", "soir"):
             mem.success_by_bucket[k] = raw_buckets.get(k, [])
         mem.success_by_mood = d.get("success_by_mood", {})
+        mem.success_by_cognitive_state = d.get("success_by_cognitive_state", {})
         return mem
 
 
@@ -267,6 +280,14 @@ class DopamineSystem:
             mood_avg = sum(mood_vals) / len(mood_vals)
             base = base * 0.8 + mood_avg * 0.2
 
+        # Ajustement etat cognitif (20%) — prediction contextuelle
+        cog_state = _get_cognitive_state()
+        if cog_state:
+            cog_vals = memory.success_by_cognitive_state.get(cog_state, [])
+            if cog_vals:
+                cog_avg = sum(cog_vals) / len(cog_vals)
+                base = base * 0.8 + cog_avg * 0.2
+
         return max(0.0, min(1.0, base))
 
     def _compute_habituation_factor(self, memory: RewardMemory) -> float:
@@ -327,6 +348,15 @@ class DopamineSystem:
         mem.success_by_mood[mood].append(actual)
         if len(mem.success_by_mood[mood]) > 20:
             mem.success_by_mood[mood] = mem.success_by_mood[mood][-20:]
+
+        # Contexte etat cognitif (prediction contextuelle)
+        cog_state = _get_cognitive_state()
+        if cog_state:
+            if cog_state not in mem.success_by_cognitive_state:
+                mem.success_by_cognitive_state[cog_state] = []
+            mem.success_by_cognitive_state[cog_state].append(actual)
+            if len(mem.success_by_cognitive_state[cog_state]) > 20:
+                mem.success_by_cognitive_state[cog_state] = mem.success_by_cognitive_state[cog_state][-20:]
 
     # ================================================================
     # NIVEAU DE DOPAMINE
