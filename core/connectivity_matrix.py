@@ -96,6 +96,7 @@ _EVENT_ORIGIN_MAP = {
     "SENSORIUM_UPDATE": "sensorium",
     "HIPPOCAMPUS_ARC_CREATED": "hippocampus",
     "SYNAPTIC_UPDATE": "synaptic",
+    "SENSORIUM_FEEDBACK": "cardiac",  # Le feedback est multi-organe, cardiac comme proxy
 }
 
 
@@ -193,6 +194,22 @@ class ConnectivityMatrix:
                 result.append(conn)
         result.sort(key=lambda c: c["weight"], reverse=True)
         return result
+
+    def get_signal_weight(self, event_type: str, receiver: str) -> float:
+        """Signal Bridge : retourne le poids de connexion pour un signal recu.
+
+        Deduit l'organe source via _EVENT_ORIGIN_MAP et retourne le poids
+        de la connexion source→receiver. Les organes appellent cette methode
+        dans leurs handlers pour moduler leur reaction.
+
+        Retourne 1.0 si la connexion n'existe pas (pas de modulation = fallback).
+        """
+        source = _EVENT_ORIGIN_MAP.get(event_type, "")
+        if not source or source == receiver:
+            return 1.0
+        weight = self.get_weight(source, receiver)
+        # Si pas de connexion explicite, pas de modulation
+        return weight if weight > 0.0 else 1.0
 
     def get_matrix_summary(self) -> Dict[str, Any]:
         """Resume de la matrice pour API/dashboard."""

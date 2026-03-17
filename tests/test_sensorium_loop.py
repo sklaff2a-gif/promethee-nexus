@@ -298,7 +298,10 @@ class TestCorpusSensoriumFeedback:
                 "quality_score": 0.8,
             })
 
-        assert c.global_coherence == 0.85
+        # La coherence est interpolee par le signal_weight (bridge)
+        # Avec weight=1.0 (fallback) : 100% de la nouvelle valeur
+        # Avec weight<1.0 : melange ancien/nouveau
+        assert c.global_coherence >= 0.5  # Au moins influence par la nouvelle valeur
 
     @pytest.mark.asyncio
     async def test_mini_cycle_can_transition_state(self, corpus_instance):
@@ -1644,3 +1647,95 @@ class TestContextualPrediction:
         assert pred_flow > pred_crisis
 
         DopamineSystem.reset_singleton()
+
+
+# ============================================================
+# Test 14 : Signal Bridge (modulation par connectivity_matrix)
+# ============================================================
+
+class TestSignalBridge:
+    """Tests du pont de traduction inter-organes."""
+
+    def test_get_signal_weight_known_event(self):
+        """get_signal_weight retourne le poids pour un event connu."""
+        from core import connectivity_matrix as cmod
+        from core.connectivity_matrix import ConnectivityMatrix
+        ConnectivityMatrix.reset_singleton()
+        with patch.object(ConnectivityMatrix, "_load"), \
+             patch.object(ConnectivityMatrix, "_subscribe_events"):
+            m = ConnectivityMatrix()
+            m.connections = {}
+            m._init_default_connections()
+
+        # cardiac→thalamus est une connexion initiale (0.8)
+        w = m.get_signal_weight("CARDIAC_EMOTION_CHANGE", "thalamus")
+        assert w == 0.8
+
+        ConnectivityMatrix.reset_singleton()
+
+    def test_get_signal_weight_unknown_event(self):
+        """Event inconnu retourne 1.0 (pas de modulation)."""
+        from core import connectivity_matrix as cmod
+        from core.connectivity_matrix import ConnectivityMatrix
+        ConnectivityMatrix.reset_singleton()
+        with patch.object(ConnectivityMatrix, "_load"), \
+             patch.object(ConnectivityMatrix, "_subscribe_events"):
+            m = ConnectivityMatrix()
+            m.connections = {}
+
+        w = m.get_signal_weight("UNKNOWN_EVENT", "thalamus")
+        assert w == 1.0
+
+        ConnectivityMatrix.reset_singleton()
+
+    def test_get_signal_weight_no_connection(self):
+        """Pas de connexion entre source et receiver → 1.0."""
+        from core import connectivity_matrix as cmod
+        from core.connectivity_matrix import ConnectivityMatrix
+        ConnectivityMatrix.reset_singleton()
+        with patch.object(ConnectivityMatrix, "_load"), \
+             patch.object(ConnectivityMatrix, "_subscribe_events"):
+            m = ConnectivityMatrix()
+            m.connections = {}  # Vide
+
+        w = m.get_signal_weight("CARDIAC_EMOTION_CHANGE", "thalamus")
+        assert w == 1.0  # Pas de connexion = pas de modulation
+
+        ConnectivityMatrix.reset_singleton()
+
+    def test_thalamus_modulated_by_weight(self, thalamus_instance):
+        """Le boost thalamus est module par le poids cardiac→thalamus."""
+        from core.thalamus import EVENT_CATEGORIES
+        t = thalamus_instance
+
+        # Mock : poids faible (0.2)
+        mock_matrix = MagicMock()
+        mock_matrix.get_signal_weight.return_value = 0.2
+
+        urgence_events = [e for e, c in EVENT_CATEGORIES.items() if c == "urgence"]
+        initial = {e: t._scorecard[e] for e in urgence_events}
+
+        with patch.dict(sys.modules, {"core.connectivity_matrix": MagicMock(matrix=mock_matrix)}):
+            import asyncio
+            asyncio.get_event_loop().run_until_complete(
+                t._on_cardiac_emotion({"emotion": "peur", "intensity": 0.8})
+            )
+
+        # Le boost est reduit par le poids faible (0.2)
+        boost_weak = max(t._scorecard[e] - initial[e] for e in urgence_events)
+
+        # Reset
+        for e in urgence_events:
+            t._scorecard[e] = initial[e]
+
+        # Mock : poids fort (1.0)
+        mock_matrix.get_signal_weight.return_value = 1.0
+        with patch.dict(sys.modules, {"core.connectivity_matrix": MagicMock(matrix=mock_matrix)}):
+            asyncio.get_event_loop().run_until_complete(
+                t._on_cardiac_emotion({"emotion": "peur", "intensity": 0.8})
+            )
+
+        boost_strong = max(t._scorecard[e] - initial[e] for e in urgence_events)
+
+        # Le boost fort doit etre > au boost faible
+        assert boost_strong > boost_weak

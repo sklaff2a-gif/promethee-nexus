@@ -638,12 +638,19 @@ class CardiacEngine:
         if not intent or not rule_type:
             return
 
+        # Signal Bridge : moduler la qualite du marqueur par le poids thalamus→cardiac
+        try:
+            from core.connectivity_matrix import matrix as _matrix
+            signal_weight = _matrix.get_signal_weight("THALAMUS_RULE_LEARNED", "cardiac")
+        except Exception:
+            signal_weight = 1.0
+
         if rule_type == "boost":
-            # Regle de succes → marqueur somatique positif
-            self.form_somatic_marker(intent, "success", 0.7, f"thalamus rule {action}")
+            quality = 0.5 + 0.2 * signal_weight  # 0.5-0.7 selon poids
+            self.form_somatic_marker(intent, "success", quality, f"thalamus rule {action}")
         elif rule_type == "dampen":
-            # Regle d'echec → marqueur somatique negatif
-            self.form_somatic_marker(intent, "failure", 0.3, f"thalamus rule {action}")
+            quality = 0.5 - 0.2 * signal_weight  # 0.3-0.5 selon poids
+            self.form_somatic_marker(intent, "failure", quality, f"thalamus rule {action}")
 
     async def _on_council_end(self, event: dict):
         """Council terminé → flow (délibération collective)."""

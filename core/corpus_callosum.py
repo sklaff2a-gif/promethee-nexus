@@ -353,7 +353,15 @@ class CorpusCallosum:
                 self._snapshots = self._snapshots[-MAX_STATE_BUFFER:]
 
             # Re-evaluer coherence et etat cognitif
-            self.global_coherence = self._compute_global_coherence(snapshot)
+            # Signal Bridge : ponderer la mise a jour par le poids de connexion
+            try:
+                from core.connectivity_matrix import matrix as _matrix
+                signal_weight = _matrix.get_signal_weight("SENSORIUM_FEEDBACK", "corpus_callosum")
+            except Exception:
+                signal_weight = 1.0
+            raw_coherence = self._compute_global_coherence(snapshot)
+            # Interpoler entre ancienne et nouvelle coherence selon le poids
+            self.global_coherence = self.global_coherence * (1 - signal_weight) + raw_coherence * signal_weight
             new_state = self._determine_cognitive_state(snapshot)
             if new_state != self.cognitive_state:
                 self._previous_state = self.cognitive_state

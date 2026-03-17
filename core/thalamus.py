@@ -476,7 +476,14 @@ class Thalamus:
         if not cat:
             return
 
-        boost = min(0.15, intensity * 0.15)
+        # Signal Bridge : moduler le boost par le poids cardiac→thalamus
+        try:
+            from core.connectivity_matrix import matrix as _matrix
+            signal_weight = _matrix.get_signal_weight("CARDIAC_EMOTION_CHANGE", "thalamus")
+        except Exception:
+            signal_weight = 1.0
+
+        boost = min(0.15, intensity * 0.15) * signal_weight
         for evt, c in EVENT_CATEGORIES.items():
             if c == cat:
                 self._scorecard[evt] = min(1.0, self._scorecard[evt] + boost)
