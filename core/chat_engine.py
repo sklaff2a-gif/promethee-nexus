@@ -63,8 +63,15 @@ class ChatEngine:
         "  !vision                  — Observer une photo de la dropzone\n"
         "  !salaire                 — Etat du salaire visuel\n"
         "  !souhait <categorie>     — Ajouter un souhait photo\n"
+        "  !research <sujet>        — Lancer une vraie recherche web\n"
+        "  !learn <sujet>           — Etudier un sujet en profondeur\n"
+        "  !code <description>      — Produire du code\n"
         "  !aide                    — Cette liste"
     )
+
+    # Cooldown entre commandes dispatch (eviter le flood)
+    _last_dispatch_time: float = 0.0
+    _DISPATCH_COOLDOWN: float = 60.0  # 60s entre deux dispatch
 
     def _parse_command(self, message: str) -> Optional[Tuple[str, List[str]]]:
         """Detecte si le message commence par !, retourne (commande, args) ou None."""
@@ -76,8 +83,8 @@ class ChatEngine:
         args = parts[1:]
         return (cmd, args)
 
-    def _execute_command(self, cmd: str, args: List[str]) -> str:
-        """Execute une commande d'introspection. Retourne le texte resultat."""
+    async def _execute_command(self, cmd: str, args: List[str]) -> str:
+        """Execute une commande d'introspection ou de dispatch. Retourne le texte resultat."""
 
         if cmd == "aide":
             return self._COMMAND_HELP
@@ -245,6 +252,34 @@ class ChatEngine:
                 return "Usage : !souhait <categorie>\nExemple : !souhait nature"
             return self._execute_wish_command(" ".join(args))
 
+        # Commandes dispatch — pont chat → orchestrateur
+        if cmd == "research":
+            if not args:
+                return "Usage : !research <sujet>\nExemple : !research design patterns python"
+            return await self._execute_dispatch("researcher",
+                f"VEILLE: Recherche web approfondie sur: {' '.join(args)}. "
+                "Trouve des exemples concrets, des articles, du code. "
+                "Memorise les decouvertes les plus pertinentes.",
+                " ".join(args))
+
+        if cmd == "learn":
+            if not args:
+                return "Usage : !learn <sujet>\nExemple : !learn algorithmes de tri"
+            return await self._execute_dispatch("strategist",
+                f"APPRENTISSAGE: Etudie en profondeur: {' '.join(args)}. "
+                "Analyse les concepts cles, les patterns, les pieges. "
+                "Produis une synthese structuree et memorise-la.",
+                " ".join(args))
+
+        if cmd == "code":
+            if not args:
+                return "Usage : !code <description>\nExemple : !code parser JSON minimal"
+            return await self._execute_dispatch("coder",
+                f"PRODUCTION: Cree le code suivant: {' '.join(args)}. "
+                "Suis le protocole: dessine d'abord, verifie les conventions, "
+                "implemente, puis relis le code. Qualite A+ requise.",
+                " ".join(args))
+
         return f"Commande inconnue : !{cmd}\n{self._COMMAND_HELP}"
 
     def _execute_vision_command(self) -> str:
@@ -316,6 +351,49 @@ class ChatEngine:
                 return f"'{category}' est deja dans mes souhaits."
         except ImportError:
             return "Systeme de salaire non disponible."
+
+    async def _execute_dispatch(self, agent: str, mission: str, subject: str) -> str:
+        """Pont chat → orchestrateur : dispatche une mission vers un agent.
+
+        Permet a Promethee (ou l'humain) de declencher une vraie routine
+        depuis le chat au lieu d'halluciner 'je lance une recherche'.
+        Cooldown 60s entre deux dispatch pour eviter le flood.
+        """
+        import time as _time
+
+        # Cooldown
+        now = _time.time()
+        elapsed = now - ChatEngine._last_dispatch_time
+        if elapsed < self._DISPATCH_COOLDOWN:
+            remaining = int(self._DISPATCH_COOLDOWN - elapsed)
+            return f"Cooldown actif ({remaining}s restantes). Reessaye dans un moment."
+
+        ChatEngine._last_dispatch_time = now
+
+        try:
+            from core.orchestrator import orchestrator
+            logger.info(f"CHAT DISPATCH: {agent} — {subject}")
+
+            response = await orchestrator.dispatch_task(agent, {
+                "mission": mission,
+                "context": "Demande directe depuis le chat. Produis un resultat concret.",
+                "force_local": True,
+                "intent": "CHAT_DISPATCH",
+            })
+
+            if response and isinstance(response, dict):
+                result = response.get("result", "")
+                status = response.get("status", "unknown")
+                if result:
+                    # Tronquer si trop long pour le chat
+                    preview = result[:2000] if len(result) > 2000 else result
+                    return f"[DISPATCH {agent.upper()}] ({status})\n{preview}"
+                return f"[DISPATCH {agent.upper()}] Termine ({status}), pas de resultat textuel."
+            return f"[DISPATCH {agent.upper()}] Pas de reponse de l'agent."
+
+        except Exception as e:
+            logger.warning(f"CHAT DISPATCH erreur: {e}")
+            return f"Erreur dispatch vers {agent}: {e}"
 
     def _is_visual_request(self, message: str) -> bool:
         """Detecte si le message demande d'observer des photos.
@@ -902,7 +980,7 @@ class ChatEngine:
         parsed = self._parse_command(user_message)
         if parsed:
             cmd, cmd_args = parsed
-            command_result = self._execute_command(cmd, cmd_args)
+            command_result = await self._execute_command(cmd, cmd_args)
             logger.info(f"CHAT: Commande !{cmd} executee ({len(command_result)} chars)")
 
         # 3c. Detecter les demandes visuelles et declencher le cortex
