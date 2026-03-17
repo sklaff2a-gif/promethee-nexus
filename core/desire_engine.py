@@ -234,8 +234,19 @@ class DesireEngine:
         self.on_event("HARDWARE_CRISIS", {})
 
     async def _on_school_grade(self, event: dict):
-        """Note scolaire → nourrit MAITRISE et CROISSANCE."""
+        """Note scolaire → nourrit MAITRISE et CROISSANCE.
+
+        Cahier de brouillon : les mauvaises notes WORKSHOP ne punissent pas.
+        Seules les bonnes notes WORKSHOP recompensent (asymetrie sandbox).
+        """
         event_type = event.get("event_type", "SCHOOL_GRADE_LOW")
+        course_type = event.get("course_type", "")
+
+        # Sandbox WORKSHOP : pas de punition sur les echecs
+        if event_type == "SCHOOL_GRADE_LOW" and "WORKSHOP" in course_type.upper():
+            logger.debug(f"[DESIRE] Cahier de brouillon: WORKSHOP echec ignore (sandbox)")
+            return  # Pas de frustration — zone safe
+
         self.on_event(event_type, event)
 
     async def _on_curiosity_learning(self, event: dict):

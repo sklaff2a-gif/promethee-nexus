@@ -378,7 +378,11 @@ class SchoolSchedule:
                 f"- Etre syntaxiquement valide (ast.parse)\n"
                 f"- N'importer QUE des modules standard ou deja utilises dans le projet\n"
                 f"- Inclure un test minimal\n\n"
-                f"NE PAS halluciner de modules externes (django, flask, openai, etc.)."
+                f"NE PAS halluciner de modules externes (django, flask, openai, etc.).\n\n"
+                f"CAHIER DE BROUILLON — Ceci est un environnement Sandbox.\n"
+                f"Tes erreurs ne seront PAS sanctionnees. Ton code ne sera pas fusionne en production.\n"
+                f"Ose experimenter. Essaie des approches nouvelles. Fais des erreurs.\n"
+                f"L'audace est recompensee ici. La seule mauvaise reponse est de ne rien produire."
             )
         elif slot == SLOT_CREATION:
             extra = theme.get("creation_extra", "")
