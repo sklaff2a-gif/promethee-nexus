@@ -142,11 +142,16 @@ class PsycheEngine:
             self.history = loaded.get("history", [])
             self.last_decay_day = loaded.get("last_decay_day")
 
-        # Initialiser les agents manquants
+        # Initialiser les agents manquants + migration traits
         names = agent_names or list(AGENT_OFFSETS.keys())
         for name in names:
             if name not in self.agents:
                 self.agents[name] = self._default_traits(name)
+        # Migration : ajouter les traits manquants aux agents existants
+        for name, traits in self.agents.items():
+            for t in TRAIT_NAMES:
+                if t not in traits:
+                    traits[t] = BASELINES[t]
 
         self._subscribe_events()
         logger.info(f"PSYCHE: Moteur de personnalité actif ({len(self.agents)} agents)")
@@ -230,7 +235,7 @@ class PsycheEngine:
         traits = self.agents.get(agent_name, self._default_traits(agent_name))
         for trait, delta in deltas.items():
             if trait in TRAIT_NAMES:
-                traits[trait] = _clamp(traits[trait] + delta)
+                traits[trait] = _clamp(traits.get(trait, BASELINES[trait]) + delta)
         self.agents[agent_name] = traits
 
     # --- Personality bias pour le scoring des routines ---
