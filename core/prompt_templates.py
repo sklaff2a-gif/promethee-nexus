@@ -41,6 +41,13 @@ CODE_GENERATION_GUARDRAIL = (
     f"BIBLIOTHÈQUES INTERDITES : {forbidden_frameworks_str()}.\n"
     "Le code DOIT cibler un fichier EXISTANT du projet (core/, Agents/).\n"
     "Retourne UNIQUEMENT un bloc ```python, RIEN d'autre.\n"
+    "\n--- PROTOCOLE AVANT DE CODER ---\n"
+    "1. STRUCTURE : Décris en 1 ligne ce que le code fait AVANT de l'écrire.\n"
+    "2. IMPORTS : Liste UNIQUEMENT les imports standard (os, json, asyncio, time, logging) "
+    "ou ceux DÉJÀ utilisés dans le fichier cible. AUCUN import externe.\n"
+    "3. CODE MINIMAL : Écris le minimum de code nécessaire. Chaque fonction < 20 lignes.\n"
+    "4. VÉRIFICATION : Le code contient-il def ou class ? Les types sont-ils cohérents ? "
+    "Les imports existent-ils vraiment ? Si non, CORRIGE avant de retourner.\n"
 )
 
 # ---------------------------------------------------------------------------
