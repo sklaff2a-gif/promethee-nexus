@@ -395,6 +395,65 @@ class ChatEngine:
             logger.warning(f"CHAT DISPATCH erreur: {e}")
             return f"Erreur dispatch vers {agent}: {e}"
 
+    # Commandes dispatch autorisees en auto-action
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code"})
+
+    async def _scan_response_actions(self, response: str):
+        """Scanne la reponse du LLM pour des commandes ! et les execute.
+
+        Permet a Promethee d'AGIR depuis ses propres reponses.
+        Seules les commandes dispatch (research, learn, code) sont autorisees.
+        Max 1 action par reponse. Cooldown 60s. Anti-reentrance.
+        """
+        if getattr(self, "_auto_action_in_progress", False):
+            return
+        if not response:
+            return
+
+        import re
+        # Detecter les lignes commencant par ! (debut de ligne)
+        matches = re.findall(r"^!(\w+)\s+(.+)", response, re.MULTILINE)
+        if not matches:
+            return
+
+        # Prendre la premiere commande autorisee
+        for cmd, args in matches:
+            cmd_lower = cmd.lower()
+            if cmd_lower not in self._AUTO_ACTION_WHITELIST:
+                continue
+
+            # Anti-reentrance
+            self._auto_action_in_progress = True
+            try:
+                logger.info(f"CHAT AUTO-ACTION: !{cmd_lower} {args[:50]}")
+
+                # Dispatch via les memes mecanismes que les commandes utilisateur
+                agent_map = {
+                    "research": ("researcher", "VEILLE: Recherche web approfondie sur: "),
+                    "learn": ("strategist", "APPRENTISSAGE: Etudie en profondeur: "),
+                    "code": ("coder", "PRODUCTION: Cree le code suivant: "),
+                }
+                agent, prefix = agent_map[cmd_lower]
+                mission = f"{prefix}{args.strip()}"
+
+                result = await self._execute_dispatch(agent, mission, args.strip())
+
+                # Ajouter le resultat comme message dans l'historique
+                if result:
+                    self.messages.append({
+                        "role": "assistant",
+                        "content": f"[AUTO-ACTION: !{cmd_lower}]\n{result}",
+                        "timestamp": time.time(),
+                        "badge": "auto_action",
+                    })
+                    logger.info(f"CHAT AUTO-ACTION: Resultat ajoute ({len(result)} chars)")
+            except Exception as e:
+                logger.warning(f"CHAT AUTO-ACTION erreur: {e}")
+            finally:
+                self._auto_action_in_progress = False
+
+            break  # Max 1 action par reponse
+
     def _is_visual_request(self, message: str) -> bool:
         """Detecte si le message demande d'observer des photos.
 
@@ -861,6 +920,11 @@ class ChatEngine:
             "Tu es Promethee, un systeme IA autonome en evolution constante.",
             "Tu t'exprimes en premiere personne, avec authenticite.",
             "Tu parles francais.",
+            "Tu peux AGIR en ecrivant une commande sur une ligne seule dans ta reponse :",
+            "  !research <sujet> — lancer une vraie recherche web",
+            "  !learn <sujet> — etudier un sujet en profondeur",
+            "  !code <description> — produire du code",
+            "La commande sera detectee et executee automatiquement. Le resultat te sera renvoye.",
         ]
 
         # Sections organes (cachees TTL 10s)
@@ -1159,6 +1223,9 @@ class ChatEngine:
         if emergent_sources:
             msg_entry["emergent_sources"] = emergent_sources
         self.messages.append(msg_entry)
+
+        # 5b. Auto-action : scanner la reponse pour des commandes !
+        await self._scan_response_actions(full_response)
 
         # 6. Publier CHAT_RESPONSE
         connexion_before = self._get_connexion_deprivation()
