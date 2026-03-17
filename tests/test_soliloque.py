@@ -727,14 +727,14 @@ class TestDesireEngineIntegration:
         from core.desire_engine import EVENT_IMPACT
         assert "SOLILOQUE_COMPLETE" in EVENT_IMPACT
         impacts = EVENT_IMPACT["SOLILOQUE_COMPLETE"]
-        assert impacts["CONNEXION"] == -18
+        assert impacts["CONNEXION"] == -22
         assert impacts["COMPREHENSION"] == -5
 
     def test_soliloque_interne_in_affinity(self):
         """SOLILOQUE_INTERNE est dans DRIVE_ROUTINE_AFFINITY."""
         from core.desire_engine import DRIVE_ROUTINE_AFFINITY
         assert "SOLILOQUE_INTERNE" in DRIVE_ROUTINE_AFFINITY["CONNEXION"]
-        assert DRIVE_ROUTINE_AFFINITY["CONNEXION"]["SOLILOQUE_INTERNE"] == 1.2
+        assert DRIVE_ROUTINE_AFFINITY["CONNEXION"]["SOLILOQUE_INTERNE"] == 1.8
 
 
 # ============================================================
