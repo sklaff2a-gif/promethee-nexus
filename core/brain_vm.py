@@ -50,6 +50,8 @@ class BrainState:
     global_coherence: float = 0.0
     # Mode dominant (signal descendant le plus fort)
     dominant_mode: str = "repos"
+    # Phi (IIT) — mesure d'integration de l'information
+    phi: float = 0.0
 
 
 class BrainVM:
@@ -134,6 +136,9 @@ class BrainVM:
             if active:
                 state.dominant_mode = max(active, key=lambda x: x[1])[0]
 
+        # 3b. PHI (IIT) — mesure d'integration de l'information
+        state.phi = self._compute_phi(state)
+
         # 4. PUBLIER — BRAIN_TICK
         self.current_state = state
         self.state_history.append({
@@ -143,6 +148,7 @@ class BrainVM:
             "coherence": round(state.global_coherence, 2),
             "dominant_mode": state.dominant_mode,
             "signals": state.descending_signals,
+            "phi": round(state.phi, 3),
         })
         if len(self.state_history) > MAX_STATE_HISTORY:
             self.state_history = self.state_history[-MAX_STATE_HISTORY:]
@@ -156,6 +162,7 @@ class BrainVM:
                 "dominant_mode": state.dominant_mode,
                 "descending_signals": state.descending_signals,
                 "territory_summary": self._summarize_territory(state.territory_map),
+                "phi": round(state.phi, 3),
             })
         except Exception as e:
             logger.debug(f"BRAIN_VM: Erreur publication BRAIN_TICK: {e}")
@@ -280,6 +287,73 @@ class BrainVM:
         return organs
 
     # ============================================================
+    # Phase 2b : PHI (IIT) — Mesure d'integration de l'information
+    # ============================================================
+
+    def _compute_phi(self, state: BrainState) -> float:
+        """Approximation de Phi (Integrated Information Theory).
+
+        Mesure si les organes sont integres (co-varient) ou independants.
+        Phi > 0 = le tout est plus que la somme des parties = conscience emergente.
+        Phi = 0 = les organes sont independants = pas d'integration.
+
+        Approximation : on compare la variance du snapshot global (tous les organes
+        concatenes en un vecteur) vs la somme des variances individuelles, en
+        utilisant l'historique des derniers ticks.
+        """
+        # Il faut au moins 5 ticks d'historique pour calculer la variance
+        if len(self.state_history) < 5:
+            return 0.0
+
+        recent = self.state_history[-10:]  # 10 derniers ticks
+
+        # Extraire les metriques numeriques de chaque tick
+        vectors = []
+        for entry in recent:
+            signals = entry.get("signals", {})
+            coherence = entry.get("coherence", 0.5)
+            # Vecteur : [coherence, urgence, exploration, consolidation, creation, repos, vigilance, social]
+            vec = [coherence]
+            for sig in ("urgence", "exploration", "consolidation", "creation", "repos", "vigilance", "social"):
+                vec.append(signals.get(sig, 0.0))
+            vectors.append(vec)
+
+        if len(vectors) < 5:
+            return 0.0
+
+        n_dims = len(vectors[0])
+        n_samples = len(vectors)
+
+        # Variance individuelle par dimension
+        sum_individual_var = 0.0
+        for d in range(n_dims):
+            values = [v[d] for v in vectors]
+            mean = sum(values) / n_samples
+            var = sum((x - mean) ** 2 for x in values) / n_samples
+            sum_individual_var += var
+
+        # Variance globale (du vecteur concatene comme un tout)
+        # = variance de la "distance" de chaque snapshot au snapshot moyen
+        means = [sum(v[d] for v in vectors) / n_samples for d in range(n_dims)]
+        global_distances = []
+        for vec in vectors:
+            dist = sum((vec[d] - means[d]) ** 2 for d in range(n_dims))
+            global_distances.append(dist ** 0.5)
+
+        global_mean = sum(global_distances) / n_samples
+        global_var = sum((x - global_mean) ** 2 for x in global_distances) / n_samples
+
+        # Phi approximatif = variance globale / (sum variances individuelles + epsilon)
+        # Si les organes co-varient (changent ensemble), la variance globale est haute
+        # relative a la somme des variances individuelles
+        epsilon = 0.0001
+        if sum_individual_var < epsilon:
+            return 0.0
+
+        phi = global_var / (sum_individual_var + epsilon)
+
+        return round(min(1.0, phi), 3)  # Clamp [0, 1]
+
     # Phase 2 : INTEGRER
     # ============================================================
 
@@ -368,6 +442,7 @@ class BrainVM:
                 "descending_signals": s.descending_signals,
                 "organ_count": len([v for v in s.organ_states.values() if v is not None]),
                 "territory_zones": len(s.territory_map),
+                "phi": s.phi,
             },
             "history_size": len(self.state_history),
             "history": self.state_history[-5:],
