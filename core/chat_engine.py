@@ -512,7 +512,7 @@ class ChatEngine:
             return f"Erreur lecture : {e}"
 
     # Commandes dispatch autorisees en auto-action
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status"})
 
     async def _scan_response_actions(self, response: str):
         """Scanne la reponse du LLM pour des commandes ! et les execute.
@@ -528,7 +528,8 @@ class ChatEngine:
 
         import re
         # Detecter les lignes commencant par ! (debut de ligne)
-        matches = re.findall(r"^!(\w+)\s+(.+)", response, re.MULTILINE)
+        # Support des commandes avec ET sans arguments (!status vs !research sujet)
+        matches = re.findall(r"^!(\w+)(?:\s+(.+))?", response, re.MULTILINE)
         if not matches:
             return
 
@@ -541,12 +542,14 @@ class ChatEngine:
             # Anti-reentrance
             self._auto_action_in_progress = True
             try:
-                logger.info(f"CHAT AUTO-ACTION: !{cmd_lower} {args[:50]}")
+                args = args or ""  # args peut etre None si pas d'argument
+                logger.info(f"CHAT AUTO-ACTION: !{cmd_lower} {args[:50] if args else ''}")
 
                 # Traitement selon le type de commande
-                if cmd_lower == "read":
-                    # !read est une commande locale, pas un dispatch
-                    read_args = args.strip().split()
+                if cmd_lower == "status":
+                    result = self._execute_status_command()
+                elif cmd_lower == "read":
+                    read_args = args.strip().split() if args else []
                     result = self._execute_read_command(read_args)
                 else:
                     # Dispatch via les memes mecanismes que les commandes utilisateur
