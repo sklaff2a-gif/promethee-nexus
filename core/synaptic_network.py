@@ -41,6 +41,13 @@ NEURON_MAX_CASCADE_DEPTH = 2      # Max profondeur de cascade (reduit de 3)
 NEURON_MAX_PROPAGATION = 8        # Max voisins propages par fire (evite les hubs)
 NEURON_MIN_SYNAPSE_WEIGHT = 0.3   # Seuil synapse pour propagation (reduit bruit)
 
+# --- Plasticite structurelle (inspire NEST) ---
+# Les noeuds co-actifs non-connectes font "pousser" des synapses spontanement.
+STRUCTURAL_GROWTH_THRESHOLD = 0.6  # Energie min pour etre "actif" (candidat croissance)
+STRUCTURAL_GROWTH_MAX_PER_TICK = 3 # Max nouvelles synapses par tick
+STRUCTURAL_GROWTH_INITIAL_WEIGHT = 0.05  # Poids initial (faible, doit etre renforce par Hebbian)
+STRUCTURAL_GROWTH_FILL_LIMIT = 0.9  # Ne pas faire pousser si synapses > 90% de MAX
+
 # Noeuds système exclus du STDP — ces noeuds sont activés à chaque cycle
 # par les organes internes et créent du bruit auto-référentiel massif.
 _STDP_EXCLUDED_PREFIXES = frozenset({
@@ -592,6 +599,76 @@ class SynapticNetwork:
         for node in self.nodes.values():
             node["energy"] = max(0.0, min(1.0, node["energy"] * scale))
 
+    # --- Plasticite structurelle (NEST-inspired) ---
+
+    def structural_growth(self) -> int:
+        """Plasticite structurelle : les noeuds co-actifs non-connectes
+        font pousser des synapses spontanement.
+
+        Inspire de NEST : "cells that fire together WIRE together" —
+        pas juste renforcer, mais CREER les connexions manquantes.
+        Appele a chaque BRAIN_TICK (30s).
+
+        Retourne le nombre de synapses creees.
+        """
+        # Guard : ne pas faire pousser si le reseau est quasi-plein
+        if len(self.synapses) >= int(MAX_SYNAPSES * STRUCTURAL_GROWTH_FILL_LIMIT):
+            return 0
+
+        # Collecter les noeuds actifs (energie > seuil)
+        active_nodes = [
+            (nid, node) for nid, node in self.nodes.items()
+            if node["energy"] >= STRUCTURAL_GROWTH_THRESHOLD
+        ]
+
+        if len(active_nodes) < 2:
+            return 0
+
+        # Trier par energie decroissante (les plus actifs en premier)
+        active_nodes.sort(key=lambda x: x[1]["energy"], reverse=True)
+
+        # Chercher les paires co-actives non-connectees
+        created = 0
+        for i in range(len(active_nodes)):
+            if created >= STRUCTURAL_GROWTH_MAX_PER_TICK:
+                break
+            nid_a, node_a = active_nodes[i]
+            for j in range(i + 1, len(active_nodes)):
+                if created >= STRUCTURAL_GROWTH_MAX_PER_TICK:
+                    break
+                nid_b, node_b = active_nodes[j]
+
+                # Verifier que la connexion n'existe pas deja
+                key_ab = _synapse_key(nid_a, nid_b)
+                key_ba = _synapse_key(nid_b, nid_a)
+                if key_ab in self.synapses or key_ba in self.synapses:
+                    continue
+
+                # Creer une synapse faible (sera renforcee par Hebbian ou elaguee)
+                self.synapses[key_ab] = _make_synapse(nid_a, nid_b,
+                    weight=STRUCTURAL_GROWTH_INITIAL_WEIGHT, syn_type="structural")
+                created += 1
+
+                concept_a = node_a.get("concept", nid_a[:8])
+                concept_b = node_b.get("concept", nid_b[:8])
+                logger.debug(
+                    f"SYNAPSE GROWTH: '{concept_a}' <-> '{concept_b}' "
+                    f"(e={node_a['energy']:.2f}/{node_b['energy']:.2f})"
+                )
+
+        if created > 0:
+            self._mutations_since_save += created
+            self._auto_save()
+
+        return created
+
+    async def _on_brain_tick_growth(self, event: dict):
+        """BRAIN_TICK : declencher la plasticite structurelle."""
+        try:
+            self.structural_growth()
+        except Exception as e:
+            logger.debug(f"SYNAPSE: Erreur plasticite structurelle: {e}")
+
     # --- Buffer temporel STDP ---
 
     def _record_activation(self, node_id: str):
@@ -861,6 +938,8 @@ class SynapticNetwork:
             # Sensorium hardware (Sprint 2 Sensorium)
             bus.subscribe("SENSORIUM_UPDATE", self._on_sensorium_update)
             bus.subscribe("TISSUE_ZONE_UPDATE", self._on_tissue_zone_update)
+            # Plasticite structurelle sur BRAIN_TICK
+            bus.subscribe("BRAIN_TICK", self._on_brain_tick_growth)
         except Exception as e:
             logger.warning(f"SYNAPSE: Impossible de souscrire aux evenements: {e}")
 
