@@ -611,9 +611,18 @@ class SynapticNetwork:
 
         Retourne le nombre de synapses creees.
         """
-        # Guard : ne pas faire pousser si le reseau est quasi-plein
-        if len(self.synapses) >= int(MAX_SYNAPSES * STRUCTURAL_GROWTH_FILL_LIMIT):
-            return 0
+        # Guard : si le reseau est quasi-plein, activer le remplacement
+        # au lieu de bloquer. Les synapses quasi-mortes (< 0.1) sont remplacees.
+        network_full = len(self.synapses) >= int(MAX_SYNAPSES * STRUCTURAL_GROWTH_FILL_LIMIT)
+        if network_full:
+            # Trouver les synapses les plus faibles pour remplacement
+            weak = [(k, s["weight"]) for k, s in self.synapses.items() if s["weight"] < 0.1]
+            if not weak:
+                return 0  # Pas de synapse remplacable → vraiment plein
+            weak.sort(key=lambda x: x[1])
+            self._replacement_candidates = [k for k, _ in weak[:STRUCTURAL_GROWTH_MAX_PER_TICK * 2]]
+        else:
+            self._replacement_candidates = []
 
         # Collecter les noeuds actifs (energie > seuil)
         active_nodes = [
@@ -644,6 +653,14 @@ class SynapticNetwork:
                 if key_ab in self.synapses or key_ba in self.synapses:
                     continue
 
+                # Si reseau plein, remplacer une synapse quasi-morte
+                if network_full:
+                    if not self._replacement_candidates:
+                        break  # Plus de candidats au remplacement
+                    dead_key = self._replacement_candidates.pop(0)
+                    if dead_key in self.synapses:
+                        del self.synapses[dead_key]
+
                 # Creer une synapse faible (sera renforcee par Hebbian ou elaguee)
                 self.synapses[key_ab] = _make_synapse(nid_a, nid_b,
                     weight=STRUCTURAL_GROWTH_INITIAL_WEIGHT, syn_type="structural")
@@ -654,6 +671,7 @@ class SynapticNetwork:
                 logger.debug(
                     f"SYNAPSE GROWTH: '{concept_a}' <-> '{concept_b}' "
                     f"(e={node_a['energy']:.2f}/{node_b['energy']:.2f})"
+                    f"{' [REPLACE]' if network_full else ''}"
                 )
 
         if created > 0:
