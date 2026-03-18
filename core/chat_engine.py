@@ -493,16 +493,21 @@ class ChatEngine:
             try:
                 logger.info(f"CHAT AUTO-ACTION: !{cmd_lower} {args[:50]}")
 
-                # Dispatch via les memes mecanismes que les commandes utilisateur
-                agent_map = {
-                    "research": ("researcher", "VEILLE: Recherche web approfondie sur: "),
-                    "learn": ("strategist", "APPRENTISSAGE: Etudie en profondeur: "),
-                    "code": ("coder", "PRODUCTION: Cree le code suivant: "),
-                }
-                agent, prefix = agent_map[cmd_lower]
-                mission = f"{prefix}{args.strip()}"
-
-                result = await self._execute_dispatch(agent, mission, args.strip())
+                # Traitement selon le type de commande
+                if cmd_lower == "read":
+                    # !read est une commande locale, pas un dispatch
+                    read_args = args.strip().split()
+                    result = self._execute_read_command(read_args)
+                else:
+                    # Dispatch via les memes mecanismes que les commandes utilisateur
+                    agent_map = {
+                        "research": ("researcher", "VEILLE: Recherche web approfondie sur: "),
+                        "learn": ("strategist", "APPRENTISSAGE: Etudie en profondeur: "),
+                        "code": ("coder", "PRODUCTION: Cree le code suivant: "),
+                    }
+                    agent, prefix = agent_map[cmd_lower]
+                    mission = f"{prefix}{args.strip()}"
+                    result = await self._execute_dispatch(agent, mission, args.strip())
 
                 # Ajouter le resultat comme message dans l'historique
                 if result:
