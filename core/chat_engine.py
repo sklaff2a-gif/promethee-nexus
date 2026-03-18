@@ -66,6 +66,7 @@ class ChatEngine:
         "  !research <sujet>        — Lancer une vraie recherche web\n"
         "  !learn <sujet>           — Etudier un sujet en profondeur\n"
         "  !code <description>      — Produire du code\n"
+        "  !read <fichier> [L1-L2]  — Lire un fichier du projet\n"
         "  !aide                    — Cette liste"
     )
 
@@ -252,6 +253,12 @@ class ChatEngine:
                 return "Usage : !souhait <categorie>\nExemple : !souhait nature"
             return self._execute_wish_command(" ".join(args))
 
+        # Commande lecture de fichier — auto-inspection du code
+        if cmd == "read":
+            if not args:
+                return "Usage : !read <fichier> [debut-fin]\nExemple : !read core/chat_engine.py 1-80"
+            return self._execute_read_command(args)
+
         # Commandes dispatch — pont chat → orchestrateur
         if cmd == "research":
             if not args:
@@ -395,8 +402,67 @@ class ChatEngine:
             logger.warning(f"CHAT DISPATCH erreur: {e}")
             return f"Erreur dispatch vers {agent}: {e}"
 
+    # Repertoires autorises pour !read (securite anti-path-traversal)
+    _READ_ALLOWED_DIRS = frozenset({"core", "Agents", "tools", "config", "tests"})
+    _READ_MAX_LINES = 80  # Lignes max par defaut
+
+    def _execute_read_command(self, args: list) -> str:
+        """Lit un fichier du projet et retourne son contenu.
+
+        Auto-inspection : permet a Promethee de lire son propre code.
+        Securise : whitelist de repertoires, verification du path.
+        """
+        import os as _os
+
+        filepath = args[0]
+        # Range optionnel (ex: "100-200")
+        line_start, line_end = 1, self._READ_MAX_LINES
+        if len(args) >= 2 and "-" in args[1]:
+            try:
+                parts = args[1].split("-")
+                line_start = max(1, int(parts[0]))
+                line_end = int(parts[1])
+            except (ValueError, IndexError):
+                pass
+
+        # Securite : verifier que le repertoire est autorise
+        first_dir = filepath.replace("\\", "/").split("/")[0] if "/" in filepath.replace("\\", "/") else ""
+        if first_dir and first_dir not in self._READ_ALLOWED_DIRS:
+            return f"Acces refuse : repertoire '{first_dir}' non autorise.\nRepertoires autorises : {', '.join(sorted(self._READ_ALLOWED_DIRS))}"
+
+        # Construire le chemin absolu et verifier qu'il reste dans le projet
+        project_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        abs_path = _os.path.normpath(_os.path.join(project_root, filepath))
+        if not abs_path.startswith(project_root):
+            return "Acces refuse : chemin hors du projet."
+
+        if not _os.path.exists(abs_path):
+            return f"Fichier non trouve : {filepath}"
+
+        if not abs_path.endswith((".py", ".json", ".md", ".txt", ".cfg")):
+            return f"Type de fichier non autorise. Extensions : .py, .json, .md, .txt, .cfg"
+
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                all_lines = f.readlines()
+
+            total = len(all_lines)
+            selected = all_lines[line_start - 1:line_end]
+
+            header = f"📄 {filepath} ({total} lignes) — affichage {line_start}-{min(line_end, total)}\n"
+            content = "".join(f"{line_start + i:4d} | {line}" for i, line in enumerate(selected))
+
+            # Tronquer si trop long pour le chat
+            if len(content) > 3000:
+                content = content[:3000] + "\n... (tronque, utilisez un range plus petit)"
+
+            return header + content
+
+        except Exception as e:
+            return f"Erreur lecture : {e}"
+
     # Commandes dispatch autorisees en auto-action
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read"})
 
     async def _scan_response_actions(self, response: str):
         """Scanne la reponse du LLM pour des commandes ! et les execute.
