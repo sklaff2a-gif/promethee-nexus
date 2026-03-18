@@ -1093,8 +1093,19 @@ class Council:
             "status": status,
             "rounds_used": rounds_used,
             "participants": self.participants,
-            "final_summary": final_summary
+            "final_summary": final_summary,
+            "mission": self.mission,
         })
+
+        # Chunking SOAR : si consensus atteint, publier la regle apprise
+        # Le routeur peut l'utiliser comme raccourci Grimoire (N0.5)
+        if status == "consensus" and final_summary and len(final_summary) > 100:
+            await bus.publish("COUNCIL_RULE_LEARNED", {
+                "mission": self.mission[:200],
+                "decision": final_summary[:500],
+                "participants": self.participants,
+                "rounds": rounds_used,
+            })
 
         # Publication AGENT_RESPONSE pour le dialogue principal
         await bus.publish("AGENT_RESPONSE", {

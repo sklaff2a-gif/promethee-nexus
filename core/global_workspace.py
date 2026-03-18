@@ -13,6 +13,7 @@ Singleton. 0 appel LLM.
 """
 
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -24,6 +25,14 @@ MAX_CONSCIOUS_SLOTS = 7     # Capacite du workspace (theorie de Miller : 7±2)
 MIN_CONSCIOUS_SLOTS = 3     # Minimum de contenus (eviter le vide)
 CONTENT_TTL = 120.0         # Duree de vie d'un contenu (2 min)
 SALIENCE_DECAY = 0.1        # Decay par cycle pour les contenus non renouveles
+
+# --- Ignition non-lineaire (inspire GWT/LIDA) ---
+# Le seuil de conscience est module par l'arousal cardiaque.
+# En panique (BPM haut) : seuil bas → plus de contenus accedent a la conscience
+# Au repos (BPM bas) : seuil haut → seuls les plus saillants passent
+IGNITION_BASE_THRESHOLD = 0.35   # Seuil de base (saillance minimale pour acceder)
+IGNITION_K = 5.0                 # Pente de la sigmoid
+IGNITION_MIDPOINT = 0.5          # Point d'inflexion de l'arousal [0,1]
 
 # Categories de contenus
 CATEGORIES = frozenset({
@@ -195,9 +204,17 @@ class GlobalWorkspace:
         # Trier par saillance effective decroissante
         normal.sort(key=lambda c: getattr(c, "_effective_salience", c.salience), reverse=True)
 
-        # Assembler : critical d'abord, puis normaux
+        # Ignition non-lineaire : filtrer par seuil dynamique (arousal cardiaque)
+        ignition_threshold = self._compute_ignition_threshold()
+        above_threshold = [c for c in normal
+                           if getattr(c, "_effective_salience", c.salience) >= ignition_threshold]
+        # Garantir un minimum de contenus (meme sous le seuil)
+        if len(above_threshold) < MIN_CONSCIOUS_SLOTS:
+            above_threshold = normal[:MIN_CONSCIOUS_SLOTS]
+
+        # Assembler : critical d'abord, puis normaux au-dessus du seuil
         remaining_slots = MAX_CONSCIOUS_SLOTS - len(critical)
-        selected_normal = normal[:max(0, remaining_slots)]
+        selected_normal = above_threshold[:max(0, remaining_slots)]
 
         self.conscious_contents = critical + selected_normal
         self._stats["total_conscious"] += len(self.conscious_contents)
@@ -295,6 +312,30 @@ class GlobalWorkspace:
     # ============================================================
     # Handler bus
     # ============================================================
+
+    def _compute_ignition_threshold(self) -> float:
+        """Ignition non-lineaire : seuil de conscience module par l'arousal cardiaque.
+
+        Inspire de GWT/LIDA : en situation de stress (BPM eleve, emotion intense),
+        le seuil baisse et plus d'informations accedent a la conscience.
+        Au repos, seules les plus saillantes percent.
+        Sigmoid : threshold = base * sigmoid(arousal)
+        """
+        arousal = 0.5  # Valeur par defaut (neutre)
+        try:
+            from core.cardiac_engine import heart
+            # Arousal = combinaison BPM normalise + intensite emotionnelle
+            bpm_norm = min(1.0, max(0.0, (heart.bpm - 50) / 60))  # 50-110 BPM → 0-1
+            intensity = getattr(heart, "emotion_intensity", 0.3)
+            arousal = bpm_norm * 0.6 + intensity * 0.4
+        except Exception:
+            pass
+
+        # Sigmoid inversee : arousal haut → seuil bas (plus de contenus passent)
+        sigmoid = 1.0 / (1.0 + math.exp(IGNITION_K * (arousal - IGNITION_MIDPOINT)))
+        threshold = IGNITION_BASE_THRESHOLD * (0.5 + sigmoid)  # [0.175, 0.525]
+
+        return threshold
 
     async def _on_brain_tick(self, event: dict):
         """BRAIN_TICK : collecter les organes et mettre a jour la conscience.

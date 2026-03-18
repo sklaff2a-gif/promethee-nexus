@@ -27,7 +27,15 @@ class RouterAgent:
 
     # Cache de l'index Grimoire (chargé une seule fois)
     _grimoire_index_cache = None
-    
+
+    # Chunking SOAR : regles apprises depuis les Councils
+    _learned_rules: list = []
+    _LEARNED_RULES_FILE = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "memory", "council_learned_rules.json"
+    )
+    _MAX_LEARNED_RULES = 50
+
     @staticmethod
     async def classify_intent(mission: str) -> str:
         m_low = mission.strip().lower()
@@ -43,6 +51,13 @@ class RouterAgent:
             # Ex: "math_wizard" (OK) vs "Calcul le" (KO - ignoré)
             if ' ' not in potential_agent:
                 return potential_agent.lower()
+
+        # --- NIVEAU 0.25 : CHUNKING SOAR (Règles apprises depuis les Councils) ---
+        # Si un Council a déjà résolu un problème similaire, court-circuiter la délibération.
+        chunked = RouterAgent._check_learned_rules(m_low)
+        if chunked:
+            logger.info(f"🧠 ROUTER: Chunking SOAR match -> {chunked.upper()} (règle apprise)")
+            return chunked
 
         # --- NIVEAU 0.5 : CONSULTATION DU GRIMOIRE (Spécialistes éphémères) ---
         # Les recettes Grimoire sont spécialisées et matchent avant les mots-clés génériques.
@@ -146,6 +161,82 @@ class RouterAgent:
     def invalidate_grimoire_cache():
         """Invalide le cache de l'index Grimoire (après ajout d'une recette)."""
         RouterAgent._grimoire_index_cache = None
+
+    # ============================================================
+    # Chunking SOAR : regles apprises depuis les Councils
+    # ============================================================
+
+    @staticmethod
+    def _load_learned_rules():
+        """Charge les regles apprises depuis le fichier JSON."""
+        if RouterAgent._learned_rules:
+            return
+        try:
+            with open(RouterAgent._LEARNED_RULES_FILE, "r", encoding="utf-8") as f:
+                RouterAgent._learned_rules = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            RouterAgent._learned_rules = []
+
+    @staticmethod
+    def _save_learned_rules():
+        """Sauvegarde les regles apprises."""
+        os.makedirs(os.path.dirname(RouterAgent._LEARNED_RULES_FILE), exist_ok=True)
+        with open(RouterAgent._LEARNED_RULES_FILE, "w", encoding="utf-8") as f:
+            json.dump(RouterAgent._learned_rules[-RouterAgent._MAX_LEARNED_RULES:],
+                      f, indent=2, ensure_ascii=False)
+
+    @staticmethod
+    def _check_learned_rules(mission_lower: str) -> Optional[str]:
+        """Consulte les regles apprises pour un raccourci direct."""
+        RouterAgent._load_learned_rules()
+        mission_norm = RouterAgent._normalize(mission_lower)
+        for rule in RouterAgent._learned_rules:
+            keywords = rule.get("keywords", [])
+            for kw in keywords:
+                if kw in mission_norm and len(kw) >= 4:
+                    return rule.get("agent", "strategist")
+        return None
+
+    @staticmethod
+    async def on_council_rule_learned(event: dict):
+        """COUNCIL_RULE_LEARNED : compiler la deliberation en regle directe.
+
+        Chunking SOAR : le Council a resolu un probleme — on extrait les
+        mots-cles de la mission et l'agent qui a ete le plus pertinent,
+        pour court-circuiter la deliberation la prochaine fois.
+        """
+        mission = event.get("mission", "")
+        decision = event.get("decision", "")
+        participants = event.get("participants", [])
+        if not mission or not participants:
+            return
+
+        # Extraire les mots-cles de la mission (mots > 3 chars, pas stopwords)
+        _stopwords = {"pour", "dans", "avec", "cette", "notre", "projet", "comment",
+                      "faire", "faut", "mode", "veille", "peut", "doit", "quel"}
+        words = RouterAgent._normalize(mission.lower()).split()
+        keywords = [w for w in words if len(w) >= 4 and w not in _stopwords][:5]
+
+        if not keywords:
+            return
+
+        # L'agent principal = premier participant (souvent le plus pertinent)
+        agent = participants[0] if participants else "strategist"
+
+        rule = {
+            "mission_preview": mission[:100],
+            "keywords": keywords,
+            "agent": agent,
+            "source": "council_chunking",
+        }
+
+        RouterAgent._load_learned_rules()
+        RouterAgent._learned_rules.append(rule)
+        # FIFO
+        if len(RouterAgent._learned_rules) > RouterAgent._MAX_LEARNED_RULES:
+            RouterAgent._learned_rules = RouterAgent._learned_rules[-RouterAgent._MAX_LEARNED_RULES:]
+        RouterAgent._save_learned_rules()
+        logger.info(f"🧠 ROUTER CHUNKING: Regle apprise [{', '.join(keywords)}] -> {agent}")
 
     @staticmethod
     def _get_grimoire_slugs() -> list:

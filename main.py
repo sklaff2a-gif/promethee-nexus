@@ -332,6 +332,12 @@ async def lifespan(app: FastAPI):
     brain.start()
     print(f"   🧬 BRAIN VM: Machine virtuelle cerebrale activee (tick #{brain.tick_count}).")
 
+    # --- CHUNKING SOAR (Règles apprises depuis les Councils) ---
+    from core.event_bus.bus import bus as _bus
+    _bus.subscribe("COUNCIL_RULE_LEARNED", RouterAgent.on_council_rule_learned)
+    RouterAgent._load_learned_rules()
+    print(f"   🧠 CHUNKING: {len(RouterAgent._learned_rules)} regles apprises chargees.")
+
     # --- HIPPOCAMPE (Mémoire Épisodique) ---
     from core.hippocampus import hippocampus
     hippocampus.init()
