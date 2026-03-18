@@ -66,6 +66,7 @@ class ChatEngine:
         "  !research <sujet>        — Lancer une vraie recherche web\n"
         "  !learn <sujet>           — Etudier un sujet en profondeur\n"
         "  !code <description>      — Produire du code\n"
+        "  !status                  — Diagnostic interne compact\n"
         "  !read <fichier> [L1-L2]  — Lire un fichier du projet\n"
         "  !aide                    — Cette liste"
     )
@@ -248,6 +249,9 @@ class ChatEngine:
         if cmd == "salaire":
             return self._execute_salary_command()
 
+        if cmd == "status":
+            return self._execute_status_command()
+
         if cmd == "souhait":
             if not args:
                 return "Usage : !souhait <categorie>\nExemple : !souhait nature"
@@ -405,6 +409,52 @@ class ChatEngine:
     # Repertoires autorises pour !read (securite anti-path-traversal)
     _READ_ALLOWED_DIRS = frozenset({"core", "Agents", "tools", "config", "tests"})
     _READ_MAX_LINES = 80  # Lignes max par defaut
+
+    def _execute_status_command(self) -> str:
+        """Diagnostic interne compact — concu par Promethee (exercice V3, note A)."""
+        lines = ["=== STATUS PROMETHEE ==="]
+
+        try:
+            from core.cardiac_engine import heart
+            lines.append(f"BPM : {heart.bpm:.0f} | Emotion : {heart.current_emotion}")
+        except Exception:
+            lines.append("BPM : N/A | Emotion : N/A")
+
+        try:
+            from core.corpus_callosum import callosum
+            lines.append(f"Cognition : {callosum.cognitive_state} | Coherence : {callosum.global_coherence:.2f}")
+        except Exception:
+            lines.append("Cognition : N/A | Coherence : N/A")
+
+        try:
+            from core.autonomy_engine import autonomy
+            signals = autonomy._compute_descending_signals()
+            mode = max(signals.items(), key=lambda x: x[1])[0] if signals else "N/A"
+            top3 = sorted(signals.items(), key=lambda x: x[1], reverse=True)[:3]
+            sig_str = " ".join(f"{k}={v:.0%}" for k, v in top3)
+            lines.append(f"Mode : {mode.upper()} | {sig_str}")
+        except Exception:
+            lines.append("Mode : N/A")
+
+        try:
+            from core.connectivity_matrix import matrix
+            summary = matrix.get_matrix_summary()
+            lines.append(f"Connexions : {summary.get('connections', 0)} (avg={summary.get('avg_weight', 0):.2f})")
+        except Exception:
+            lines.append("Connexions : N/A")
+
+        try:
+            from core.global_workspace import workspace
+            thoughts = workspace.conscious_contents[:3]
+            lines.append("--- Pensees conscientes ---")
+            for i, t in enumerate(thoughts, 1):
+                preview = t.content[:60] if hasattr(t, "content") else "..."
+                lines.append(f"  {i}. [{t.source}] {preview}")
+        except Exception:
+            lines.append("Pensees : N/A")
+
+        lines.append("===========================")
+        return "\n".join(lines)
 
     def _execute_read_command(self, args: list) -> str:
         """Lit un fichier du projet et retourne son contenu.
