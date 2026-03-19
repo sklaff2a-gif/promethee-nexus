@@ -470,6 +470,38 @@ class ChatEngine:
         lines.append("===========================")
         return "\n".join(lines)
 
+    def _clean_response_commands(self, response: str) -> str:
+        """Nettoie les faux resultats hallucinés apres les commandes !.
+
+        Si le LLM ecrit '!status\\n=== FAUX RESULTAT ===', on tronque
+        pour ne garder que le texte avant + les lignes de commandes.
+        Le vrai resultat sera ajoute par l'auto-action.
+        """
+        if not response or "!" not in response:
+            return response
+
+        import re
+        lines = response.split("\n")
+        cleaned = []
+        found_command = False
+
+        for line in lines:
+            stripped = line.strip()
+            # Detecter une commande ! en debut de ligne (whitelist)
+            match = re.match(r"^!(\w+)", stripped)
+            if match and match.group(1).lower() in self._AUTO_ACTION_WHITELIST:
+                cleaned.append(stripped)
+                found_command = True
+            elif not found_command:
+                # Texte AVANT la premiere commande — garder
+                cleaned.append(line)
+            # Texte APRES une commande — supprimer (hallucine)
+
+        if not found_command:
+            return response  # Pas de commande detectee, retourner tel quel
+
+        return "\n".join(cleaned).strip()
+
     def _execute_grep_command(self, args: list) -> str:
         """Cherche un pattern dans les fichiers du projet."""
         import os as _os
@@ -1233,7 +1265,14 @@ class ChatEngine:
             "  !research <sujet> — lancer une vraie recherche web",
             "  !learn <sujet> — etudier un sujet en profondeur",
             "  !code <description> — produire du code",
-            "La commande sera detectee et executee automatiquement. Le resultat te sera renvoye.",
+            "  !status — voir ton etat interne",
+            "  !grep <pattern> [fichier] — chercher dans ton code",
+            "  !read <fichier> [L1-L2] — lire un fichier",
+            "  !github — voir ta page GitHub",
+            "  !test [fichier] — lancer un test",
+            "REGLE ABSOLUE : quand tu ecris une commande !, ARRETE-TOI immediatement apres.",
+            "Ne genere JAMAIS de faux resultat apres la commande. Le systeme executera la commande",
+            "et te renverra le VRAI resultat. Si tu inventes un resultat, il sera SUPPRIME.",
         ]
 
         # Sections organes (cachees TTL 10s)
@@ -1522,6 +1561,9 @@ class ChatEngine:
                     "Demande-moi de regarder une photo specifique, par exemple : "
                     "'regarde les photos dans paysage'."
                 )
+
+        # 4b. Nettoyer les faux resultats hallucinés apres les commandes !
+        full_response = self._clean_response_commands(full_response)
 
         # 5. Ajouter la reponse assistant a l'historique
         msg_entry = {
