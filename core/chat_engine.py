@@ -68,6 +68,9 @@ class ChatEngine:
         "  !code <description>      — Produire du code\n"
         "  !status                  — Diagnostic interne compact\n"
         "  !read <fichier> [L1-L2]  — Lire un fichier du projet\n"
+        "  !grep <pattern> [fichier] — Chercher dans le code\n"
+        "  !github                  — Stats de ma page GitHub\n"
+        "  !test [fichier_test]      — Lancer un test et voir le resultat\n"
         "  !aide                    — Cette liste"
     )
 
@@ -263,6 +266,17 @@ class ChatEngine:
                 return "Usage : !read <fichier> [debut-fin]\nExemple : !read core/chat_engine.py 1-80"
             return self._execute_read_command(args)
 
+        if cmd == "grep":
+            if not args:
+                return "Usage : !grep <pattern> [fichier]\nExemple : !grep compute_routine core/autonomy_engine.py"
+            return self._execute_grep_command(args)
+
+        if cmd == "github":
+            return self._execute_github_command()
+
+        if cmd == "test":
+            return await self._execute_test_command(args)
+
         # Commandes dispatch — pont chat → orchestrateur
         if cmd == "research":
             if not args:
@@ -456,6 +470,166 @@ class ChatEngine:
         lines.append("===========================")
         return "\n".join(lines)
 
+    def _execute_grep_command(self, args: list) -> str:
+        """Cherche un pattern dans les fichiers du projet."""
+        import os as _os
+        import re as _re
+
+        if not args:
+            return "Usage : !grep <pattern> [fichier]"
+
+        pattern = args[0]
+        target_file = args[1] if len(args) > 1 else None
+
+        project_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        results = []
+        max_results = 30
+
+        if target_file:
+            # Chercher dans un fichier specifique
+            abs_path = _os.path.normpath(_os.path.join(project_root, target_file))
+            if not abs_path.startswith(project_root) or not _os.path.exists(abs_path):
+                return f"Fichier non trouve : {target_file}"
+            files_to_search = [(target_file, abs_path)]
+        else:
+            # Chercher dans core/ et Agents/
+            files_to_search = []
+            for subdir in ("core", "Agents"):
+                dir_path = _os.path.join(project_root, subdir)
+                if _os.path.isdir(dir_path):
+                    for fname in sorted(_os.listdir(dir_path)):
+                        if fname.endswith(".py"):
+                            files_to_search.append((f"{subdir}/{fname}", _os.path.join(dir_path, fname)))
+
+        try:
+            regex = _re.compile(pattern, _re.IGNORECASE)
+        except _re.error:
+            return f"Pattern regex invalide : {pattern}"
+
+        for rel_path, abs_path in files_to_search:
+            try:
+                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                    for i, line in enumerate(f, 1):
+                        if regex.search(line):
+                            results.append(f"{rel_path}:{i}: {line.rstrip()[:80]}")
+                            if len(results) >= max_results:
+                                break
+            except Exception:
+                continue
+            if len(results) >= max_results:
+                break
+
+        if not results:
+            return f"Aucun resultat pour '{pattern}'"
+
+        header = f"🔍 {len(results)} resultats pour '{pattern}'\n"
+        return header + "\n".join(results)
+
+    def _execute_github_command(self) -> str:
+        """Consulte la page GitHub de Promethee via gh CLI."""
+        import subprocess
+
+        lines = ["📊 GitHub — promethee-nexus\n"]
+
+        # Stats repo
+        try:
+            r = subprocess.run(
+                ["gh", "api", "repos/sklaff2a-gif/promethee-nexus"],
+                capture_output=True, text=True, timeout=10
+            )
+            if r.returncode == 0:
+                import json
+                data = json.loads(r.stdout)
+                lines.append(f"Description : {data.get('description', 'N/A')[:100]}")
+                lines.append(f"Stars: {data.get('stargazers_count', 0)} | Forks: {data.get('forks_count', 0)} | Issues: {data.get('open_issues_count', 0)}")
+                topics = data.get("topics", [])
+                if topics:
+                    lines.append(f"Topics : {', '.join(topics[:5])}")
+        except Exception as e:
+            lines.append(f"Stats : erreur ({e})")
+
+        # Trafic
+        try:
+            r = subprocess.run(
+                ["gh", "api", "repos/sklaff2a-gif/promethee-nexus/traffic/views"],
+                capture_output=True, text=True, timeout=10
+            )
+            if r.returncode == 0:
+                import json
+                data = json.loads(r.stdout)
+                lines.append(f"Vues : {data.get('count', 0)} ({data.get('uniques', 0)} uniques)")
+        except Exception:
+            pass
+
+        try:
+            r = subprocess.run(
+                ["gh", "api", "repos/sklaff2a-gif/promethee-nexus/traffic/clones"],
+                capture_output=True, text=True, timeout=10
+            )
+            if r.returncode == 0:
+                import json
+                data = json.loads(r.stdout)
+                lines.append(f"Clones : {data.get('count', 0)} ({data.get('uniques', 0)} uniques)")
+        except Exception:
+            pass
+
+        # Derniers commits
+        try:
+            r = subprocess.run(
+                ["git", "-C", "C:/MesProjets/PROMETHEE_V11_restructuration2026",
+                 "log", "--oneline", "-5"],
+                capture_output=True, text=True, timeout=10
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                lines.append("\nDerniers commits :")
+                for line in r.stdout.strip().split("\n")[:5]:
+                    lines.append(f"  {line}")
+        except Exception:
+            pass
+
+        return "\n".join(lines)
+
+    async def _execute_test_command(self, args: list) -> str:
+        """Lance un test pytest et retourne le resultat."""
+        import subprocess
+        import os as _os
+
+        project_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+
+        if args:
+            test_file = args[0]
+            # Securite : verifier que le fichier est dans tests/
+            if not test_file.startswith("tests/"):
+                test_file = f"tests/{test_file}"
+            abs_path = _os.path.join(project_root, test_file)
+            if not _os.path.exists(abs_path):
+                return f"Test non trouve : {test_file}"
+        else:
+            test_file = "tests/test_chat_engine.py"
+
+        try:
+            env = _os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            r = subprocess.run(
+                ["python", "-m", "pytest", test_file, "-x", "--tb=short", "-q"],
+                capture_output=True, text=True, timeout=60,
+                cwd=project_root, env=env,
+            )
+            output = r.stdout + r.stderr
+            # Garder les 30 dernieres lignes
+            lines = output.strip().split("\n")
+            if len(lines) > 30:
+                lines = ["... (tronque)"] + lines[-30:]
+
+            status = "PASSE" if r.returncode == 0 else "ECHEC"
+            header = f"🧪 Test {test_file} : {status}\n"
+            return header + "\n".join(lines)
+
+        except subprocess.TimeoutExpired:
+            return f"🧪 Test {test_file} : TIMEOUT (> 60s)"
+        except Exception as e:
+            return f"🧪 Test {test_file} : ERREUR ({e})"
+
     def _execute_read_command(self, args: list) -> str:
         """Lit un fichier du projet et retourne son contenu.
 
@@ -512,7 +686,7 @@ class ChatEngine:
             return f"Erreur lecture : {e}"
 
     # Commandes dispatch autorisees en auto-action
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test"})
 
     async def _scan_response_actions(self, response: str):
         """Scanne la reponse du LLM pour des commandes ! et les execute.
@@ -551,6 +725,14 @@ class ChatEngine:
                 elif cmd_lower == "read":
                     read_args = args.strip().split() if args else []
                     result = self._execute_read_command(read_args)
+                elif cmd_lower == "grep":
+                    grep_args = args.strip().split() if args else []
+                    result = self._execute_grep_command(grep_args)
+                elif cmd_lower == "github":
+                    result = self._execute_github_command()
+                elif cmd_lower == "test":
+                    test_args = args.strip().split() if args else []
+                    result = await self._execute_test_command(test_args)
                 else:
                     # Dispatch via les memes mecanismes que les commandes utilisateur
                     agent_map = {
