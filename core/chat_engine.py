@@ -707,7 +707,8 @@ class ChatEngine:
         if not matches:
             return
 
-        # Prendre la premiere commande autorisee
+        # Executer les commandes autorisees (max 4 par reponse)
+        actions_executed = 0
         for cmd, args in matches:
             cmd_lower = cmd.lower()
             if cmd_lower not in self._AUTO_ACTION_WHITELIST:
@@ -753,12 +754,14 @@ class ChatEngine:
                         "badge": "auto_action",
                     })
                     logger.info(f"CHAT AUTO-ACTION: Resultat ajoute ({len(result)} chars)")
+                    actions_executed += 1
             except Exception as e:
                 logger.warning(f"CHAT AUTO-ACTION erreur: {e}")
             finally:
                 self._auto_action_in_progress = False
 
-            break  # Max 1 action par reponse
+            if actions_executed >= 4:  # Max 4 actions par reponse
+                break
 
     def _is_visual_request(self, message: str) -> bool:
         """Detecte si le message demande d'observer des photos.
