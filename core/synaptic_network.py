@@ -624,10 +624,20 @@ class SynapticNetwork:
         else:
             self._replacement_candidates = []
 
-        # Collecter les noeuds actifs (energie > seuil)
+        # Seuil dynamique HID (Inhibition Homeostatique Dynamique — concept Promethee)
+        # Le signal "creation" des signaux descendants abaisse le seuil :
+        # creation=0 → seuil=0.6 (repos), creation=1 → seuil=0.3 (pleine croissance)
+        try:
+            from core.autonomy_engine import autonomy
+            creation_signal = autonomy._compute_descending_signals().get("creation", 0.0)
+        except Exception:
+            creation_signal = 0.0
+        dynamic_threshold = STRUCTURAL_GROWTH_THRESHOLD * (1.0 - creation_signal * 0.5)
+
+        # Collecter les noeuds actifs (energie > seuil dynamique)
         active_nodes = [
             (nid, node) for nid, node in self.nodes.items()
-            if node["energy"] >= STRUCTURAL_GROWTH_THRESHOLD
+            if node["energy"] >= dynamic_threshold
         ]
 
         if len(active_nodes) < 2:
