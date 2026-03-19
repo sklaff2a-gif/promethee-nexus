@@ -1585,6 +1585,19 @@ class DivineEvolution(BaseAgent):
                 self.log_thought(f"❌ Erreur critique Evolution : {e}", type="error")
                 return {"status": "error", "result": str(e)}
 
+        # MODE COURS/WORKSHOP (diagnostic Promethee 19 mars 2026)
+        # Le prompt WORKSHOP contient "COURS" mais pas "[MODE VEILLE]"
+        # → l'agent refusait systematiquement de travailler.
+        elif "COURS" in mission or "SCHOOL" in context:
+            self.log_thought("📚 Activation Evolution (mode scolaire)...", type="thought")
+            try:
+                response = await self.generate_content(mission)
+                if response and len(response) > 50:
+                    return {"status": "success", "result": response}
+                return {"status": "error", "result": "Production scolaire insuffisante."}
+            except Exception as e:
+                return {"status": "error", "result": str(e)}
+
         # MODE PAR DÉFAUT
         else:
             return {"status": "success", "result": "Evolution en attente d'ordre de veille."}
