@@ -323,13 +323,23 @@ class PsycheEngine:
         if now - getattr(self, '_last_soma_modulation', 0) < 30:
             return
         self._last_soma_modulation = now
-        # Stress hardware → survie monte, audace baisse
+        # Stress hardware → survie monte
         stress_factor = (0.6 - comfort) / 0.6
         deltas = {
             "survie": 0.3 * stress_factor,
-            "audace": -0.15 * stress_factor,
         }
         self.apply_deltas("_system", deltas, event="SENSORIUM_STRESS")
+
+        # Audace : inertie cognitive EMA (solution concue par Promethee)
+        # Au lieu de soustraire a chaque tick, l'audace converge vers un
+        # equilibre dynamique base sur le stress. Lissage exponentiel :
+        # audace = audace * alpha + target * (1 - alpha)
+        # Stress eleve → target bas (30). Stress faible → target = baseline (50).
+        ema_alpha = 0.995  # Inertie forte (changement lent)
+        stress_target = max(30.0, 50.0 * (1.0 - stress_factor))
+        for agent_name, traits in self.agents.items():
+            current_audace = traits.get("audace", BASELINES["audace"])
+            traits["audace"] = round(current_audace * ema_alpha + stress_target * (1 - ema_alpha), 2)
 
     async def _on_council_end(self, event: dict):
         participants = event.get("participants", [])
