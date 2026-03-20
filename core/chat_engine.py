@@ -665,27 +665,27 @@ class ChatEngine:
             return f"[!votes] Erreur : {e}"
 
     def _execute_codelets_command(self) -> str:
-        """Alertes codelets d'attention — concu par Promethee (session 2, ex 2/5)."""
+        """Alertes codelets d'attention (LIDA) — module attention_codelets."""
         try:
-            from core.global_workspace import workspace
-            from core.brain_vm import brain
-            contents = workspace.conscious_contents
-            codelets = [c for c in contents if hasattr(c, 'source') and c.source.startswith('codelet_')]
-            if codelets:
-                lines = [f"=== CODELETS ({len(codelets)} alertes) ==="]
-                for c in sorted(codelets, key=lambda x: x.salience, reverse=True):
-                    lines.append(f"  [{c.salience:.2f}] {c.source}: {c.content[:60]}")
-                return "\n".join(lines)
-            # Fallback : cooldowns
-            cooldowns = getattr(brain, '_codelet_cooldowns', {})
-            if cooldowns:
-                from datetime import datetime
-                lines = ["=== CODELETS (aucune alerte) ==="]
-                for name, ts in cooldowns.items():
-                    ago = int(time.time() - ts) if isinstance(ts, (int, float)) else "?"
-                    lines.append(f"  {name}: dernier il y a {ago}s")
-                return "\n".join(lines)
-            return "=== CODELETS ===\n[Aucune activite]"
+            from core.attention_codelets import codelet_system
+            status = codelet_system.get_status()
+            lines = [f"=== CODELETS ({status['registered_codelets']} enregistres, {status['total_alerts']} alertes totales) ==="]
+            # Alertes recentes
+            last = status.get("last_alerts", [])
+            if last:
+                lines.append("  Dernieres alertes:")
+                for a in last:
+                    lines.append(f"    [{a['salience']:.2f}] {a['name']}: {a['content'][:60]}")
+            else:
+                lines.append("  [Aucune alerte recente]")
+            # Etat de chaque codelet
+            lines.append("  ---")
+            for name, info in status.get("codelets", {}).items():
+                ready = "PRET" if info["ready"] else f"cooldown ({info['last_fire_ago']:.0f}s)"
+                total = info["total_alerts"]
+                lines.append(f"  {name}: {ready} | {total} alertes")
+            lines.append(f"  Runs: {status['total_runs']}")
+            return "\n".join(lines)
         except Exception as e:
             return f"[!codelets] Erreur : {e}"
 

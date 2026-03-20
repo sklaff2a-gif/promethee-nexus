@@ -332,6 +332,10 @@ async def lifespan(app: FastAPI):
     brain.start()
     print(f"   🧬 BRAIN VM: Machine virtuelle cerebrale activee (tick #{brain.tick_count}).")
 
+    # --- ATTENTION CODELETS (LIDA) ---
+    from core.attention_codelets import codelet_system
+    print(f"   👁 CODELETS: {len(codelet_system.get_registered_names())} codelets d'attention enregistres.")
+
     # --- CHUNKING SOAR (Règles apprises depuis les Councils) ---
     from core.event_bus.bus import bus as _bus
     _bus.subscribe("COUNCIL_RULE_LEARNED", RouterAgent.on_council_rule_learned)
