@@ -83,6 +83,8 @@ class ChatEngine:
         "  !network                 — Reseau synaptique + plasticite\n"
         "  !health                  — Diagnostic sante systeme\n"
         "  !dashboard               — Tableau de bord compact\n"
+        "  !invoke <slug> [mission] — Invoquer un specialiste du Grimoire\n"
+        "  !craft <nom> <desc>      — Creer un outil ephemere a la volee\n"
         "  !aide                    — Cette liste"
     )
 
@@ -353,6 +355,12 @@ class ChatEngine:
                 "implemente, puis relis le code. Qualite A+ requise.",
                 " ".join(args))
 
+        if cmd == "invoke":
+            return await self._execute_invoke_command(args)
+
+        if cmd == "craft":
+            return await self._execute_craft_command(args)
+
         return f"Commande inconnue : !{cmd}\n{self._COMMAND_HELP}"
 
     def _execute_vision_command(self) -> str:
@@ -424,6 +432,195 @@ class ChatEngine:
                 return f"'{category}' est deja dans mes souhaits."
         except ImportError:
             return "Systeme de salaire non disponible."
+
+    # ============================================================
+    # Grimoire : invocation et creation d'outils ephemeres
+    # ============================================================
+
+    _GRIMOIRE_INDEX_PATH = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "grimoire", "grimoire_index.json"
+    )
+    _GRIMOIRE_DIR = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "grimoire"
+    )
+
+    def _load_grimoire_index(self) -> list:
+        """Charge le grimoire_index.json."""
+        try:
+            with open(self._GRIMOIRE_INDEX_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+
+    def _save_grimoire_index(self, index: list):
+        """Sauvegarde le grimoire_index.json."""
+        tmp = self._GRIMOIRE_INDEX_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(index, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, self._GRIMOIRE_INDEX_PATH)
+
+    async def _execute_invoke_command(self, args: list) -> str:
+        """Invoque un specialiste du Grimoire depuis le chat.
+
+        Usage : !invoke <slug> [mission...]
+        Sans argument : liste les specialistes disponibles.
+        Avec slug seul : affiche la description du specialiste.
+        Avec slug + mission : dispatch la mission vers le specialiste.
+        """
+        index = self._load_grimoire_index()
+
+        if not args:
+            # Lister les specialistes
+            if not index:
+                return "=== GRIMOIRE ===\n[Aucun specialiste enregistre]"
+            lines = [f"=== GRIMOIRE ({len(index)} specialistes) ==="]
+            for entry in index:
+                lines.append(f"  {entry['slug']:20s} — {entry['description'][:60]}")
+            lines.append("\nUsage : !invoke <slug> <mission>")
+            return "\n".join(lines)
+
+        slug = args[0].lower().replace("-", "_")
+
+        # Verifier que le slug existe
+        entry = next((e for e in index if e["slug"] == slug), None)
+        if not entry:
+            # Suggestion si slug proche
+            available = ", ".join(e["slug"] for e in index)
+            return f"Specialiste '{slug}' introuvable.\nDisponibles : {available}"
+
+        if len(args) < 2:
+            return (f"=== {entry['name']} ===\n"
+                    f"Description : {entry['description']}\n"
+                    f"Keywords : {', '.join(entry.get('keywords', []))}\n"
+                    f"\nUsage : !invoke {slug} <ta mission>")
+
+        mission = " ".join(args[1:])
+        return await self._execute_dispatch(
+            slug,
+            f"GRIMOIRE [{entry['name']}]: {mission}",
+            mission,
+        )
+
+    async def _execute_craft_command(self, args: list) -> str:
+        """Cree un outil ephemere (agent Grimoire) a la volee.
+
+        Usage : !craft <nom> <description et keywords>
+        Genere un agent BaseAgent minimal dans core/grimoire/<nom>.py
+        et l'enregistre dans grimoire_index.json.
+
+        Guardrails :
+        - Nom alphanumerique + underscore uniquement (Summoner validation)
+        - Ne peut pas ecraser un slug existant
+        - Genere un agent LLM-wrapper simple (pas de code custom complexe)
+        """
+        if len(args) < 2:
+            return ("Usage : !craft <nom> <description>\n"
+                    "Exemple : !craft csv_parser Analyse de fichiers CSV et statistiques")
+
+        slug = args[0].lower().replace("-", "_")
+        description = " ".join(args[1:])
+
+        # Validation du nom (meme regle que Summoner)
+        if not slug.replace("_", "").isalnum():
+            return f"Nom invalide : '{slug}'. Utilise uniquement lettres, chiffres, underscores."
+
+        if len(slug) < 3:
+            return f"Nom trop court : '{slug}'. Minimum 3 caracteres."
+
+        # Verifier que le slug n'existe pas deja
+        index = self._load_grimoire_index()
+        if any(e["slug"] == slug for e in index):
+            return f"Le specialiste '{slug}' existe deja dans le Grimoire. Utilise !invoke {slug}."
+
+        # Generer le nom de classe (PascalCase)
+        class_name = "".join(part.capitalize() for part in slug.split("_"))
+
+        # Extraire des keywords depuis la description (mots de 4+ lettres)
+        import re
+        words = re.findall(r"[a-zA-ZÀ-ÿ]{4,}", description.lower())
+        # Deduplier et prendre les 6 premiers mots significatifs
+        stopwords = {"dans", "pour", "avec", "depuis", "entre", "cette", "comme",
+                     "tout", "plus", "moins", "aussi", "outil", "faire"}
+        keywords = []
+        seen = set()
+        for w in words:
+            if w not in stopwords and w not in seen:
+                keywords.append(w)
+                seen.add(w)
+            if len(keywords) >= 6:
+                break
+
+        # Generer le code de l'agent
+        agent_code = (
+            f"from core.base_agent import BaseAgent\n"
+            f"\n\n"
+            f"class {class_name}(BaseAgent):\n"
+            f"    \"\"\"Agent ephemere cree par Promethee via !craft.\n"
+            f"\n"
+            f"    {description}\n"
+            f"    \"\"\"\n"
+            f"\n"
+            f"    def __init__(self):\n"
+            f"        super().__init__(\n"
+            f"            name=\"{slug}\",\n"
+            f"            role=\"Specialiste ephemere: {slug}\",\n"
+            f"            description=\"{description[:100]}\"\n"
+            f"        )\n"
+            f"\n"
+            f"    async def process_task(self, task_payload):\n"
+            f"        mission = task_payload.get(\"mission\", \"\")\n"
+            f"        prompt = (\n"
+            f"            \"Tu es un specialiste : {description[:80]}. \"\n"
+            f"            \"Reponds de facon precise et structuree a la demande suivante.\\n\\n\"\n"
+            f"            f\"{{mission}}\"\n"
+            f"        )\n"
+            f"        response = await self.generate_content(prompt)\n"
+            f"        return {{\"status\": \"success\", \"result\": response}}\n"
+        )
+
+        # Validation AST
+        import ast
+        try:
+            ast.parse(agent_code)
+        except SyntaxError as e:
+            return f"Erreur generation code agent : {e}"
+
+        # Ecrire le fichier
+        agent_path = os.path.join(self._GRIMOIRE_DIR, f"{slug}.py")
+        try:
+            with open(agent_path, "w", encoding="utf-8") as f:
+                f.write(agent_code)
+        except Exception as e:
+            return f"Erreur ecriture fichier : {e}"
+
+        # Mettre a jour l'index
+        index.append({
+            "slug": slug,
+            "name": class_name,
+            "description": description[:200],
+            "keywords": keywords,
+            "file": f"{slug}.py",
+        })
+        try:
+            self._save_grimoire_index(index)
+        except Exception as e:
+            # Rollback : supprimer le fichier
+            try:
+                os.remove(agent_path)
+            except Exception:
+                pass
+            return f"Erreur mise a jour index : {e}"
+
+        logger.info(f"CRAFT: Nouvel agent '{slug}' cree dans le Grimoire ({len(keywords)} keywords)")
+
+        return (
+            f"=== OUTIL CREE : {class_name} ===\n"
+            f"Slug : {slug}\n"
+            f"Description : {description[:100]}\n"
+            f"Keywords : {', '.join(keywords)}\n"
+            f"Fichier : core/grimoire/{slug}.py\n"
+            f"\nPret a utiliser : !invoke {slug} <ta mission>"
+        )
 
     async def _execute_dispatch(self, agent: str, mission: str, subject: str) -> str:
         """Pont chat → orchestrateur : dispatche une mission vers un agent.
@@ -1064,7 +1261,7 @@ class ChatEngine:
             return f"Erreur lecture : {e}"
 
     # Commandes dispatch autorisees en auto-action
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft"})
 
     async def _scan_response_actions(self, response: str):
         """Scanne la reponse du LLM pour des commandes ! et les execute.
@@ -1121,6 +1318,12 @@ class ChatEngine:
                 elif cmd_lower == "test":
                     test_args = args.strip().split() if args else []
                     result = await self._execute_test_command(test_args)
+                elif cmd_lower == "invoke":
+                    invoke_args = args.strip().split() if args else []
+                    result = await self._execute_invoke_command(invoke_args)
+                elif cmd_lower == "craft":
+                    craft_args = args.strip().split() if args else []
+                    result = await self._execute_craft_command(craft_args)
                 else:
                     # Dispatch via les memes mecanismes que les commandes utilisateur
                     agent_map = {
