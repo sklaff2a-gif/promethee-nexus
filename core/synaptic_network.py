@@ -632,7 +632,7 @@ class SynapticNetwork:
             creation_signal = autonomy._compute_descending_signals().get("creation", 0.0)
         except Exception:
             creation_signal = 0.0
-        dynamic_threshold = STRUCTURAL_GROWTH_THRESHOLD * (1.0 - creation_signal * 0.5)
+        dynamic_threshold = STRUCTURAL_GROWTH_THRESHOLD * (1.0 - creation_signal * 0.7)
 
         # Collecter les noeuds actifs (energie > seuil dynamique)
         active_nodes = [

@@ -335,7 +335,7 @@ class PsycheEngine:
         # equilibre dynamique base sur le stress. Lissage exponentiel :
         # audace = audace * alpha + target * (1 - alpha)
         # Stress eleve → target bas (30). Stress faible → target = baseline (50).
-        ema_alpha = 0.995  # Inertie forte (changement lent)
+        ema_alpha = 0.95  # Inertie moderee (convergence en ~20 ticks = ~10 min)
         stress_target = max(30.0, 50.0 * (1.0 - stress_factor))
         for agent_name, traits in self.agents.items():
             current_audace = traits.get("audace", BASELINES["audace"])
