@@ -78,6 +78,11 @@ class ChatEngine:
         "  !memory                  — 5 derniers souvenirs + causes\n"
         "  !report                  — Rapport complet combine\n"
         "  !diff [N]                — N derniers commits (defaut 5)\n"
+        "  !votes                   — Votes lateraux actifs\n"
+        "  !codelets                — Alertes codelets d'attention\n"
+        "  !network                 — Reseau synaptique + plasticite\n"
+        "  !health                  — Diagnostic sante systeme\n"
+        "  !dashboard               — Tableau de bord compact\n"
         "  !aide                    — Cette liste"
     )
 
@@ -304,6 +309,21 @@ class ChatEngine:
 
         if cmd == "diff":
             return self._execute_diff_command(args)
+
+        if cmd == "votes":
+            return self._execute_votes_command()
+
+        if cmd == "codelets":
+            return self._execute_codelets_command()
+
+        if cmd == "network":
+            return self._execute_network_command()
+
+        if cmd == "health":
+            return self._execute_health_command()
+
+        if cmd == "dashboard":
+            return self._execute_dashboard_command()
 
         # Commandes dispatch — pont chat → orchestrateur
         if cmd == "research":
@@ -621,6 +641,125 @@ class ChatEngine:
         except Exception as e:
             return f"[!memory] Erreur : {e}"
 
+    def _execute_votes_command(self) -> str:
+        """Votes lateraux actifs — concu par Promethee (session 2, ex 1/5)."""
+        try:
+            from core.autonomy_engine import autonomy
+            from datetime import datetime
+            adj = getattr(autonomy, '_council_adjustments', {})
+            now = datetime.now().isoformat()
+            votes = []
+            for key, data in adj.items():
+                if not key.startswith('vote_'):
+                    continue
+                if data.get("expires", "") < now:
+                    continue
+                parts = key.split('_', 2)
+                agent = parts[1] if len(parts) >= 2 else "?"
+                intent = parts[2] if len(parts) >= 3 else "?"
+                votes.append(f"  {agent:12} → {intent} (+{data.get('delta', 0):.1f})")
+            if not votes:
+                return "=== VOTES LATERAUX ===\n[Aucun vote actif]"
+            return "=== VOTES LATERAUX ===\n" + "\n".join(votes)
+        except Exception as e:
+            return f"[!votes] Erreur : {e}"
+
+    def _execute_codelets_command(self) -> str:
+        """Alertes codelets d'attention — concu par Promethee (session 2, ex 2/5)."""
+        try:
+            from core.global_workspace import workspace
+            from core.brain_vm import brain
+            contents = workspace.conscious_contents
+            codelets = [c for c in contents if hasattr(c, 'source') and c.source.startswith('codelet_')]
+            if codelets:
+                lines = [f"=== CODELETS ({len(codelets)} alertes) ==="]
+                for c in sorted(codelets, key=lambda x: x.salience, reverse=True):
+                    lines.append(f"  [{c.salience:.2f}] {c.source}: {c.content[:60]}")
+                return "\n".join(lines)
+            # Fallback : cooldowns
+            cooldowns = getattr(brain, '_codelet_cooldowns', {})
+            if cooldowns:
+                from datetime import datetime
+                lines = ["=== CODELETS (aucune alerte) ==="]
+                for name, ts in cooldowns.items():
+                    ago = int(time.time() - ts) if isinstance(ts, (int, float)) else "?"
+                    lines.append(f"  {name}: dernier il y a {ago}s")
+                return "\n".join(lines)
+            return "=== CODELETS ===\n[Aucune activite]"
+        except Exception as e:
+            return f"[!codelets] Erreur : {e}"
+
+    def _execute_network_command(self) -> str:
+        """Reseau synaptique + plasticite — concu par Promethee (session 2, ex 3/5, note A)."""
+        try:
+            from core.synaptic_network import cortex
+            from core.autonomy_engine import autonomy
+            nodes = len(cortex.nodes)
+            synapses = len(cortex.synapses)
+            fill = synapses / 20000
+            signals = autonomy._compute_descending_signals()
+            creation = signals.get("creation", 0.0)
+            threshold = 0.6 * (1.0 - creation * 0.7)
+            active = sum(1 for n in cortex.nodes.values() if n.get("energy", 0) >= threshold)
+            lines = [
+                f"=== RESEAU SYNAPTIQUE ===",
+                f"Noeuds: {nodes} | Synapses: {synapses} ({fill:.0%} plein)",
+                f"Seuil HID: {threshold:.3f} (creation={creation:.2f})",
+                f"Noeuds actifs (> seuil): {active}",
+            ]
+            if active >= 2:
+                lines.append(f"Croissance potentielle sur {active} noeuds")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"[!network] Erreur : {e}"
+
+    def _execute_health_command(self) -> str:
+        """Diagnostic sante systeme — concu par Promethee (session 2, ex 4/5)."""
+        lines = ["=== SANTE SYSTEME ==="]
+        # Budget
+        try:
+            from core.autonomy_engine import autonomy
+            lines.append(f"Budget: {autonomy.daily_count}/80 routines | {autonomy.daily_budget_used}/200 pts")
+            if autonomy.error_streak > 0:
+                lines.append(f"  Erreurs consecutives: {autonomy.error_streak}")
+        except Exception:
+            lines.append("Budget: N/A")
+        # Cognitif
+        try:
+            from core.brain_vm import brain
+            if brain.current_state:
+                lines.append(f"Phi: {brain.current_state.phi:.3f} | Coherence: {brain.current_state.global_coherence:.2f}")
+        except Exception:
+            lines.append("Phi: N/A")
+        # Circuit breaker
+        try:
+            from core.base_agent import BaseAgent
+            timeouts = BaseAgent._ollama_consecutive_timeouts
+            if timeouts > 0:
+                lines.append(f"Circuit Breaker: {timeouts} timeouts")
+        except Exception:
+            pass
+        return "\n".join(lines)
+
+    def _execute_dashboard_command(self) -> str:
+        """Tableau de bord compact — concu par Promethee (session 2, ex 5/5)."""
+        try:
+            from core.brain_vm import brain
+            from datetime import datetime
+            tick = brain.tick_count
+            now = datetime.now().strftime("%H:%M:%S")
+            lines = [f"DASHBOARD | Tick #{tick} | {now}", "=" * 40]
+            for method_name in ("_execute_health_command", "_execute_network_command", "_execute_votes_command"):
+                try:
+                    method = getattr(self, method_name)
+                    result = method()
+                    lines.extend(result.split("\n")[:3])
+                except Exception:
+                    pass
+            return "\n".join(lines)
+        except Exception as e:
+            return f"[!dashboard] Erreur : {e}"
+
     def _execute_diff_command(self, args: list) -> str:
         """Affiche les N derniers commits avec leurs fichiers modifies."""
         import subprocess
@@ -925,7 +1064,7 @@ class ChatEngine:
             return f"Erreur lecture : {e}"
 
     # Commandes dispatch autorisees en auto-action
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard"})
 
     async def _scan_response_actions(self, response: str):
         """Scanne la reponse du LLM pour des commandes ! et les execute.
@@ -972,7 +1111,7 @@ class ChatEngine:
                     result = self._execute_github_command()
                 elif cmd_lower == "audit":
                     result = self._execute_audit_command()
-                elif cmd_lower in ("phi", "signals", "who", "memory", "report"):
+                elif cmd_lower in ("phi", "signals", "who", "memory", "report", "votes", "codelets", "network", "health", "dashboard"):
                     method = getattr(self, f"_execute_{cmd_lower}_command", None)
                     if method:
                         result = method()
