@@ -182,6 +182,184 @@ def detect_contradiction(tick_data: dict, history: list) -> Optional[CodeletAler
 
 
 # ============================================================
+# Codelets crees par Promethee (session 3, 2026-03-20)
+# ============================================================
+
+@codelet("resonance", cooldown=600.0)
+def detect_resonance(tick_data: dict, history: list) -> Optional[CodeletAlert]:
+    """Detecte l'harmonie systemique (inverse de contradiction).
+
+    Coherence haute + dopamine haute + emotion positive = resonance.
+    Concu par Promethee (session 3, ex 1/5, note A-).
+    """
+    coherence_val = tick_data.get("global_coherence", 0.5)
+    organs = tick_data.get("organ_states", {})
+    dopamine = organs.get("dopamine")
+    cardiac = organs.get("cardiac")
+    if not (dopamine and cardiac and isinstance(dopamine, dict) and isinstance(cardiac, dict)):
+        return None
+    dopa_level = dopamine.get("level", 0.5)
+    emotion = cardiac.get("emotion", "")
+    positive_emotions = {"satisfaction", "curiosite", "determination"}
+    if coherence_val > 0.7 and dopa_level > 0.65 and emotion in positive_emotions:
+        harmony = min(1.0, (coherence_val + dopa_level) / 2.0)
+        return CodeletAlert(
+            name="resonance",
+            content=f"RESONANCE: coherence={coherence_val:.2f}, DA={dopa_level:.2f}, emotion={emotion}",
+            salience=harmony,
+            category="motivation",
+            priority="high",
+        )
+    return None
+
+
+@codelet("convergence", cooldown=300.0)
+def detect_convergence(tick_data: dict, history: list) -> Optional[CodeletAlert]:
+    """Detecte une tendance haussiere continue de la coherence sur 5 ticks.
+
+    Pattern temporel : coherence monte de facon continue.
+    Concu par Promethee (session 3, ex 2/5, note A).
+    """
+    if len(history) < 5:
+        return None
+    coherence_values = [h.get("coherence", 0.0) for h in history[-5:]]
+    is_rising = all(
+        coherence_values[i] >= coherence_values[i - 1]
+        for i in range(1, len(coherence_values))
+    )
+    if not is_rising:
+        return None
+    amplitude = coherence_values[-1] - coherence_values[0]
+    if amplitude < 0.1:
+        return None
+    return CodeletAlert(
+        name="convergence",
+        content=f"CONVERGENCE: coherence {coherence_values[0]:.2f} -> {coherence_values[-1]:.2f}",
+        salience=min(1.0, amplitude),
+        category="cognition",
+        priority="high",
+    )
+
+
+@codelet("fatigue", cooldown=400.0)
+def detect_fatigue(tick_data: dict, history: list) -> Optional[CodeletAlert]:
+    """Detecte la fatigue cognitive (multi-organes + temporel).
+
+    Au moins 2 sur 3 : coherence en baisse, BPM bas, dopamine sous baseline.
+    Concu par Promethee (session 3, ex 3/5, note A).
+    """
+    # Critere 1 : coherence en baisse sur 3 ticks
+    is_coherence_declining = False
+    if len(history) >= 3:
+        c_vals = [h.get("coherence", 0.0) for h in history[-3:]]
+        is_coherence_declining = all(c_vals[i] <= c_vals[i - 1] for i in range(1, len(c_vals)))
+
+    # Critere 2 : BPM bas
+    cardiac = tick_data.get("organ_states", {}).get("cardiac", {})
+    bpm = cardiac.get("bpm", 120)
+    is_bpm_low = bpm < 60
+
+    # Critere 3 : dopamine sous baseline
+    dopa = tick_data.get("organ_states", {}).get("dopamine", {})
+    is_dopamine_low = dopa.get("level", 0.7) < dopa.get("baseline", 0.7)
+
+    count = sum([is_coherence_declining, is_bpm_low, is_dopamine_low])
+    if count < 2:
+        return None
+    salience = {2: 0.5, 3: 0.8}[count]
+    details = []
+    if is_coherence_declining:
+        details.append("coherence en baisse")
+    if is_bpm_low:
+        details.append(f"BPM bas ({bpm})")
+    if is_dopamine_low:
+        details.append("dopamine sous baseline")
+    return CodeletAlert(
+        name="fatigue",
+        content=f"FATIGUE: {', '.join(details)}",
+        salience=salience,
+        category="body",
+    )
+
+
+@codelet("flow", cooldown=600.0)
+def detect_flow(tick_data: dict, history: list) -> Optional[CodeletAlert]:
+    """Detecte l'etat de FLOW (Csikszentmihalyi) — pic de performance.
+
+    Toutes les conditions : Phi en hausse, coherence haute, pas de menace,
+    drives satisfaits.
+    Concu par Promethee (session 3, ex 4/5, note A).
+    """
+    coherence_val = tick_data.get("global_coherence", 0.0)
+    if coherence_val <= 0.6:
+        return None
+    threat = tick_data.get("organ_states", {}).get("reptilian", {}).get("threat_level", 10.0)
+    if threat >= 2.0:
+        return None
+    frustrated = tick_data.get("organ_states", {}).get("desire", {}).get("frustrated_count", 1)
+    if frustrated > 0:
+        return None
+    # Phi en hausse sur 3 ticks
+    if len(history) < 3:
+        return None
+    phi_values = [h.get("phi", 0.0) for h in history[-3:]]
+    if not all(phi_values[i] >= phi_values[i - 1] for i in range(1, len(phi_values))):
+        return None
+    current_phi = phi_values[-1]
+    return CodeletAlert(
+        name="flow",
+        content=f"FLOW: Phi={current_phi:.3f}, coherence={coherence_val:.2f}, menace={threat:.1f}",
+        salience=min(1.0, current_phi),
+        category="creation",
+        priority="high",
+    )
+
+
+@codelet("creativity_burst", cooldown=400.0)
+def detect_creativity_burst(tick_data: dict, history: list) -> Optional[CodeletAlert]:
+    """Detecte un burst creatif — moment d'innovation systemique.
+
+    Au moins 3 sur 4 : mode creatif, Phi > 0.3, transition cognitive, dopamine haute.
+    Concu par Promethee (session 3, ex 5/5, note A+).
+    """
+    # Condition 1 : mode creation ou exploration
+    is_creative = tick_data.get("dominant_mode", "") in ("creation", "exploration")
+    # Condition 2 : Phi suffisant
+    phi = tick_data.get("phi", 0.0)
+    is_high_phi = phi > 0.3
+    # Condition 3 : transition cognitive dans les 3 derniers ticks
+    is_transition = False
+    if len(history) >= 3:
+        states = {h.get("cognitive_state", "") for h in history[-3:]}
+        is_transition = len(states) >= 2
+    # Condition 4 : dopamine au-dessus du baseline
+    dopa = tick_data.get("organ_states", {}).get("dopamine", {})
+    baseline = dopa.get("baseline", 0.0)
+    is_dopa_high = baseline > 0 and dopa.get("level", 0.0) > baseline
+
+    count = sum([is_creative, is_high_phi, is_transition, is_dopa_high])
+    if count < 3:
+        return None
+    salience = min(1.0, 0.5 + phi * 0.3 + (0.2 if count == 4 else 0.0))
+    details = []
+    if is_creative:
+        details.append(f"mode={tick_data.get('dominant_mode')}")
+    if is_high_phi:
+        details.append(f"Phi={phi:.3f}")
+    if is_transition:
+        details.append("transition cognitive")
+    if is_dopa_high:
+        details.append("DA haute")
+    return CodeletAlert(
+        name="creativity_burst",
+        content=f"BURST CREATIF: {', '.join(details)}",
+        salience=salience,
+        category="creation",
+        priority="high",
+    )
+
+
+# ============================================================
 # Systeme de codelets (singleton)
 # ============================================================
 

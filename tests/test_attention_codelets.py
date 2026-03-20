@@ -14,6 +14,11 @@ from core.attention_codelets import (
     detect_novelty,
     detect_opportunity,
     detect_contradiction,
+    detect_resonance,
+    detect_convergence,
+    detect_fatigue,
+    detect_flow,
+    detect_creativity_burst,
 )
 
 
@@ -69,10 +74,13 @@ def _make_tick_data(
 class TestCodeletRegistry:
     """Tests pour le registre de codelets."""
 
-    def test_five_codelets_registered(self):
-        """Les 5 codelets de base sont enregistres."""
-        assert len(_CODELET_REGISTRY) >= 5
-        expected = {"danger", "stagnation", "novelty", "opportunity", "contradiction"}
+    def test_ten_codelets_registered(self):
+        """Les 10 codelets (5 base + 5 Promethee) sont enregistres."""
+        assert len(_CODELET_REGISTRY) >= 10
+        expected = {
+            "danger", "stagnation", "novelty", "opportunity", "contradiction",
+            "resonance", "convergence", "fatigue", "flow", "creativity_burst",
+        }
         assert expected.issubset(set(_CODELET_REGISTRY.keys()))
 
     def test_registry_has_function_and_cooldown(self):
@@ -335,3 +343,201 @@ class TestCodeletAlert:
             priority="critical",
         )
         assert alert.priority == "critical"
+
+
+# ============================================================
+# Tests des 5 codelets crees par Promethee (session 3)
+# ============================================================
+
+class TestCodeletResonance:
+    """Tests pour detect_resonance — harmonie systemique."""
+
+    def test_no_alert_low_coherence(self):
+        data = _make_tick_data(dopa_level=0.8, emotion="satisfaction")
+        data["global_coherence"] = 0.5  # Trop bas
+        assert detect_resonance(data, []) is None
+
+    def test_no_alert_negative_emotion(self):
+        data = _make_tick_data(dopa_level=0.8, emotion="frustration")
+        data["global_coherence"] = 0.9
+        assert detect_resonance(data, []) is None
+
+    def test_alert_harmony(self):
+        data = _make_tick_data(dopa_level=0.8, emotion="satisfaction")
+        data["global_coherence"] = 0.8
+        alert = detect_resonance(data, [])
+        assert alert is not None
+        assert alert.name == "resonance"
+        assert alert.priority == "high"
+
+    def test_no_alert_low_dopamine(self):
+        data = _make_tick_data(dopa_level=0.3, emotion="satisfaction")
+        data["global_coherence"] = 0.8
+        assert detect_resonance(data, []) is None
+
+
+class TestCodeletConvergence:
+    """Tests pour detect_convergence — tendance haussiere coherence."""
+
+    def test_no_alert_short_history(self):
+        history = [{"coherence": 0.5}] * 3
+        assert detect_convergence({}, history) is None
+
+    def test_no_alert_declining(self):
+        history = [{"coherence": 0.8 - i * 0.1} for i in range(5)]
+        assert detect_convergence({}, history) is None
+
+    def test_alert_rising(self):
+        history = [{"coherence": 0.3 + i * 0.1} for i in range(5)]
+        alert = detect_convergence({}, history)
+        assert alert is not None
+        assert alert.name == "convergence"
+        assert "0.30" in alert.content
+        assert "0.70" in alert.content
+
+    def test_no_alert_flat(self):
+        history = [{"coherence": 0.5}] * 5
+        assert detect_convergence({}, history) is None  # Amplitude < 0.1
+
+    def test_no_alert_small_rise(self):
+        history = [{"coherence": 0.5 + i * 0.01} for i in range(5)]
+        assert detect_convergence({}, history) is None  # Amplitude 0.04 < 0.1
+
+
+class TestCodeletFatigue:
+    """Tests pour detect_fatigue — fatigue cognitive multi-organes."""
+
+    def test_no_alert_one_criterion(self):
+        data = _make_tick_data()
+        data["organ_states"]["cardiac"]["bpm"] = 55  # Seul BPM bas
+        assert detect_fatigue(data, []) is None
+
+    def test_alert_two_criteria(self):
+        data = _make_tick_data(dopa_level=0.3)
+        data["organ_states"]["cardiac"]["bpm"] = 55
+        data["organ_states"]["dopamine"]["baseline"] = 0.7
+        data["organ_states"]["dopamine"]["level"] = 0.3
+        # Coherence en hausse = PAS de baisse = critere 1 non rempli
+        history = [{"coherence": 0.5}, {"coherence": 0.6}, {"coherence": 0.7}]
+        alert = detect_fatigue(data, history)
+        assert alert is not None
+        assert alert.name == "fatigue"
+        assert alert.salience == 0.5  # 2/3 (BPM + dopamine)
+
+    def test_alert_three_criteria(self):
+        data = _make_tick_data(dopa_level=0.3)
+        data["organ_states"]["cardiac"]["bpm"] = 55
+        data["organ_states"]["dopamine"]["baseline"] = 0.7
+        data["organ_states"]["dopamine"]["level"] = 0.3
+        history = [{"coherence": 0.8}, {"coherence": 0.6}, {"coherence": 0.4}]
+        alert = detect_fatigue(data, history)
+        assert alert is not None
+        assert alert.salience == 0.8  # 3/3
+
+    def test_no_alert_healthy(self):
+        data = _make_tick_data(dopa_level=0.8)
+        data["organ_states"]["cardiac"]["bpm"] = 70
+        data["organ_states"]["dopamine"]["baseline"] = 0.5
+        history = [{"coherence": 0.5 + i * 0.05} for i in range(5)]
+        assert detect_fatigue(data, history) is None
+
+
+class TestCodeletFlow:
+    """Tests pour detect_flow — etat de flow (Csikszentmihalyi)."""
+
+    def test_no_alert_low_coherence(self):
+        data = _make_tick_data(threat=0.5)
+        data["global_coherence"] = 0.3
+        assert detect_flow(data, []) is None
+
+    def test_no_alert_high_threat(self):
+        data = _make_tick_data(threat=5.0)
+        data["global_coherence"] = 0.8
+        assert detect_flow(data, []) is None
+
+    def test_no_alert_frustrated(self):
+        data = _make_tick_data(threat=0.5)
+        data["global_coherence"] = 0.8
+        data["organ_states"]["desire"]["frustrated_count"] = 2
+        history = [{"phi": 0.1 + i * 0.05} for i in range(3)]
+        assert detect_flow(data, history) is None
+
+    def test_alert_all_conditions(self):
+        data = _make_tick_data(threat=0.5)
+        data["global_coherence"] = 0.8
+        data["organ_states"]["desire"]["frustrated_count"] = 0
+        history = [{"phi": 0.2}, {"phi": 0.3}, {"phi": 0.4}]
+        alert = detect_flow(data, history)
+        assert alert is not None
+        assert alert.name == "flow"
+        assert alert.category == "creation"
+
+    def test_no_alert_phi_declining(self):
+        data = _make_tick_data(threat=0.5)
+        data["global_coherence"] = 0.8
+        data["organ_states"]["desire"]["frustrated_count"] = 0
+        history = [{"phi": 0.5}, {"phi": 0.3}, {"phi": 0.2}]
+        assert detect_flow(data, history) is None
+
+
+class TestCodeletCreativityBurst:
+    """Tests pour detect_creativity_burst — burst creatif."""
+
+    def test_no_alert_insufficient_conditions(self):
+        data = _make_tick_data()
+        data["dominant_mode"] = "repos"
+        data["phi"] = 0.1
+        assert detect_creativity_burst(data, []) is None
+
+    def test_alert_three_conditions(self):
+        data = _make_tick_data(dopa_level=0.8)
+        data["dominant_mode"] = "creation"
+        data["phi"] = 0.5
+        data["organ_states"]["dopamine"]["baseline"] = 0.5
+        data["organ_states"]["dopamine"]["level"] = 0.8
+        history = [
+            {"cognitive_state": "standard"},
+            {"cognitive_state": "exploration"},
+            {"cognitive_state": "standard"},
+        ]
+        alert = detect_creativity_burst(data, history)
+        assert alert is not None
+        assert alert.name == "creativity_burst"
+        assert alert.category == "creation"
+
+    def test_salience_formula_3_conditions(self):
+        data = _make_tick_data(dopa_level=0.8)
+        data["dominant_mode"] = "creation"
+        data["phi"] = 0.2  # Sous 0.3 = condition phi NON remplie
+        data["organ_states"]["dopamine"]["baseline"] = 0.5
+        data["organ_states"]["dopamine"]["level"] = 0.8
+        history = [
+            {"cognitive_state": "standard"},
+            {"cognitive_state": "exploration"},
+            {"cognitive_state": "standard"},
+        ]
+        alert = detect_creativity_burst(data, history)
+        # 3/4 : creation + transition + DA haute (phi False)
+        # 0.5 + 0.2*0.3 + 0 = 0.56
+        assert abs(alert.salience - 0.56) < 0.01
+
+    def test_salience_formula_4_conditions(self):
+        data = _make_tick_data(dopa_level=0.8)
+        data["dominant_mode"] = "exploration"
+        data["phi"] = 0.4
+        data["organ_states"]["dopamine"]["baseline"] = 0.5
+        data["organ_states"]["dopamine"]["level"] = 0.8
+        history = [
+            {"cognitive_state": "standard"},
+            {"cognitive_state": "exploration"},
+            {"cognitive_state": "creation"},
+        ]
+        alert = detect_creativity_burst(data, history)
+        # 0.5 + 0.4*0.3 + 0.2 (4/4) = 0.82
+        assert abs(alert.salience - 0.82) < 0.01
+
+    def test_no_alert_short_history(self):
+        data = _make_tick_data()
+        data["dominant_mode"] = "creation"
+        data["phi"] = 0.5
+        assert detect_creativity_burst(data, [{"cognitive_state": "x"}]) is None
