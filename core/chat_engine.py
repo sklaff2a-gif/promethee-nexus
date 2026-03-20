@@ -77,6 +77,7 @@ class ChatEngine:
         "  !who                     — Resume identite\n"
         "  !memory                  — 5 derniers souvenirs + causes\n"
         "  !report                  — Rapport complet combine\n"
+        "  !diff [N]                — N derniers commits (defaut 5)\n"
         "  !aide                    — Cette liste"
     )
 
@@ -300,6 +301,9 @@ class ChatEngine:
 
         if cmd == "report":
             return self._execute_report_command()
+
+        if cmd == "diff":
+            return self._execute_diff_command(args)
 
         # Commandes dispatch — pont chat → orchestrateur
         if cmd == "research":
@@ -617,6 +621,40 @@ class ChatEngine:
         except Exception as e:
             return f"[!memory] Erreur : {e}"
 
+    def _execute_diff_command(self, args: list) -> str:
+        """Affiche les N derniers commits avec leurs fichiers modifies."""
+        import subprocess
+
+        n = 5
+        if args:
+            try:
+                n = min(20, max(1, int(args[0])))
+            except ValueError:
+                pass
+
+        lines = [f"GIT DIFF — {n} derniers commits\n"]
+
+        try:
+            r = subprocess.run(
+                ["git", "-C", "C:/MesProjets/PROMETHEE_V11_restructuration2026",
+                 "log", f"--oneline", f"-{n}", "--stat", "--no-color"],
+                capture_output=True, text=True, timeout=15
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                output = r.stdout.strip()
+                # Tronquer si trop long
+                if len(output) > 2500:
+                    output = output[:2500] + "\n... (tronque)"
+                lines.append(output)
+            else:
+                lines.append("Aucun commit trouve.")
+        except subprocess.TimeoutExpired:
+            lines.append("Timeout git log.")
+        except Exception as e:
+            lines.append(f"Erreur : {e}")
+
+        return "\n".join(lines)
+
     def _execute_report_command(self) -> str:
         """Rapport complet combine — concu par Promethee (exercice 5/5, auto-correction)."""
         try:
@@ -725,13 +763,29 @@ class ChatEngine:
             if r.returncode == 0:
                 import json
                 data = json.loads(r.stdout)
-                lines.append(f"Description : {data.get('description', 'N/A')[:100]}")
+                lines.append(f"Description : {data.get('description', 'N/A')}")
                 lines.append(f"Stars: {data.get('stargazers_count', 0)} | Forks: {data.get('forks_count', 0)} | Issues: {data.get('open_issues_count', 0)}")
                 topics = data.get("topics", [])
                 if topics:
                     lines.append(f"Topics : {', '.join(topics[:5])}")
+                lines.append(f"Taille : {data.get('size', 0)} KB | Langue : {data.get('language', 'N/A')}")
         except Exception as e:
             lines.append(f"Stats : erreur ({e})")
+
+        # Referrers
+        try:
+            r = subprocess.run(
+                ["gh", "api", "repos/sklaff2a-gif/promethee-nexus/traffic/popular/referrers"],
+                capture_output=True, text=True, timeout=10
+            )
+            if r.returncode == 0:
+                import json
+                refs = json.loads(r.stdout)
+                if refs:
+                    ref_str = ", ".join(f"{r['referrer']}({r['uniques']})" for r in refs[:3])
+                    lines.append(f"Referrers : {ref_str}")
+        except Exception:
+            pass
 
         # Trafic
         try:
@@ -871,7 +925,7 @@ class ChatEngine:
             return f"Erreur lecture : {e}"
 
     # Commandes dispatch autorisees en auto-action
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff"})
 
     async def _scan_response_actions(self, response: str):
         """Scanne la reponse du LLM pour des commandes ! et les execute.
@@ -922,8 +976,9 @@ class ChatEngine:
                     method = getattr(self, f"_execute_{cmd_lower}_command", None)
                     if method:
                         result = method()
-                    else:
-                        result = f"Commande {cmd_lower} non trouvee"
+                elif cmd_lower == "diff":
+                    diff_args = args.strip().split() if args else []
+                    result = self._execute_diff_command(diff_args)
                 elif cmd_lower == "test":
                     test_args = args.strip().split() if args else []
                     result = await self._execute_test_command(test_args)
