@@ -71,6 +71,7 @@ class ChatEngine:
         "  !grep <pattern> [fichier] — Chercher dans le code\n"
         "  !github                  — Stats de ma page GitHub\n"
         "  !test [fichier_test]      — Lancer un test et voir le resultat\n"
+        "  !audit                   — 10 dernieres actions du systeme\n"
         "  !aide                    — Cette liste"
     )
 
@@ -276,6 +277,9 @@ class ChatEngine:
 
         if cmd == "test":
             return await self._execute_test_command(args)
+
+        if cmd == "audit":
+            return self._execute_audit_command()
 
         # Commandes dispatch — pont chat → orchestrateur
         if cmd == "research":
@@ -502,6 +506,30 @@ class ChatEngine:
 
         return "\n".join(cleaned).strip()
 
+    def _execute_audit_command(self) -> str:
+        """Affiche les 10 dernieres actions du systeme — concu par Promethee."""
+        try:
+            from core.autonomy_engine import autonomy
+            history = autonomy.routine_history
+
+            recent = history[-10:]
+            if not recent:
+                return "Aucune routine enregistree recemment."
+
+            lines = ["📋 AUDIT — 10 dernieres actions"]
+            for entry in recent:
+                agent = entry.get("agent", "?")
+                intent = entry.get("intent", "?")
+                status = entry.get("status", "?")
+                timestamp = entry.get("timestamp", "")[:19]
+                quality = entry.get("quality_score", 0.0)
+                line = f"  [{agent}] {intent} → {status} | Q:{quality:.1f} @ {timestamp}"
+                lines.append(line)
+
+            return "\n".join(lines)
+        except Exception as e:
+            return f"[!audit] Erreur : {e}"
+
     def _execute_grep_command(self, args: list) -> str:
         """Cherche un pattern dans les fichiers du projet."""
         import os as _os
@@ -718,7 +746,7 @@ class ChatEngine:
             return f"Erreur lecture : {e}"
 
     # Commandes dispatch autorisees en auto-action
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit"})
 
     async def _scan_response_actions(self, response: str):
         """Scanne la reponse du LLM pour des commandes ! et les execute.
@@ -763,6 +791,8 @@ class ChatEngine:
                     result = self._execute_grep_command(grep_args)
                 elif cmd_lower == "github":
                     result = self._execute_github_command()
+                elif cmd_lower == "audit":
+                    result = self._execute_audit_command()
                 elif cmd_lower == "test":
                     test_args = args.strip().split() if args else []
                     result = await self._execute_test_command(test_args)
