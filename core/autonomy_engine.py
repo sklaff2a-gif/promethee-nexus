@@ -29,6 +29,22 @@ POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE", "S
 FINAL_SCORE_CLAMP_MIN = -5.0
 FINAL_SCORE_CLAMP_MAX = 25.0
 
+# --- Voting lateral (inspire Monty/Thousand Brains) ---
+# Apres chaque routine reussie, l'agent vote pour les intents lies.
+# Le vote est injecte dans council_adjustments (Couche 14) avec expiration.
+AGENT_VOTE_MAP = {
+    "security": ["SECURITY_AUDIT"],
+    "evolution": ["EXPANSION_CODE", "EXPANSION_CATALOG"],
+    "researcher": ["VEILLE_SILENCIEUSE", "DROPZONE_SCAN"],
+    "architect": ["AUDIT_STRUCTURE"],
+    "_memory_consolidation": ["MEMORY_CONSOLIDATION"],
+    "_council": ["COUNCIL_DEBATE"],
+    "_school_class": [],  # L'ecole ne vote pas pour elle-meme
+    "_grimoire": ["GRIMOIRE_INVOKE"],
+}
+VOTE_DELTA = 1.0        # Bonus de vote (petit, contrebalance par recency penalty)
+VOTE_TTL_MINUTES = 5    # Expiration du vote
+
 # --- Modele LIF (Leaky Integrate-and-Fire) ---
 # Inspire de Eon Systems (mouche drosophile) : chaque routine maintient un potentiel
 # qui accumule les scores et decroit naturellement (leak). Fire quand seuil atteint.
@@ -1038,6 +1054,31 @@ class AutonomyEngine:
             "timestamp": time.time(),
         })
         logger.debug(f"[SENSORIUM] Feedback pulse publie (intent={intent}, q={quality_score:.2f})")
+
+    def _publish_agent_vote(self, agent: str, intent: str):
+        """Voting lateral : l'agent vote pour les intents lies apres succes.
+
+        Inspire de Monty/Thousand Brains : chaque agent partage ses
+        recommandations avec ses voisins via council_adjustments.
+        Le vote expire apres VOTE_TTL_MINUTES et est ecrase par le suivant.
+        """
+        recommended = AGENT_VOTE_MAP.get(agent.lower(), [])
+        if not recommended:
+            return
+
+        from datetime import datetime, timedelta
+        expires = (datetime.now() + timedelta(minutes=VOTE_TTL_MINUTES)).isoformat()
+
+        for rec_intent in recommended:
+            # Ecraser le vote precedent du meme agent (pas d'accumulation)
+            vote_key = f"vote_{agent}_{rec_intent}"
+            self._council_adjustments[vote_key] = {
+                "delta": VOTE_DELTA,
+                "expires": expires,
+                "reason": f"vote lateral {agent} apres {intent}",
+            }
+
+        logger.debug(f"[VOTING] {agent} vote pour {recommended} (expire {VOTE_TTL_MINUTES}min)")
 
     def _lif_integrate_and_select(self, scored: list) -> list:
         """Modele Leaky Integrate-and-Fire pour la selection de routine.
@@ -2292,6 +2333,10 @@ class AutonomyEngine:
                 intent, agent, quality_score, routine_status)
         except Exception as e:
             logger.debug(f"[SENSORIUM] Feedback pulse erreur: {e}")
+
+        # Voting lateral : l'agent vote pour les intents lies apres succes
+        if routine_status == "success" and quality_score >= 0.5:
+            self._publish_agent_vote(agent, intent)
 
         self.daily_count += 1
         self.total_routines_executed += 1
