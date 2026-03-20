@@ -72,6 +72,11 @@ class ChatEngine:
         "  !github                  — Stats de ma page GitHub\n"
         "  !test [fichier_test]      — Lancer un test et voir le resultat\n"
         "  !audit                   — 10 dernieres actions du systeme\n"
+        "  !phi                     — Mesure de conscience Phi (IIT)\n"
+        "  !signals                 — Signaux descendants en barres\n"
+        "  !who                     — Resume identite\n"
+        "  !memory                  — 5 derniers souvenirs + causes\n"
+        "  !report                  — Rapport complet combine\n"
         "  !aide                    — Cette liste"
     )
 
@@ -280,6 +285,21 @@ class ChatEngine:
 
         if cmd == "audit":
             return self._execute_audit_command()
+
+        if cmd == "phi":
+            return self._execute_phi_command()
+
+        if cmd == "signals":
+            return self._execute_signals_command()
+
+        if cmd == "who":
+            return self._execute_who_command()
+
+        if cmd == "memory":
+            return self._execute_memory_command()
+
+        if cmd == "report":
+            return self._execute_report_command()
 
         # Commandes dispatch — pont chat → orchestrateur
         if cmd == "research":
@@ -505,6 +525,111 @@ class ChatEngine:
             return response  # Pas de commande detectee, retourner tel quel
 
         return "\n".join(cleaned).strip()
+
+    def _execute_phi_command(self) -> str:
+        """Mesure de conscience Phi — concu par Promethee (exercice 1/5)."""
+        try:
+            from core.brain_vm import brain
+            if not brain.current_state:
+                return "Phi : N/A (Brain VM pas encore active)"
+            phi = brain.current_state.phi
+            history = brain.state_history[-5:]
+            tick_values = [t.get("phi", 0) for t in history]
+            if len(tick_values) > 1:
+                first, last = tick_values[0], tick_values[-1]
+                if last > first + 0.05: trend = "Montee"
+                elif last < first - 0.05: trend = "Descente"
+                else: trend = "Stable"
+            else:
+                trend = "?"
+            if phi > 0.3: interp = "Integration forte (conscience globale)"
+            elif phi >= 0.1: interp = "Integration moderee"
+            else: interp = "Organes independants"
+            vals = " ".join(f"{v:.2f}" for v in tick_values)
+            return f"CONSCIENCE PHI = {phi:.3f}\nTendance : {trend} [{vals}]\nInterpretation : {interp}"
+        except Exception as e:
+            return f"[!phi] Erreur : {e}"
+
+    def _execute_signals_command(self) -> str:
+        """Signaux descendants en barres ASCII — concu par Promethee (exercice 2/5)."""
+        try:
+            from core.autonomy_engine import autonomy
+            signals = autonomy._compute_descending_signals()
+            sorted_signals = sorted(signals.items(), key=lambda x: x[1], reverse=True)
+            lines = ["SIGNAUX DESCENDANTS"]
+            for mode, intensity in sorted_signals:
+                bar_len = int(intensity * 10)
+                bar = chr(9608) * bar_len + chr(9617) * (10 - bar_len)
+                name = mode.upper().ljust(15)
+                lines.append(f"  {name}|{bar}| {intensity*100:5.0f}%")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"[!signals] Erreur : {e}"
+
+    def _execute_who_command(self) -> str:
+        """Resume identite — concu par Promethee (exercice 3/5)."""
+        lines = ["=== QUI SUIS-JE ? ==="]
+        try:
+            from core.psyche import psyche
+            traits = psyche.get_system_average()
+            sorted_t = sorted(traits.items(), key=lambda x: x[1], reverse=True)
+            top3 = ", ".join(f"{k}({int(v)})" for k, v in sorted_t[:3])
+            weak = f"Faible: {sorted_t[-1][0]}({int(sorted_t[-1][1])})"
+            lines.append(f"Traits : {top3} | {weak}")
+        except Exception:
+            lines.append("Traits : N/A")
+        try:
+            from core.desire_engine import desires
+            dominant = max(desires.drives.values(), key=lambda d: d.deprivation)
+            lines.append(f"Pulsion : {dominant.name} (dep={dominant.deprivation:.0f})")
+        except Exception:
+            lines.append("Pulsion : N/A")
+        try:
+            from core.cardiac_engine import heart
+            lines.append(f"Humeur : {heart.current_emotion} ({heart.bpm:.0f} BPM)")
+        except Exception:
+            lines.append("Humeur : N/A")
+        try:
+            from core.autonomy_engine import autonomy
+            signals = autonomy._compute_descending_signals()
+            mode = max(signals.items(), key=lambda x: x[1])[0] if signals else "N/A"
+            pct = int(max(signals.values(), default=0) * 100)
+            lines.append(f"Mode : {mode.upper()} ({pct}%)")
+        except Exception:
+            lines.append("Mode : N/A")
+        return "\n".join(lines)
+
+    def _execute_memory_command(self) -> str:
+        """Souvenirs episodiques + causes — concu par Promethee (exercice 4/5)."""
+        try:
+            from core.hippocampus import hippocampus
+            episodes = hippocampus._episodes[-5:]
+            if not episodes:
+                return "=== MEMOIRE ===\n[Aucun souvenir]"
+            lines = ["=== MEMOIRE EPISODIQUE ==="]
+            for i, ep in enumerate(episodes, 1):
+                from datetime import datetime
+                ts = datetime.fromtimestamp(ep.timestamp).strftime("%H:%M") if ep.timestamp else "?"
+                lines.append(f"  {i}. [{ep.event_type}] {ep.intent} @ {ts} (q={ep.quality_score:.2f})")
+                if ep.causal_chain:
+                    lines.append(f"     Cause: {' > '.join(ep.causal_chain)}")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"[!memory] Erreur : {e}"
+
+    def _execute_report_command(self) -> str:
+        """Rapport complet combine — concu par Promethee (exercice 5/5, auto-correction)."""
+        try:
+            sections = [
+                self._execute_status_command(),
+                self._execute_phi_command(),
+                self._execute_signals_command(),
+                self._execute_who_command(),
+                self._execute_audit_command(),
+            ]
+            return "\n\n---\n".join(filter(None, sections))
+        except Exception as e:
+            return f"[!report] Erreur : {e}"
 
     def _execute_audit_command(self) -> str:
         """Affiche les 10 dernieres actions du systeme — concu par Promethee."""
@@ -746,7 +871,7 @@ class ChatEngine:
             return f"Erreur lecture : {e}"
 
     # Commandes dispatch autorisees en auto-action
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report"})
 
     async def _scan_response_actions(self, response: str):
         """Scanne la reponse du LLM pour des commandes ! et les execute.
@@ -793,6 +918,12 @@ class ChatEngine:
                     result = self._execute_github_command()
                 elif cmd_lower == "audit":
                     result = self._execute_audit_command()
+                elif cmd_lower in ("phi", "signals", "who", "memory", "report"):
+                    method = getattr(self, f"_execute_{cmd_lower}_command", None)
+                    if method:
+                        result = method()
+                    else:
+                        result = f"Commande {cmd_lower} non trouvee"
                 elif cmd_lower == "test":
                     test_args = args.strip().split() if args else []
                     result = await self._execute_test_command(test_args)
