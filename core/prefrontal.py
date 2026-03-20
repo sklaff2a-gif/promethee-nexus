@@ -40,6 +40,7 @@ MAX_ACTIVE_GOALS = 3            # Slots de travail simultanés
 MAX_STRATEGIES = 50             # Mémoire stratégique (FIFO)
 MAX_PROSPECTIVE_TRIGGERS = 20   # Rappels différés max
 MAX_NARRATIVE_LOG = 100         # Journal interne (FIFO)
+MAX_SAVED_GOALS_HISTORY = 50    # Goals terminées gardées en persistance
 
 # Horizons temporels (secondes)
 HORIZON_IMMEDIATE = 600         # 10 min
@@ -1360,8 +1361,12 @@ class PrefrontalCortex:
 
     def save(self):
         """Sauvegarde atomique de l'état."""
+        active = [g for g in self.goals if g.status == "active"]
+        finished = [g for g in self.goals if g.status != "active"]
+        finished.sort(key=lambda g: getattr(g, "last_advanced", 0))
+        saved_goals = active + finished[-MAX_SAVED_GOALS_HISTORY:]
         state = {
-            "goals": [self._goal_to_dict(g) for g in self.goals],
+            "goals": [self._goal_to_dict(g) for g in saved_goals],
             "strategies": [asdict(s) for s in self.strategies],
             "triggers": [asdict(t) for t in self.triggers],
             "stats": self.stats,
