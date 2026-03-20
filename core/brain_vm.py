@@ -139,6 +139,9 @@ class BrainVM:
         # 3b. PHI (IIT) — mesure d'integration de l'information
         state.phi = self._compute_phi(state)
 
+        # 3c. CODELETS D'ATTENTION (LIDA) — detection de patterns
+        self._run_codelets(state)
+
         # 4. PUBLIER — BRAIN_TICK
         self.current_state = state
         self.state_history.append({
@@ -353,6 +356,122 @@ class BrainVM:
         phi = global_var / (sum_individual_var + epsilon)
 
         return round(min(1.0, phi), 3)  # Clamp [0, 1]
+
+    # ============================================================
+    # Codelets d'attention (LIDA-inspired)
+    # ============================================================
+
+    _CODELET_COOLDOWN = 300.0  # 5 minutes entre deux alertes du meme codelet
+
+    def _run_codelets(self, state: BrainState):
+        """Execute les 5 codelets d'attention sur le BrainState courant.
+
+        Inspire de LIDA : micro-detecteurs legers qui scannent les patterns
+        emergents et soumettent des alertes au Global Workspace.
+        """
+        if not hasattr(self, "_codelet_cooldowns"):
+            self._codelet_cooldowns = {}
+
+        now = time.time()
+        codelets = [
+            self._codelet_danger,
+            self._codelet_stagnation,
+            self._codelet_novelty,
+            self._codelet_opportunity,
+            self._codelet_contradiction,
+        ]
+        for codelet in codelets:
+            name = codelet.__name__
+            last = self._codelet_cooldowns.get(name, 0)
+            if now - last < self._CODELET_COOLDOWN:
+                continue
+            try:
+                alert = codelet(state)
+                if alert:
+                    self._codelet_cooldowns[name] = now
+                    try:
+                        from core.global_workspace import workspace
+                        workspace.submit(**alert)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+    def _codelet_danger(self, state: BrainState) -> Optional[dict]:
+        """Detecte quand threat_level > 4 (danger imminent)."""
+        reptilian = state.organ_states.get("reptilian")
+        if reptilian and isinstance(reptilian, dict):
+            threat = reptilian.get("threat_level", 0)
+            if threat > 4.0:
+                return {
+                    "source": "codelet_danger",
+                    "content": f"ALERTE: menace detectee (threat={threat:.1f})",
+                    "salience": 0.9,
+                    "category": "urgence",
+                    "priority": "critical" if threat >= 6.0 else "high",
+                }
+        return None
+
+    def _codelet_stagnation(self, state: BrainState) -> Optional[dict]:
+        """Detecte quand le meme intent est repete 3+ fois dans les 5 derniers."""
+        recent = [h.get("dominant_mode", "") for h in self.state_history[-10:]]
+        if len(recent) >= 5:
+            last_5 = recent[-5:]
+            if len(set(last_5)) == 1 and last_5[0] != "":
+                return {
+                    "source": "codelet_stagnation",
+                    "content": f"STAGNATION: mode {last_5[0]} repete 5x de suite",
+                    "salience": 0.7,
+                    "category": "cognition",
+                }
+        return None
+
+    def _codelet_novelty(self, state: BrainState) -> Optional[dict]:
+        """Detecte un changement d'etat cognitif (transition)."""
+        if len(self.state_history) < 2:
+            return None
+        prev = self.state_history[-2].get("cognitive_state", "standard")
+        curr = state.cognitive_state
+        if prev != curr and curr != "standard":
+            return {
+                "source": "codelet_novelty",
+                "content": f"TRANSITION: {prev} → {curr}",
+                "salience": 0.6,
+                "category": "cognition",
+            }
+        return None
+
+    def _codelet_opportunity(self, state: BrainState) -> Optional[dict]:
+        """Detecte quand un drive est tres affame (>80) — opportunite d'action."""
+        desires = state.organ_states.get("desire")
+        if desires and isinstance(desires, dict):
+            drive = desires.get("dominant_drive", "")
+            dep = desires.get("dominant_deprivation", 0)
+            if dep > 80:
+                return {
+                    "source": "codelet_opportunity",
+                    "content": f"OPPORTUNITE: {drive} affame (dep={dep:.0f})",
+                    "salience": 0.6,
+                    "category": "motivation",
+                }
+        return None
+
+    def _codelet_contradiction(self, state: BrainState) -> Optional[dict]:
+        """Detecte une contradiction entre organes (dopamine haute + emotion negative)."""
+        dopamine = state.organ_states.get("dopamine")
+        cardiac = state.organ_states.get("cardiac")
+        if dopamine and cardiac and isinstance(dopamine, dict) and isinstance(cardiac, dict):
+            dopa_level = dopamine.get("level", 0.5)
+            emotion = cardiac.get("emotion", "")
+            negative_emotions = {"frustration", "inquietude", "peur", "panique", "fatigue"}
+            if dopa_level > 0.7 and emotion in negative_emotions:
+                return {
+                    "source": "codelet_contradiction",
+                    "content": f"CONTRADICTION: dopamine={dopa_level:.2f} mais emotion={emotion}",
+                    "salience": 0.7,
+                    "category": "emotion",
+                }
+        return None
 
     # Phase 2 : INTEGRER
     # ============================================================
