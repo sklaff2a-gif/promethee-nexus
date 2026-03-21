@@ -166,7 +166,7 @@ def reload_organ_precision():
 
 # Anti-chambre d'écho : bonus extroversion quand trop de routines introspectives consécutives
 INTROSPECTIVE_INTENTS = {
-    "COUNCIL_DEBATE", "SOLILOQUE_INTERNE", "SELF_INSPECT",
+    "COUNCIL_DEBATE", "SOLILOQUE_INTERNE", "SELF_INSPECT", "SELF_ANALYSIS",
     "MEMORY_CLEANUP", "MEMORY_CONSOLIDATION", "AUDIT_STRUCTURE",
     "REFACTOR_RANDOM", "SECURITY_AUDIT", "EXPANSION_CODE", "EXPANSION_CATALOG",
 }
@@ -438,6 +438,7 @@ CONTEXT_KEYWORDS = {
     "ROADMAP_SPEC": ["specification", "specs", "roadmap", "concevoir", "design", "architecture"],
     "COUNCIL_DEBATE": ["council", "debate", "consensus", "decision", "délibération"],
     "SELF_INSPECT": ["github", "code source", "repo", "inspection", "miroir", "auto-analyse"],
+    "SELF_ANALYSIS": ["diagnostic", "analyse", "problème", "anomalie", "qualité", "routine", "performance", "rapport"],
     "AUTO_FUZZING": ["fuzz", "test", "edge case", "crash", "robustesse", "exception", "bug"],
     "CREATIVE_PLAY": ["créatif", "association", "analogie", "exploration", "idée", "hypothèse"],
     "GRIMOIRE_EVOLVE": ["grimoire", "prompt", "mutation", "amélioration", "formulation", "optimiser"],
@@ -759,6 +760,7 @@ class AutonomyEngine:
             {"agent": "vision", "intent": "ROADMAP_RESEARCH", "mission": "Recherche et analyse des sujets pour le prochain module de la roadmap."},
             {"agent": "vision", "intent": "ROADMAP_SPEC", "mission": "Genere des specifications structurees pour un module en cours de recherche."},
             {"agent": "_self_inspect", "intent": "SELF_INSPECT", "mission": "Explore ton propre code source sur GitHub pour mieux te comprendre."},
+            {"agent": "_self_analysis", "intent": "SELF_ANALYSIS", "mission": "Auto-analyse : diagnostique tes routines, organes et contenus recents. Detecte les problemes et propose des solutions."},
             {"agent": "_auto_fuzzing", "intent": "AUTO_FUZZING", "mission": "Fuzz-test une fonction aléatoire du projet pour trouver des bugs cachés."},
             {"agent": "_creative_play", "intent": "CREATIVE_PLAY", "mission": "Association libre : croise deux concepts éloignés pour découvrir des connexions inattendues."},
             {"agent": "_grimoire_evolve", "intent": "GRIMOIRE_EVOLVE", "mission": "Mute un prompt du Grimoire et compare les résultats pour trouver de meilleures formulations."},
@@ -1990,6 +1992,8 @@ class AutonomyEngine:
             response = await self._execute_soliloque()
         elif intent == "SELF_INSPECT":
             response = await self._execute_self_inspect()
+        elif intent == "SELF_ANALYSIS":
+            response = await self._execute_self_analysis()
         elif intent == "AUTO_FUZZING":
             response = await self._execute_auto_fuzzing()
         elif intent == "CREATIVE_PLAY":
@@ -4410,6 +4414,146 @@ class AutonomyEngine:
 
 
     # ================================================================
+    # ================================================================
+    # SELF_ANALYSIS — Auto-diagnostic via la boucle agentique
+    # ================================================================
+
+    async def _execute_self_analysis(self) -> dict:
+        """Auto-analyse : Promethee diagnostique ses propres routines et organes.
+
+        Utilise le ChatEngine (avec boucle agentique) pour collecter les donnees
+        internes via les commandes !, les analyser, et produire un rapport.
+        Cap : max 2 auto-analyses par jour.
+        """
+        # Cap quotidien
+        analysis_today = sum(1 for h in self.routine_history if h.get("intent") == "SELF_ANALYSIS")
+        if analysis_today >= 2:
+            logger.info(f"[AUTONOMY] SELF_ANALYSIS cap atteint ({analysis_today}/2 aujourd'hui), skip.")
+            return {"status": "skipped", "reason": f"Cap quotidien atteint ({analysis_today}/2)."}
+
+        try:
+            from core.chat_engine import chat_engine
+
+            # Collecter un snapshot des donnees cles (deterministe, 0 LLM)
+            snapshot_parts = []
+
+            # Routine history recente
+            recent = self.routine_history[-10:]
+            if recent:
+                rh_lines = []
+                for h in recent:
+                    ts = h.get("timestamp", "?")
+                    if isinstance(ts, str) and len(ts) > 10:
+                        ts = ts[11:19]
+                    rh_lines.append(f"  {h.get('intent','?')} -> {h.get('agent','?')} "
+                                    f"q={h.get('quality_score','?')} {h.get('status','?')}")
+                snapshot_parts.append("ROUTINES RECENTES (10 dernieres):\n" + "\n".join(rh_lines))
+
+            # Compteurs globaux
+            snapshot_parts.append(
+                f"COMPTEURS: {self.daily_count} routines aujourd'hui, "
+                f"{self.total_routines_executed} total, "
+                f"error_streak={self.error_streak}, "
+                f"budget={self.daily_budget_used}/{DAILY_BUDGET_POINTS}"
+            )
+
+            # Organes rapides (pas d'appel LLM)
+            try:
+                from core.brain_vm import brain
+                if brain.current_state:
+                    bs = brain.current_state
+                    snapshot_parts.append(
+                        f"BRAIN: tick={brain.tick_count}, "
+                        f"etat={bs.cognitive_state}, coherence={bs.global_coherence:.2f}, "
+                        f"mode={bs.dominant_mode}, phi={bs.phi:.3f}"
+                    )
+            except Exception:
+                pass
+
+            try:
+                from core.cardiac_engine import heart
+                snapshot_parts.append(
+                    f"CARDIAC: bpm={heart.bpm:.0f}, emotion={heart.current_emotion}"
+                )
+            except Exception:
+                pass
+
+            try:
+                from core.desire_engine import desires
+                drives_str = ", ".join(
+                    f"{d.name}={d.deprivation:.0f}" for d in
+                    sorted(desires.drives.values(), key=lambda d: -d.deprivation)[:3]
+                )
+                snapshot_parts.append(f"PULSIONS (top 3): {drives_str}")
+            except Exception:
+                pass
+
+            try:
+                from core.attention_codelets import codelet_system
+                cs = codelet_system.get_status()
+                snapshot_parts.append(
+                    f"CODELETS: {cs['total_alerts']} alertes totales, "
+                    f"{cs['total_runs']} runs"
+                )
+                last = cs.get("last_alerts", [])
+                if last:
+                    snapshot_parts.append(
+                        "  Dernieres alertes: " +
+                        ", ".join(f"{a['name']}" for a in last)
+                    )
+            except Exception:
+                pass
+
+            snapshot = "\n".join(snapshot_parts)
+
+            # Prompt d'auto-analyse soumis au chat (boucle agentique active)
+            analysis_prompt = (
+                f"[AUTO-ANALYSE INTERNE]\n\n"
+                f"Voici un snapshot de ton etat actuel :\n{snapshot}\n\n"
+                f"INSTRUCTIONS :\n"
+                f"1. Analyse ces donnees factuelles. Detecte les ANOMALIES :\n"
+                f"   - Routines repetitives (meme intent 3+ fois) ?\n"
+                f"   - Qualite faible (q < 0.5) ?\n"
+                f"   - Organes en anomalie (coherence basse, emotion negative prolongee, phi=0) ?\n"
+                f"   - Codelets qui alertent en boucle ?\n"
+                f"2. Si tu as besoin de plus de details, utilise !status, !health, !codelets, !network.\n"
+                f"3. Si tu detectes un probleme dans le code, utilise !read et !grep pour investiguer.\n"
+                f"4. Produis un RAPPORT structure :\n"
+                f"   - ETAT GENERAL (1 ligne)\n"
+                f"   - PROBLEMES DETECTES (avec gravite)\n"
+                f"   - RECOMMANDATIONS (actions concretes)\n"
+                f"5. NE conclus QUE sur les donnees — pas d'invention.\n"
+                f"6. Si tout est nominal, dis-le simplement."
+            )
+
+            logger.info("[AUTONOMY] SELF_ANALYSIS: soumission au chat (boucle agentique)...")
+            result = await chat_engine.chat(analysis_prompt)
+
+            if result:
+                # Sauvegarder le rapport en memoire vectorielle
+                try:
+                    from core.vector_store import ChromaMemoryManager
+                    mgr = ChromaMemoryManager.get_instance()
+                    if mgr:
+                        import hashlib
+                        doc_id = f"self-analysis-{hashlib.md5(result[:100].encode()).hexdigest()[:8]}"
+                        mgr.add_documents(
+                            [f"[SELF_ANALYSIS] {result[:1000]}"],
+                            [{"source": "self_analysis", "timestamp": str(time.time())}],
+                            [doc_id],
+                            "collective_wisdom"
+                        )
+                except Exception:
+                    pass
+
+                return {"status": "success", "result": result[:2000]}
+
+            return {"status": "error", "result": "Chat n'a pas retourne de resultat."}
+
+        except Exception as e:
+            logger.warning(f"[AUTONOMY] Erreur SELF_ANALYSIS: {e}")
+            return {"status": "error", "result": f"Erreur: {e}"}
+
     # CHANTIER 2 : AUTO-FUZZING — test automatique de robustesse
     # ================================================================
 
