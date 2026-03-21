@@ -714,6 +714,8 @@ class ReptilianCore:
             bus.subscribe("EUREKA_MOMENT", self._on_parasympathetic_signal)
             bus.subscribe("CURIOSITY_LEARNING", self._on_parasympathetic_signal)
             bus.subscribe("SENSORIUM_RECOVERY", self._on_parasympathetic_signal)
+            # --- Circuit reflexe codelets → reptilien → autonomy ---
+            bus.subscribe("CODELET_ALERT", self._on_codelet_alert)
         except Exception as e:
             logger.warning(f"REPTILIEN: Échec souscription bus: {e}")
 
@@ -1000,6 +1002,97 @@ class ReptilianCore:
                         f"mémoires={len(self.threat_memories)})")
         except Exception as e:
             logger.warning(f"REPTILIEN: Échec chargement état: {e}")
+
+
+    # ============================================================
+    # Circuit reflexe : codelets → reptilien → directives autonomy
+    # ============================================================
+
+    # Mapping codelet -> (niveau, intent_cible, description)
+    # Niveaux : "info" (log), "moderate" (boost +3.0), "urgent" (force intent)
+    _CODELET_DIRECTIVE_MAP = {
+        "danger":          ("urgent",   "SECURITY_AUDIT",        "Menace detectee"),
+        "fatigue":         ("moderate", "MEMORY_CONSOLIDATION",  "Fatigue cognitive"),
+        "stagnation":      ("moderate", "_EXTROVERT_BOOST",      "Stagnation cognitive"),
+        "contradiction":   ("moderate", "SELF_ANALYSIS",         "Contradiction organes"),
+        "opportunity":     ("moderate", "_DRIVE_BOOST",          "Drive affame"),
+        "creativity_burst":("moderate", "EXPANSION_CODE",        "Burst creatif"),
+        "flow":            ("info",     None,                    "Etat de flow"),
+        "convergence":     ("info",     None,                    "Convergence coherence"),
+        "resonance":       ("info",     None,                    "Harmonie systemique"),
+    }
+
+    _DIRECTIVE_COOLDOWN = 300.0  # 5 min entre deux directives du meme type
+    _MAX_DIRECTIVES_PER_HOUR = 3
+
+    async def _on_codelet_alert(self, event: dict):
+        """Recoit une alerte codelet et evalue si une directive est necessaire.
+
+        Circuit reflexe bio-inspire :
+        1. Codelet detecte un pattern (perception)
+        2. Reptilien evalue l'urgence (evaluation)
+        3. Directive envoyee a l'autonomy (action)
+        """
+        name = event.get("name", "")
+        salience = event.get("salience", 0.0)
+
+        mapping = self._CODELET_DIRECTIVE_MAP.get(name)
+        if not mapping:
+            return
+
+        level, target_intent, description = mapping
+
+        # Cooldown par type de codelet
+        if not hasattr(self, "_directive_cooldowns"):
+            self._directive_cooldowns = {}
+            self._directive_count_hour = 0
+            self._directive_hour_start = time.time()
+
+        now = time.time()
+
+        # Reset compteur horaire
+        if now - self._directive_hour_start > 3600:
+            self._directive_count_hour = 0
+            self._directive_hour_start = now
+
+        # Cap horaire
+        if self._directive_count_hour >= self._MAX_DIRECTIVES_PER_HOUR:
+            return
+
+        # Cooldown individuel
+        last = self._directive_cooldowns.get(name, 0)
+        if now - last < self._DIRECTIVE_COOLDOWN:
+            return
+
+        # INFO : juste loguer (ne pas interrompre les etats positifs)
+        if level == "info":
+            logger.debug(f"REPTILIEN REFLEX: {name} ({description}) — info, pas d'action")
+            return
+
+        # MODERATE ou URGENT : emettre une directive
+        self._directive_cooldowns[name] = now
+        self._directive_count_hour += 1
+
+        directive = {
+            "level": level,
+            "source_codelet": name,
+            "target_intent": target_intent,
+            "description": description,
+            "salience": salience,
+            "threat_level": self.threat_level,
+            "timestamp": now,
+        }
+
+        logger.info(
+            f"REPTILIEN REFLEX: {name} -> directive {level.upper()} "
+            f"(target={target_intent}, salience={salience:.2f})"
+        )
+
+        try:
+            from core.event_bus.bus import bus
+            await bus.publish("REPTILIAN_DIRECTIVE", directive)
+        except Exception:
+            pass
 
 
 # ============================================================

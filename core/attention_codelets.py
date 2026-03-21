@@ -442,7 +442,7 @@ class CodeletSystem:
         # Stocker les alertes recentes
         self._last_alerts = alerts
 
-        # Soumettre au Global Workspace
+        # Soumettre au Global Workspace + publier CODELET_ALERT sur le bus
         for alert in alerts:
             try:
                 from core.global_workspace import workspace
@@ -453,6 +453,21 @@ class CodeletSystem:
                     category=alert.category,
                     priority=alert.priority,
                 )
+            except Exception:
+                pass
+            # Publier sur le bus pour le circuit reflexe reptilien
+            try:
+                from core.event_bus.bus import bus
+                import asyncio
+                loop = asyncio.get_running_loop()
+                loop.create_task(bus.publish("CODELET_ALERT", {
+                    "name": alert.name,
+                    "content": alert.content,
+                    "salience": alert.salience,
+                    "category": alert.category,
+                    "priority": alert.priority,
+                    "timestamp": alert.timestamp,
+                }))
             except Exception:
                 pass
 

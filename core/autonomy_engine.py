@@ -664,6 +664,11 @@ class AutonomyEngine:
         bus.subscribe("USER_COMMAND", self.reset_timer)
         bus.subscribe("TISSUE_ZONE_DESERT", self._on_tissue_desert)
         bus.subscribe("SALARY_PAYDAY", self._on_salary_payday)
+        bus.subscribe("REPTILIAN_DIRECTIVE", self._on_reptilian_directive)
+
+        # Boosts temporaires appliques par le circuit reflexe reptilien
+        # {intent: {"boost": float, "expires": float, "source": str}}
+        self._reptilian_boosts: dict = {}
 
         # Zones tissu désertiques — routines de stimulation programmées
         self._tissue_stimulation_zones: list = []
@@ -683,6 +688,61 @@ class AutonomyEngine:
         week = event.get("week_start", "?")
         net = event.get("net", 0)
         logger.info(f"[RITUAL] Payday semaine {week} (net={net}) → rituel introspection programmé")
+
+    async def _on_reptilian_directive(self, event: dict):
+        """Recoit une directive du reptilien (circuit reflexe codelet→reptilien→autonomy).
+
+        Niveaux :
+        - moderate : boost temporaire +3.0 sur l'intent cible (expire apres 1 cycle)
+        - urgent : force l'intent au prochain cycle (bypass scoring)
+        """
+        level = event.get("level", "")
+        target = event.get("target_intent", "")
+        source = event.get("source_codelet", "")
+        salience = event.get("salience", 0.0)
+
+        if not target or not level:
+            return
+
+        if level == "urgent":
+            # Forcer l'intent au prochain cycle (meme mecanisme que loop_breaker)
+            if not self._forced_next_intent:
+                self._forced_next_intent = target
+                print(f"   🦎 REPTILIEN REFLEX: Force -> [{target}] (codelet={source}, salience={salience:.2f})")
+                logger.info(f"[AUTONOMY] Directive reptilienne URGENT: force {target} (source={source})")
+
+        elif level == "moderate":
+            now = time.time()
+            # Boost special pour stagnation : booster TOUS les intents extrovertis
+            if target == "_EXTROVERT_BOOST":
+                for intent in EXTROVERTED_INTENTS:
+                    self._reptilian_boosts[intent] = {
+                        "boost": 3.0, "expires": now + 900, "source": source,
+                    }
+                print(f"   🦎 REPTILIEN REFLEX: Boost extroversion +3.0 (codelet={source})")
+            # Boost special pour opportunite : booster selon le drive affame
+            elif target == "_DRIVE_BOOST":
+                # Le codelet opportunity mentionne le drive dans son contenu
+                # On booste les routines liees a ce drive via desire_engine
+                try:
+                    from core.desire_engine import desires, DRIVE_ROUTINE_AFFINITY
+                    dominant = max(desires.drives.values(), key=lambda d: d.deprivation)
+                    affinity = DRIVE_ROUTINE_AFFINITY.get(dominant.name, {})
+                    for intent in affinity:
+                        self._reptilian_boosts[intent] = {
+                            "boost": 3.0, "expires": now + 900, "source": source,
+                        }
+                    print(f"   🦎 REPTILIEN REFLEX: Boost {dominant.name} routines +3.0")
+                except Exception:
+                    pass
+            else:
+                # Boost direct sur un intent specifique
+                self._reptilian_boosts[target] = {
+                    "boost": 3.0, "expires": now + 900, "source": source,
+                }
+                print(f"   🦎 REPTILIEN REFLEX: Boost [{target}] +3.0 (codelet={source})")
+
+            logger.info(f"[AUTONOMY] Directive reptilienne MODERATE: boost {target} (source={source})")
 
     def _check_daily_budget(self) -> str:
         """Vérifie et reset le compteur quotidien.
@@ -1553,6 +1613,19 @@ class AutonomyEngine:
                     scored[i] = (routine, s + _normalize_bonus(syn_bonus, "synaptic"))
         except Exception:
             pass
+
+        # --- Boosts reptiliens (circuit reflexe codelet → reptilien → boost) ---
+        now_boost = time.time()
+        expired_boosts = [k for k, v in self._reptilian_boosts.items() if now_boost > v["expires"]]
+        for k in expired_boosts:
+            del self._reptilian_boosts[k]
+        if self._reptilian_boosts:
+            for i, (routine, s) in enumerate(scored):
+                boost_info = self._reptilian_boosts.get(routine["intent"])
+                if boost_info:
+                    scored[i] = (routine, s + boost_info["boost"])
+            active = [f"{k}(+{v['boost']:.0f})" for k, v in self._reptilian_boosts.items()]
+            print(f"   🦎 REPTILIEN BOOSTS: {', '.join(active)}")
 
         # --- Bonus pulsions (desirs) ---
         try:
