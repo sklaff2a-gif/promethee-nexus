@@ -667,7 +667,7 @@ class ChatEngine:
 
     # Repertoires autorises pour !read (securite anti-path-traversal)
     _READ_ALLOWED_DIRS = frozenset({"core", "Agents", "tools", "config", "tests"})
-    _READ_MAX_LINES = 80  # Lignes max par defaut
+    _READ_MAX_LINES = 150  # Lignes max par defaut (augmente de 80 pour l'auto-correction)
 
     def _execute_status_command(self) -> str:
         """Diagnostic interne compact — concu par Promethee (exercice V3, note A)."""
@@ -1263,24 +1263,24 @@ class ChatEngine:
     # Commandes dispatch autorisees en auto-action
     _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft"})
 
-    async def _scan_response_actions(self, response: str):
+    async def _scan_response_actions(self, response: str) -> int:
         """Scanne la reponse du LLM pour des commandes ! et les execute.
 
         Permet a Promethee d'AGIR depuis ses propres reponses.
-        Seules les commandes dispatch (research, learn, code) sont autorisees.
-        Max 1 action par reponse. Cooldown 60s. Anti-reentrance.
+        Retourne le nombre d'actions executees (pour la boucle agentique).
+        Max 4 actions par reponse. Cooldown 60s. Anti-reentrance.
         """
         if getattr(self, "_auto_action_in_progress", False):
-            return
+            return 0
         if not response:
-            return
+            return 0
 
         import re
         # Detecter les lignes commencant par ! (debut de ligne)
         # Support des commandes avec ET sans arguments (!status vs !research sujet)
         matches = re.findall(r"^!(\w+)(?:\s+(.+))?", response, re.MULTILINE)
         if not matches:
-            return
+            return 0
 
         # Executer les commandes autorisees (max 4 par reponse)
         actions_executed = 0
@@ -1352,6 +1352,8 @@ class ChatEngine:
 
             if actions_executed >= 4:  # Max 4 actions par reponse
                 break
+
+        return actions_executed
 
     def _is_visual_request(self, message: str) -> bool:
         """Detecte si le message demande d'observer des photos.
@@ -2134,7 +2136,128 @@ class ChatEngine:
         self.messages.append(msg_entry)
 
         # 5b. Auto-action : scanner la reponse pour des commandes !
-        await self._scan_response_actions(full_response)
+        actions_count = await self._scan_response_actions(full_response)
+
+        # 5c. BOUCLE AGENTIQUE : si des auto-actions ont ete executees,
+        # relancer le LLM pour qu'il continue son raisonnement avec les resultats.
+        # Transforme Promethee de chatbot en AGENT capable de raisonner en chaine.
+        _MAX_AGENTIC_LOOPS = 3
+        _AGENTIC_TIMEOUT = 90  # secondes par iteration
+        agentic_loop = 0
+
+        while actions_count > 0 and agentic_loop < _MAX_AGENTIC_LOOPS:
+            agentic_loop += 1
+            logger.info(f"CHAT AGENTIC LOOP {agentic_loop}/{_MAX_AGENTIC_LOOPS}: "
+                        f"{actions_count} action(s) executee(s), relance LLM...")
+
+            # Injecter un message de continuation (pas un vrai message user)
+            continuation_msg = (
+                "[CONTINUATION AUTOMATIQUE] "
+                "Les commandes ci-dessus ont ete executees et les resultats sont disponibles. "
+                "Continue ton raisonnement avec ces nouvelles donnees. "
+                "Si tu as besoin de plus d'informations, utilise d'autres commandes !. "
+                "Sinon, donne ta conclusion."
+            )
+            self.messages.append({
+                "role": "user",
+                "content": continuation_msg,
+                "timestamp": time.time(),
+                "badge": "agentic_continuation",
+            })
+
+            # Reconstruire le prompt et les messages pour Ollama
+            loop_system = self._build_system_prompt(
+                self._query_relevant_memories(""), "", ""
+            )
+            loop_ollama_msgs = [{"role": "system", "content": loop_system}]
+            loop_recent = self.messages[-adaptive_max:]
+            for msg in loop_recent:
+                loop_ollama_msgs.append({
+                    "role": msg["role"],
+                    "content": msg["content"],
+                })
+
+            # Appel LLM streaming
+            loop_response = ""
+            loop_stream_id = f"chat-agent-{uuid.uuid4().hex[:8]}"
+            try:
+                from core.base_agent import gpu_scheduler
+                async with gpu_scheduler.access("chat_agentic"):
+                    await bus.publish("CHAT_STREAM", {
+                        "stream_id": loop_stream_id,
+                        "status": "start",
+                        "emergent_sources": ["agentic_loop"],
+                    })
+
+                    loop_payload = {
+                        "model": CHAT_MODEL,
+                        "messages": loop_ollama_msgs,
+                        "stream": True,
+                        "think": False,
+                        "options": {"temperature": 0.7, "num_ctx": OLLAMA_CHAT_CTX, "num_predict": -1},
+                    }
+
+                    async with httpx.AsyncClient() as client:
+                        async with client.stream(
+                            "POST", OLLAMA_CHAT_URL, json=loop_payload, timeout=_AGENTIC_TIMEOUT
+                        ) as resp:
+                            if resp.status_code == 200:
+                                async for line in resp.aiter_lines():
+                                    if not line.strip():
+                                        continue
+                                    try:
+                                        data = json.loads(line)
+                                    except json.JSONDecodeError:
+                                        continue
+                                    if data.get("done"):
+                                        break
+                                    chunk = data.get("message", {}).get("content", "")
+                                    if chunk:
+                                        loop_response += chunk
+                                        await bus.publish("CHAT_STREAM", {
+                                            "stream_id": loop_stream_id,
+                                            "chunk": chunk,
+                                        })
+
+                    await bus.publish("CHAT_STREAM", {
+                        "stream_id": loop_stream_id,
+                        "done": True,
+                    })
+
+            except Exception as e:
+                logger.warning(f"CHAT AGENTIC LOOP {agentic_loop}: Erreur — {e}")
+                await bus.publish("CHAT_STREAM", {
+                    "stream_id": loop_stream_id,
+                    "done": True,
+                })
+                break
+
+            # Nettoyer la reponse
+            loop_response = re.sub(r"<think>.*?</think>", "", loop_response, flags=re.DOTALL).strip()
+            if not loop_response:
+                break
+
+            loop_response = self._clean_response_commands(loop_response)
+
+            # Ajouter a l'historique
+            self.messages.append({
+                "role": "assistant",
+                "content": loop_response,
+                "timestamp": time.time(),
+                "badge": "agentic_continuation",
+            })
+
+            # Accumuler dans full_response pour le retour final
+            full_response += f"\n\n{loop_response}"
+
+            # Scanner pour d'autres commandes
+            actions_count = await self._scan_response_actions(loop_response)
+
+            logger.info(f"CHAT AGENTIC LOOP {agentic_loop}: "
+                        f"{len(loop_response)} chars, {actions_count} nouvelle(s) action(s)")
+
+        if agentic_loop > 0:
+            logger.info(f"CHAT AGENTIC: {agentic_loop} iteration(s) de raisonnement en chaine")
 
         # 6. Publier CHAT_RESPONSE
         connexion_before = self._get_connexion_deprivation()
