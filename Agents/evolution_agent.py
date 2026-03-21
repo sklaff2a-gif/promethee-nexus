@@ -277,6 +277,10 @@ class DivineEvolution(BaseAgent):
         except Exception as e:
             logger.debug(f"gather_seeds synaptic echoue: {e}")
 
+        # Shuffle pour varier les seeds entre exécutions consécutives
+        # (évite de toujours sélectionner les mêmes concepts dominants)
+        import random as _rng
+        _rng.shuffle(seeds)
         return seeds[:15]
 
     def _cross_reference(self, seeds: list) -> dict:

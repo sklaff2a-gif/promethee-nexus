@@ -524,8 +524,15 @@ class RoutineScorer:
                         pass
                     break  # Seule la dernière occurrence compte
 
-            # m16: cap combiné repetition+cooldown à -6.0 max (évite suppression permanente)
-            score -= min(recency_penalty, 6.0)
+            # Cap consécutif sévère : si l'intent est déjà apparu 2+ fois
+            # dans les 5 dernières routines, pénalité brutale (anti-stagnation)
+            last_5_intents = [h["intent"] for h in routine_history[-5:]]
+            consecutive_same = sum(1 for i in last_5_intents if i == intent)
+            if consecutive_same >= 2:
+                recency_penalty += 8.0  # rend le score négatif → ne sera pas sélectionné
+
+            # m16: cap combiné repetition+cooldown à -10.0 max (rehaussé pour anti-stagnation)
+            score -= min(recency_penalty, 10.0)
 
             # Health penalty : si DEGRADED, pénaliser les routines lourdes
             if health_verdict == "DEGRADED" and intent in ("EXPANSION_CODE", "EXPANSION_CATALOG"):
@@ -2079,6 +2086,20 @@ class AutonomyEngine:
             raw_mission = selected["mission"]
             # Retirer le préfixe [MODE VEILLE] déjà présent dans certaines missions
             clean_mission = raw_mission.replace("[MODE VEILLE] ", "").replace("[MODE VEILLE]", "").strip()
+
+            # Enrichissement dynamique pour EXPANSION_CODE (anti-stagnation)
+            # Injecte le mode dominant et la cohérence pour varier le prompt LLM
+            if intent == "EXPANSION_CODE":
+                try:
+                    from core.brain_vm import brain
+                    bs = brain.current_state
+                    if bs:
+                        mode = bs.dominant_mode or "standard"
+                        coh = bs.global_coherence
+                        clean_mission += f" (Mode actuel: {mode}, coherence: {coh:.2f}. Adapte ton analyse a ce contexte.)"
+                except Exception:
+                    pass
+
             mission_text = f"[MODE VEILLE] {clean_mission}\nAgis de ta propre initiative."
             # Guardrails et purpose dans le context (pas dans la mission envoyée aux moteurs de recherche)
             context_parts = ["PROTOCOLE_AUTONOMIE"]
