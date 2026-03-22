@@ -85,6 +85,7 @@ class ChatEngine:
         "  !dashboard               — Tableau de bord compact\n"
         "  !invoke <slug> [mission] — Invoquer un specialiste du Grimoire\n"
         "  !craft <nom> <desc>      — Creer un outil ephemere a la volee\n"
+        "  !antibodies              — Anticorps anti-bugs + scan\n"
         "  !aide                    — Cette liste"
     )
 
@@ -354,6 +355,9 @@ class ChatEngine:
                 "Suis le protocole: dessine d'abord, verifie les conventions, "
                 "implemente, puis relis le code. Qualite A+ requise.",
                 " ".join(args))
+
+        if cmd == "antibodies":
+            return self._execute_antibodies_command(args)
 
         if cmd == "invoke":
             return await self._execute_invoke_command(args)
@@ -886,6 +890,17 @@ class ChatEngine:
         except Exception as e:
             return f"[!codelets] Erreur : {e}"
 
+    def _execute_antibodies_command(self, args: list = None) -> str:
+        """Systeme immunitaire — liste les anticorps ou lance un scan."""
+        try:
+            from core.bug_antibodies import antibody_registry
+            args = args or []
+            if args and args[0] == "scan":
+                return antibody_registry.scan_report()
+            return antibody_registry.list_antibodies()
+        except Exception as e:
+            return f"[!antibodies] Erreur : {e}"
+
     def _execute_network_command(self) -> str:
         """Reseau synaptique + plasticite — concu par Promethee (session 2, ex 3/5, note A)."""
         try:
@@ -1261,7 +1276,7 @@ class ChatEngine:
             return f"Erreur lecture : {e}"
 
     # Commandes dispatch autorisees en auto-action
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies"})
 
     async def _scan_response_actions(self, response: str) -> int:
         """Scanne la reponse du LLM pour des commandes ! et les execute.
@@ -1308,6 +1323,9 @@ class ChatEngine:
                     result = self._execute_github_command()
                 elif cmd_lower == "audit":
                     result = self._execute_audit_command()
+                elif cmd_lower == "antibodies":
+                    ab_args = args.strip().split() if args else []
+                    result = self._execute_antibodies_command(ab_args)
                 elif cmd_lower in ("phi", "signals", "who", "memory", "report", "votes", "codelets", "network", "health", "dashboard"):
                     method = getattr(self, f"_execute_{cmd_lower}_command", None)
                     if method:

@@ -32,6 +32,7 @@
 | DefaultModeNetwork | `dmn` | Pensee vagabonde, creativite spontanee | core/default_mode_network.py |
 | CircadianRhythm | `circadian` | Rythme jour/nuit, phases actives | core/circadian_rhythm.py |
 | Neurochemistry | `neurochemistry` | 3 pools : serotonine (patience), noradrenaline (vigilance), acetylcholine (plasticite) | core/neurochemistry.py |
+| BugAntibodies | `antibody_registry` | Systeme immunitaire — anticorps anti-bugs, scan deterministe | core/bug_antibodies.py |
 | InnerVoice | `voice` | Voix interieure, soliloque, stream de conscience | core/inner_voice.py |
 
 ## Evenements bus principaux

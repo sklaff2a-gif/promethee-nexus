@@ -4057,6 +4057,20 @@ class AutonomyEngine:
             with open(target, "r", encoding="utf-8") as f:
                 code = f.read()[:3000]
 
+            # Scan anticorps deterministe (0 LLM) avant l'audit LLM
+            antibody_report = ""
+            try:
+                from core.bug_antibodies import antibody_registry
+                infections = antibody_registry.scan_file(target)
+                if infections:
+                    ab_lines = [f"[ANTICORPS] {len(infections)} infection(s) dans {filename}:"]
+                    for inf in infections[:5]:
+                        ab_lines.append(f"  L{inf.line} [{inf.antibody_name}] {inf.context[:60]}")
+                    antibody_report = "\n".join(ab_lines)
+                    print(f"   🦠 ANTICORPS: {len(infections)} infection(s) dans {filename}")
+            except Exception:
+                pass
+
             print(f"   🔒 SECURITY AUDIT: {filename}")
             response = await orchestrator.dispatch_task("security", {
                 "mission": (
@@ -4088,6 +4102,10 @@ class AutonomyEngine:
                 # Tronquer les réponses excessivement longues
                 elif len(result_text) > 3000:
                     response["result"] = result_text[:3000] + "\n\n[... tronqué — réponse trop longue]"
+
+            # Ajouter le rapport anticorps au resultat
+            if antibody_report and response and response.get("result"):
+                response["result"] = antibody_report + "\n\n" + response["result"]
 
             return response or {"status": "error", "result": "Pas de réponse."}
         except Exception as e:
