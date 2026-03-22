@@ -655,6 +655,9 @@ class AutonomyEngine:
         # Rituel hebdomadaire : introspection GitHub apres payday
         self._weekly_ritual_pending: bool = False
 
+        # Auto-analyse quotidienne : garantir 1 SELF_ANALYSIS par jour
+        self._daily_analysis_done: bool = False
+
         # SensoriumLoop : dernier snapshot post-action pour boucle fermee
         self._last_feedback_snapshot: dict = {}
 
@@ -717,7 +720,7 @@ class AutonomyEngine:
             if target == "_EXTROVERT_BOOST":
                 for intent in EXTROVERTED_INTENTS:
                     self._reptilian_boosts[intent] = {
-                        "boost": 3.0, "expires": now + 900, "source": source,
+                        "boost": 2.0, "expires": now + 300, "source": source,
                     }
                 print(f"   🦎 REPTILIEN REFLEX: Boost extroversion +3.0 (codelet={source})")
             # Boost special pour opportunite : booster selon le drive affame
@@ -730,7 +733,7 @@ class AutonomyEngine:
                     affinity = DRIVE_ROUTINE_AFFINITY.get(dominant.name, {})
                     for intent in affinity:
                         self._reptilian_boosts[intent] = {
-                            "boost": 3.0, "expires": now + 900, "source": source,
+                            "boost": 2.0, "expires": now + 300, "source": source,
                         }
                     print(f"   🦎 REPTILIEN REFLEX: Boost {dominant.name} routines +3.0")
                 except Exception:
@@ -738,7 +741,7 @@ class AutonomyEngine:
             else:
                 # Boost direct sur un intent specifique
                 self._reptilian_boosts[target] = {
-                    "boost": 3.0, "expires": now + 900, "source": source,
+                    "boost": 2.0, "expires": now + 300, "source": source,
                 }
                 print(f"   🦎 REPTILIEN REFLEX: Boost [{target}] +3.0 (codelet={source})")
 
@@ -757,6 +760,7 @@ class AutonomyEngine:
             self.daily_count = 0
             self.daily_budget_used = 0
             self.last_reset_day = today
+            self._daily_analysis_done = False
             self._persist_state()
 
             # Bilan et seed objectifs quotidiens
@@ -1926,6 +1930,15 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Auto-analyse quotidienne (Couche 26b) ---
+        # Garantir 1 SELF_ANALYSIS par jour apres 10+ routines (assez de donnees)
+        if not self._daily_analysis_done and self.daily_count >= 10:
+            for i, (routine, s) in enumerate(scored):
+                if routine["intent"] == "SELF_ANALYSIS":
+                    scored[i] = (routine, s + 10.0)  # Boost fort pour garantir la selection
+                    print("   🔬 AUTO-ANALYSE: Promethee va s'auto-diagnostiquer (1x/jour)")
+                    break
+
         # --- Rituel hebdomadaire d'introspection (Couche 27) ---
         # Apres payday, SELF_INSPECT est garanti d'etre selectionne pour le rituel
         if self._weekly_ritual_pending:
@@ -2089,6 +2102,7 @@ class AutonomyEngine:
             response = await self._execute_self_inspect()
         elif intent == "SELF_ANALYSIS":
             response = await self._execute_self_analysis()
+            self._daily_analysis_done = True
         elif intent == "AUTO_FUZZING":
             response = await self._execute_auto_fuzzing()
         elif intent == "CREATIVE_PLAY":

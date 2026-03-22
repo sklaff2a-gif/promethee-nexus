@@ -152,7 +152,7 @@ class TestAutonomyDirectiveHandler:
             "salience": 0.6,
         })
         assert "MEMORY_CONSOLIDATION" in engine._reptilian_boosts
-        assert engine._reptilian_boosts["MEMORY_CONSOLIDATION"]["boost"] == 3.0
+        assert engine._reptilian_boosts["MEMORY_CONSOLIDATION"]["boost"] == 2.0
 
     @pytest.mark.asyncio
     async def test_moderate_boost_expires(self):

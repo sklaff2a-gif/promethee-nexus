@@ -237,9 +237,21 @@ class DivineEvolution(BaseAgent):
     #  KNOWLEDGE SYNTHESIS — méthodes de synthèse de connaissances
     # ───────────────────────────────────────────────────────────
 
+    # Historique des seeds recentes pour eviter la repetition
+    _recent_seeds_history: list = []  # 3 derniers sets de seeds
+
     def _gather_seeds(self) -> list:
-        """Récolte 4-15 graines depuis 3 sources internes (déterministe)."""
+        """Récolte 4-15 graines depuis 3 sources internes (déterministe).
+
+        Exclut les seeds deja utilisees dans les 3 dernières syntheses
+        pour forcer la diversite des contenus EXPANSION_CODE.
+        """
         seeds = []
+
+        # Seeds a exclure (concepts deja utilises recemment)
+        recently_used = set()
+        for past_seeds in self._recent_seeds_history[-3:]:
+            recently_used.update(past_seeds)
 
         # Source 1 : DesireEngine — drives avec deprivation > 50
         try:
@@ -263,25 +275,36 @@ class DivineEvolution(BaseAgent):
         except Exception as e:
             logger.debug(f"gather_seeds hippocampus echoue: {e}")
 
-        # Source 3 : SynapticNetwork — top 10 nœuds par énergie
+        # Source 3 : SynapticNetwork — top 20 nœuds par énergie (elargi pour compenser l'exclusion)
         try:
             from core.synaptic_network import cortex as synapse_net
             nodes_by_energy = sorted(
                 synapse_net.nodes.items(),
                 key=lambda kv: kv[1].get("energy", 0),
                 reverse=True
-            )[:10]
+            )[:20]  # Elargi de 10 a 20 pour avoir assez apres exclusion
             for node_id, _data in nodes_by_energy:
                 if node_id not in seeds:
                     seeds.append(node_id)
         except Exception as e:
             logger.debug(f"gather_seeds synaptic echoue: {e}")
 
-        # Shuffle pour varier les seeds entre exécutions consécutives
-        # (évite de toujours sélectionner les mêmes concepts dominants)
+        # Exclure les seeds deja utilisees (sauf si trop peu restent)
+        filtered = [s for s in seeds if s not in recently_used]
+        if len(filtered) >= 5:
+            seeds = filtered
+
+        # Shuffle pour varier l'ordre
         import random as _rng
         _rng.shuffle(seeds)
-        return seeds[:15]
+        selected = seeds[:15]
+
+        # Enregistrer dans l'historique (FIFO 3 dernieres)
+        self._recent_seeds_history.append(set(selected))
+        if len(self._recent_seeds_history) > 3:
+            self._recent_seeds_history = self._recent_seeds_history[-3:]
+
+        return selected
 
     def _cross_reference(self, seeds: list) -> dict:
         """Croise les graines via cascades synaptiques (déterministe)."""
