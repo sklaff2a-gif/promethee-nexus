@@ -336,6 +336,11 @@ async def lifespan(app: FastAPI):
     from core.attention_codelets import codelet_system
     print(f"   👁 CODELETS: {len(codelet_system.get_registered_names())} codelets d'attention enregistres.")
 
+    # --- NEUROCHEMISTRY (Pools neurochimiques) ---
+    from core.neurochemistry import neurochemistry
+    nc = neurochemistry.get_status()
+    print(f"   🧪 NEUROCHIMIE: S={nc['serotonin']:.2f} NA={nc['noradrenaline']:.2f} ACh={nc['acetylcholine']:.2f}")
+
     # --- CHUNKING SOAR (Règles apprises depuis les Councils) ---
     from core.event_bus.bus import bus as _bus
     _bus.subscribe("COUNCIL_RULE_LEARNED", RouterAgent.on_council_rule_learned)

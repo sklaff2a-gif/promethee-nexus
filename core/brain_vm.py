@@ -287,6 +287,17 @@ class BrainVM:
         except Exception:
             organs["circadian"] = None
 
+        # Neurochemistry (pools neurochimiques)
+        try:
+            from core.neurochemistry import neurochemistry
+            organs["neurochemistry"] = {
+                "serotonin": round(neurochemistry.serotonin, 2),
+                "noradrenaline": round(neurochemistry.noradrenaline, 2),
+                "acetylcholine": round(neurochemistry.acetylcholine, 2),
+            }
+        except Exception:
+            organs["neurochemistry"] = None
+
         return organs
 
     # ============================================================

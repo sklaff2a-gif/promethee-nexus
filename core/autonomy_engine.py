@@ -1627,6 +1627,28 @@ class AutonomyEngine:
             active = [f"{k}(+{v['boost']:.0f})" for k, v in self._reptilian_boosts.items()]
             print(f"   🦎 REPTILIEN BOOSTS: {', '.join(active)}")
 
+        # --- Modulation neurochimique (serotonine, noradrenaline, acetylcholine) ---
+        try:
+            from core.neurochemistry import neurochemistry
+            modulation = neurochemistry.get_modulation()
+            patience = modulation["patience"]      # [0.55, 1.45]
+            urgency = modulation["urgency"]        # [0.55, 1.45]
+            # Routines longues (consolidation, council) boostees par la serotonine (patience)
+            patient_intents = {"MEMORY_CONSOLIDATION", "COUNCIL_DEBATE", "SOLILOQUE_INTERNE",
+                               "SELF_ANALYSIS", "EXPANSION_CATALOG"}
+            # Routines urgentes boostees par la noradrenaline
+            urgent_intents = {"SECURITY_AUDIT", "AUDIT_STRUCTURE", "MEMORY_CLEANUP"}
+            for i, (routine, s) in enumerate(scored):
+                intent = routine["intent"]
+                if intent in patient_intents:
+                    bonus = (patience - 1.0) * 2.0  # [-0.9, +0.9]
+                    scored[i] = (routine, s + bonus)
+                elif intent in urgent_intents:
+                    bonus = (urgency - 1.0) * 2.0   # [-0.9, +0.9]
+                    scored[i] = (routine, s + bonus)
+        except Exception:
+            pass
+
         # --- Bonus pulsions (desirs) ---
         try:
             from core.desire_engine import desires

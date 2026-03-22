@@ -318,13 +318,34 @@ class Hippocampus:
                         routine_number: int = 0, budget_used: float = 0.0,
                         causal_chain: list = None,
                         scoring_factors: dict = None) -> Optional[Episode]:
-        """Encode un episode si la saillance depasse le seuil."""
+        """Encode un episode si la saillance depasse le seuil.
+
+        Filtre tissu neural : si la zone memory du tissu est active,
+        on encode. Si elle est inactive (activite < 0.15), l'evenement
+        est juge banal et filtre — sauf exceptions (menaces, erreurs).
+        """
         affect = self._capture_affect()
         salience = self._compute_salience(event_type, intent, affect, error_streak)
 
         if salience < SALIENCE_THRESHOLD:
             self._stats["episodes_rejected"] += 1
             return None
+
+        # Filtre tissu neural — sas avant memorisation
+        # Les evenements critiques passent toujours (menaces, erreurs, high quality)
+        is_critical = (error_streak >= 3 or quality_score >= 0.95
+                       or event_type in ("THREAT_DETECTED", "CI_FAILURE", "EVOLUTION_DEPLOYED"))
+        if not is_critical:
+            try:
+                from core.neural_tissue import tissue
+                zone_signals = tissue.get_zone_signals()
+                memory_zone = zone_signals.get("memory", {})
+                memory_activity = memory_zone.get("activity", 1.0)  # default 1.0 = passe si pas de tissu
+                if memory_activity < 0.15:
+                    self._stats["episodes_rejected"] += 1
+                    return None
+            except Exception:
+                pass  # Tissu indisponible → filtre desactive, tout passe
 
         # Marquer l'intent comme connu
         if intent:
