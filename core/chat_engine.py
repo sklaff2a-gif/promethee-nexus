@@ -86,6 +86,8 @@ class ChatEngine:
         "  !invoke <slug> [mission] — Invoquer un specialiste du Grimoire\n"
         "  !craft <nom> <desc>      — Creer un outil ephemere a la volee\n"
         "  !antibodies              — Anticorps anti-bugs + scan\n"
+        "  !write <fichier> <code>  — Ecrire dans le SANDBOX uniquement\n"
+        "  !metrics                 — Snapshot metriques pour comparaison\n"
         "  !aide                    — Cette liste"
     )
 
@@ -358,6 +360,12 @@ class ChatEngine:
 
         if cmd == "antibodies":
             return self._execute_antibodies_command(args)
+
+        if cmd == "write":
+            return self._execute_write_command(args)
+
+        if cmd == "metrics":
+            return self._execute_metrics_command()
 
         if cmd == "invoke":
             return await self._execute_invoke_command(args)
@@ -901,6 +909,90 @@ class ChatEngine:
         except Exception as e:
             return f"[!antibodies] Erreur : {e}"
 
+    def _execute_write_command(self, args: list) -> str:
+        """Ecrire un fichier dans le SANDBOX uniquement.
+
+        Usage : !write <chemin_relatif> <contenu>
+        Le chemin doit etre relatif (ex: core/my_module.py).
+        Le fichier est ecrit dans PROMETHEE_sandbox/, JAMAIS en production.
+        """
+        if not args or len(args) < 2:
+            return "Usage : !write <fichier> <contenu>\nExemple : !write core/test.py print('hello')"
+
+        relative_path = args[0]
+
+        # GARDE-FOU : refuser les chemins absolus ou traversals
+        if os.path.isabs(relative_path) or ".." in relative_path:
+            return "REFUSE : chemin absolu ou traversal interdit. Utilise un chemin relatif (ex: core/foo.py)."
+
+        # GARDE-FOU : seuls core/ et Agents/ sont modifiables
+        if not (relative_path.startswith("core/") or relative_path.startswith("Agents/")):
+            return f"REFUSE : seuls core/ et Agents/ sont modifiables. Chemin : {relative_path}"
+
+        content = args[1] if len(args) > 1 else ""
+
+        try:
+            from core.sandbox_engine import SandboxEngine
+            sandbox = SandboxEngine()
+            sandbox.create_or_refresh()
+            success = sandbox.apply_change(relative_path, content)
+            if success:
+                return f"[SANDBOX] Ecrit {relative_path} ({len(content)} chars). Utilise !test pour valider."
+            return f"[SANDBOX] Echec ecriture {relative_path}."
+        except Exception as e:
+            return f"[!write] Erreur : {e}"
+
+    def _execute_metrics_command(self) -> str:
+        """Snapshot des metriques cles pour comparaison avant/apres."""
+        lines = ["=== METRIQUES SNAPSHOT ==="]
+        try:
+            from core.brain_vm import brain
+            if brain.current_state:
+                bs = brain.current_state
+                lines.append(f"Phi: {bs.phi:.3f}")
+                lines.append(f"Coherence: {bs.global_coherence:.3f}")
+                lines.append(f"Mode: {bs.dominant_mode}")
+                lines.append(f"Ticks: {brain.tick_count}")
+        except Exception:
+            lines.append("Brain: indisponible")
+
+        try:
+            from core.autonomy_engine import autonomy
+            rh = autonomy.routine_history[-10:]
+            q_scores = [h.get("quality_score", 0) for h in rh if h.get("quality_score")]
+            avg_q = sum(q_scores) / len(q_scores) if q_scores else 0
+            success_count = sum(1 for h in rh if h.get("status") == "success")
+            lines.append(f"Qualite moy (10 dernieres): {avg_q:.2f}")
+            lines.append(f"Succes: {success_count}/{len(rh)}")
+            lines.append(f"Routines total: {autonomy.total_routines_executed}")
+            lines.append(f"Error streak: {autonomy.error_streak}")
+        except Exception:
+            lines.append("Autonomy: indisponible")
+
+        try:
+            from core.neurochemistry import neurochemistry
+            lines.append(f"Serotonine: {neurochemistry.serotonin:.3f}")
+            lines.append(f"Noradrenaline: {neurochemistry.noradrenaline:.3f}")
+            lines.append(f"Acetylcholine: {neurochemistry.acetylcholine:.3f}")
+        except Exception:
+            pass
+
+        try:
+            from core.attention_codelets import codelet_system
+            cs = codelet_system.get_status()
+            lines.append(f"Codelets alertes: {cs['total_alerts']}")
+        except Exception:
+            pass
+
+        try:
+            from core.bug_antibodies import antibody_registry
+            infections = antibody_registry.scan_all()
+            lines.append(f"Anticorps infections: {len(infections)}")
+        except Exception:
+            pass
+
+        return "\n".join(lines)
+
     def _execute_network_command(self) -> str:
         """Reseau synaptique + plasticite — concu par Promethee (session 2, ex 3/5, note A)."""
         try:
@@ -1276,7 +1368,7 @@ class ChatEngine:
             return f"Erreur lecture : {e}"
 
     # Commandes dispatch autorisees en auto-action
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics"})
 
     async def _scan_response_actions(self, response: str) -> int:
         """Scanne la reponse du LLM pour des commandes ! et les execute.
@@ -1326,6 +1418,11 @@ class ChatEngine:
                 elif cmd_lower == "antibodies":
                     ab_args = args.strip().split() if args else []
                     result = self._execute_antibodies_command(ab_args)
+                elif cmd_lower == "write":
+                    write_args = args.strip().split(maxsplit=1) if args else []
+                    result = self._execute_write_command(write_args)
+                elif cmd_lower == "metrics":
+                    result = self._execute_metrics_command()
                 elif cmd_lower in ("phi", "signals", "who", "memory", "report", "votes", "codelets", "network", "health", "dashboard"):
                     method = getattr(self, f"_execute_{cmd_lower}_command", None)
                     if method:

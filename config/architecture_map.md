@@ -131,3 +131,6 @@ score = base_score (desirs + territory + personality)
 - _PROTECTED_FILES dans Factory (11 fichiers intouchables)
 - Cooldown 60s entre dispatch chat
 - Max 4 auto-actions par reponse, max 3 boucles agentiques
+- !write SANDBOX UNIQUEMENT (jamais en production)
+- !metrics pour snapshot avant/apres comparaison
+- /research-loop : cycle scientifique hypothese -> sandbox -> test -> comparaison
