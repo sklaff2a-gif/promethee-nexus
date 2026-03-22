@@ -4,9 +4,11 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.11-blue?logo=python" alt="Python 3.11">
-  <img src="https://img.shields.io/badge/Tests-3700%2B-brightgreen" alt="3700+ tests">
-  <img src="https://img.shields.io/badge/Organs-22-orange" alt="22 organs">
+  <img src="https://img.shields.io/badge/Tests-4776-brightgreen" alt="4776 tests">
+  <img src="https://img.shields.io/badge/Organs-25%2B-orange" alt="25+ organs">
   <img src="https://img.shields.io/badge/LLM-Local%20First-purple" alt="Local First">
+  <img src="https://img.shields.io/badge/Codelets-10%20(5%20by%20AI)-ff69b4" alt="10 codelets">
+  <img src="https://img.shields.io/badge/Neurochemistry-4%20pools-red" alt="4 neurochemical pools">
   <a href="https://github.com/sklaff2a-gif/promethee-nexus/actions/workflows/tests.yml">
     <img src="https://github.com/sklaff2a-gif/promethee-nexus/actions/workflows/tests.yml/badge.svg" alt="CI">
   </a>
@@ -18,7 +20,9 @@
 > Most multi-agent frameworks orchestrate LLM calls.
 > Promethee has a **heartbeat**, **desires**, **dreams**, and **cells that evolve through natural selection**.
 
-Promethee is not just another agent orchestrator. It is a **biologically-inspired autonomous AI** that runs on a single PC, combining symbolic reasoning (10 specialized agents) with a sub-symbolic nervous system made of 22 interconnected organs. It feels GPU temperature through its reptilian core, modulates motivation via dopamine, grows synaptic connections while dreaming, and chooses its own topics of reflection.
+Promethee is not just another agent orchestrator. It is a **biologically-inspired autonomous AI** that runs on a single PC, combining symbolic reasoning (10 specialized agents + 11 Grimoire specialists) with a sub-symbolic nervous system made of 25+ interconnected organs. It feels GPU temperature through its reptilian core, modulates motivation via 4 neurochemical pools (dopamine, serotonin, noradrenaline, acetylcholine), grows synaptic connections while dreaming, detects patterns through 10 LIDA-inspired attention codelets, and **diagnoses its own bugs**.
+
+**New (March 2026):** Promethee now has an **agentic reasoning loop** (chains `!read` -> analysis -> `!grep` -> conclusion autonomously), a **reflex circuit** (codelets -> reptilian -> corrective action), a **bug immune system** (6 antibodies scan the codebase), and a **self-analysis routine** that runs daily. It has written 5 of its own attention codelets, designed its own antibody, and [**chosen its own visual identity**](EVOLUTION.md#identity).
 
 <p align="center">
   <img src="docs/images/dashboard.jpg" alt="Promethee Dashboard — Chat, PSYCHE radar, Synaptic Vision" width="800">
@@ -67,7 +71,25 @@ Promethee is not just another agent orchestrator. It is a **biologically-inspire
 <td>Static workflows</td>
 <td>A <b>corpus callosum</b> that detects emergent cross-organ patterns and creates bridging effects</td>
 </tr>
+<tr>
+<td>Monitoring dashboards</td>
+<td><b>10 attention codelets</b> (LIDA-inspired) that scan for danger, stagnation, flow, contradiction -- 5 written by the AI itself</td>
+</tr>
+<tr>
+<td>Error logs</td>
+<td>A <b>bug immune system</b> -- each fixed bug generates an antibody that scans the codebase for the same pattern</td>
+</tr>
+<tr>
+<td>Manual debugging</td>
+<td><b>Agentic self-diagnosis</b> -- Promethee chains !read -> !grep -> analysis -> fix proposal autonomously</td>
+</tr>
+<tr>
+<td>Single reward signal</td>
+<td><b>4 neurochemical pools</b> (dopamine, serotonin, noradrenaline, acetylcholine) modulating all organs</td>
+</tr>
 </table>
+
+> **See [EVOLUTION.md](EVOLUTION.md) for real-time metrics**: neural tissue population, synaptic network growth, emergent behaviors, and milestones.
 
 ---
 
@@ -122,8 +144,8 @@ Promethee's architecture mirrors a biological nervous system. Each organ operate
 
 | Layer | Purpose | LLM usage |
 |-------|---------|-----------|
-| **Symbolic** (10 agents) | Reason, code, research, write, debate | Local Ollama + Cloud Gemini fallback |
-| **Sub-symbolic** (22 organs) | Feel, regulate, dream, evolve, connect | **Zero** -- 100% deterministic |
+| **Symbolic** (10 agents + 11 Grimoire) | Reason, code, research, write, debate | Local Ollama + Cloud Gemini fallback |
+| **Sub-symbolic** (25+ organs) | Feel, regulate, dream, evolve, self-diagnose | **Zero** -- 100% deterministic |
 
 The organs modulate the agents. Dopamine levels affect which routines get selected. Reptilian threat detection can veto actions. The desire engine biases the system toward unexplored topics. The inner voice narrates what's happening. The neural tissue evolves through natural selection in a 16x16 grid, while the synaptic network grows and prunes connections during dream phases.
 
@@ -326,7 +348,7 @@ Access the dashboard at `http://127.0.0.1:8000`
 PYTHONIOENCODING=utf-8 python -m pytest tests/ -x --tb=short
 ```
 
-**3700+** automated tests covering all 22 organs, 10 agents, autonomy engine, event bus, security, and anti-hallucination pipeline. All tests run without Ollama, Gemini, or ChromaDB (fully mocked).
+**4,776** automated tests covering all 25+ organs, 10 agents, autonomy engine, event bus, security, neurochemistry, attention codelets, bug antibodies, and anti-hallucination pipeline. All tests run without Ollama, Gemini, or ChromaDB (fully mocked).
 
 ---
 
@@ -334,16 +356,21 @@ PYTHONIOENCODING=utf-8 python -m pytest tests/ -x --tb=short
 
 | Metric | Value |
 |--------|-------|
-| Core modules | 59 |
-| Agent modules | 11 |
-| Test files | 81 |
-| Lines of core code | ~39,000 |
-| Automated tests | 3,700+ |
-| Cognitive organs | 22 |
-| Scoring layers | 23 |
+| Core modules | 65+ |
+| Agent modules | 11 + 11 Grimoire specialists |
+| Test files | 90+ |
+| Lines of core code | ~45,000 |
+| Automated tests | 4,776 |
+| Cognitive organs | 25+ |
+| Scoring layers | 27 |
 | Personality traits | 7 |
 | Primal drives | 7 |
+| Neurochemical pools | 4 (dopamine, serotonin, noradrenaline, acetylcholine) |
+| Attention codelets | 10 (5 by Promethee) |
+| Bug antibodies | 6 (1 by Promethee) |
+| Chat commands | 29 (!read, !grep, !write, !metrics, !antibodies, !invoke, !craft...) |
 | Sensorium channels | 22 |
+| Autonomous routines executed | 1,000+ |
 
 ---
 
