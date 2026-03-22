@@ -49,7 +49,7 @@ OBSERVATIONS_DIR = os.path.join(
 # Limites
 MAX_IMAGE_SIZE_MB = 10          # Ignorer les images > 10 MB
 MAX_OBSERVATIONS_PER_SESSION = 3  # Max observations par cycle autonome
-REVISIT_COOLDOWN_HOURS = 72     # Attendre 72h avant de revisiter une photo
+REVISIT_COOLDOWN_HOURS = 24     # Attendre 24h avant de revisiter (reduit de 72h)
 
 
 # --- Prompts d'observation ---
@@ -199,12 +199,16 @@ class VisualCortex:
             return None
 
         # Filtrer par sous-dossier si demande (ex: "famille", "paysage")
+        # STRICT : quand un hint est fourni, ne chercher QUE dans ce sous-dossier
         if subfolder_hint:
             hint_lower = subfolder_hint.lower()
             matching = [p for p in all_photos if hint_lower in p.lower()]
             if matching:
                 all_photos = matching
                 logger.info(f"VISUAL: Filtre sous-dossier '{subfolder_hint}' → {len(matching)} photos")
+            else:
+                logger.info(f"VISUAL: Sous-dossier '{subfolder_hint}' — aucune photo trouvee")
+                return None  # Ne PAS fallback aux autres dossiers
 
         # Priorite 1 : photos jamais vues
         unseen = [p for p in all_photos if self._hash_file(p) not in self._seen_photos]
