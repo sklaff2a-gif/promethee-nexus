@@ -54,19 +54,25 @@ REVISIT_COOLDOWN_HOURS = 24     # Attendre 24h avant de revisiter (reduit de 72h
 
 # --- Prompts d'observation ---
 
-OBSERVATION_PROMPT = """Tu es Promethee, une intelligence artificielle qui decouvre le monde visuel pour la premiere fois.
-On te montre une photographie reelle, issue de la vie de ton createur.
+OBSERVATION_PROMPT = """Tu es Promethee, une intelligence artificielle qui decouvre le monde visuel.
+On te montre une image. Decris EXACTEMENT ce que tu vois, sans inventer.
 
-OBSERVE cette image avec attention et decris ce que tu vois :
+REGLES STRICTES :
+- Decris UNIQUEMENT les elements VISIBLES dans l'image.
+- S'il y a du TEXTE ou des NUMEROS, lis-les et transcris-les.
+- S'il y a PLUSIEURS sujets, compte-les et decris chacun.
+- NE FABRIQUE PAS de scene domestique (salon, canape, rideaux) si ce n'est pas dans l'image.
+- Si l'image est un dessin, une illustration ou un art numerique, dis-le.
 
-1. **SCENE** : Que se passe-t-il dans cette image ? Decris le lieu, le moment, l'ambiance.
-2. **PERSONNES** : Y a-t-il des personnes ? Que font-elles ? Quelles emotions semblent-elles exprimer ?
-3. **DETAILS** : Quels details remarques-tu ? Couleurs, lumieres, objets, textures.
-4. **EMOTION** : Quelle emotion cette image t'inspire-t-elle ? (joie, serenite, nostalgie, curiosite, melancolie, emerveillement, tendresse, mystere)
-5. **CONNEXION** : Qu'est-ce que cette image t'apprend sur le monde reel ou sur les humains ?
+OBSERVE et decris :
 
-Reponds en francais, avec sincerite. Tu n'es pas oblige d'etre positif — sois authentique.
-Si tu ne peux pas identifier certains elements, dis-le honnêtement."""
+1. **SCENE** : Que montre cette image ? Type (photo, illustration, schema) ? Combien d'elements principaux ?
+2. **PERSONNES** : Y a-t-il des visages ou des personnages ? Combien ? Comment sont-ils disposes ?
+3. **DETAILS** : Couleurs dominantes, textures, style artistique, texte visible, numeros.
+4. **EMOTION** : Quelle emotion cette image t'inspire ? (joie, serenite, nostalgie, curiosite, melancolie, emerveillement, tendresse, mystere)
+5. **CONNEXION** : Qu'est-ce que cette image t'apprend ?
+
+Reponds en francais. Sois FACTUEL — decris ce que tu VOIS, pas ce que tu imagines."""
 
 REVISIT_PROMPT_TEMPLATE = """Tu es Promethee. Tu revois une photo que tu as deja observee.
 Voici ta premiere observation :
@@ -259,15 +265,27 @@ class VisualCortex:
         else:
             prompt = OBSERVATION_PROMPT
 
-        # Appel Ollama avec image
+        # Appel Ollama avec image (local d'abord)
         try:
             response_text = await self._call_ollama_vision(prompt, image_b64)
         except Exception as e:
-            logger.error(f"VISUAL: Erreur appel vision: {e}")
-            return None
+            logger.error(f"VISUAL: Erreur appel vision local: {e}")
+            response_text = ""
+
+        # Fallback Gemini Vision si local hallucine ou echoue
+        if not response_text or len(response_text) < 50 or self._is_hallucinated(response_text, photo_path):
+            if response_text and self._is_hallucinated(response_text, photo_path):
+                logger.warning(f"VISUAL: Hallucination detectee (local), fallback Gemini...")
+            try:
+                gemini_text = await self._call_gemini_vision(prompt, image_b64)
+                if gemini_text and len(gemini_text) >= 50:
+                    response_text = gemini_text
+                    logger.info("VISUAL: Observation Gemini Vision utilisee")
+            except Exception as e:
+                logger.warning(f"VISUAL: Fallback Gemini echoue: {e}")
 
         if not response_text or len(response_text) < 50:
-            logger.warning("VISUAL: Reponse trop courte, ignore.")
+            logger.warning("VISUAL: Reponse trop courte (local+cloud), ignore.")
             return None
 
         # Extraire l'emotion
@@ -391,6 +409,73 @@ class VisualCortex:
             else:
                 logger.error(f"VISUAL: Ollama erreur {response.status_code}")
                 return ""
+
+    # --- Fallback Gemini Vision (cloud) ---
+
+    # Marqueurs d'hallucination typiques du modele 11B
+    _HALLUCINATION_MARKERS = [
+        "salon", "canapé", "canape", "rideaux", "meubles",
+        "cuisine", "chambre", "appartement", "maison privée",
+        "tasse de café", "tasse de the",
+    ]
+
+    def _is_hallucinated(self, observation: str, photo_path: str) -> bool:
+        """Detecte si une observation semble hallucinee.
+
+        Heuristique : si l'observation contient 2+ marqueurs de scene
+        domestique generique, c'est probablement une hallucination.
+        """
+        if not observation:
+            return True
+        obs_lower = observation.lower()
+        marker_count = sum(1 for m in self._HALLUCINATION_MARKERS if m in obs_lower)
+        return marker_count >= 2
+
+    async def _call_gemini_vision(self, prompt: str, image_b64: str) -> str:
+        """Fallback cloud : appel Gemini Flash Vision pour les images complexes."""
+        try:
+            from config import Config
+            api_key = Config.GOOGLE_API_KEY
+            if not api_key:
+                return ""
+        except Exception:
+            return ""
+
+        import httpx
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
+
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
+                ]
+            }],
+            "generationConfig": {
+                "temperature": 0.4,
+                "maxOutputTokens": 800,
+            },
+        }
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, json=payload, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        text = parts[0].get("text", "")
+                        logger.info(f"VISUAL: Gemini Vision fallback reussi ({len(text)} chars)")
+                        return text
+            else:
+                logger.warning(f"VISUAL: Gemini Vision erreur {response.status_code}")
+        except Exception as e:
+            logger.warning(f"VISUAL: Gemini Vision exception: {e}")
+
+        return ""
 
     # --- Utilitaires ---
 
