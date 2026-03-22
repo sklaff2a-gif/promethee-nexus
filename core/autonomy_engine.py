@@ -1931,13 +1931,14 @@ class AutonomyEngine:
             pass
 
         # --- Auto-analyse quotidienne (Couche 26b) ---
-        # Garantir 1 SELF_ANALYSIS par jour apres 10+ routines (assez de donnees)
-        if not self._daily_analysis_done and self.daily_count >= 10:
-            for i, (routine, s) in enumerate(scored):
-                if routine["intent"] == "SELF_ANALYSIS":
-                    scored[i] = (routine, s + 10.0)  # Boost fort pour garantir la selection
-                    print("   🔬 AUTO-ANALYSE: Promethee va s'auto-diagnostiquer (1x/jour)")
-                    break
+        # Garantir 1 SELF_ANALYSIS par jour : forcer via _forced_next_intent
+        # apres 15+ routines (assez de donnees). Le boost +10 ne suffisait pas
+        # car le LIF peut reordonner les resultats. Force = bypass total.
+        if not self._daily_analysis_done and self.daily_count >= 15:
+            if not self._forced_next_intent:
+                self._forced_next_intent = "SELF_ANALYSIS"
+                print("   🔬 AUTO-ANALYSE: Promethee va s'auto-diagnostiquer (force 1x/jour)")
+                self._daily_analysis_done = True  # Marquer immediatement pour eviter double-force
 
         # --- Rituel hebdomadaire d'introspection (Couche 27) ---
         # Apres payday, SELF_INSPECT est garanti d'etre selectionne pour le rituel

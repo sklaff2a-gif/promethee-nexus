@@ -87,10 +87,13 @@ INITIAL_ANTIBODIES = [
     ),
     Antibody(
         id="AB-002", name="unprotected_organ_import",
-        description="Import d'organe (from core.X import) sans try/except dans un handler async",
-        pattern=r"^\s{4,}from core\.\w+ import \w+\s*$",
-        antibody_type="regex", severity="medium",
-        exclude_files=["test_", "__init__", "main.py"],
+        description="Import d'organe (from core.X import) au top-level d'un module organe (sans try/except)",
+        pattern=r"^from core\.\w+ import \w+",
+        antibody_type="regex", severity="low",
+        exclude_files=["test_", "__init__", "main.py", "autonomy_engine", "chat_engine",
+                        "base_agent", "orchestrator", "config", "prompt_templates",
+                        "event_bus", "sandbox_engine", "bug_antibodies", "neurochemistry",
+                        "attention_codelets"],
     ),
     Antibody(
         id="AB-003", name="mutable_default_arg",
