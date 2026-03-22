@@ -1523,7 +1523,23 @@ class ChatEngine:
         # Si pas de mention explicite, reutiliser le dernier sous-dossier demande
         subfolder = None
         msg_lower = user_message.lower()
-        for folder_hint in ["famille", "paysage", "nature", "voyage", "art", "sport"]:
+        # Detecter le sous-dossier demande (dynamique — scan les dossiers reels)
+        try:
+            from core.visual_cortex import vision as _vc
+            photo_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "USER_DROPZONE", "photos"
+            )
+            if os.path.isdir(photo_dir):
+                real_folders = [d.lower() for d in os.listdir(photo_dir)
+                                if os.path.isdir(os.path.join(photo_dir, d))]
+            else:
+                real_folders = []
+        except Exception:
+            real_folders = []
+        # Fallback statique si le scan echoue
+        folder_hints = real_folders or ["famille", "paysage", "nature", "voyage", "art", "sport", "promethee"]
+        for folder_hint in folder_hints:
             if folder_hint in msg_lower:
                 subfolder = folder_hint
                 break
@@ -2079,6 +2095,14 @@ class ChatEngine:
             visual_context = await self._trigger_visual_observation(user_message)
             if visual_context:
                 logger.info(f"CHAT: Observation visuelle obtenue ({len(visual_context)} chars)")
+                # Ajouter l'observation comme message visible dans le chat
+                # pour que Promethee puisse la relire et y reagir
+                self.messages.append({
+                    "role": "assistant",
+                    "content": f"[OBSERVATION VISUELLE]\n{visual_context}",
+                    "timestamp": time.time(),
+                    "badge": "visual_observation",
+                })
             else:
                 # GUARDRAIL CODE-LEVEL : forcer une reponse sans LLM
                 # pour empecher toute fabrication visuelle
