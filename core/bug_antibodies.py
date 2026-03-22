@@ -116,6 +116,13 @@ INITIAL_ANTIBODIES = [
         antibody_type="regex", severity="medium",
         exclude_files=["test_"],
     ),
+    Antibody(
+        id="AB-006", name="hardcoded_model_fragility",
+        description="Modele IA hardcode sans fallback — risque de blocage si le modele hallucine ou devient indisponible",
+        pattern=r"""model\s*=\s*['"][^'"]*llama3.*vision[^'"]*['"]""",
+        antibody_type="regex", severity="critical",
+        exclude_files=["test_"],
+    ),
 ]
 
 
