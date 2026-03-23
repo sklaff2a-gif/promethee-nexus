@@ -86,6 +86,7 @@ class ChatEngine:
         "  !invoke <slug> [mission] — Invoquer un specialiste du Grimoire\n"
         "  !craft <nom> <desc>      — Creer un outil ephemere a la volee\n"
         "  !antibodies              — Anticorps anti-bugs + scan\n"
+        "  !observe <dossier/fichier> — Observer une photo SPECIFIQUE\n"
         "  !write <fichier> <code>  — Ecrire dans le SANDBOX uniquement\n"
         "  !metrics                 — Snapshot metriques pour comparaison\n"
         "  !aide                    — Cette liste"
@@ -360,6 +361,9 @@ class ChatEngine:
 
         if cmd == "antibodies":
             return self._execute_antibodies_command(args)
+
+        if cmd == "observe":
+            return await self._execute_observe_command(args)
 
         if cmd == "write":
             return self._execute_write_command(args)
@@ -909,6 +913,44 @@ class ChatEngine:
         except Exception as e:
             return f"[!antibodies] Erreur : {e}"
 
+    async def _execute_observe_command(self, args: list) -> str:
+        """Observe une photo SPECIFIQUE par son chemin relatif.
+
+        Usage : !observe <dossier/fichier>
+        Exemple : !observe Promethee/Photo Promethee.jpg
+        Le chemin est relatif a USER_DROPZONE/photos/.
+        """
+        if not args:
+            return ("Usage : !observe <dossier/fichier>\n"
+                    "Exemple : !observe Promethee/Photo Promethee.jpg")
+
+        relative_path = " ".join(args)  # Supporter les espaces dans les noms
+
+        try:
+            from core.visual_cortex import vision as visual_cortex
+            result = await visual_cortex.observe_targeted(relative_path)
+            if result:
+                obs = result.get("observation", "")
+                emotion = result.get("emotion", "?")
+                img_type = result.get("image_type", "?")
+                path = result.get("photo_path", relative_path)
+
+                # Ajouter comme message visible
+                self.messages.append({
+                    "role": "assistant",
+                    "content": f"[OBSERVATION CIBLEE]\nPhoto: {path} (type={img_type})\nEmotion: {emotion}\n{obs}",
+                    "timestamp": time.time(),
+                    "badge": "visual_observation",
+                })
+
+                return (f"[OBSERVATION CIBLEE — {img_type}]\n"
+                        f"Photo: {path}\n"
+                        f"Emotion: {emotion}\n"
+                        f"---\n{obs[:800]}")
+            return f"Impossible d'observer {relative_path}. Fichier introuvable ou erreur de vision."
+        except Exception as e:
+            return f"[!observe] Erreur : {e}"
+
     def _execute_write_command(self, args: list) -> str:
         """Ecrire un fichier dans le SANDBOX uniquement.
 
@@ -1368,7 +1410,7 @@ class ChatEngine:
             return f"Erreur lecture : {e}"
 
     # Commandes dispatch autorisees en auto-action
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe"})
 
     async def _scan_response_actions(self, response: str) -> int:
         """Scanne la reponse du LLM pour des commandes ! et les execute.
@@ -1418,6 +1460,9 @@ class ChatEngine:
                 elif cmd_lower == "antibodies":
                     ab_args = args.strip().split() if args else []
                     result = self._execute_antibodies_command(ab_args)
+                elif cmd_lower == "observe":
+                    obs_args = args.strip().split() if args else []
+                    result = await self._execute_observe_command(obs_args)
                 elif cmd_lower == "write":
                     write_args = args.strip().split(maxsplit=1) if args else []
                     result = self._execute_write_command(write_args)

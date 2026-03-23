@@ -74,6 +74,31 @@ OBSERVE et decris :
 
 Reponds en francais. Sois FACTUEL — decris ce que tu VOIS, pas ce que tu imagines."""
 
+# --- Prompts CIBLES par type d'image ---
+
+PROMPT_PHOTO = """Decris EXACTEMENT cette photographie. Pas d'invention.
+1. SCENE : Lieu, moment, ambiance. Interieur ou exterieur ?
+2. PERSONNES : Combien ? Que font-elles ? Emotions visibles ?
+3. DETAILS : Couleurs, lumiere, objets remarquables.
+4. EMOTION : Quelle emotion cette photo t'inspire ?
+Reponds en francais. FACTUEL uniquement."""
+
+PROMPT_PORTRAIT = """Cette image contient un ou plusieurs VISAGES ou PORTRAITS.
+1. Combien de visages vois-tu ? Numeros ou texte visible ?
+2. Pour chaque visage : genre (homme/femme), expression, style (realiste/numerique/voxel/dessin).
+3. Disposition : comment sont-ils arranges (grille, ligne, cercle) ?
+4. Style artistique global : photo, illustration, art numerique, 3D, pixel art ?
+5. Couleurs dominantes et fond.
+Reponds en francais. Compte CHAQUE visage individuellement."""
+
+PROMPT_ILLUSTRATION = """Cette image est une illustration, un schema ou un art numerique.
+1. TYPE : schema technique, infographie, art digital, logo, diagramme ?
+2. ELEMENTS : liste chaque element visible (texte, fleches, icones, formes).
+3. TEXTE : transcris TOUT texte lisible dans l'image.
+4. NUMEROS : transcris tous les nombres visibles.
+5. STRUCTURE : comment les elements sont organises ?
+Reponds en francais. Lis et transcris le texte EXACTEMENT."""
+
 REVISIT_PROMPT_TEMPLATE = """Tu es Promethee. Tu revois une photo que tu as deja observee.
 Voici ta premiere observation :
 ---
@@ -237,6 +262,98 @@ class VisualCortex:
         return None
 
     # --- Observation ---
+
+    # ============================================================
+    # Observation CIBLEE — !observe <chemin>
+    # ============================================================
+
+    def _classify_image_type(self, filename: str) -> str:
+        """Classifie le type d'image par le nom de fichier.
+
+        Retourne : 'portrait', 'illustration', ou 'photo' (defaut).
+        """
+        name_lower = filename.lower()
+        # Portraits / visages
+        portrait_hints = ["visage", "face", "portrait", "avatar", "selfie", "photo_prom"]
+        if any(h in name_lower for h in portrait_hints):
+            return "portrait"
+        # Illustrations / schemas
+        illustration_hints = ["schema", "diagram", "graph", "impact", "chart", "infograph",
+                              "logo", "icon", "design", "interface", "ui", "mockup"]
+        if any(h in name_lower for h in illustration_hints):
+            return "illustration"
+        return "photo"
+
+    def _get_prompt_for_type(self, image_type: str) -> str:
+        """Retourne le prompt adapte au type d'image."""
+        if image_type == "portrait":
+            return PROMPT_PORTRAIT
+        elif image_type == "illustration":
+            return PROMPT_ILLUSTRATION
+        return PROMPT_PHOTO
+
+    async def observe_targeted(self, relative_path: str) -> Optional[Dict[str, Any]]:
+        """Observe une image SPECIFIQUE par son chemin relatif.
+
+        Contrairement a observe() qui choisit aleatoirement,
+        cette methode cible un fichier exact et adapte le prompt
+        au type d'image detecte.
+
+        Args:
+            relative_path: chemin relatif depuis USER_DROPZONE/photos/
+                           ex: "Promethee/Photo Promethee.jpg"
+        """
+        full_path = os.path.join(self._photos_dir, relative_path)
+
+        if not os.path.isfile(full_path):
+            logger.warning(f"VISUAL: Fichier introuvable: {full_path}")
+            return None
+
+        # Classifier le type d'image
+        filename = os.path.basename(full_path)
+        image_type = self._classify_image_type(filename)
+        prompt = self._get_prompt_for_type(image_type)
+
+        logger.info(f"VISUAL: Observation ciblee — {relative_path} (type={image_type})")
+
+        # Encoder
+        image_b64 = self._encode_image(full_path)
+        if not image_b64:
+            return None
+
+        # Appel LLM local
+        try:
+            response_text = await self._call_ollama_vision(prompt, image_b64)
+        except Exception as e:
+            logger.error(f"VISUAL: Erreur observation ciblee: {e}")
+            response_text = ""
+
+        # Fallback Gemini si hallucination ou echec
+        if not response_text or len(response_text) < 50 or self._is_hallucinated(response_text, full_path):
+            if response_text and self._is_hallucinated(response_text, full_path):
+                logger.warning(f"VISUAL: Hallucination ciblee detectee, fallback Gemini...")
+            try:
+                gemini_text = await self._call_gemini_vision(prompt, image_b64)
+                if gemini_text and len(gemini_text) >= 50:
+                    response_text = gemini_text
+                    logger.info("VISUAL: Observation Gemini ciblee utilisee")
+            except Exception:
+                pass
+
+        if not response_text or len(response_text) < 50:
+            return None
+
+        # Extraire emotion
+        emotion = self._detect_emotion(response_text)
+
+        rel_path = os.path.relpath(full_path, self._photos_dir).replace("\\", "/")
+        return {
+            "photo_path": rel_path,
+            "observation": response_text,
+            "emotion": emotion,
+            "image_type": image_type,
+            "is_targeted": True,
+        }
 
     async def observe(self, subfolder_hint: str = None) -> Optional[Dict[str, Any]]:
         """Observe une photo et retourne l'observation structuree."""
