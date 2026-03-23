@@ -2274,18 +2274,46 @@ class NeuralTissue:
             top_cells = data.get("top_cells", [])
             if top_cells:
                 self.cells = []
+
+                # Redistribuer les cellules dans les zones avec positions uniques
+                # (anti-lobotomie : evite les empilements qui causent la famine)
+                zones = list(SIGNAL_ZONES.items())
+                zone_index = 0
+                occupied = set()
+
                 for cd in top_cells:
+                    # Trouver une position libre dans une zone (round-robin)
+                    placed = False
+                    for attempt in range(len(zones)):
+                        zone_name, (x1, y1, x2, y2) = zones[zone_index % len(zones)]
+                        zone_index += 1
+                        # Chercher une case libre dans cette zone
+                        for _ in range(10):
+                            x = random.randint(x1, min(x2 - 1, GRID_SIZE - 1))
+                            y = random.randint(y1, min(y2 - 1, GRID_SIZE - 1))
+                            if (x, y) not in occupied:
+                                occupied.add((x, y))
+                                placed = True
+                                break
+                        if placed:
+                            break
+
+                    if not placed:
+                        # Fallback : position aleatoire (accepter l'empilement)
+                        x = random.randint(0, GRID_SIZE - 1)
+                        y = random.randint(0, GRID_SIZE - 1)
+
                     self.cells.append(NeuralCell(
                         genome=cd["genome"],
-                        x=cd.get("x", random.randint(0, GRID_SIZE - 1)),
-                        y=cd.get("y", random.randint(0, GRID_SIZE - 1)),
-                        energy=cd.get("energy", INITIAL_ENERGY),
+                        x=x, y=y,
+                        energy=max(cd.get("energy", INITIAL_ENERGY), INITIAL_ENERGY * 0.8),
                         age=cd.get("age", 0),
                         generation=cd.get("generation", 0),
                         output_count=cd.get("output_count", 0),
                         immune_to=set(cd.get("immune_to", [])),
                         epigenetic_markers=cd.get("epigenetic_markers", {}),
                     ))
+
                 # Compléter avec des mutants des survivants (si < INITIAL_CELLS)
                 while len(self.cells) < INITIAL_CELLS:
                     parent = random.choice(self.cells)
@@ -2296,13 +2324,9 @@ class NeuralTissue:
                         generation=parent.generation + 1,
                     ))
 
-                # Boost post-load : injecter de l'energie aux cellules restaurees
-                # pour eviter la famine massive dans les premiers ticks
-                for cell in self.cells:
-                    cell.energy = max(cell.energy, INITIAL_ENERGY * 0.8)
-
                 logger.info(f"TISSUE: {len(self.cells)} cellules restaurees "
-                            f"(boost energie post-load applique)")
+                            f"(redistribuees dans {len(zones)} zones, "
+                            f"{len(occupied)} positions uniques)")
 
         except (FileNotFoundError, json.JSONDecodeError):
             pass
