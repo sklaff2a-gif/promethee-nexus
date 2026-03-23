@@ -1537,6 +1537,179 @@
       ],
       "created_at": "2026-03-22T00:00:00",
       "updated_at": "2026-03-22T00:00:00"
+    },
+    {
+      "id": "oscillatory_binding",
+      "phase": 4,
+      "phase_name": "VM NEURALE",
+      "display": "oscillatory_binding",
+      "description": "Binding oscillatoire (AKOrN) — synchronisation de phase entre organes. Les organes synchronises forment des percepts unifies. Resout le binding problem.",
+      "status": "ready",
+      "specs": [],
+      "depends_on": [
+        "brain_vm",
+        "connectivity_matrix",
+        "global_workspace"
+      ],
+      "estimated_cost": 8,
+      "completion_criteria": [
+        "Synchronisation mesurable entre 3+ organes",
+        "Phi augmente quand binding actif"
+      ],
+      "research_topics": [
+        "Kuramoto oscillators neural binding AKOrN phase synchronization consciousness"
+      ],
+      "connects_to": [
+        "core.brain_vm",
+        "core.global_workspace",
+        "core.connectivity_matrix",
+        "core.corpus_callosum"
+      ],
+      "created_at": "2026-03-23T00:00:00",
+      "updated_at": "2026-03-23T00:00:00"
+    },
+    {
+      "id": "reentrant_processing",
+      "phase": 4,
+      "phase_name": "VM NEURALE",
+      "display": "reentrant_processing",
+      "description": "Traitement reentrant — le Global Workspace fait 3-5 cycles iteratifs par tick au lieu de 1. Chaque cycle affine la selection des contenus conscients.",
+      "status": "ready",
+      "specs": [],
+      "depends_on": [
+        "global_workspace",
+        "brain_vm"
+      ],
+      "estimated_cost": 5,
+      "completion_criteria": [
+        "3+ cycles par tick",
+        "Contenus conscients plus stables apres convergence"
+      ],
+      "research_topics": [
+        "reentrant processing Global Neuronal Workspace Dehaene iterative settling consciousness"
+      ],
+      "connects_to": [
+        "core.global_workspace",
+        "core.brain_vm",
+        "core.thalamus"
+      ],
+      "created_at": "2026-03-23T00:00:00",
+      "updated_at": "2026-03-23T00:00:00"
+    },
+    {
+      "id": "consciousness_benchmarks",
+      "phase": 7,
+      "phase_name": "CONSCIENCE & EMERGENCE",
+      "display": "consciousness_benchmarks",
+      "description": "Benchmarks de conscience — tests DMTS (delayed match-to-sample), WCST (Wisconsin Card Sort) et mesures IIT formelles pour evaluer objectivement le niveau de conscience.",
+      "status": "ready",
+      "specs": [],
+      "depends_on": [
+        "global_workspace",
+        "oscillatory_binding",
+        "hippocampus"
+      ],
+      "estimated_cost": 6,
+      "completion_criteria": [
+        "Score DMTS mesurable",
+        "Phi correle avec performance"
+      ],
+      "research_topics": [
+        "DMTS delayed match to sample consciousness test IIT phi measurement WCST"
+      ],
+      "connects_to": [
+        "core.global_workspace",
+        "core.hippocampus",
+        "core.prefrontal"
+      ],
+      "created_at": "2026-03-23T00:00:00",
+      "updated_at": "2026-03-23T00:00:00"
+    },
+    {
+      "id": "ethics_module",
+      "phase": 7,
+      "phase_name": "CONSCIENCE & EMERGENCE",
+      "display": "ethics_module",
+      "description": "Module ethique — filtre ethique formel adapte a Promethee. Evaluation des actions par rapport aux valeurs (bienveillance, respect, non-nuisance). Pas Asimov, mais intrinsèque.",
+      "status": "ready",
+      "specs": [],
+      "depends_on": [
+        "prefrontal",
+        "psyche"
+      ],
+      "estimated_cost": 5,
+      "completion_criteria": [
+        "Veto ethique sur les actions dangereuses",
+        "Coherence avec PSYCHE traits"
+      ],
+      "research_topics": [
+        "AI ethics compliance intrinsic values moral reasoning autonomous agent"
+      ],
+      "connects_to": [
+        "core.prefrontal",
+        "core.psyche",
+        "core.reptilian_core"
+      ],
+      "created_at": "2026-03-23T00:00:00",
+      "updated_at": "2026-03-23T00:00:00"
+    },
+    {
+      "id": "organ_synchronization",
+      "phase": 3,
+      "phase_name": "SIGNAL BUS",
+      "display": "organ_synchronization",
+      "description": "Synchronisation inter-organes — mesure et optimisation de la coherence entre organes. Detecte les organes desynchronises et les resynchronise via le corpus callosum.",
+      "status": "ready",
+      "specs": [],
+      "depends_on": [
+        "connectivity_matrix",
+        "corpus_callosum",
+        "brain_vm"
+      ],
+      "estimated_cost": 4,
+      "completion_criteria": [
+        "Mesure de synchronisation par paire organe",
+        "Resynchronisation automatique"
+      ],
+      "research_topics": [
+        "neural synchronization cross-frequency coupling coherence inter-organ coordination"
+      ],
+      "connects_to": [
+        "core.connectivity_matrix",
+        "core.corpus_callosum",
+        "core.brain_vm",
+        "core.neurochemistry"
+      ],
+      "created_at": "2026-03-23T00:00:00",
+      "updated_at": "2026-03-23T00:00:00"
+    },
+    {
+      "id": "hierarchical_workspace",
+      "phase": 4,
+      "phase_name": "VM NEURALE",
+      "display": "hierarchical_workspace",
+      "description": "Workspace hierarchique — capsule network a 3+ niveaux dans le Global Workspace. Les contenus bas-niveau se composent en percepts haut-niveau avant la competition.",
+      "status": "ready",
+      "specs": [],
+      "depends_on": [
+        "global_workspace",
+        "reentrant_processing"
+      ],
+      "estimated_cost": 7,
+      "completion_criteria": [
+        "3 niveaux de composition",
+        "Contenus composites emergent des atomiques"
+      ],
+      "research_topics": [
+        "capsule network hierarchical workspace compositional binding nested hierarchy"
+      ],
+      "connects_to": [
+        "core.global_workspace",
+        "core.thalamus",
+        "core.synaptic_network"
+      ],
+      "created_at": "2026-03-23T00:00:00",
+      "updated_at": "2026-03-23T00:00:00"
     }
   ]
 }
