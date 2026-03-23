@@ -30,6 +30,10 @@ SALIENCE_DECAY = 0.1        # Decay par cycle pour les contenus non renouveles
 REENTRANT_CYCLES = 3        # Nombre de cycles iteratifs par tick
 PERSISTENCE_BONUS = 0.05    # Bonus saillance pour contenus qui survivent un cycle
 
+# --- Hierarchical composition ---
+COMPOSITION_BONUS = 0.15    # Bonus saillance pour les contenus composites
+MAX_COMPOSITES = 3          # Max composites par cycle (eviter la sur-fusion)
+
 # --- Ignition non-lineaire (inspire GWT/LIDA) ---
 # Le seuil de conscience est module par l'arousal cardiaque.
 # En panique (BPM haut) : seuil bas → plus de contenus accedent a la conscience
@@ -200,6 +204,10 @@ class GlobalWorkspace:
         critical = [c for c in candidates if c.is_critical]
         normal = [c for c in candidates if not c.is_critical]
 
+        # Hierarchical composition : fusionner les contenus de meme categorie
+        # dont les sources sont synchronisees (binding Kuramoto)
+        normal = self._compose_hierarchy(normal)
+
         # Saillance effective = base + bonus mode dominant + bonus binding
         synced_sources = set()
         try:
@@ -326,6 +334,69 @@ class GlobalWorkspace:
     # ============================================================
     # Handler bus
     # ============================================================
+
+    def _compose_hierarchy(self, contents: list) -> list:
+        """Compose les contenus en percepts hierarchiques.
+
+        Niveau 1 : contenus atomiques (soumis par les organes)
+        Niveau 2 : contenus composites (fusion de 2+ atomiques de meme
+                    categorie dont les sources sont synchronisees)
+
+        Les composites remplacent leurs atomiques dans la competition
+        et recoivent un bonus de saillance (COMPOSITION_BONUS).
+        """
+        if len(contents) < 2:
+            return contents
+
+        # Recuperer les paires synchronisees
+        synced_sources = set()
+        try:
+            from core.brain_vm import brain
+            for pair in brain.get_synchronized_pairs(threshold=0.5):
+                synced_sources.update(pair)
+        except Exception:
+            pass
+
+        # Regrouper par categorie
+        by_category = {}
+        for c in contents:
+            by_category.setdefault(c.category, []).append(c)
+
+        composites = []
+        consumed = set()  # Sources des atomiques fusionnes
+
+        for category, items in by_category.items():
+            if len(items) < 2 or len(composites) >= MAX_COMPOSITES:
+                continue
+
+            # Filtrer : seuls les items dont la source est synchronisee
+            synced_items = [c for c in items if c.source in synced_sources]
+            if len(synced_items) < 2:
+                continue
+
+            # Fusionner les 2-3 plus saillants de cette categorie
+            synced_items.sort(key=lambda c: c.salience, reverse=True)
+            to_merge = synced_items[:3]
+
+            # Creer le composite
+            avg_salience = sum(c.salience for c in to_merge) / len(to_merge)
+            merged_sources = "+".join(c.source for c in to_merge)
+            merged_content = " | ".join(c.content[:80] for c in to_merge)
+
+            composite = ConsciousContent(
+                source=f"composite:{merged_sources}",
+                content=f"[COMPOSITE {category.upper()}] {merged_content}",
+                salience=min(1.0, avg_salience + COMPOSITION_BONUS),
+                category=category,
+                priority=max(c.priority for c in to_merge),
+            )
+            composites.append(composite)
+            for c in to_merge:
+                consumed.add(id(c))
+
+        # Retourner : atomiques non-fusionnes + composites
+        remaining = [c for c in contents if id(c) not in consumed]
+        return remaining + composites
 
     def _compute_ignition_threshold(self) -> float:
         """Ignition non-lineaire : seuil de conscience module par l'arousal cardiaque.
