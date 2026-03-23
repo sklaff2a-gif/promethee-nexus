@@ -65,11 +65,13 @@ NORADRENALINE_IMPACTS = {
 ACETYLCHOLINE_IMPACTS = {
     "exploration": +0.08,
     "learning_success": +0.10,
-    "eureka": +0.12,
+    "eureka": +0.15,              # Renforce de +0.12 a +0.15 (concu par Promethee)
     "codelet_novelty": +0.06,
     "stagnation": -0.08,
     "nap_start": -0.06,
     "routine_success": +0.03,
+    "SCHOOL_GRADE_HIGH": +0.10,   # Note scolaire >= 8.0 (concu par Promethee)
+    "SPREADING_ACTIVATION": +0.05, # Activation reseau synaptique (concu par Promethee)
 }
 
 
@@ -116,6 +118,8 @@ class Neurochemistry:
             bus.subscribe("NAP_MODE", self._on_nap_mode)
             bus.subscribe("EUREKA_BRIDGE", self._on_eureka)
             bus.subscribe("COUNCIL_CONSENSUS", self._on_council_consensus)
+            bus.subscribe("SCHOOL_GRADE_HIGH", self._on_school_grade_high)
+            bus.subscribe("SPREADING_ACTIVATION", self._on_spreading_activation)
         except Exception as e:
             logger.warning(f"NEUROCHIMIE: Echec souscription bus: {e}")
 
@@ -128,15 +132,19 @@ class Neurochemistry:
         self._tick_count += 1
         self.serotonin = self._decay(self.serotonin)
         self.noradrenaline = self._decay(self.noradrenaline)
-        self.acetylcholine = self._decay(self.acetylcholine)
+        self.acetylcholine = self._decay(self.acetylcholine, pool_name="acetylcholine")
 
         # Persister toutes les 20 ticks (~10 min)
         if self._tick_count % 20 == 0:
             self.save()
 
-    def _decay(self, level: float) -> float:
-        """Decay vers baseline avec clamp."""
-        new = BASELINE + (level - BASELINE) * DECAY_RATE
+    def _decay(self, level: float, pool_name: str = None) -> float:
+        """Decay vers baseline avec clamp. ACh a un decay plus lent (0.98)."""
+        if pool_name == "acetylcholine":
+            rate = 0.98  # Persiste plus longtemps (concu par Promethee)
+        else:
+            rate = DECAY_RATE
+        new = BASELINE + (level - BASELINE) * rate
         return max(MIN_LEVEL, min(MAX_LEVEL, new))
 
     # ============================================================
@@ -190,6 +198,16 @@ class Neurochemistry:
 
     async def _on_council_consensus(self, event: dict):
         self._apply("serotonin", SEROTONIN_IMPACTS["council_consensus"])
+
+    async def _on_school_grade_high(self, event: dict):
+        """Note scolaire >= 8.0 → boost ACh (concu par Promethee)."""
+        grade = event.get("grade", 0.0)
+        if grade >= 8.0:
+            self._apply("acetylcholine", ACETYLCHOLINE_IMPACTS["SCHOOL_GRADE_HIGH"])
+
+    async def _on_spreading_activation(self, event: dict):
+        """Activation reseau synaptique → boost ACh (concu par Promethee)."""
+        self._apply("acetylcholine", ACETYLCHOLINE_IMPACTS["SPREADING_ACTIVATION"])
 
     # ============================================================
     # Modulation
