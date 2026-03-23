@@ -87,6 +87,7 @@ class ChatEngine:
         "  !craft <nom> <desc>      — Creer un outil ephemere a la volee\n"
         "  !antibodies              — Anticorps anti-bugs + scan\n"
         "  !consciousness            — Benchmarks de conscience (C-Score)\n"
+        "  !ethics                   — Etat ethique (valeurs PSYCHE)\n"
         "  !observe <dossier/fichier> — Observer une photo SPECIFIQUE\n"
         "  !write <fichier> <code>  — Ecrire dans le SANDBOX uniquement\n"
         "  !metrics                 — Snapshot metriques pour comparaison\n"
@@ -365,6 +366,9 @@ class ChatEngine:
 
         if cmd == "consciousness":
             return self._execute_consciousness_command()
+
+        if cmd == "ethics":
+            return self._execute_ethics_command()
 
         if cmd == "observe":
             return await self._execute_observe_command(args)
@@ -917,6 +921,14 @@ class ChatEngine:
         except Exception as e:
             return f"[!antibodies] Erreur : {e}"
 
+    def _execute_ethics_command(self) -> str:
+        """Etat ethique — valeurs PSYCHE et autorisations."""
+        try:
+            from core.ethics_module import format_report
+            return format_report()
+        except Exception as e:
+            return f"[!ethics] Erreur : {e}"
+
     def _execute_consciousness_command(self) -> str:
         """Benchmarks de conscience — C-Score objectif."""
         try:
@@ -1423,7 +1435,7 @@ class ChatEngine:
             return f"Erreur lecture : {e}"
 
     # Commandes dispatch autorisees en auto-action
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
 
     async def _scan_response_actions(self, response: str) -> int:
         """Scanne la reponse du LLM pour des commandes ! et les execute.
@@ -1475,6 +1487,8 @@ class ChatEngine:
                     result = self._execute_antibodies_command(ab_args)
                 elif cmd_lower == "consciousness":
                     result = self._execute_consciousness_command()
+                elif cmd_lower == "ethics":
+                    result = self._execute_ethics_command()
                 elif cmd_lower == "observe":
                     obs_args = args.strip().split() if args else []
                     result = await self._execute_observe_command(obs_args)
