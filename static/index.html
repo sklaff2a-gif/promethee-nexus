@@ -10,20 +10,30 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&display=swap" rel="stylesheet">
     <style>
-        /* SCROLLBARS CYBERPUNK */
+        /* SCROLLBARS BIO-INSPIRED */
         ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-track { background: #050505; }
-        ::-webkit-scrollbar-thumb { background: #00441b; border: 1px solid #000; }
-        ::-webkit-scrollbar-thumb:hover { background: #006622; }
-        
-        body { background-color: #000000; color: #00ff41; font-family: 'Courier New', monospace; font-size: 13px; overflow: hidden; }
-        
-        .cyber-box { 
-            border: 1px solid #00441b; 
-            background: #050a05; 
-            position: relative; 
+        ::-webkit-scrollbar-track { background: #0a1628; }
+        ::-webkit-scrollbar-thumb { background: #1a4a3a; border: 1px solid #0a1628; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #2a6a5a; }
+
+        body {
+            background: url('/static/assets/bio/fond_principal.webp') center center / cover no-repeat fixed;
+            background-color: #0a1628;
+            color: #c0e8d0;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            overflow: hidden;
+        }
+
+        .cyber-box {
+            border: 1px solid rgba(0, 229, 200, 0.3);
+            background: rgba(10, 22, 40, 0.55);
+            backdrop-filter: blur(6px);
+            border-radius: 8px;
+            position: relative;
             display: flex;
             flex-direction: column;
+            box-shadow: 0 0 15px rgba(0, 229, 200, 0.1), 0 0 30px rgba(0, 229, 200, 0.04), inset 0 0 30px rgba(0, 0, 0, 0.2);
         }
 
         /* ZONES DE CONTENU VERROUILLÉES */
@@ -38,57 +48,59 @@
         }
         
         /* MESSAGES CHAT */
-        .msg-user { color: #00ffff; text-align: right; margin-bottom: 10px; border-right: 2px solid #00ffff; padding-right: 8px; }
-        .msg-agent { color: #00ff41; margin-bottom: 10px; border-left: 2px solid #00ff41; padding-left: 8px; background: #001100; padding-top: 4px; padding-bottom: 4px; }
-        .msg-system { color: #facc15; margin-bottom: 10px; border-left: 2px solid #facc15; padding-left: 8px; font-style: italic;}
+        .msg-user { color: #80e0ff; text-align: right; margin-bottom: 10px; border-right: 2px solid rgba(0, 229, 200, 0.5); padding-right: 8px; }
+        .msg-agent { color: #4dff88; margin-bottom: 10px; border-left: 2px solid rgba(77, 255, 136, 0.5); padding-left: 8px; background: rgba(0, 40, 20, 0.4); padding-top: 4px; padding-bottom: 4px; border-radius: 4px; }
+        .msg-system { color: #f0d070; margin-bottom: 10px; border-left: 2px solid rgba(240, 208, 112, 0.4); padding-left: 8px; font-style: italic;}
         
         /* CODE BLOCKS */
         pre {
-            background: #111;
-            color: #ddd;
+            background: rgba(10, 22, 40, 0.7);
+            color: #c0e8d0;
             padding: 8px;
             overflow-x: auto;
-            border: 1px solid #333;
+            border: 1px solid rgba(0, 229, 200, 0.15);
+            border-radius: 4px;
             margin-top: 4px;
             font-family: 'Consolas', monospace;
             font-size: 11px;
-            white-space: pre; 
+            white-space: pre;
             max-width: 100%;
         }
 
-        .log-entry { font-size: 11px; border-bottom: 1px solid #111; padding: 1px 0; font-family: 'Consolas', monospace; white-space: nowrap; }
-        .log-err { color: #ef4444; }
-        .log-sys { color: #3b82f6; }
-        .log-success { color: #22c55e; }
+        .log-entry { font-size: 11px; border-bottom: 1px solid rgba(0, 229, 200, 0.08); padding: 1px 0; font-family: 'Consolas', monospace; white-space: nowrap; }
+        .log-err { color: #ff5555; }
+        .log-sys { color: #60a0ff; }
+        .log-success { color: #4dff88; }
         
         /* ANIMATION ACTIVITÉ AGENT */
-        .agent-active { text-shadow: 0 0 10px #22c55e; color: #ffffff !important; transition: all 0.2s; }
-        .dot-active { color: #22c55e !important; text-shadow: 0 0 8px #22c55e; }
-        .dot-inactive { color: #374151; }
+        .agent-active { text-shadow: 0 0 10px #00e5c8; color: #ffffff !important; transition: all 0.2s; }
+        .dot-active { color: #00e5c8 !important; text-shadow: 0 0 8px #00e5c8; }
+        .dot-inactive { color: #2a4a3a; }
 
         /* CHAT DIRECT */
-        .msg-chat-user { color: #00ffff; text-align: right; margin-bottom: 10px; border-right: 2px solid #00ffff; padding-right: 8px; }
-        .msg-chat-bot { color: #ffa500; margin-bottom: 10px; border-left: 2px solid #ffa500; padding-left: 8px; background: #110800; padding-top: 4px; padding-bottom: 4px; }
-        .chat-cursor { display: inline; animation: blink 0.7s step-end infinite; color: #ffa500; font-weight: bold; }
+        .msg-chat-user { color: #80e0ff; text-align: right; margin-bottom: 10px; border-right: 2px solid rgba(0, 229, 200, 0.5); padding-right: 8px; }
+        .msg-chat-bot { color: #ffb860; margin-bottom: 10px; border-left: 2px solid rgba(255, 184, 96, 0.5); padding-left: 8px; background: rgba(30, 15, 0, 0.5); padding-top: 4px; padding-bottom: 4px; border-radius: 4px; }
+        .chat-cursor { display: inline; animation: blink 0.7s step-end infinite; color: #ffb860; font-weight: bold; }
 
         /* STYLE EMERGENT — pensees authentiques de Promethee vs LLM brut */
         .msg-chat-emergent {
-            color: #e8b4f8;
+            color: #d0b0ff;
             margin-bottom: 10px;
-            border-left: 2px solid #c084fc;
+            border-left: 2px solid rgba(192, 132, 252, 0.5);
             padding-left: 8px;
-            background: linear-gradient(135deg, #0d001a 0%, #110020 100%);
+            background: linear-gradient(135deg, rgba(13, 0, 40, 0.6) 0%, rgba(20, 0, 50, 0.6) 100%);
             padding-top: 4px;
             padding-bottom: 4px;
             font-family: 'Caveat', cursive;
             font-size: 16px;
             font-weight: 500;
             line-height: 1.4;
+            border-radius: 4px;
         }
         .emergent-badge {
             font-family: 'Courier New', monospace;
             font-size: 9px;
-            color: #9333ea;
+            color: #8060c0;
             opacity: 0.7;
             display: block;
             margin-bottom: 2px;
@@ -132,7 +144,7 @@
         .stream-content { display: inline; white-space: pre-wrap; word-break: break-word; }
 
         /* VISION - Neural Map */
-        #vision-svg { background: radial-gradient(ellipse at center, #020a02 0%, #000 100%); }
+        #vision-svg { background: radial-gradient(ellipse at center, rgba(5, 20, 15, 0.7) 0%, rgba(0, 0, 0, 0.4) 100%); }
         .vision-tooltip {
             position: absolute; background: rgba(0,10,0,0.95); border: 1px solid #00ff41;
             color: #00ff41; font: 9px 'Courier New', monospace; padding: 4px 6px;
@@ -148,9 +160,9 @@
 
     </style>
 </head>
-<body class="h-screen w-screen flex flex-col p-1 gap-1">
+<body class="h-screen w-screen flex flex-col p-3 gap-2">
     
-    <header class="flex justify-between items-center cyber-box px-3 h-12 shrink-0" style="flex-direction: row;">
+    <header class="flex justify-between items-center cyber-box px-3 h-12 shrink-0" style="flex-direction: row; background: url('/static/assets/bio/header_bar.png') center center / cover no-repeat; background-color: rgba(10, 22, 40, 0.7);">
         <div class="flex flex-col justify-center">
             <h1 class="text-lg font-bold tracking-[0.2em] leading-none">PROMÉTHÉE <span class="text-white">NEXUS</span></h1>
             <div class="text-[9px] text-gray-500" id="version-display">--</div>
@@ -163,15 +175,15 @@
     </header>
     <div id="nap-banner" class="hidden shrink-0 bg-indigo-900 text-indigo-200 text-center text-xs font-bold py-1 tracking-widest animate-pulse">MODE SIESTE ACTIF — GPU libre, reptilien apaise</div>
 
-    <div class="grid grid-cols-12 gap-1 flex-1 min-h-0">
+    <div class="grid grid-cols-12 gap-2 flex-1 min-h-0">
         
-        <div class="col-span-2 flex flex-col gap-1 h-full min-h-0">
+        <div class="col-span-2 flex flex-col gap-2 h-full min-h-0">
             <div class="cyber-box h-1/4 shrink-0">
-                <div class="absolute top-0 left-0 right-0 bg-gray-900 text-gray-400 text-[9px] px-1 font-bold h-5 flex items-center">PSYCHÉ</div>
+                <div class="absolute top-0 left-0 right-0 bg-transparent text-cyan-300 text-[9px] px-1 font-bold h-5 flex items-center border-b border-cyan-900/30">PSYCHÉ</div>
                 <div class="absolute top-5 left-0 right-0 bottom-0 p-1"><canvas id="psycheChart"></canvas></div>
             </div>
             <div class="cyber-box flex-1 min-h-0">
-                <div class="absolute top-0 left-0 right-0 bg-gray-900 text-gray-400 text-[9px] px-1 font-bold h-5 flex items-center">AGENTS</div>
+                <div class="absolute top-0 left-0 right-0 bg-transparent text-cyan-300 text-[9px] px-1 font-bold h-5 flex items-center border-b border-cyan-900/30">AGENTS</div>
                 <div class="locked-scroll-area"> 
                     <ul id="agent-list" class="text-[10px] space-y-1 opacity-90">
                         <li class="flex justify-between" id="agent-strategist"><span>STRATEGIST</span> <span class="dot-inactive">●</span></li>
@@ -189,13 +201,13 @@
             </div>
         </div>
 
-        <div class="col-span-7 flex flex-col gap-1 h-full min-h-0">
+        <div class="col-span-7 flex flex-col gap-2 h-full min-h-0">
 
             <div class="cyber-box flex-[2] min-h-0" id="flux-panel">
                 <div class="absolute top-0 left-0 right-0 bg-green-900 text-black text-[10px] px-2 font-bold h-6 flex items-center justify-between">
                     <span>FLUX DE PENSÉE & RÉSULTATS</span> <span class="text-[9px] opacity-50">LIVE FEED</span>
                 </div>
-                <div id="dialogue-box" class="absolute top-6 left-0 right-0 bottom-0 overflow-y-auto p-2 scroll-smooth bg-black">
+                <div id="dialogue-box" class="absolute top-6 left-0 right-0 bottom-0 overflow-y-auto p-2 scroll-smooth bg-black/40">
                     <div class="text-center text-gray-800 text-[10px] mt-4">-- SYSTÈME PRÊT --</div>
                 </div>
             </div>
@@ -210,7 +222,7 @@
                         <button onclick="toggleChatPanel()" class="text-[9px] hover:text-white" style="color:#ffa500;">FERMER [X]</button>
                     </span>
                 </div>
-                <div id="chat-messages" class="absolute top-6 left-0 right-0 bottom-0 overflow-y-auto p-2 scroll-smooth bg-black">
+                <div id="chat-messages" class="absolute top-6 left-0 right-0 bottom-0 overflow-y-auto p-2 scroll-smooth bg-black/40">
                     <div class="text-center text-[10px] mt-4" style="color:#663300;">-- CANAL DIRECT OUVERT --</div>
                 </div>
                 <!-- Panel wishlist (cache par defaut, glisse depuis la droite) -->
@@ -230,36 +242,36 @@
             </div>
 
             <div class="cyber-box flex-1 min-h-0">
-                <div class="absolute top-0 left-0 right-0 bg-gray-800 text-white text-[10px] px-2 font-bold h-5 flex items-center">LOGS SYSTÈME</div>
-                <div id="logs-box" class="absolute top-5 left-0 right-0 bottom-0 overflow-y-auto p-1 font-mono bg-[#050505] text-[10px]"></div>
+                <div class="absolute top-0 left-0 right-0 bg-transparent text-cyan-300 text-[10px] px-2 font-bold h-5 flex items-center border-b border-cyan-900/30">LOGS SYSTÈME</div>
+                <div id="logs-box" class="absolute top-5 left-0 right-0 bottom-0 overflow-y-auto p-1 font-mono bg-black/30 text-[10px]"></div>
             </div>
 
             <!-- Input mission (visible quand flux actif) -->
             <div id="mission-bar" class="flex gap-0 shrink-0 h-8">
-                <input type="text" id="mission-input" class="flex-1 bg-black border border-green-900 p-2 text-white text-xs placeholder-gray-700 focus:outline-none focus:border-green-500" placeholder="Entrez un ordre (ex: Coder: Crée hello.py)..." onkeydown="if(event.key==='Enter') sendMission()">
+                <input type="text" id="mission-input" class="flex-1 bg-black/50 border border-cyan-900/50 p-2 text-cyan-100 text-xs placeholder-cyan-800 focus:outline-none focus:border-cyan-500 rounded" placeholder="Entrez un ordre (ex: Coder: Crée hello.py)..." onkeydown="if(event.key==='Enter') sendMission()">
                 <button onclick="sendMission()" class="bg-green-900 px-4 text-black text-xs font-bold hover:bg-green-500 transition">GO</button>
             </div>
             <!-- Input chat (visible quand chat actif) -->
             <div id="chat-bar" class="flex gap-0 shrink-0 h-8 hidden">
-                <input type="text" id="chat-input" class="flex-1 bg-black p-2 text-white text-xs placeholder-gray-700 focus:outline-none" style="border:1px solid #663300; focus:border-color:#ffa500;" placeholder="Parle a Promethee..." onkeydown="if(event.key==='Enter') sendChat()">
+                <input type="text" id="chat-input" class="flex-1 bg-black/50 p-2 text-orange-100 text-xs placeholder-orange-900 focus:outline-none rounded" style="border:1px solid rgba(200, 120, 0, 0.3);" placeholder="Parle a Promethee..." onkeydown="if(event.key==='Enter') sendChat()">
                 <button onclick="sendChat()" class="px-4 text-black text-xs font-bold hover:opacity-80 transition" style="background:#ffa500;">ENVOYER</button>
             </div>
         </div>
 
-        <div class="col-span-3 flex flex-col gap-1 h-full min-h-0">
+        <div class="col-span-3 flex flex-col gap-2 h-full min-h-0">
             <div class="cyber-box h-1/2 min-h-0" id="vision-panel">
-                <div class="absolute top-0 left-0 right-0 bg-gray-900 text-gray-400 text-[9px] px-1 font-bold h-5 flex items-center justify-between">
+                <div class="absolute top-0 left-0 right-0 bg-transparent text-cyan-300 text-[9px] px-1 font-bold h-5 flex items-center border-b border-cyan-900/30 justify-between">
                     <span>VISION</span>
                     <span id="vision-stats" class="text-[8px] text-green-900">--</span>
                 </div>
-                <div id="vision-container" class="absolute top-5 left-0 right-0 bottom-0 bg-black overflow-hidden">
+                <div id="vision-container" class="absolute top-5 left-0 right-0 bottom-0 bg-black/30 overflow-hidden">
                     <svg id="vision-svg" width="100%" height="100%"></svg>
                     <div id="vision-tooltip" class="vision-tooltip" style="display:none;"></div>
                     <div id="vision-offline" class="absolute inset-0 flex items-center justify-center text-gray-800 text-[10px]">[CHARGEMENT...]</div>
                 </div>
             </div>
             <div class="cyber-box flex-1 min-h-0">
-                <div class="absolute top-0 left-0 right-0 bg-gray-900 text-gray-400 text-[9px] px-1 font-bold h-5 flex items-center justify-between">
+                <div class="absolute top-0 left-0 right-0 bg-transparent text-cyan-300 text-[9px] px-1 font-bold h-5 flex items-center border-b border-cyan-900/30 justify-between">
                     <span>TÉLÉMÉTRIE</span>
                     <span class="flex items-center gap-2">
                         <button onclick="TissueView.open()" class="text-[8px] border border-green-900 px-1 hover:bg-green-900 hover:text-black transition" style="color:#00ff41;border-color:#00441b">TISSUE</button>
@@ -271,23 +283,23 @@
                     <div class="space-y-2 mt-1">
                         <div>
                             <div class="flex justify-between text-[9px] mb-1 text-gray-400"><span>CPU</span> <span id="telem-cpu-val">--%</span></div>
-                            <div class="h-1 bg-gray-900"><div id="telem-cpu-bar" class="h-full bg-green-600 transition-all duration-500" style="width: 0%"></div></div>
+                            <div class="h-1.5 bg-cyan-950/40 rounded-full"><div id="telem-cpu-bar" class="h-full bg-green-600 transition-all duration-500" style="width: 0%"></div></div>
                         </div>
                         <div>
                             <div class="flex justify-between text-[9px] mb-1 text-gray-400"><span>RAM</span> <span id="telem-ram-val">--%</span></div>
-                            <div class="h-1 bg-gray-900"><div id="telem-ram-bar" class="h-full bg-blue-600 transition-all duration-500" style="width: 0%"></div></div>
+                            <div class="h-1.5 bg-cyan-950/40 rounded-full"><div id="telem-ram-bar" class="h-full bg-blue-600 transition-all duration-500" style="width: 0%"></div></div>
                         </div>
                         <div>
                             <div class="flex justify-between text-[9px] mb-1 text-gray-400"><span>OLLAMA</span> <span id="telem-ollama-val" class="text-gray-600">--</span></div>
-                            <div class="h-1 bg-gray-900"><div id="telem-ollama-bar" class="h-full bg-purple-600 transition-all duration-500" style="width: 0%"></div></div>
+                            <div class="h-1.5 bg-cyan-950/40 rounded-full"><div id="telem-ollama-bar" class="h-full bg-purple-600 transition-all duration-500" style="width: 0%"></div></div>
                         </div>
                         <div>
                             <div class="flex justify-between text-[9px] mb-1 text-gray-400"><span>BPM</span> <span id="telem-bpm-val">--</span></div>
-                            <div class="h-1 bg-gray-900"><div id="telem-bpm-bar" class="h-full transition-all duration-500" style="width: 0%; background-color: #00ff41"></div></div>
+                            <div class="h-1.5 bg-cyan-950/40 rounded-full"><div id="telem-bpm-bar" class="h-full transition-all duration-500" style="width: 0%; background-color: #00ff41"></div></div>
                         </div>
                         <div>
                             <div class="flex justify-between text-[9px] mb-1 text-gray-400"><span>BUDGET</span> <span id="telem-budget-val">--</span></div>
-                            <div class="h-1 bg-gray-900"><div id="telem-budget-bar" class="h-full bg-yellow-600 transition-all duration-500" style="width: 0%"></div></div>
+                            <div class="h-1.5 bg-cyan-950/40 rounded-full"><div id="telem-budget-bar" class="h-full bg-yellow-600 transition-all duration-500" style="width: 0%"></div></div>
                         </div>
                         <div class="border-t border-gray-900 pt-1 mt-1">
                             <div class="flex justify-between text-[8px] text-gray-600"><span>ADRENALINE</span> <span id="telem-adrenaline-val">0%</span></div>
