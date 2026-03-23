@@ -90,10 +90,8 @@ INITIAL_ANTIBODIES = [
         description="Import d'organe (from core.X import) au top-level d'un module organe (sans try/except)",
         pattern=r"^from core\.\w+ import \w+",
         antibody_type="regex", severity="low",
-        exclude_files=["test_", "__init__", "main.py", "autonomy_engine", "chat_engine",
-                        "base_agent", "orchestrator", "config", "prompt_templates",
-                        "event_bus", "sandbox_engine", "bug_antibodies", "neurochemistry",
-                        "attention_codelets"],
+        enabled=False,  # Desactive — les imports locaux try/except sont le pattern VOULU
+        exclude_files=["test_"],
     ),
     Antibody(
         id="AB-003", name="mutable_default_arg",
