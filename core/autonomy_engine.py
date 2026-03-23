@@ -761,6 +761,7 @@ class AutonomyEngine:
             self.daily_budget_used = 0
             self.last_reset_day = today
             self._daily_analysis_done = False
+            self._forced_failure_counts.clear()  # Reset blacklist pour la nouvelle journee
             self._persist_state()
 
             # Bilan et seed objectifs quotidiens
@@ -2545,6 +2546,11 @@ class AutonomyEngine:
             response = await self._execute_memory_consolidation()
         elif intent == "SOLILOQUE_INTERNE":
             response = await self._execute_soliloque()
+        elif intent == "SELF_INSPECT":
+            response = await self._execute_self_inspect()
+        elif intent == "SELF_ANALYSIS":
+            response = await self._execute_self_analysis()
+            self._daily_analysis_done = True
         elif intent == "AUTO_FUZZING":
             response = await self._execute_auto_fuzzing()
         elif intent == "CREATIVE_PLAY":
