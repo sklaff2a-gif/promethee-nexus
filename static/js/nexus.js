@@ -740,17 +740,35 @@ var avatarEmotionMap = {
 function updateAvatar(emotion) {
     var img = document.getElementById('avatar-img');
     var label = document.getElementById('avatar-emotion');
+    var panel = document.getElementById('avatar-panel');
     if (!img) return;
     var file = avatarEmotionMap[emotion] || 'avatar_visage5.png';
     var newSrc = '/static/assets/bio/' + file;
-    if (img.src !== newSrc) {
+    if (img.src.indexOf(file) === -1) {
         img.style.opacity = '0.3';
         setTimeout(function() {
             img.src = newSrc;
             img.style.opacity = '1';
         }, 400);
     }
-    if (label) label.textContent = emotion || '--';
+    if (label) {
+        label.textContent = emotion || '--';
+        var emotionColors = {
+            serenite: '#00e5c8', curiosite: '#00e5ff', enthousiasme: '#ffea00',
+            flow: '#e040fb', frustration: '#ff5252', inquietude: '#ff9100',
+            fatigue: '#78909c', determination: '#448aff', alerte: '#ff1744',
+            satisfaction: '#4dff88', neutre: '#00e5c8', ennui: '#6a7a8a',
+            peur: '#ff6600', panique: '#ff0000'
+        };
+        label.style.color = emotionColors[emotion] || '#00e5c8';
+    }
+    // Pulse cardiaque sur l'avatar
+    if (img) {
+        img.style.filter = 'drop-shadow(0 0 30px rgba(0, 229, 200, 0.6))';
+        setTimeout(function() {
+            img.style.filter = 'drop-shadow(0 0 15px rgba(0, 229, 200, 0.3))';
+        }, 500);
+    }
 }
 
 // --- NEUROCHIMIE TELEMETRIE ---

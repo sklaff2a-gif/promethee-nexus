@@ -10,6 +10,25 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&display=swap" rel="stylesheet">
     <style>
+        /* ANIMATIONS BIO-INSPIRED */
+        @keyframes breathe {
+            0%, 100% { box-shadow: 0 0 15px rgba(0, 229, 200, 0.08), 0 0 30px rgba(0, 229, 200, 0.03); }
+            50% { box-shadow: 0 0 20px rgba(0, 229, 200, 0.15), 0 0 40px rgba(0, 229, 200, 0.06); }
+        }
+        @keyframes pulse-glow {
+            0%, 100% { filter: drop-shadow(0 0 12px rgba(0, 229, 200, 0.2)); }
+            50% { filter: drop-shadow(0 0 25px rgba(0, 229, 200, 0.5)); }
+        }
+        @keyframes border-flow {
+            0% { border-color: rgba(0, 229, 200, 0.2); }
+            50% { border-color: rgba(0, 229, 200, 0.4); }
+            100% { border-color: rgba(0, 229, 200, 0.2); }
+        }
+        @keyframes title-glow {
+            0%, 100% { text-shadow: 0 0 8px rgba(0, 229, 200, 0.3); }
+            50% { text-shadow: 0 0 15px rgba(0, 229, 200, 0.6), 0 0 30px rgba(0, 229, 200, 0.2); }
+        }
+
         /* SCROLLBARS BIO-INSPIRED */
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #0a1628; }
@@ -33,7 +52,7 @@
             position: relative;
             display: flex;
             flex-direction: column;
-            box-shadow: 0 0 15px rgba(0, 229, 200, 0.1), 0 0 30px rgba(0, 229, 200, 0.04), inset 0 0 30px rgba(0, 0, 0, 0.2);
+            animation: breathe 4s ease-in-out infinite, border-flow 6s ease-in-out infinite;
         }
 
         /* ZONES DE CONTENU VERROUILLÉES */
@@ -164,7 +183,7 @@
     
     <header class="flex justify-between items-center cyber-box px-3 h-12 shrink-0" style="flex-direction: row; background: url('/static/assets/bio/header_bar.png') center center / cover no-repeat; background-color: rgba(10, 22, 40, 0.7);">
         <div class="flex flex-col justify-center">
-            <h1 class="text-lg font-bold tracking-[0.2em] leading-none">PROMÉTHÉE <span class="text-white">NEXUS</span></h1>
+            <h1 class="text-lg font-bold tracking-[0.2em] leading-none" style="animation: title-glow 3s ease-in-out infinite; color: #00e5c8;">PROMÉTHÉE <span class="text-white">NEXUS</span></h1>
             <div class="text-[9px] text-gray-500" id="version-display">--</div>
         </div>
         <div class="flex gap-2 items-center">
