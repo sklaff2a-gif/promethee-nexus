@@ -1555,7 +1555,9 @@ class ChatEngine:
         # Mots d'exclusion : si le message parle DU systeme visuel (pas une demande d'observation)
         tech_exclusions = ["cortex", "modele", "llama", "bug", "fix", "code", "pipeline",
                            "hallucine", "corrige", "ameliorer", "option a", "option b",
-                           "strategie", "limitation", "11b"]
+                           "strategie", "limitation", "11b", "metriques", "metrique",
+                           "recommandation", "exercice", "commande", "lance", "analyse",
+                           "c-score", "conscience", "ethique", "benchmark"]
         if sum(1 for ex in tech_exclusions if ex in msg_lower) >= 2:
             return False
 
