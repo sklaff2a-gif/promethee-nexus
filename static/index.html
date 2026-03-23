@@ -29,6 +29,69 @@
             50% { text-shadow: 0 0 15px rgba(0, 229, 200, 0.6), 0 0 30px rgba(0, 229, 200, 0.2); }
         }
 
+        /* PANNEAUX MEMBRANE */
+        .cyber-box::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: url('/static/assets/bio/panneau_membrane.png') center center / cover no-repeat;
+            opacity: 0.08;
+            border-radius: 8px;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .cyber-box > * { position: relative; z-index: 1; }
+
+        /* BOUTONS BIO */
+        .btn-bio {
+            background: url('/static/assets/bio/bouton_bio.png') center center / cover no-repeat;
+            border: 1px solid rgba(0, 229, 200, 0.3);
+            border-radius: 4px;
+            padding: 2px 12px;
+            font-size: 10px;
+            font-weight: bold;
+            font-family: 'Courier New', monospace;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-shadow: 0 0 6px rgba(0, 229, 200, 0.5);
+        }
+        .btn-bio:hover {
+            border-color: rgba(0, 229, 200, 0.6);
+            filter: brightness(1.3);
+        }
+
+        /* BULLES CHAT BIO */
+        .msg-chat-user {
+            background: url('/static/assets/bio/fond_chat_bulle_user.png') center center / cover no-repeat !important;
+            background-color: rgba(0, 40, 60, 0.3) !important;
+            padding: 8px 12px !important;
+            border-radius: 8px !important;
+            border-right: none !important;
+            border: 1px solid rgba(0, 229, 200, 0.15) !important;
+        }
+        .msg-chat-bot {
+            background: url('/static/assets/bio/fond_chat_bulle_agent.png') center center / cover no-repeat !important;
+            background-color: rgba(30, 15, 0, 0.3) !important;
+            padding: 8px 12px !important;
+            border-radius: 8px !important;
+            border-left: none !important;
+            border: 1px solid rgba(255, 184, 96, 0.15) !important;
+        }
+
+        /* NEURONES DECORATIFS (fond panel agents) */
+        #avatar-panel::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 100%;
+            height: 100%;
+            background: url('/static/assets/bio/neurones_decoratifs.png') center center / cover no-repeat;
+            opacity: 0.04;
+            pointer-events: none;
+            z-index: 0;
+        }
+
         /* SCROLLBARS BIO-INSPIRED */
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #0a1628; }
@@ -187,9 +250,9 @@
             <div class="text-[9px] text-gray-500" id="version-display">--</div>
         </div>
         <div class="flex gap-2 items-center">
-            <button id="btn-chat-toggle" onclick="toggleChatPanel()" class="border border-orange-700 text-orange-400 px-3 py-0 text-[10px] font-bold hover:bg-orange-800 hover:text-white transition h-6">CHAT</button>
-            <button id="nap-button" onclick="toggleNapMode()" class="border border-indigo-700 text-indigo-400 px-3 py-0 text-[10px] font-bold hover:bg-indigo-800 hover:text-white transition h-6">SIESTE</button>
-            <button id="reboot-button" onclick="triggerReboot()" class="border border-red-900 text-red-700 px-3 py-0 text-[10px] font-bold hover:bg-red-900 hover:text-white transition h-6">REBOOT</button>
+            <button id="btn-chat-toggle" onclick="toggleChatPanel()" class="btn-bio" style="color: #ffb860;">CHAT</button>
+            <button id="nap-button" onclick="toggleNapMode()" class="btn-bio" style="color: #a0a0ff;">SIESTE</button>
+            <button id="reboot-button" onclick="triggerReboot()" class="btn-bio" style="color: #ff6060;">REBOOT</button>
         </div>
     </header>
     <div id="nap-banner" class="hidden shrink-0 bg-indigo-900 text-indigo-200 text-center text-xs font-bold py-1 tracking-widest animate-pulse">MODE SIESTE ACTIF — GPU libre, reptilien apaise</div>
@@ -260,6 +323,7 @@
                 </div>
             </div>
 
+            <img src="/static/assets/bio/separateur_organique.svg" alt="" class="w-full h-2 opacity-20" style="object-fit: cover;">
             <div class="cyber-box flex-1 min-h-0">
                 <div class="absolute top-0 left-0 right-0 bg-transparent text-cyan-300 text-[10px] px-2 font-bold h-5 flex items-center border-b border-cyan-900/30">LOGS SYSTÈME</div>
                 <div id="logs-box" class="absolute top-5 left-0 right-0 bottom-0 overflow-y-auto p-1 font-mono bg-black/30 text-[10px]"></div>
@@ -268,12 +332,12 @@
             <!-- Input mission (visible quand flux actif) -->
             <div id="mission-bar" class="flex gap-0 shrink-0 h-8">
                 <input type="text" id="mission-input" class="flex-1 bg-black/50 border border-cyan-900/50 p-2 text-cyan-100 text-xs placeholder-cyan-800 focus:outline-none focus:border-cyan-500 rounded" placeholder="Entrez un ordre (ex: Coder: Crée hello.py)..." onkeydown="if(event.key==='Enter') sendMission()">
-                <button onclick="sendMission()" class="bg-green-900 px-4 text-black text-xs font-bold hover:bg-green-500 transition">GO</button>
+                <button onclick="sendMission()" class="btn-bio" style="color: #4dff88;">GO</button>
             </div>
             <!-- Input chat (visible quand chat actif) -->
             <div id="chat-bar" class="flex gap-0 shrink-0 h-8 hidden">
                 <input type="text" id="chat-input" class="flex-1 bg-black/50 p-2 text-orange-100 text-xs placeholder-orange-900 focus:outline-none rounded" style="border:1px solid rgba(200, 120, 0, 0.3);" placeholder="Parle a Promethee..." onkeydown="if(event.key==='Enter') sendChat()">
-                <button onclick="sendChat()" class="px-4 text-black text-xs font-bold hover:opacity-80 transition" style="background:#ffa500;">ENVOYER</button>
+                <button onclick="sendChat()" class="btn-bio" style="color: #ffb860;">ENVOYER</button>
             </div>
         </div>
 
