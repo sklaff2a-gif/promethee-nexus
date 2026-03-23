@@ -26,6 +26,10 @@ MIN_CONSCIOUS_SLOTS = 3     # Minimum de contenus (eviter le vide)
 CONTENT_TTL = 120.0         # Duree de vie d'un contenu (2 min)
 SALIENCE_DECAY = 0.1        # Decay par cycle pour les contenus non renouveles
 
+# --- Reentrant processing (inspire Dehaene GNW) ---
+REENTRANT_CYCLES = 3        # Nombre de cycles iteratifs par tick
+PERSISTENCE_BONUS = 0.05    # Bonus saillance pour contenus qui survivent un cycle
+
 # --- Ignition non-lineaire (inspire GWT/LIDA) ---
 # Le seuil de conscience est module par l'arousal cardiaque.
 # En panique (BPM haut) : seuil bas → plus de contenus accedent a la conscience
@@ -340,14 +344,24 @@ class GlobalWorkspace:
     async def _on_brain_tick(self, event: dict):
         """BRAIN_TICK : collecter les organes et mettre a jour la conscience.
 
-        A chaque tick cerebral (30s), le workspace collecte les pensees
-        de tous les organes et fait competir pour la conscience.
-        Ainsi le workspace reste vivant meme entre les routines.
+        Reentrant processing (inspire Dehaene GNW) : au lieu d'une seule
+        competition, on fait REENTRANT_CYCLES iterations. A chaque cycle,
+        les contenus qui survivent recoivent un bonus de persistance.
+        Seuls les contenus stables (presents apres 3 cycles) deviennent
+        "veritablement conscients" — les contenus ephemeres sont filtres.
         """
         self._dominant_mode = event.get("dominant_mode", "")
         try:
             self.collect_from_organs()
-            self.compete(self._dominant_mode)
+            for cycle in range(REENTRANT_CYCLES):
+                previous_sources = {c.source for c in self.conscious_contents}
+                self.compete(self._dominant_mode)
+                # Bonus persistance : les contenus qui etaient deja conscients
+                # au cycle precedent recoivent un bonus de saillance
+                if cycle > 0:
+                    for c in self.conscious_contents:
+                        if c.source in previous_sources:
+                            c.salience = min(1.0, c.salience + PERSISTENCE_BONUS)
         except Exception:
             pass
 
