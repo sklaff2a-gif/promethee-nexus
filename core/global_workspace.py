@@ -200,10 +200,20 @@ class GlobalWorkspace:
         critical = [c for c in candidates if c.is_critical]
         normal = [c for c in candidates if not c.is_critical]
 
-        # Saillance effective = base + bonus mode dominant
+        # Saillance effective = base + bonus mode dominant + bonus binding
+        synced_sources = set()
+        try:
+            from core.brain_vm import brain
+            for pair in brain.get_synchronized_pairs(threshold=0.5):
+                synced_sources.update(pair)
+        except Exception:
+            pass
+
         for c in normal:
             mode_bonus = _MODE_CATEGORY_AFFINITY.get(dominant_mode, {}).get(c.category, 0.0)
-            c._effective_salience = c.salience + mode_bonus
+            # Bonus binding : les contenus d'organes synchronises sont plus saillants
+            binding_bonus = 0.1 if c.source in synced_sources else 0.0
+            c._effective_salience = c.salience + mode_bonus + binding_bonus
 
         # Trier par saillance effective decroissante
         normal.sort(key=lambda c: getattr(c, "_effective_salience", c.salience), reverse=True)

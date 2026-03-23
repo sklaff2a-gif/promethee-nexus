@@ -15,8 +15,10 @@ Lecture seule — ne modifie aucun organe. Singleton persistant.
 """
 
 import logging
+import math
 import os
 import json
+import random
 import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, Optional
@@ -80,6 +82,21 @@ class BrainVM:
         self._subscribed = False
         self._alive = False
 
+        # Oscillatory binding (Kuramoto) — phases par organe [0, 2π]
+        self._oscillator_phases: Dict[str, float] = {
+            organ: random.uniform(0, 2 * math.pi)
+            for organ in [
+                "cardiac", "desire", "reptilian", "prefrontal", "dopamine",
+                "thalamus", "hippocampus", "synaptic", "amygdala", "corpus",
+            ]
+        }
+        # Frequences naturelles (legere variation pour eviter la sync totale)
+        self._oscillator_frequencies: Dict[str, float] = {
+            organ: 0.3 + random.uniform(-0.05, 0.05)
+            for organ in self._oscillator_phases
+        }
+        self.phase_coherence: float = 0.0  # Order parameter R [0, 1]
+
         self._load()
         self._subscribe_events()
 
@@ -136,11 +153,16 @@ class BrainVM:
             if active:
                 state.dominant_mode = max(active, key=lambda x: x[1])[0]
 
+        # 2b2. OSCILLATORY BINDING (Kuramoto) — synchronisation de phase
+        phase_R = self._update_kuramoto()
+
         # 2c. SYNCHRONISATION — plasticite Hebbienne temporelle inter-organes
         sync_count = self._compute_synchronization(state)
 
-        # 3b. PHI (IIT) — mesure d'integration de l'information
+        # 3b. PHI (IIT) — mesure d'integration enrichie par la coherence de phase
         state.phi = self._compute_phi(state)
+        # Phi est module par la coherence de phase (binding enrichit l'integration)
+        state.phi = min(1.0, state.phi * 0.7 + phase_R * 0.3)
 
         # 3c. CODELETS — deleguees au module attention_codelets.py
         #     (s'executent via BRAIN_TICK handler, apres publication)
@@ -169,6 +191,7 @@ class BrainVM:
                 "descending_signals": state.descending_signals,
                 "territory_summary": self._summarize_territory(state.territory_map),
                 "phi": round(state.phi, 3),
+                "phase_coherence": self.phase_coherence,
                 "sync_pairs": sync_count,
             })
         except Exception as e:
@@ -373,6 +396,86 @@ class BrainVM:
         return round(min(1.0, phi), 3)  # Clamp [0, 1]
 
     # ============================================================
+    # ============================================================
+    # Phase 2b2 : OSCILLATORY BINDING (Kuramoto)
+    # ============================================================
+
+    _KURAMOTO_COUPLING = 0.1  # Force de couplage (faible pour eviter sync totale)
+
+    def _update_kuramoto(self) -> float:
+        """Met a jour les phases oscillatoires via le modele de Kuramoto.
+
+        Chaque organe a une phase theta_i qui evolue :
+          d(theta_i)/dt = omega_i + K * sum_j(w_ij * sin(theta_j - theta_i))
+
+        omega_i = frequence naturelle de l'organe
+        K = constante de couplage
+        w_ij = poids de la connexion dans connectivity_matrix
+
+        Retourne le parametre d'ordre R (coherence de phase) [0, 1].
+        R = |1/N * sum(exp(i*theta_i))|
+        """
+        # Recuperer les poids de la connectivity_matrix
+        weights = {}
+        try:
+            from core.connectivity_matrix import matrix
+            for key, conn in matrix.connections.items():
+                weights[(conn["src"], conn["tgt"])] = conn["weight"]
+                weights[(conn["tgt"], conn["src"])] = conn["weight"]
+        except Exception:
+            pass
+
+        TWO_PI = 2 * math.pi
+        organs = list(self._oscillator_phases.keys())
+        new_phases = {}
+
+        for organ in organs:
+            theta = self._oscillator_phases[organ]
+            omega = self._oscillator_frequencies[organ]
+
+            # Couplage Kuramoto : somme des interactions
+            coupling_sum = 0.0
+            for other in organs:
+                if other == organ:
+                    continue
+                w = weights.get((organ, other), 0.0)
+                if w > 0:
+                    theta_other = self._oscillator_phases[other]
+                    coupling_sum += w * math.sin(theta_other - theta)
+
+            # Mise a jour de la phase
+            new_theta = theta + omega + self._KURAMOTO_COUPLING * coupling_sum
+            new_phases[organ] = new_theta % TWO_PI
+
+        self._oscillator_phases = new_phases
+
+        # Parametre d'ordre R (coherence globale)
+        if not organs:
+            return 0.0
+        n = len(organs)
+        sum_cos = sum(math.cos(self._oscillator_phases[o]) for o in organs)
+        sum_sin = sum(math.sin(self._oscillator_phases[o]) for o in organs)
+        R = math.sqrt(sum_cos ** 2 + sum_sin ** 2) / n
+
+        self.phase_coherence = round(R, 3)
+        return R
+
+    def get_synchronized_pairs(self, threshold: float = 0.5) -> set:
+        """Retourne les paires d'organes synchronises (phase proche).
+
+        Deux organes sont synchronises si |sin(theta_j - theta_i)| < threshold.
+        """
+        synced = set()
+        organs = list(self._oscillator_phases.keys())
+        for i in range(len(organs)):
+            for j in range(i + 1, len(organs)):
+                diff = abs(math.sin(
+                    self._oscillator_phases[organs[j]] - self._oscillator_phases[organs[i]]
+                ))
+                if diff < threshold:
+                    synced.add(frozenset({organs[i], organs[j]}))
+        return synced
+
     # Phase 2c : SYNCHRONISATION — plasticite Hebbienne temporelle
     # ============================================================
 
@@ -564,6 +667,7 @@ class BrainVM:
                 "organ_count": len([v for v in s.organ_states.values() if v is not None]),
                 "territory_zones": len(s.territory_map),
                 "phi": s.phi,
+                "phase_coherence": self.phase_coherence,
             },
             "history_size": len(self.state_history),
             "history": self.state_history[-5:],
