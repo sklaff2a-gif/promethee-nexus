@@ -241,11 +241,13 @@ ws.onmessage = (event) => {
             psycheChartInstance.update();
         }
     }
-    // 13. CARDIAC_BEAT : overlay cardiaque VISION + télémétrie BPM
+    // 13. CARDIAC_BEAT : overlay cardiaque VISION + télémétrie BPM + avatar émotion
     else if (type === "CARDIAC_BEAT") {
         if (typeof NeuralVision !== 'undefined') NeuralVision.handleCardiacBeat(payload);
         // Télémétrie BPM
         updateTelemBpm(payload);
+        // Avatar dynamique selon émotion
+        if (payload.emotion) updateAvatar(payload.emotion);
     }
     // 14. SYNAPTIC_UPDATE : mise à jour graphe neural VISION
     else if (type === "SYNAPTIC_UPDATE") {
@@ -716,6 +718,83 @@ function updateTelemBpm(p) {
     bpmBar.style.width = pct + '%';
     bpmBar.style.backgroundColor = color;
 }
+
+// --- AVATAR EMOTION MAPPING ---
+var avatarEmotionMap = {
+    'neutre': 'avatar_visage5.png',
+    'serenite': 'avatar_visage5.png',
+    'curiosite': 'avatar_visage5_souriant.png',
+    'satisfaction': 'avatar_visage5_souriant.png',
+    'enthousiasme': 'avatar_visage5_souriant.png',
+    'flow': 'avatar_visage5_souriant.png',
+    'determination': 'avatar_visage5_la_colere.png',
+    'frustration': 'avatar_visage5_la_colere.png',
+    'inquietude': 'avatar_visage5_la_peur.png',
+    'peur': 'avatar_visage5_la_peur.png',
+    'panique': 'avatar_visage5_la_peur.png',
+    'alerte': 'avatar_visage5_surpris.png',
+    'fatigue': 'avatar_visage5_triste.png',
+    'ennui': 'avatar_visage5_triste.png',
+};
+
+function updateAvatar(emotion) {
+    var img = document.getElementById('avatar-img');
+    var label = document.getElementById('avatar-emotion');
+    if (!img) return;
+    var file = avatarEmotionMap[emotion] || 'avatar_visage5.png';
+    var newSrc = '/static/assets/bio/' + file;
+    if (img.src !== newSrc) {
+        img.style.opacity = '0.3';
+        setTimeout(function() {
+            img.src = newSrc;
+            img.style.opacity = '1';
+        }, 400);
+    }
+    if (label) label.textContent = emotion || '--';
+}
+
+// --- NEUROCHIMIE TELEMETRIE ---
+function updateTelemNeurochemistry() {
+    fetch('/api/psyche/status').then(function(r) { return r.json(); }).then(function(data) {
+        // Les pools neurochimiques ne sont pas dans psyche, cherchons dans brain
+    }).catch(function() {});
+    // Fallback : lire directement le brain status pour les neurochimiques
+    fetch('/api/brain/status').then(function(r) { return r.json(); }).then(function(data) {
+        var cs = data && data.current_state;
+        if (!cs || !cs.organ_states) return;
+        var neuro = cs.organ_states;
+        // Dopamine
+        var dopa = neuro.dopamine;
+        if (dopa) {
+            var dopaVal = document.getElementById('telem-dopamine-val');
+            var dopaBar = document.getElementById('telem-dopamine-bar');
+            if (dopaVal) dopaVal.textContent = dopa.level.toFixed(2);
+            if (dopaBar) dopaBar.style.width = Math.round(dopa.level * 100) + '%';
+        }
+        // Neurochemistry
+        var nc = neuro.neurochemistry;
+        if (nc) {
+            var pools = [
+                {key: 'serotonin', id: 'serotonin'},
+                {key: 'noradrenaline', id: 'noradrenaline'},
+                {key: 'acetylcholine', id: 'acetylcholine'},
+            ];
+            pools.forEach(function(p) {
+                var val = nc[p.key];
+                if (val !== undefined) {
+                    var el = document.getElementById('telem-' + p.id + '-val');
+                    var bar = document.getElementById('telem-' + p.id + '-bar');
+                    if (el) el.textContent = val.toFixed(2);
+                    if (bar) bar.style.width = Math.round(val * 100) + '%';
+                }
+            });
+        }
+    }).catch(function() {});
+}
+
+// Mise a jour periodique neurochimie (30s)
+setInterval(updateTelemNeurochemistry, 30000);
+updateTelemNeurochemistry();
 
 // Chargement initial télémétrie
 fetch('/api/reptilian/status').then(function(r) { return r.json(); }).then(function(data) {
