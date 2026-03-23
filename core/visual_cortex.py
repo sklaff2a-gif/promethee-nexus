@@ -274,7 +274,7 @@ class VisualCortex:
         """
         name_lower = filename.lower()
         # Portraits / visages
-        portrait_hints = ["visage", "face", "portrait", "avatar", "selfie", "photo_prom"]
+        portrait_hints = ["visage", "face", "portrait", "avatar", "selfie", "promethee", "photo_prom"]
         if any(h in name_lower for h in portrait_hints):
             return "portrait"
         # Illustrations / schemas
@@ -534,6 +534,8 @@ class VisualCortex:
         "salon", "canapé", "canape", "rideaux", "meubles",
         "cuisine", "chambre", "appartement", "maison privée",
         "tasse de café", "tasse de the",
+        "auditorium", "immeuble", "bureau", "réunion",
+        "papier blanc", "dossier", "coussins",
     ]
 
     def _is_hallucinated(self, observation: str, photo_path: str) -> bool:
