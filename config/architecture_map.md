@@ -33,6 +33,8 @@
 | CircadianRhythm | `circadian` | Rythme jour/nuit, phases actives | core/circadian_rhythm.py |
 | Neurochemistry | `neurochemistry` | 3 pools : serotonine (patience), noradrenaline (vigilance), acetylcholine (plasticite) | core/neurochemistry.py |
 | BugAntibodies | `antibody_registry` | Systeme immunitaire — anticorps anti-bugs, scan deterministe | core/bug_antibodies.py |
+| ConsciousnessBenchmarks | (fonctions) | C-Score [0,1] — 4 tests objectifs (binding, phi, recall, integration) | core/consciousness_benchmarks.py |
+| EthicsModule | (fonctions) | Filtre ethique intrinseque — 8 regles basees sur PSYCHE, 3 principes | core/ethics_module.py |
 | InnerVoice | `voice` | Voix interieure, soliloque, stream de conscience | core/inner_voice.py |
 
 ## Evenements bus principaux
@@ -133,4 +135,10 @@ score = base_score (desirs + territory + personality)
 - Max 4 auto-actions par reponse, max 3 boucles agentiques
 - !write SANDBOX UNIQUEMENT (jamais en production)
 - !metrics pour snapshot avant/apres comparaison
+- !observe <chemin> pour observation visuelle ciblee avec prompts par type
+- !consciousness pour le C-Score (4 benchmarks de conscience)
+- !ethics pour l'etat ethique (regles PSYCHE)
 - /research-loop : cycle scientifique hypothese -> sandbox -> test -> comparaison
+- Oscillatory binding : Kuramoto 10 organes, phase_coherence R dans BRAIN_TICK
+- Hierarchical workspace : composition de percepts en composites (3 max/cycle)
+- Reentrant processing : 3 cycles iteratifs dans le Global Workspace

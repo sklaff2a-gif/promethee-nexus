@@ -1544,7 +1544,7 @@
       "phase_name": "VM NEURALE",
       "display": "oscillatory_binding",
       "description": "Binding oscillatoire (AKOrN) — synchronisation de phase entre organes. Les organes synchronises forment des percepts unifies. Resout le binding problem.",
-      "status": "ready",
+      "status": "implemented",
       "specs": [],
       "depends_on": [
         "brain_vm",
@@ -1574,7 +1574,7 @@
       "phase_name": "VM NEURALE",
       "display": "reentrant_processing",
       "description": "Traitement reentrant — le Global Workspace fait 3-5 cycles iteratifs par tick au lieu de 1. Chaque cycle affine la selection des contenus conscients.",
-      "status": "ready",
+      "status": "implemented",
       "specs": [],
       "depends_on": [
         "global_workspace",
@@ -1602,7 +1602,7 @@
       "phase_name": "CONSCIENCE & EMERGENCE",
       "display": "consciousness_benchmarks",
       "description": "Benchmarks de conscience — tests DMTS (delayed match-to-sample), WCST (Wisconsin Card Sort) et mesures IIT formelles pour evaluer objectivement le niveau de conscience.",
-      "status": "ready",
+      "status": "implemented",
       "specs": [],
       "depends_on": [
         "global_workspace",
@@ -1631,7 +1631,7 @@
       "phase_name": "CONSCIENCE & EMERGENCE",
       "display": "ethics_module",
       "description": "Module ethique — filtre ethique formel adapte a Promethee. Evaluation des actions par rapport aux valeurs (bienveillance, respect, non-nuisance). Pas Asimov, mais intrinsèque.",
-      "status": "ready",
+      "status": "implemented",
       "specs": [],
       "depends_on": [
         "prefrontal",
@@ -1659,7 +1659,7 @@
       "phase_name": "SIGNAL BUS",
       "display": "organ_synchronization",
       "description": "Synchronisation inter-organes — mesure et optimisation de la coherence entre organes. Detecte les organes desynchronises et les resynchronise via le corpus callosum.",
-      "status": "ready",
+      "status": "implemented",
       "specs": [],
       "depends_on": [
         "connectivity_matrix",
@@ -1689,7 +1689,7 @@
       "phase_name": "VM NEURALE",
       "display": "hierarchical_workspace",
       "description": "Workspace hierarchique — capsule network a 3+ niveaux dans le Global Workspace. Les contenus bas-niveau se composent en percepts haut-niveau avant la competition.",
-      "status": "ready",
+      "status": "implemented",
       "specs": [],
       "depends_on": [
         "global_workspace",
