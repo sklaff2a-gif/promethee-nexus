@@ -136,6 +136,9 @@ class BrainVM:
             if active:
                 state.dominant_mode = max(active, key=lambda x: x[1])[0]
 
+        # 2c. SYNCHRONISATION — plasticite Hebbienne temporelle inter-organes
+        sync_count = self._compute_synchronization(state)
+
         # 3b. PHI (IIT) — mesure d'integration de l'information
         state.phi = self._compute_phi(state)
 
@@ -166,6 +169,7 @@ class BrainVM:
                 "descending_signals": state.descending_signals,
                 "territory_summary": self._summarize_territory(state.territory_map),
                 "phi": round(state.phi, 3),
+                "sync_pairs": sync_count,
             })
         except Exception as e:
             logger.debug(f"BRAIN_VM: Erreur publication BRAIN_TICK: {e}")
@@ -367,6 +371,109 @@ class BrainVM:
         phi = global_var / (sum_individual_var + epsilon)
 
         return round(min(1.0, phi), 3)  # Clamp [0, 1]
+
+    # ============================================================
+    # Phase 2c : SYNCHRONISATION — plasticite Hebbienne temporelle
+    # ============================================================
+
+    # Taux reduit pour eviter la saturation (HEBBIAN_STRENGTHEN_RATE / 5)
+    _SYNC_STRENGTHEN_RATE = 0.004
+    # Metriques numeriques extractibles par organe
+    _ORGAN_METRICS = {
+        "cardiac": ("bpm", "coherence"),
+        "desire": ("dominant_deprivation",),
+        "reptilian": ("threat_level",),
+        "dopamine": ("level",),
+        "prefrontal": ("active_goals",),
+        "thalamus": ("rules_count",),
+        "hippocampus": ("episodes",),
+        "synaptic": ("nodes", "synapses"),
+    }
+
+    def _compute_synchronization(self, state: BrainState) -> int:
+        """Mesure la co-variation entre organes et renforce les connexions.
+
+        Compare les metriques de chaque organe entre le tick courant et
+        le tick precedent. Si deux organes varient dans le meme sens
+        (les deux montent ou les deux descendent), leur connexion est
+        renforcee dans la connectivity_matrix.
+
+        Retourne le nombre de paires synchronisees detectees.
+        """
+        if len(self.state_history) < 2:
+            return 0
+
+        prev_organs = self.state_history[-2].get("organ_snapshot", {})
+        if not prev_organs:
+            # Stocker le snapshot pour la prochaine comparaison
+            if self.state_history:
+                self.state_history[-1]["organ_snapshot"] = self._extract_metrics(state)
+            return 0
+
+        curr_metrics = self._extract_metrics(state)
+        # Stocker pour le prochain tick
+        if self.state_history:
+            self.state_history[-1]["organ_snapshot"] = curr_metrics
+
+        if not curr_metrics or not prev_organs:
+            return 0
+
+        # Calculer les deltas par organe
+        deltas = {}
+        for organ, value in curr_metrics.items():
+            prev_value = prev_organs.get(organ, 0)
+            if prev_value != 0:
+                delta = (value - prev_value) / max(abs(prev_value), 0.01)
+                deltas[organ] = delta
+
+        if len(deltas) < 2:
+            return 0
+
+        # Detecter les co-variations (meme signe = synchronises)
+        sync_count = 0
+        organs = list(deltas.keys())
+
+        try:
+            from core.connectivity_matrix import matrix
+        except Exception:
+            return 0
+
+        for i in range(len(organs)):
+            for j in range(i + 1, len(organs)):
+                a, b = organs[i], organs[j]
+                da, db = deltas[a], deltas[b]
+                # Seuil : les deux varient de plus de 1% dans le meme sens
+                if abs(da) > 0.01 and abs(db) > 0.01:
+                    if (da > 0 and db > 0) or (da < 0 and db < 0):
+                        matrix.strengthen(a, b, self._SYNC_STRENGTHEN_RATE)
+                        sync_count += 1
+
+        if sync_count > 0 and self.tick_count % 20 == 0:
+            logger.info(f"BRAIN_VM: Sync tick #{self.tick_count} — "
+                        f"{sync_count} paire(s) co-variantes renforcees")
+
+        return sync_count
+
+    def _extract_metrics(self, state: BrainState) -> Dict[str, float]:
+        """Extrait une metrique numerique par organe depuis le snapshot."""
+        metrics = {}
+        for organ, keys in self._ORGAN_METRICS.items():
+            organ_data = state.organ_states.get(organ)
+            if organ_data and isinstance(organ_data, dict):
+                # Prendre la premiere metrique disponible
+                for key in keys:
+                    val = organ_data.get(key)
+                    if val is not None and isinstance(val, (int, float)):
+                        metrics[organ] = float(val)
+                        break
+        # Ajouter les neurochimiques
+        neuro = state.organ_states.get("neurochemistry")
+        if neuro and isinstance(neuro, dict):
+            for pool in ("serotonin", "noradrenaline", "acetylcholine"):
+                val = neuro.get(pool)
+                if val is not None:
+                    metrics[f"neuro_{pool}"] = float(val)
+        return metrics
 
     # Phase 2 : INTEGRER
     # ============================================================

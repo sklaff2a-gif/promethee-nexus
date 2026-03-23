@@ -1970,7 +1970,9 @@ class TestKnowledgeSynthesis:
             seeds = evo._gather_seeds()
 
         assert len(seeds) <= 15
-        assert "concept_0" in seeds  # plus haute énergie
+        assert len(seeds) > 0  # au moins quelques concepts du reseau
+        # Les seeds viennent du top 20 noeuds (shuffle + exclusion possible)
+        assert all(s.startswith("concept_") for s in seeds)
 
     def test_gather_seeds_graceful_degradation(self):
         """3 sources en erreur → liste vide."""
