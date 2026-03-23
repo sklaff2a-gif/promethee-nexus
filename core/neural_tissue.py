@@ -52,7 +52,7 @@ SIGNAL_DECAY = 0.92
 MAX_GRID_SIGNAL = 5.0              # Saturation : signal max par cellule de grille
 TICK_INTERVAL = 2.0
 SAVE_EVERY_N_TICKS = 50
-SAVE_TOP_CELLS = 150                # Cellules sauvegardées au reboot (diversité génétique)
+SAVE_TOP_CELLS = 500                # Sauvegarder TOUTES les cellules (anti-lobotomie au reboot)
 FOOD_SPAWN_PER_ZONE = 3
 MIN_ZONE_INTENSITY = 0.15          # Plancher signal — aucune zone ne reçoit 0
 PATTERN_TRACK_SIZE = 20
@@ -2286,7 +2286,7 @@ class NeuralTissue:
                         immune_to=set(cd.get("immune_to", [])),
                         epigenetic_markers=cd.get("epigenetic_markers", {}),
                     ))
-                # Compléter avec des mutants des survivants
+                # Compléter avec des mutants des survivants (si < INITIAL_CELLS)
                 while len(self.cells) < INITIAL_CELLS:
                     parent = random.choice(self.cells)
                     self.cells.append(NeuralCell(
@@ -2295,6 +2295,15 @@ class NeuralTissue:
                         y=random.randint(0, GRID_SIZE - 1),
                         generation=parent.generation + 1,
                     ))
+
+                # Boost post-load : injecter de l'energie aux cellules restaurees
+                # pour eviter la famine massive dans les premiers ticks
+                for cell in self.cells:
+                    cell.energy = max(cell.energy, INITIAL_ENERGY * 0.8)
+
+                logger.info(f"TISSUE: {len(self.cells)} cellules restaurees "
+                            f"(boost energie post-load applique)")
+
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
