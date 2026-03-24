@@ -25,6 +25,10 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger("BrainVM")
 
+# --- Constantes tunables (niveau module pour autoresearch) ---
+_KURAMOTO_COUPLING = 0.1     # Force de couplage oscillatoire Kuramoto entre organes
+_SYNC_STRENGTHEN_RATE = 0.004  # Taux de renforcement Hebbien temporel inter-organes
+
 # --- Constantes ---
 BRAIN_STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -400,8 +404,6 @@ class BrainVM:
     # Phase 2b2 : OSCILLATORY BINDING (Kuramoto)
     # ============================================================
 
-    _KURAMOTO_COUPLING = 0.1  # Force de couplage (faible pour eviter sync totale)
-
     def _update_kuramoto(self) -> float:
         """Met a jour les phases oscillatoires via le modele de Kuramoto.
 
@@ -444,7 +446,7 @@ class BrainVM:
                     coupling_sum += w * math.sin(theta_other - theta)
 
             # Mise a jour de la phase
-            new_theta = theta + omega + self._KURAMOTO_COUPLING * coupling_sum
+            new_theta = theta + omega + _KURAMOTO_COUPLING * coupling_sum
             new_phases[organ] = new_theta % TWO_PI
 
         self._oscillator_phases = new_phases
@@ -479,8 +481,7 @@ class BrainVM:
     # Phase 2c : SYNCHRONISATION — plasticite Hebbienne temporelle
     # ============================================================
 
-    # Taux reduit pour eviter la saturation (HEBBIAN_STRENGTHEN_RATE / 5)
-    _SYNC_STRENGTHEN_RATE = 0.004
+    # _SYNC_STRENGTHEN_RATE est maintenant au niveau module (tunable par autoresearch)
     # Metriques numeriques extractibles par organe
     _ORGAN_METRICS = {
         "cardiac": ("bpm", "coherence"),
@@ -548,7 +549,7 @@ class BrainVM:
                 # Seuil : les deux varient de plus de 1% dans le meme sens
                 if abs(da) > 0.01 and abs(db) > 0.01:
                     if (da > 0 and db > 0) or (da < 0 and db < 0):
-                        matrix.strengthen(a, b, self._SYNC_STRENGTHEN_RATE)
+                        matrix.strengthen(a, b, _SYNC_STRENGTHEN_RATE)
                         sync_count += 1
 
         if sync_count > 0 and self.tick_count % 20 == 0:

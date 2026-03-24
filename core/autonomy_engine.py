@@ -3765,6 +3765,8 @@ class AutonomyEngine:
         self._autoresearch_started_at = time.time()
         self._autoresearch_experiments = 0
         self._autoresearch_kept = 0
+        self._experiment_skip_blacklist = set()  # Reset blacklist pour la nouvelle session
+        self._experiment_history = []  # Reset historique expériences
         # Capturer les métriques globales de début de session
         self._autoresearch_baseline_metrics = self._capture_experiment_metrics("phi")
 
@@ -5135,6 +5137,7 @@ else:
     # Flag exclusif : une seule expérience à la fois
     _experiment_in_progress = False
     _experiment_history = []  # Journal des expériences récentes (en mémoire)
+    _experiment_skip_blacklist: set = set()  # Params introuvables cette session (skip-loop guard)
     _EXPERIMENT_OBSERVE_TICKS = 30  # Nombre de ticks d'observation (~15 min) — était 10 (5 min), trop court
     _EXPERIMENT_JOURNAL_PATH = os.path.join("memory", "experiment_journal.md")
     _TUNABLE_PARAMS_PATH = os.path.join("config", "tunable_params.json")
@@ -5165,15 +5168,17 @@ else:
         for e in self._experiment_history[-5:]:
             pid = e.get("param_id")
             if e.get("decision") == "KEPT" and abs(e.get("improvement", 0)) < 0.001:
-                # Gardé sans amélioration réelle → cascade suspecte
                 cascade_blacklist.add(pid)
-        exclude_ids = set(recent_ids) | cascade_blacklist
+        # Anti-skip-loop : exclure les params introuvables cette session
+        exclude_ids = set(recent_ids) | cascade_blacklist | self._experiment_skip_blacklist
         candidates = [p for p in params if p["id"] not in exclude_ids]
         if not candidates:
-            # Fallback : exclure seulement les récents (pas la cascade blacklist)
-            candidates = [p for p in params if p["id"] not in recent_ids]
+            # Fallback progressif : relâcher les contraintes une par une
+            candidates = [p for p in params if p["id"] not in (set(recent_ids) | self._experiment_skip_blacklist)]
         if not candidates:
-            candidates = params
+            candidates = [p for p in params if p["id"] not in self._experiment_skip_blacklist]
+        if not candidates:
+            return {"status": "skipped", "result": f"Tous les params sont blacklistés ({len(self._experiment_skip_blacklist)} introuvables, {len(cascade_blacklist)} cascade)."}
         param = candidates[self.total_routines_executed % len(candidates)]
 
         param_id = param["id"]
@@ -5190,9 +5195,11 @@ else:
             module = self._import_module(module_path)
             current_val = self._get_param_value(module, attr_name)
             if current_val is None:
-                return {"status": "skipped", "result": f"Paramètre {attr_name} introuvable dans {module_path}."}
+                self._experiment_skip_blacklist.add(param_id)
+                return {"status": "skipped", "result": f"Paramètre {attr_name} introuvable dans {module_path}. Blacklisté pour cette session."}
         except Exception as e:
-            return {"status": "error", "result": f"Import {module_path} échoué: {e}"}
+            self._experiment_skip_blacklist.add(param_id)
+            return {"status": "error", "result": f"Import {module_path} échoué: {e}. Blacklisté pour cette session."}
 
         # Capturer les métriques baseline
         baseline = self._capture_experiment_metrics(target_metric)
