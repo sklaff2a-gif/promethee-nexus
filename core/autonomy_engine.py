@@ -614,6 +614,12 @@ class AutonomyEngine:
         self.is_processing = False  # VERROU DE SÉCURITÉ
         self.recent_context = []
 
+        # Conscience du loop : heartbeat + compteur de resurrections
+        self._loop_last_tick: float = 0.0       # timestamp du dernier cycle
+        self._loop_alive: bool = False           # True seulement quand le loop tourne
+        self._loop_crash_count: int = 0          # nombre de resurrections depuis le démarrage
+        self._loop_last_error: str = ""          # dernière erreur qui a tué le loop
+
         # Charger l'état persistant
         persisted = AutonomyStatePersistence.load()
         self.daily_count = persisted.get("daily_count", 0)
@@ -1549,6 +1555,12 @@ class AutonomyEngine:
             "recent_context": self.recent_context,
             "idle_threshold": self.idle_threshold,
             "descending_signals": desc_signals,
+            "loop_health": {
+                "alive": self._loop_alive,
+                "last_tick_ago_s": int(time.time() - self._loop_last_tick) if self._loop_last_tick else -1,
+                "crash_count": self._loop_crash_count,
+                "last_error": self._loop_last_error[:200] if self._loop_last_error else None,
+            },
         }
 
     async def _execute_scored_routine(self, health: dict, budget_status: str = "full"):
@@ -4555,9 +4567,15 @@ class AutonomyEngine:
 
     async def start_loop(self):
         self.is_running = True
+        self._loop_alive = True
+        self._loop_last_tick = time.time()
         print(f"   🧠 AUTONOMY: Moteur V24 (Health-Aware Sentinel) activé. Limite: {MAX_DAILY_ROUTINES} routines/jour.")
 
         while self.is_running:
+          try:
+            # === HEARTBEAT : preuve de vie à chaque cycle ===
+            self._loop_last_tick = time.time()
+
             # Sleep adaptatif : piloté par le coeur (cohérence cardiaque)
             try:
                 from core.cardiac_engine import heart
@@ -4626,14 +4644,19 @@ class AutonomyEngine:
                 self.is_processing = True
                 try:
                     response = await self._execute_param_experiment()
-                    if response and response.get("status") == "success":
+                    status = response.get("status", "unknown") if response else "none"
+                    if status == "success":
                         self._autoresearch_experiments += 1
                         result_text = response.get("result", "")
                         if "KEPT" in result_text:
                             self._autoresearch_kept += 1
                         self._persist_state()
-                    elif response and response.get("status") == "skipped":
-                        pass  # Normal — expérience en cours ou paramètre inchangé
+                    elif status == "skipped":
+                        logger.info(f"[AUTORESEARCH] Expérience skipped: {response.get('result', '?')[:120]}")
+                    elif status == "error":
+                        logger.warning(f"[AUTORESEARCH] Expérience error: {response.get('result', '?')[:200]}")
+                    else:
+                        logger.warning(f"[AUTORESEARCH] Réponse inattendue: {response}")
                 except Exception as e:
                     logger.warning(f"[AUTORESEARCH] Erreur expérience: {e}")
                 finally:
@@ -4641,6 +4664,32 @@ class AutonomyEngine:
                 await asyncio.sleep(AUTORESEARCH_INTERVAL)
                 continue
 
+          except asyncio.CancelledError:
+            logger.info("[AUTONOMY] Loop annulée (CancelledError).")
+            break
+          except Exception as e:
+            # RÉSURRECTION : le loop ne meurt JAMAIS silencieusement
+            self._loop_crash_count += 1
+            self._loop_last_error = f"{type(e).__name__}: {e}"
+            self.is_processing = False  # Reset verrou
+            logger.error(
+                f"[AUTONOMY] ☠️ CRASH LOOP #{self._loop_crash_count}: {type(e).__name__}: {e} — résurrection dans 30s",
+                exc_info=True
+            )
+            print(f"   ☠️ AUTONOMY CRASH #{self._loop_crash_count}: {e} — résurrection...")
+            try:
+                await bus.publish("THOUGHT_STREAM", {
+                    "agent": "SYSTEM",
+                    "content": f"⚠️ Autonomy loop crash #{self._loop_crash_count}: {e}. Auto-résurrection.",
+                    "type": "warning"
+                })
+            except Exception:
+                pass
+            await asyncio.sleep(30)  # cooldown avant résurrection
+            continue  # retour au début du while après résurrection
+
+          # === Chemin normal (ni sieste, ni autoresearch) — aussi protégé ===
+          try:
             budget_status = self._check_daily_budget()
 
             # --- CIRCADIEN : évaluer transition de phase ---
@@ -4750,6 +4799,24 @@ class AutonomyEngine:
                     self.is_processing = False
                     self.last_user_interaction = time.time()
 
+          except asyncio.CancelledError:
+            logger.info("[AUTONOMY] Loop annulée (CancelledError) dans chemin normal.")
+            break
+          except Exception as e:
+            self._loop_crash_count += 1
+            self._loop_last_error = f"{type(e).__name__}: {e}"
+            self.is_processing = False
+            logger.error(
+                f"[AUTONOMY] ☠️ CRASH LOOP #{self._loop_crash_count} (routine): {type(e).__name__}: {e} — résurrection dans 30s",
+                exc_info=True
+            )
+            print(f"   ☠️ AUTONOMY CRASH #{self._loop_crash_count}: {e} — résurrection...")
+            await asyncio.sleep(30)
+            continue
+
+        # Fin du while — le loop est mort proprement
+        self._loop_alive = False
+        logger.info(f"[AUTONOMY] Loop terminée. Crashes totaux: {self._loop_crash_count}")
 
     # ================================================================
     # ================================================================
@@ -5058,6 +5125,12 @@ else:
     # ================================================================
     # PARAM_EXPERIMENT — boucle autoresearch (Karpathy-inspired)
     # ================================================================
+
+    # Defaults au niveau classe — safe pour les instances créées via __new__ (tests)
+    _loop_last_tick: float = 0.0
+    _loop_alive: bool = False
+    _loop_crash_count: int = 0
+    _loop_last_error: str = ""
 
     # Flag exclusif : une seule expérience à la fois
     _experiment_in_progress = False

@@ -12,6 +12,8 @@ import logging
 import logging.handlers
 import time
 import uvicorn
+
+logger = logging.getLogger("prometheev11.main")
 import tracemalloc
 import secrets
 import sys
@@ -474,7 +476,27 @@ async def lifespan(app: FastAPI):
 
     talk_logger.start()
     interface_logger.start()
-    asyncio.create_task(autonomy.start_loop())
+
+    # Task autonomie avec watchdog — détecte la mort silencieuse
+    def _on_autonomy_done(task):
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            exc = None
+        if exc:
+            logger.error(f"[MAIN] ☠️ AUTONOMY TASK MORTE: {exc} — relancement...")
+            print(f"   ☠️ AUTONOMY TASK MORTE: {exc}")
+            asyncio.create_task(_resilient_autonomy())
+
+    async def _resilient_autonomy():
+        """Relance le loop d'autonomie si le task meurt."""
+        try:
+            await autonomy.start_loop()
+        except Exception as e:
+            logger.error(f"[MAIN] Autonomy loop fatale: {e}", exc_info=True)
+
+    _autonomy_task = asyncio.create_task(autonomy.start_loop())
+    _autonomy_task.add_done_callback(_on_autonomy_done)
     yield
     ci_pipeline.stop()
     talk_logger.stop()
