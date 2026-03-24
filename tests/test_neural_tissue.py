@@ -63,9 +63,9 @@ class TestBasalMetabolism:
         grid[0][0] = 1.0  # Signal élevé → plein coût maintenance
         cell.tick(grid, [])
         # C capture signal 1.0 → register=1.0, CAPTURE_REWARD=3.0 → +3.0
-        # 60 >= 50 et signal >= 0.1 -> MAINTENANCE_COST = 1.0
-        # 60 + 3.0 - 1.0 = 62.0
-        assert cell.energy == pytest.approx(62.0, abs=0.01)
+        # 60 >= 50 et signal >= 0.1 -> MAINTENANCE_COST = 1.8
+        # 60 + 3.0 - 1.8 = 61.2
+        assert cell.energy == pytest.approx(61.2, abs=0.01)
 
     def test_low_energy_pays_basal_cost(self):
         cell = NeuralCell(genome="C", x=0, y=0, energy=40.0)
@@ -81,9 +81,9 @@ class TestBasalMetabolism:
         grid[0][0] = 1.0  # Signal élevé → plein coût maintenance
         cell.tick(grid, [])
         # C capture signal 1.0 → register=1.0, CAPTURE_REWARD=3.0 → +3.0
-        # 50 >= 50 et signal >= 0.1 -> MAINTENANCE_COST = 1.0
-        # 50 + 3.0 - 1.0 = 52.0
-        assert cell.energy == pytest.approx(52.0, abs=0.01)
+        # 50 >= 50 et signal >= 0.1 -> MAINTENANCE_COST = 1.8
+        # 50 + 3.0 - 1.8 = 51.2
+        assert cell.energy == pytest.approx(51.2, abs=0.01)
 
     def test_basal_extends_survival(self):
         """Une cellule en mode basal survit bien plus de 100 ticks."""
@@ -172,9 +172,9 @@ class TestSignalAwareMaintenance:
         grid[0][0] = 1.0
         cell.tick(grid, [])
         # C capture signal → +3.0, grid[0][0] *= 0.5 → 0.5
-        # 0.5 >= 0.1 et 63 >= 50 → MAINTENANCE_COST = 1.0
-        # 60 + 3.0 - 1.0 = 62.0
-        assert cell.energy == pytest.approx(62.0, abs=0.01)
+        # 0.5 >= 0.1 et 63 >= 50 → MAINTENANCE_COST = 1.8
+        # 60 + 3.0 - 1.8 = 61.2
+        assert cell.energy == pytest.approx(61.2, abs=0.01)
 
     def test_low_energy_always_basal(self):
         """energy < 50 → coût basal même avec signal élevé."""
@@ -1014,10 +1014,10 @@ class TestEpigenetics:
         cell2.tick(grid2, [])
         # C: signal=8.0 > 0.1 → register=8.0, reward=3.0*min(8.0,2.0)=6.0
         # grid[0][0] = 8.0*0.5 = 4.0 after C
-        # local_signal = 4.0 > 0.1, energy = 106 >= 50 → cost = MAINTENANCE_COST = 1.0
-        # heat_tolerant: local_signal 4.0 > 3.0 → cost *= 0.5 → 0.5
-        # 100 + 6.0 - 0.5 = 105.5
-        assert cell2.energy == pytest.approx(105.5, abs=0.01)
+        # local_signal = 4.0 > 0.1, energy = 106 >= 50 → cost = MAINTENANCE_COST = 1.8
+        # heat_tolerant: local_signal 4.0 > 3.0 → cost *= 0.5 → 0.9
+        # 100 + 6.0 - 0.9 = 105.1
+        assert cell2.energy == pytest.approx(105.1, abs=0.01)
 
     # 7
     def test_famine_adapted_acquisition(self):
@@ -1088,9 +1088,9 @@ class TestEpigenetics:
         cell.tick(grid, [])
         # C: signal=2.0 > 0.1 → register=2.0, reward=3.0*min(2.0,2.0)*1.5=9.0
         # grid[0][0] = 2.0*0.5 = 1.0, local_signal=1.0 >= 0.1
-        # energy=109 >= 50 → cost=1.0
-        # 100 + 9.0 - 1.0 = 108.0
-        assert cell.energy == pytest.approx(108.0, abs=0.01)
+        # energy=109 >= 50 → cost=1.8
+        # 100 + 9.0 - 1.8 = 107.2
+        assert cell.energy == pytest.approx(107.2, abs=0.01)
 
     # 13
     def test_marker_inheritance_replicate(self):
@@ -2187,8 +2187,8 @@ class TestLocalCompetition:
         grid[5][5] = 2.0
         cell.tick(grid, [], local_density=1)
         # reward = CAPTURE_REWARD * min(2.0, 2.0) / 1 = 3.0 * 2.0 = 6.0
-        # energy = 50.0 + 6.0 - MAINTENANCE_COST(1.0) = 55.0
-        assert cell.energy == pytest.approx(55.0, abs=0.01)
+        # energy = 50.0 + 6.0 - MAINTENANCE_COST(1.8) = 54.2
+        assert cell.energy == pytest.approx(54.2, abs=0.01)
 
     def test_competition_multiple_cells(self):
         """3 cellules même case → reward ÷3."""
@@ -2197,8 +2197,8 @@ class TestLocalCompetition:
         grid[5][5] = 2.0
         cell.tick(grid, [], local_density=3)
         # reward = CAPTURE_REWARD * min(2.0, 2.0) / 3 = 6.0 / 3 = 2.0
-        # energy = 50.0 + 2.0 - 1.0 = 51.0
-        assert cell.energy == pytest.approx(51.0, abs=0.01)
+        # energy = 50.0 + 2.0 - 1.8 = 50.2
+        assert cell.energy == pytest.approx(50.2, abs=0.01)
 
     def test_competition_capped(self):
         """10 cellules → reward ÷ COMPETITION_DIVISOR_CAP (pas ÷10)."""
@@ -2208,8 +2208,8 @@ class TestLocalCompetition:
         cell.tick(grid, [], local_density=10)
         # competitors = min(10, COMPETITION_DIVISOR_CAP=5) = 5
         # reward = 6.0 / 5 = 1.2
-        # energy = 50.0 + 1.2 - 1.0 = 50.2
-        assert cell.energy == pytest.approx(50.2, abs=0.01)
+        # energy = 50.0 + 1.2 - 1.8 = 49.4
+        assert cell.energy == pytest.approx(49.4, abs=0.01)
 
     def test_competition_zero_density_safe(self):
         """Densité 0 → pas de division par zéro (max(0, 1) = 1)."""
@@ -2218,8 +2218,8 @@ class TestLocalCompetition:
         grid[5][5] = 2.0
         cell.tick(grid, [], local_density=0)
         # competitors = min(0, 5) = 0, max(0, 1) = 1 → reward plein
-        # energy = 50.0 + 6.0 - 1.0 = 55.0
-        assert cell.energy == pytest.approx(55.0, abs=0.01)
+        # energy = 50.0 + 6.0 - 1.8 = 54.2
+        assert cell.energy == pytest.approx(54.2, abs=0.01)
 
     def test_dense_zone_cells_gain_less_energy(self):
         """Cellules en zone dense gagnent moins par tick que cellules isolées."""

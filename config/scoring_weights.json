@@ -11,7 +11,7 @@
     "callosum":      {"weight": 0.8, "range_abs": 1.5},
     "cardiac":       {"weight": 1.5, "range_abs": 3.0},
     "roadmap":       {"weight": 1.5, "range_abs": 2.5},
-    "tissue":        {"weight": 0.7, "range_abs": 1.5},
+    "tissue":        {"weight": 1.2, "range_abs": 1.5},
     "council":       {"weight": 1.5, "range_abs": 5.0},
     "thalamus":      {"weight": 1.0, "range_abs": 2.0},
     "amygdala":      {"weight": 1.2, "range_abs": 2.5},

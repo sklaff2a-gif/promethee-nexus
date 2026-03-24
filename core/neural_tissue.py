@@ -36,7 +36,7 @@ MAX_CELLS = 500
 INITIAL_CELLS = 50
 INITIAL_ENERGY = 100.0
 DIVISION_THRESHOLD = 115.0
-MAINTENANCE_COST = 1.0
+MAINTENANCE_COST = 1.8              # Augmenté (était 1.0) — crée pression sélective réelle
 MAINTENANCE_COST_BASAL = 0.3       # Coût réduit quand énergie < seuil (hibernation cellulaire)
 BASAL_ENERGY_THRESHOLD = 50.0      # Seuil d'activation du mode basal
 ACTION_COST = 0.5
@@ -303,8 +303,9 @@ class NeuralCell:
                 if fa["cycles"] >= FAMINE_ADAPTED_CYCLES:
                     fa["acquired"] = True
 
-        # creative_burst: output_count >= 20
-        if self.output_count >= CREATIVE_BURST_OUTPUT_THRESHOLD:
+        # creative_burst: seuil adaptatif (monte avec la population)
+        _cb_threshold = getattr(self, '_creative_threshold', CREATIVE_BURST_OUTPUT_THRESHOLD)
+        if self.output_count >= _cb_threshold:
             cb = self.epigenetic_markers.setdefault(
                 "creative_burst", {"cycles": 0, "acquired": False}
             )
@@ -327,7 +328,7 @@ class NeuralCell:
 
     def tick(self, grid, neighbors, capture_reward=None, generate_reward=None,
              mutation_rate=None, waste_grid=None, partner_genome=None,
-             local_density=None):
+             local_density=None, creative_threshold=None):
         """Exécute un cycle du génome."""
         if self.energy <= 0 or not self.alive:
             self.alive = False
@@ -1103,6 +1104,14 @@ class NeuralTissue:
         # 1f. Index spatial pour lookup voisins O(25) au lieu de O(n)
         spatial_index = self._build_spatial_index()
 
+        # 1g. Seuil creative_burst adaptatif (monte avec la médiane output de la population)
+        alive_outputs = sorted(c.output_count for c in self.cells if c.alive)
+        if alive_outputs:
+            median_output = alive_outputs[len(alive_outputs) // 2]
+            adaptive_creative_threshold = max(CREATIVE_BURST_OUTPUT_THRESHOLD, median_output // 2)
+        else:
+            adaptive_creative_threshold = CREATIVE_BURST_OUTPUT_THRESHOLD
+
         # 2. Exécuter chaque cellule + check apoptose
         new_cells = []
         for cell in self.cells:
@@ -1135,6 +1144,7 @@ class NeuralTissue:
                         partner = random.choice(different_neighbors)
                     partner_genome = partner.genome
 
+            cell._creative_threshold = adaptive_creative_threshold
             child = cell.tick(self.grid, neighbors, eff_capture, eff_generate,
                               eff_mutation, waste_grid=self.waste_grid,
                               partner_genome=partner_genome,
@@ -1165,6 +1175,19 @@ class NeuralTissue:
                 if not placed:
                     continue  # Pas de place → enfant perdu
             self.cells.append(child)
+
+        # 3b. Taxe monoculture — les génomes dominants (>5% pop) paient un surcoût
+        if self.tick_count % 5 == 0:  # Toutes les 5 ticks (~10s)
+            alive_for_tax = [c for c in self.cells if c.alive]
+            if len(alive_for_tax) > 20:
+                genome_counts = Counter(c.genome for c in alive_for_tax)
+                pop_total = len(alive_for_tax)
+                for cell in alive_for_tax:
+                    freq = genome_counts[cell.genome] / pop_total
+                    if freq > 0.05:
+                        # Taxe proportionnelle à la dominance
+                        tax = (freq - 0.05) * MAINTENANCE_COST * 2.0
+                        cell.energy -= tax
 
         # 4. Supprimer les morts
         before = len(self.cells)
