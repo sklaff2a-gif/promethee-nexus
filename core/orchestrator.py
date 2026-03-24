@@ -104,17 +104,18 @@ class Orchestrator:
             if hasattr(agent, "_force_local_next"):
                 agent._force_local_next = False
 
-            # --- Publication du statut pour SelfAwareness ---
+            # --- Publication du statut pour SelfAwareness + NeuralCompiler ---
             from core.event_bus.bus import bus
+            import time as _time
             resp_status = response.get("status", "success") if isinstance(response, dict) else "success"
+            result_text = response.get("result", "") if isinstance(response, dict) else str(response)
             await bus.publish("MISSION_FINISHED", {
                 "agent": target_slug,
                 "status": resp_status,
+                "result": str(result_text)[:2000] if result_text else "",
             })
 
             # --- Publication AGENT_RESPONSE pour le frontend WebSocket ---
-            import time as _time
-            result_text = response.get("result", "") if isinstance(response, dict) else str(response)
             if result_text and resp_status != "BLOCKED":
                 await bus.publish("AGENT_RESPONSE", {
                     "agent": target_slug,
