@@ -487,7 +487,7 @@ class DivineEvolution(BaseAgent):
                 f"Graines: {len(seeds)}\n"
                 f"Ponts: {n_bridges}\n"
                 f"Anomalies: {n_anomalies}\n"
-                f"Insight: {insight[:200]}"
+                f"Insight: {insight[:600]}"
             )
         }
 

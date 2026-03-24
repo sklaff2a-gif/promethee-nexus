@@ -1039,6 +1039,42 @@ class AutonomyEngine:
         if len(self.routine_history) > 40:
             self.routine_history = self.routine_history[-40:]
 
+    def _save_to_recovery(self, intent: str, agent: str, score: float,
+                          quality_score: float, result_full: str,
+                          scoring_breakdown: dict = None):
+        """Sauvegarde les routines exceptionnelles (score >= 9) dans recovery_production.md."""
+        recovery_path = os.path.join("memory", "recovery_production.md")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        # Scoring breakdown formaté
+        scoring_str = ""
+        if scoring_breakdown:
+            parts = [f"{k} {v:+.1f}" for k, v in scoring_breakdown.items()]
+            scoring_str = f"Scoring: {', '.join(parts)}\n"
+
+        entry = (
+            f"\n---\n\n"
+            f"## [{now}] {intent} (score={score:.1f}, quality={quality_score:.2f})\n\n"
+            f"**Agent:** {agent}\n\n"
+            f"{scoring_str}"
+            f"\n{result_full.strip()}\n"
+        )
+
+        try:
+            # Créer le fichier avec header si inexistant
+            if not os.path.exists(recovery_path):
+                with open(recovery_path, "w", encoding="utf-8") as f:
+                    f.write("# Recovery Production\n\n"
+                            "> Routines exceptionnelles (score >= 9.0) — contenu complet.\n"
+                            "> Ce fichier n'est jamais tronqué automatiquement.\n")
+
+            with open(recovery_path, "a", encoding="utf-8") as f:
+                f.write(entry)
+
+            logger.info(f"[RECOVERY] {intent} (score={score:.1f}) sauvegarde dans recovery_production.md")
+        except Exception as e:
+            logger.warning(f"[RECOVERY] Impossible de sauvegarder: {e}")
+
     async def _publish_sensorium_feedback(self, intent: str, agent: str,
                                           quality_score: float, status: str):
         """SensoriumLoop : publie un snapshot post-action unifie.
@@ -2251,8 +2287,10 @@ class AutonomyEngine:
 
         # Aperçu du résultat pour comparaison future
         result_preview = ""
+        result_full = ""
         if response and isinstance(response, dict):
-            result_preview = str(response.get("result", ""))[:200]
+            result_full = str(response.get("result", ""))
+            result_preview = result_full[:200]
 
         # NOTE: desires, cardiac, prefrontal recoivent le feedback via le bus
         # (AUTONOMY_ROUTINE_COMPLETE) — pas d'appel direct pour eviter le double-comptage.
@@ -2299,6 +2337,14 @@ class AutonomyEngine:
                                      quality_score=quality_score, result_preview=result_preview,
                                      grimoire_slug=grimoire_slug)
                 self.error_streak = 0
+
+                # --- Recovery production : sauvegarder les routines exceptionnelles ---
+                if score >= 9.0:
+                    try:
+                        self._save_to_recovery(intent, agent, score, quality_score,
+                                               result_full, self._last_scoring_breakdown)
+                    except Exception as e:
+                        logger.debug(f"[RECOVERY] Sauvegarde echouee: {e}")
         else:
             failure_type = self._diagnose_failure(response, quality_score, intent)
             self._record_routine(agent, intent, "error", subject=council_subject,
