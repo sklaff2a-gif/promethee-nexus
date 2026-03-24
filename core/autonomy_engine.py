@@ -4577,14 +4577,17 @@ class AutonomyEngine:
                 if self.error_streak >= 3:
                     self.error_streak -= 1
 
-            # Modulation circadienne du sleep
-            try:
-                from core.circadian_rhythm import circadian
-                sleep_time = int(sleep_time * circadian.get_sleep_multiplier())
-            except Exception:
-                pass
-
-            await asyncio.sleep(sleep_time)
+            # Mode autoresearch : bypass le sleep cardiaque, intervalle court
+            if getattr(self, "is_autoresearch", False):
+                await asyncio.sleep(AUTORESEARCH_INTERVAL)
+            else:
+                # Modulation circadienne du sleep
+                try:
+                    from core.circadian_rhythm import circadian
+                    sleep_time = int(sleep_time * circadian.get_sleep_multiplier())
+                except Exception:
+                    pass
+                await asyncio.sleep(sleep_time)
 
             if orchestrator.kill_switch_active or self.is_processing:
                 continue
