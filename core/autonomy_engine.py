@@ -5135,7 +5135,7 @@ else:
     # Flag exclusif : une seule expérience à la fois
     _experiment_in_progress = False
     _experiment_history = []  # Journal des expériences récentes (en mémoire)
-    _EXPERIMENT_OBSERVE_TICKS = 10  # Nombre de ticks d'observation (~5 min)
+    _EXPERIMENT_OBSERVE_TICKS = 30  # Nombre de ticks d'observation (~15 min) — était 10 (5 min), trop court
     _EXPERIMENT_JOURNAL_PATH = os.path.join("memory", "experiment_journal.md")
     _TUNABLE_PARAMS_PATH = os.path.join("config", "tunable_params.json")
 
@@ -5160,7 +5160,18 @@ else:
 
         # Choisir un paramètre en rotation (pas le même 2 fois de suite)
         recent_ids = [e.get("param_id") for e in self._experiment_history[-3:]]
-        candidates = [p for p in params if p["id"] not in recent_ids]
+        # Anti-cascade : exclure aussi les params ajustés ET gardés sans preuve dans les 5 dernières
+        cascade_blacklist = set()
+        for e in self._experiment_history[-5:]:
+            pid = e.get("param_id")
+            if e.get("decision") == "KEPT" and abs(e.get("improvement", 0)) < 0.001:
+                # Gardé sans amélioration réelle → cascade suspecte
+                cascade_blacklist.add(pid)
+        exclude_ids = set(recent_ids) | cascade_blacklist
+        candidates = [p for p in params if p["id"] not in exclude_ids]
+        if not candidates:
+            # Fallback : exclure seulement les récents (pas la cascade blacklist)
+            candidates = [p for p in params if p["id"] not in recent_ids]
         if not candidates:
             candidates = params
         param = candidates[self.total_routines_executed % len(candidates)]
@@ -5216,10 +5227,27 @@ else:
 
         # Comparer
         improvement = after.get(target_metric, 0) - baseline.get(target_metric, 0)
-        quality_improved = after.get("quality_avg", 0) >= baseline.get("quality_avg", 0)
 
-        # Décision : garder ou rollback
-        keep = improvement > 0 or (abs(improvement) < 0.01 and quality_improved)
+        # Décision : garder ou rollback — critère strict (V2)
+        # V1 gardait tout ce qui ne cassait rien → marche aléatoire avec biais de conservation
+        # V2 : garder SEULEMENT si amélioration réelle sur la cible OU sur des métriques secondaires
+        if improvement > 0.001:
+            # Amélioration claire sur la métrique cible
+            keep = True
+        elif abs(improvement) < 0.01:
+            # Métrique cible stable — vérifier les métriques secondaires
+            secondary_up = sum(
+                1 for k in after if k != target_metric and k in baseline
+                and after[k] > baseline[k] + 0.001
+            )
+            secondary_down = sum(
+                1 for k in after if k != target_metric and k in baseline
+                and after[k] < baseline[k] - 0.01
+            )
+            keep = secondary_up > 0 and secondary_down == 0
+        else:
+            # Dégradation de la métrique cible
+            keep = False
 
         if keep:
             decision = "KEPT"
