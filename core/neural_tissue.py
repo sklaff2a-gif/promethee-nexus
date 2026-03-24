@@ -144,6 +144,15 @@ ZONE_PROFILE_EFFECTS = {
     ("desire", "colonisateur"):     {"ROADMAP_RESEARCH": 0.4, "SOLILOQUE_INTERNE": 0.3},
 }
 
+# Fallback par profil quand la combinaison (zone, profil) n'est pas dans ZONE_PROFILE_EFFECTS
+# Bonus réduit (0.15) comparé aux effets spécifiques (0.3-0.5)
+PROFILE_FALLBACK_BONUS = {
+    "producteur":   {"EXPANSION_CODE": 0.15, "VEILLE_SILENCIEUSE": 0.15},
+    "colonisateur": {"ROADMAP_RESEARCH": 0.15, "EXPANSION_CODE": 0.1},
+    "modulateur":   {"SECURITY_AUDIT": 0.15, "AUDIT_STRUCTURE": 0.1},
+    "recycleur":    {"MEMORY_CLEANUP": 0.15, "MEMORY_CONSOLIDATION": 0.1},
+}
+
 # Intervalle de publication TISSUE_ZONE_UPDATE (en ticks)
 ZONE_UPDATE_PUBLISH_INTERVAL = 50
 
@@ -462,7 +471,8 @@ class NeuralCell:
         # Héritage immunité avec decay
         child_immunity = set(self.immune_to)
         if child_immunity and (self.generation + 1) % IMMUNITY_DECAY_GENERATIONS == 0:
-            child_immunity.pop()
+            lost = random.choice(sorted(child_immunity))  # Déterministe (trié) + random
+            child_immunity.discard(lost)
         # Héritage épigénétique (85% = 1 - EPIGENETIC_INHERITANCE_DECAY)
         child_markers = {}
         for name, marker in self.epigenetic_markers.items():
@@ -1287,8 +1297,7 @@ class NeuralTissue:
             elif zone_name == prev_season_zone:
                 food_count += SEASON_TRANSITION_BONUS
             if sleep_mode:
-                food_count = max(1, food_count // 4)
-                intensity *= 0.5
+                food_count = max(1, food_count // 4)  # 25% du normal (métabolisme cérébral)
             for _ in range(food_count):
                 sx = random.randint(x1, min(x2 - 1, GRID_SIZE - 1))
                 sy = random.randint(y1, min(y2 - 1, GRID_SIZE - 1))
@@ -1389,19 +1398,13 @@ class NeuralTissue:
         # Pattern significatif si > 30% de la population et tick > 100
         if top["frequency"] > 0.30 and self.tick_count > 100:
             if self.tick_count % 50 == 0:  # Pas de spam
-                try:
-                    from core.event_bus.bus import bus
-                    import asyncio as _aio
-                    loop = _aio.get_running_loop()
-                    loop.create_task(bus.publish("TISSUE_PATTERN_EMERGED", {
-                        "genome": top["genome"],
-                        "frequency": top["frequency"],
-                        "fitness": top["avg_fitness"],
-                        "tick": self.tick_count,
-                        "population": len(self.cells),
-                    }))
-                except Exception:
-                    pass
+                self._try_publish("TISSUE_PATTERN_EMERGED", {
+                    "genome": top["genome"],
+                    "frequency": top["frequency"],
+                    "fitness": top["avg_fitness"],
+                    "tick": self.tick_count,
+                    "population": len(self.cells),
+                }, force=True)
 
     # --- Signaux de zone ---
 
@@ -1538,18 +1541,27 @@ class NeuralTissue:
         self._publish_cooldowns[event_name] = self.tick_count
         return True
 
-    def _try_publish(self, event_name: str, payload: dict):
-        """Publie un event si le cooldown est OK (fire-and-forget async)."""
-        if not self._publish_cooldown_ok(event_name):
+    def _try_publish(self, event_name: str, payload: dict, force: bool = False):
+        """Publie un event si le cooldown est OK. Done-callback pour log erreurs."""
+        if not force and not self._publish_cooldown_ok(event_name):
             return
         try:
             from core.event_bus.bus import bus
             import asyncio as _aio
             loop = _aio.get_running_loop()
-            loop.create_task(bus.publish(event_name, payload))
-            logger.debug(f"TISSUE: {event_name} publié")
-        except Exception:
-            pass
+            task = loop.create_task(bus.publish(event_name, payload))
+
+            def _on_done(t):
+                try:
+                    exc = t.exception()
+                except _aio.CancelledError:
+                    return
+                if exc:
+                    logger.warning(f"TISSUE: Échec publication {event_name}: {exc}")
+
+            task.add_done_callback(_on_done)
+        except RuntimeError:
+            pass  # Pas de boucle événementielle (tests synchrones)
 
     def _check_thresholds(self):
         """Vérifie les seuils et publie les events efférents."""
@@ -1748,6 +1760,8 @@ class NeuralTissue:
 
     async def _on_inner_voice(self, event):
         """Voix intérieure → stimuler mémoire + créativité + cognition."""
+        if not self._cooldown_ok("INNER_VOICE_BROADCAST"):
+            return
         self._cognitive_state["memory_activity"] = min(
             self._cognitive_state["memory_activity"] + 0.15, 1.0
         )
@@ -1811,6 +1825,8 @@ class NeuralTissue:
 
     async def _on_psyche_update(self, event):
         """Mise à jour PSYCHE → stabilité via system_average."""
+        if not self._cooldown_ok("PSYCHE_UPDATE"):
+            return
         data = event.get("data", event)
         avg = data.get("system_average", {})
         if isinstance(avg, dict):
@@ -1821,30 +1837,28 @@ class NeuralTissue:
 
     def _publish_zone_update(self):
         """Publie l'état agrégé des zones pour les autres organes."""
-        try:
-            from core.event_bus.bus import bus
-            dominants = self.get_zone_dominants()
-            asyncio.get_event_loop().create_task(bus.publish("TISSUE_ZONE_UPDATE", {
-                "zones": {
-                    name: {
-                        "activity": sig.get("activity", 0.0),
-                        "density": sig.get("density", 0.0),
-                        "energy": sig.get("energy", 0.0),
-                        "diversity": sig.get("diversity", 0.0),
-                        "dominant_genome": sig.get("dominant_genome", ""),
-                    }
-                    for name, sig in self._zone_signals.items()
-                },
-                "dominants": dominants,
-                "season": SEASON_ORDER[self._current_season_index] if self._current_season_index < len(SEASON_ORDER) else "",
-                "tick": self.tick_count,
-                "alive_cells": len(self.cells),
-            }))
-        except Exception:
-            pass  # Pas de boucle événementielle disponible (tests)
+        dominants = self.get_zone_dominants()
+        self._try_publish("TISSUE_ZONE_UPDATE", {
+            "zones": {
+                name: {
+                    "activity": sig.get("activity", 0.0),
+                    "density": sig.get("density", 0.0),
+                    "energy": sig.get("energy", 0.0),
+                    "diversity": sig.get("diversity", 0.0),
+                    "dominant_genome": sig.get("dominant_genome", ""),
+                }
+                for name, sig in self._zone_signals.items()
+            },
+            "dominants": dominants,
+            "season": SEASON_ORDER[self._current_season_index] if self._current_season_index < len(SEASON_ORDER) else "",
+            "tick": self.tick_count,
+            "alive_cells": len(self.cells),
+        }, force=True)
 
     async def _on_synaptic_update(self, event):
         """Mise à jour synaptique → modulation zones tissu."""
+        if not self._cooldown_ok("SYNAPTIC_UPDATE"):
+            return
         data = event.get("data", event) if isinstance(event, dict) else {}
         # Effet de base : activité mémoire
         self._cognitive_state["memory_activity"] = min(
@@ -1910,6 +1924,8 @@ class NeuralTissue:
 
     async def _on_sensorium_update(self, event):
         """Hardware sensorium → cognitive_state thermoception/soma."""
+        if not self._cooldown_ok("SENSORIUM_UPDATE"):
+            return
         senses = event.get("senses", {})
         self._cognitive_state["thermal_stress"] = senses.get("thermoception", 0.0)
         self._cognitive_state["somatic_load"] = senses.get("effort", 0.0)
@@ -1999,7 +2015,9 @@ class NeuralTissue:
             if not genome:
                 continue
             profile = _classify_genome_profile(genome)
-            effects = ZONE_PROFILE_EFFECTS.get((zone_name, profile), {})
+            effects = ZONE_PROFILE_EFFECTS.get((zone_name, profile))
+            if effects is None:
+                effects = PROFILE_FALLBACK_BONUS.get(profile, {})
             profile_bonus = effects.get(intent, 0.0)
             bonus += profile_bonus
 

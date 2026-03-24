@@ -456,10 +456,10 @@ class TestSeasonality:
         published = []
         original_try_publish = tissue._try_publish
 
-        def mock_try_publish(event_name, payload):
+        def mock_try_publish(event_name, payload, **kwargs):
             if event_name == "TISSUE_SEASON_CHANGE":
                 published.append(payload)
-            return original_try_publish(event_name, payload)
+            return original_try_publish(event_name, payload, **kwargs)
 
         tissue._try_publish = mock_try_publish
         # Positionner juste avant le seuil
@@ -591,7 +591,7 @@ class TestAlphaRule:
         published = []
         original_try_publish = tissue._try_publish
 
-        def mock_try_publish(event_name, payload):
+        def mock_try_publish(event_name, payload, **kwargs):
             if event_name == "TISSUE_ALPHA_EXILE":
                 published.append(payload)
 
@@ -2619,38 +2619,23 @@ class TestPublishZoneUpdate:
     """Tests pour _publish_zone_update()."""
 
     def test_publish_zone_update_fires_event(self):
-        """_publish_zone_update() publie un événement TISSUE_ZONE_UPDATE."""
+        """_publish_zone_update() publie un événement TISSUE_ZONE_UPDATE via _try_publish."""
         tissue = _make_tissue()
         tissue._zone_signals["cognition"] = {
             "activity": 1.0, "density": 0.3, "energy": 100.0,
             "diversity": 0.5, "dominant_genome": "CCGCG",
             "genome_frequency": 0.5,
         }
-        from unittest.mock import AsyncMock
-        import asyncio
-        mock_bus = MagicMock()
-        mock_bus.publish = AsyncMock()
-        mock_bus_mod = MagicMock()
-        mock_bus_mod.bus = mock_bus
+        published = []
 
-        captured_coros = []
-        mock_loop = MagicMock()
-        mock_loop.create_task = lambda c: captured_coros.append(c) or MagicMock()
+        def mock_try_publish(event_name, payload, **kwargs):
+            published.append((event_name, payload))
 
-        with patch.dict("sys.modules", {"core.event_bus": mock_bus_mod, "core.event_bus.bus": mock_bus_mod}):
-            with patch("asyncio.get_event_loop", return_value=mock_loop):
-                tissue._publish_zone_update()
-        # Exécuter les coroutines capturées
-        loop = asyncio.new_event_loop()
-        try:
-            for coro in captured_coros:
-                loop.run_until_complete(coro)
-        finally:
-            loop.close()
-        assert mock_bus.publish.call_count == 1
-        call_args = mock_bus.publish.call_args
-        assert call_args[0][0] == "TISSUE_ZONE_UPDATE"
-        data = call_args[0][1]
+        tissue._try_publish = mock_try_publish
+        tissue._publish_zone_update()
+        assert len(published) == 1
+        assert published[0][0] == "TISSUE_ZONE_UPDATE"
+        data = published[0][1]
         assert "zones" in data
         assert "dominants" in data
         assert "season" in data
@@ -2665,27 +2650,15 @@ class TestPublishZoneUpdate:
             "diversity": 0.5, "dominant_genome": "RRAAR",
             "genome_frequency": 0.7,
         }
-        from unittest.mock import AsyncMock
-        import asyncio
-        mock_bus = MagicMock()
-        mock_bus.publish = AsyncMock()
-        mock_bus_mod = MagicMock()
-        mock_bus_mod.bus = mock_bus
+        published = []
 
-        captured_coros = []
-        mock_loop = MagicMock()
-        mock_loop.create_task = lambda c: captured_coros.append(c) or MagicMock()
+        def mock_try_publish(event_name, payload, **kwargs):
+            published.append((event_name, payload))
 
-        with patch.dict("sys.modules", {"core.event_bus": mock_bus_mod, "core.event_bus.bus": mock_bus_mod}):
-            with patch("asyncio.get_event_loop", return_value=mock_loop):
-                tissue._publish_zone_update()
-        loop = asyncio.new_event_loop()
-        try:
-            for coro in captured_coros:
-                loop.run_until_complete(coro)
-        finally:
-            loop.close()
-        data = mock_bus.publish.call_args[0][1]
+        tissue._try_publish = mock_try_publish
+        tissue._publish_zone_update()
+        assert len(published) == 1
+        data = published[0][1]
         dominants = data["dominants"]
         assert "creativity" in dominants
         assert dominants["creativity"]["profile"] == "colonisateur"
