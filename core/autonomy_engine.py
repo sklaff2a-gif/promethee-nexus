@@ -3306,7 +3306,7 @@ class AutonomyEngine:
             asyncio.get_event_loop().create_task(bus.publish("COUNCIL_END", {
                 "status": "consensus",
                 "virtual": True,
-                "summary": final_summary,
+                "final_summary": final_summary,
             }))
         except Exception:
             pass
