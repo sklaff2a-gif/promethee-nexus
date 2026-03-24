@@ -1,0 +1,139 @@
+{
+  "_comment": "Parametres tunables par la routine PARAM_EXPERIMENT. Chaque parametre definit sa plage, le module source, et la valeur par defaut.",
+  "_comment2": "variation_pct = amplitude max de variation par experience (ex: 0.15 = ±15%)",
+
+  "params": [
+    {
+      "id": "kuramoto_coupling",
+      "module": "core.brain_vm",
+      "attr": "_KURAMOTO_COUPLING",
+      "default": 0.10,
+      "min": 0.01,
+      "max": 0.30,
+      "variation_pct": 0.15,
+      "metric": "phase_coherence",
+      "description": "Force de couplage oscillatoire Kuramoto entre organes"
+    },
+    {
+      "id": "sync_strengthen_rate",
+      "module": "core.brain_vm",
+      "attr": "_SYNC_STRENGTHEN_RATE",
+      "default": 0.004,
+      "min": 0.001,
+      "max": 0.015,
+      "variation_pct": 0.20,
+      "metric": "phase_coherence",
+      "description": "Taux de renforcement Hebbien temporel inter-organes"
+    },
+    {
+      "id": "ignition_threshold",
+      "module": "core.global_workspace",
+      "attr": "IGNITION_BASE_THRESHOLD",
+      "default": 0.35,
+      "min": 0.15,
+      "max": 0.60,
+      "variation_pct": 0.15,
+      "metric": "phi",
+      "description": "Seuil de saillance pour acceder a la conscience (Global Workspace)"
+    },
+    {
+      "id": "hebbian_learning_rate",
+      "module": "core.synaptic_network",
+      "attr": "HEBBIAN_LEARNING_RATE",
+      "default": 0.08,
+      "min": 0.02,
+      "max": 0.20,
+      "variation_pct": 0.15,
+      "metric": "quality_avg",
+      "description": "Vitesse apprentissage Hebbien dans le cortex associatif"
+    },
+    {
+      "id": "anti_hebbian_rate",
+      "module": "core.synaptic_network",
+      "attr": "ANTI_HEBBIAN_RATE",
+      "default": 0.03,
+      "min": 0.01,
+      "max": 0.10,
+      "variation_pct": 0.15,
+      "metric": "quality_avg",
+      "description": "Taux d'oubli anti-Hebbien dans le cortex associatif"
+    },
+    {
+      "id": "neuron_fire_threshold",
+      "module": "core.synaptic_network",
+      "attr": "NEURON_FIRE_THRESHOLD",
+      "default": 0.85,
+      "min": 0.60,
+      "max": 0.95,
+      "variation_pct": 0.10,
+      "metric": "phi",
+      "description": "Seuil de fire des neurones LIF dans le cortex"
+    },
+    {
+      "id": "lif_threshold",
+      "module": "core.autonomy_engine",
+      "attr": "LIF_THRESHOLD",
+      "default": 8.0,
+      "min": 4.0,
+      "max": 15.0,
+      "variation_pct": 0.10,
+      "metric": "quality_avg",
+      "description": "Seuil de fire du modele LIF pour le scoring des routines"
+    },
+    {
+      "id": "lif_leak_rate",
+      "module": "core.autonomy_engine",
+      "attr": "LIF_LEAK_RATE",
+      "default": 0.70,
+      "min": 0.40,
+      "max": 0.95,
+      "variation_pct": 0.10,
+      "metric": "quality_avg",
+      "description": "Decay du potentiel LIF entre cycles (routines)"
+    },
+    {
+      "id": "neurochemistry_decay",
+      "module": "core.neurochemistry",
+      "attr": "DECAY_RATE",
+      "default": 0.97,
+      "min": 0.90,
+      "max": 0.995,
+      "variation_pct": 0.02,
+      "metric": "global_coherence",
+      "description": "Taux de retour baseline des pools neurochimiques"
+    },
+    {
+      "id": "connectivity_hebbian_strengthen",
+      "module": "core.connectivity_matrix",
+      "attr": "HEBBIAN_STRENGTHEN_RATE",
+      "default": 0.02,
+      "min": 0.005,
+      "max": 0.05,
+      "variation_pct": 0.20,
+      "metric": "global_coherence",
+      "description": "Renforcement Hebbien des connexions inter-organes"
+    },
+    {
+      "id": "salience_decay",
+      "module": "core.global_workspace",
+      "attr": "SALIENCE_DECAY",
+      "default": 0.10,
+      "min": 0.02,
+      "max": 0.25,
+      "variation_pct": 0.15,
+      "metric": "phi",
+      "description": "Decay de saillance par cycle pour contenus non-renouveles"
+    },
+    {
+      "id": "persistence_bonus",
+      "module": "core.global_workspace",
+      "attr": "PERSISTENCE_BONUS",
+      "default": 0.05,
+      "min": 0.01,
+      "max": 0.15,
+      "variation_pct": 0.20,
+      "metric": "phi",
+      "description": "Bonus saillance pour contenus survivant un cycle reentrant"
+    }
+  ]
+}

@@ -23,7 +23,7 @@ DAILY_BUDGET_POINTS = 200
 BUDGET_RESERVE_POINTS = 20
 
 # Routines 0-LLM qui continuent même quand le budget est épuisé
-POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE", "SELF_INSPECT"}
+POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE", "SELF_INSPECT", "PARAM_EXPERIMENT"}
 
 # Clamping final du score total (après toutes les couches de scoring)
 FINAL_SCORE_CLAMP_MIN = -5.0
@@ -169,6 +169,7 @@ INTROSPECTIVE_INTENTS = {
     "COUNCIL_DEBATE", "SOLILOQUE_INTERNE", "SELF_INSPECT", "SELF_ANALYSIS",
     "MEMORY_CLEANUP", "MEMORY_CONSOLIDATION", "AUDIT_STRUCTURE",
     "REFACTOR_RANDOM", "SECURITY_AUDIT", "EXPANSION_CODE", "EXPANSION_CATALOG",
+    "PARAM_EXPERIMENT",
 }
 EXTROVERTED_INTENTS = {
     "VEILLE_SILENCIEUSE", "VEILLE_IA", "DROPZONE_SCAN", "ROADMAP_RESEARCH", "ROADMAP_SPEC",
@@ -838,6 +839,7 @@ class AutonomyEngine:
             {"agent": "_school_class", "intent": "SCHOOL_BULLETIN", "mission": ""},
             {"agent": "_school_class", "intent": "SCHOOL_FREE_TIME", "mission": ""},
             {"agent": "strategist", "intent": "NEURAL_TRAINING", "mission": "Entraînement neuronal ciblé"},
+            {"agent": "_param_experiment", "intent": "PARAM_EXPERIMENT", "mission": "Expérimentation autonome: varier un paramètre, observer, comparer, garder ou rollback."},
         ]
 
     def _persist_state(self):
@@ -2147,6 +2149,8 @@ class AutonomyEngine:
             response = await self._execute_creative_play()
         elif intent == "NEURAL_TRAINING":
             response = await self._execute_neural_training()
+        elif intent == "PARAM_EXPERIMENT":
+            response = await self._execute_param_experiment()
         elif intent == "GRIMOIRE_EVOLVE":
             response = await self._execute_grimoire_evolve()
         elif intent == "VEILLE_IA":
@@ -2603,6 +2607,8 @@ class AutonomyEngine:
             response = await self._execute_creative_play()
         elif intent == "NEURAL_TRAINING":
             response = await self._execute_neural_training()
+        elif intent == "PARAM_EXPERIMENT":
+            response = await self._execute_param_experiment()
         elif intent == "GRIMOIRE_EVOLVE":
             response = await self._execute_grimoire_evolve()
         elif intent == "VEILLE_IA":
@@ -4896,6 +4902,241 @@ else:
 
         except Exception as e:
             return {"status": "error", "result": f"Auto-fuzzing échoué: {e}"}
+
+    # ================================================================
+    # PARAM_EXPERIMENT — boucle autoresearch (Karpathy-inspired)
+    # ================================================================
+
+    # Flag exclusif : une seule expérience à la fois
+    _experiment_in_progress = False
+    _experiment_history = []  # Journal des expériences récentes (en mémoire)
+    _EXPERIMENT_OBSERVE_TICKS = 10  # Nombre de ticks d'observation (~5 min)
+    _EXPERIMENT_JOURNAL_PATH = os.path.join("memory", "experiment_journal.md")
+    _TUNABLE_PARAMS_PATH = os.path.join("config", "tunable_params.json")
+
+    async def _execute_param_experiment(self) -> dict:
+        """Expérimentation autonome : varier un paramètre, observer, comparer, garder/rollback.
+
+        Inspiré d'autoresearch (Karpathy) : boucle modify → benchmark → compare → keep/reject.
+        0 appel LLM. 100% déterministe.
+        """
+        if self._experiment_in_progress:
+            return {"status": "skipped", "result": "Expérience déjà en cours."}
+
+        # Charger le catalogue de paramètres
+        try:
+            with open(self._TUNABLE_PARAMS_PATH, "r", encoding="utf-8") as f:
+                catalog = json.load(f)
+            params = catalog.get("params", [])
+            if not params:
+                return {"status": "skipped", "result": "Catalogue de paramètres vide."}
+        except Exception as e:
+            return {"status": "error", "result": f"Impossible de charger tunable_params.json: {e}"}
+
+        # Choisir un paramètre en rotation (pas le même 2 fois de suite)
+        recent_ids = [e.get("param_id") for e in self._experiment_history[-3:]]
+        candidates = [p for p in params if p["id"] not in recent_ids]
+        if not candidates:
+            candidates = params
+        param = candidates[self.total_routines_executed % len(candidates)]
+
+        param_id = param["id"]
+        module_path = param["module"]
+        attr_name = param["attr"]
+        default_val = param["default"]
+        val_min = param["min"]
+        val_max = param["max"]
+        variation_pct = param.get("variation_pct", 0.10)
+        target_metric = param.get("metric", "phi")
+
+        # Lire la valeur actuelle du paramètre
+        try:
+            module = self._import_module(module_path)
+            current_val = self._get_param_value(module, attr_name)
+            if current_val is None:
+                return {"status": "skipped", "result": f"Paramètre {attr_name} introuvable dans {module_path}."}
+        except Exception as e:
+            return {"status": "error", "result": f"Import {module_path} échoué: {e}"}
+
+        # Capturer les métriques baseline
+        baseline = self._capture_experiment_metrics(target_metric)
+
+        # Calculer la nouvelle valeur (variation aléatoire dans la plage)
+        direction = random.choice([-1, 1])
+        delta = current_val * variation_pct * direction
+        new_val = current_val + delta
+        new_val = max(val_min, min(val_max, new_val))  # Clamping strict
+
+        if abs(new_val - current_val) < 1e-8:
+            return {"status": "skipped", "result": f"{param_id}: valeur inchangée après clamping."}
+
+        # Appliquer la modification
+        self._experiment_in_progress = True
+        print(f"   🔬 EXPERIMENT: {param_id} = {current_val:.6f} → {new_val:.6f} ({direction:+d}{variation_pct*100:.0f}%)")
+
+        try:
+            self._set_param_value(module, attr_name, new_val)
+        except Exception as e:
+            self._experiment_in_progress = False
+            return {"status": "error", "result": f"Impossible de modifier {attr_name}: {e}"}
+
+        # Observer pendant N ticks (~5 min)
+        observe_ticks = self._EXPERIMENT_OBSERVE_TICKS
+        tick_interval = 30  # secondes par tick
+        print(f"   ⏱️ EXPERIMENT: Observation pendant {observe_ticks} ticks ({observe_ticks * tick_interval}s)...")
+        await asyncio.sleep(observe_ticks * tick_interval)
+
+        # Capturer les métriques après
+        after = self._capture_experiment_metrics(target_metric)
+
+        # Comparer
+        improvement = after.get(target_metric, 0) - baseline.get(target_metric, 0)
+        quality_improved = after.get("quality_avg", 0) >= baseline.get("quality_avg", 0)
+
+        # Décision : garder ou rollback
+        keep = improvement > 0 or (abs(improvement) < 0.01 and quality_improved)
+
+        if keep:
+            decision = "KEPT"
+            emoji = "✅"
+            print(f"   {emoji} EXPERIMENT: {param_id} GARDE — {target_metric}: {baseline.get(target_metric, 0):.4f} → {after.get(target_metric, 0):.4f} (+{improvement:.4f})")
+        else:
+            decision = "ROLLBACK"
+            emoji = "↩️"
+            # Restaurer la valeur précédente
+            try:
+                self._set_param_value(module, attr_name, current_val)
+            except Exception:
+                pass
+            print(f"   {emoji} EXPERIMENT: {param_id} ROLLBACK — {target_metric}: {baseline.get(target_metric, 0):.4f} → {after.get(target_metric, 0):.4f} ({improvement:+.4f})")
+
+        self._experiment_in_progress = False
+
+        # Journal
+        entry = {
+            "param_id": param_id,
+            "module": module_path,
+            "attr": attr_name,
+            "old_value": current_val,
+            "new_value": new_val if keep else current_val,
+            "tried_value": new_val,
+            "baseline": baseline,
+            "after": after,
+            "improvement": improvement,
+            "metric": target_metric,
+            "decision": decision,
+            "timestamp": datetime.now().isoformat(),
+        }
+        self._experiment_history.append(entry)
+
+        # Sauvegarder dans le journal persistant
+        self._save_experiment_journal(entry)
+
+        result_text = (
+            f"PARAM_EXPERIMENT: {param_id}\n"
+            f"Valeur: {current_val:.6f} → {new_val:.6f}\n"
+            f"Métrique ({target_metric}): {baseline.get(target_metric, 0):.4f} → {after.get(target_metric, 0):.4f} ({improvement:+.4f})\n"
+            f"Décision: {decision}\n"
+            f"Baseline: {baseline}\n"
+            f"After: {after}"
+        )
+
+        return {"status": "success", "result": result_text}
+
+    @staticmethod
+    def _import_module(module_path: str):
+        """Import dynamique d'un module par son chemin."""
+        import importlib
+        return importlib.import_module(module_path)
+
+    @staticmethod
+    def _get_param_value(module, attr_name: str):
+        """Récupère la valeur d'un attribut module-level."""
+        return getattr(module, attr_name, None)
+
+    @staticmethod
+    def _set_param_value(module, attr_name: str, value):
+        """Modifie un attribut module-level."""
+        setattr(module, attr_name, value)
+
+    def _capture_experiment_metrics(self, target_metric: str) -> dict:
+        """Capture les métriques clés pour comparaison avant/après."""
+        metrics = {}
+
+        # Phi et coherence depuis brain_vm
+        try:
+            from core.brain_vm import brain
+            if brain.current_state:
+                metrics["phi"] = brain.current_state.phi
+                metrics["global_coherence"] = brain.current_state.global_coherence
+            metrics["phase_coherence"] = brain.phase_coherence
+        except Exception:
+            pass
+
+        # Quality moyenne des 5 dernières routines
+        try:
+            recent = [h.get("quality_score", 0) for h in self.routine_history[-5:]
+                      if h.get("status") == "success"]
+            metrics["quality_avg"] = sum(recent) / len(recent) if recent else 0
+        except Exception:
+            metrics["quality_avg"] = 0
+
+        # Dopamine
+        try:
+            from core.dopamine_system import dopamine
+            metrics["dopamine"] = dopamine.level
+        except Exception:
+            pass
+
+        # Coherence cardiaque
+        try:
+            from core.cardiac_engine import heart
+            metrics["cardiac_coherence"] = heart.compute_coherence()
+        except Exception:
+            pass
+
+        return metrics
+
+    def _save_experiment_journal(self, entry: dict):
+        """Sauvegarde une entrée dans memory/experiment_journal.md."""
+        try:
+            journal_path = self._EXPERIMENT_JOURNAL_PATH
+            if not os.path.exists(journal_path):
+                with open(journal_path, "w", encoding="utf-8") as f:
+                    f.write("# Experiment Journal — Autoresearch\n\n"
+                            "> Historique des expériences de tuning paramètres.\n"
+                            "> Pattern: varier → observer → comparer → garder/rollback.\n\n")
+
+            now = entry["timestamp"][:16]
+            decision_emoji = "✅" if entry["decision"] == "KEPT" else "↩️"
+            improvement = entry["improvement"]
+
+            old_val = entry['old_value']
+            tried_val = entry['tried_value']
+            decision_str = entry['decision']
+            kept_str = " (gardé)" if decision_str == "KEPT" else f" (rollback → {old_val:.6f})"
+            metric_name = entry['metric']
+            baseline_val = entry['baseline'].get(metric_name, 0)
+            after_val = entry['after'].get(metric_name, 0)
+            baseline_parts = ", ".join(f"{k}={v:.4f}" for k, v in entry["baseline"].items())
+            after_parts = ", ".join(f"{k}={v:.4f}" for k, v in entry["after"].items())
+
+            line = (
+                f"\n---\n\n"
+                f"## {decision_emoji} [{now}] {entry['param_id']} ({decision_str})\n\n"
+                f"- **Module:** `{entry['module']}.{entry['attr']}`\n"
+                f"- **Valeur:** {old_val:.6f} → {tried_val:.6f}{kept_str}\n"
+                f"- **Métrique ({metric_name}):** {baseline_val:.4f}"
+                f" → {after_val:.4f} ({improvement:+.4f})\n"
+                f"- **Baseline:** {baseline_parts}\n"
+                f"- **After:** {after_parts}\n"
+            )
+
+            with open(journal_path, "a", encoding="utf-8") as f:
+                f.write(line)
+
+        except Exception as e:
+            logger.debug(f"[EXPERIMENT] Journal sauvegarde echouee: {e}")
 
     # ================================================================
     # CHANTIER 3 : CREATIVE PLAY — associations libres inter-concepts

@@ -126,5 +126,9 @@
   "NEURAL_TRAINING": {
     "cost": 2,
     "description": "Entraînement neuronal ciblé: rappel/synthèse concepts faibles + renforcement hebbian"
+  },
+  "PARAM_EXPERIMENT": {
+    "cost": 0,
+    "description": "Expérimentation paramètres: variation → observation 10 ticks → comparaison → garder/rollback. 0 appel LLM."
   }
 }
