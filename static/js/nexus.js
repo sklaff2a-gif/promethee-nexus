@@ -559,6 +559,47 @@ function triggerReboot() {
     }, 3000);
 }
 
+// --- Mode Autoresearch (Karpathy-inspired param tuning) ---
+let autoresearchActive = false;
+
+function toggleAutoresearch() {
+    const newState = !autoresearchActive;
+    fetch('/api/autoresearch', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ enabled: newState })
+    }).then(r => r.json()).then(data => {
+        autoresearchActive = data.is_autoresearch;
+        updateAutoresearchButton(data.autoresearch_info);
+        addLog('SYSTEM', autoresearchActive ? 'MODE AUTORESEARCH ACTIVE — experimentation parametres 4h' : 'AUTORESEARCH TERMINE', autoresearchActive ? 'sys' : 'success');
+    }).catch(err => addLog('API', 'Erreur autoresearch: ' + err, 'err'));
+}
+
+function updateAutoresearchButton(info) {
+    const btn = document.getElementById('autoresearch-button');
+    const banner = document.getElementById('autoresearch-banner');
+    if (!btn) return;
+    if (autoresearchActive) {
+        btn.textContent = 'STOP';
+        btn.style.color = '#ff4444';
+        if (banner) {
+            banner.classList.remove('hidden');
+            if (info) {
+                const elExp = document.getElementById('ar-experiments');
+                const elKept = document.getElementById('ar-kept');
+                const elElapsed = document.getElementById('ar-elapsed');
+                if (elExp) elExp.textContent = info.experiments || 0;
+                if (elKept) elKept.textContent = info.kept || 0;
+                if (elElapsed) elElapsed.textContent = info.elapsed_min || 0;
+            }
+        }
+    } else {
+        btn.textContent = 'RESEARCH';
+        btn.style.color = '#00ff88';
+        if (banner) banner.classList.add('hidden');
+    }
+}
+
 // --- Mode Sieste (hibernation 0-GPU) ---
 let napModeActive = false;
 
@@ -819,20 +860,20 @@ fetch('/api/reptilian/status').then(function(r) { return r.json(); }).then(funct
     updateTelemReptilian(data);
 }).catch(function() {});
 
-// Chargement initial statut sieste + polling
-fetch('/api/autonomy/status').then(r => r.json()).then(data => {
+// Chargement initial statut sieste + autoresearch + polling
+function syncAutonomyStatus(data) {
     if (data && typeof data.is_napping === 'boolean') {
         napModeActive = data.is_napping;
         updateNapButton();
     }
-}).catch(() => {});
+    if (data && typeof data.is_autoresearch === 'boolean') {
+        autoresearchActive = data.is_autoresearch;
+        updateAutoresearchButton(data.autoresearch_info);
+    }
+}
+fetch('/api/autonomy/status').then(r => r.json()).then(syncAutonomyStatus).catch(() => {});
 setInterval(() => {
-    fetch('/api/autonomy/status').then(r => r.json()).then(data => {
-        if (data && typeof data.is_napping === 'boolean') {
-            napModeActive = data.is_napping;
-            updateNapButton();
-        }
-    }).catch(() => {});
+    fetch('/api/autonomy/status').then(r => r.json()).then(syncAutonomyStatus).catch(() => {});
 }, 30000);
 
 // Chargement version + état sieste depuis /health

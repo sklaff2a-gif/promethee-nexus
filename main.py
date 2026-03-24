@@ -647,6 +647,26 @@ async def toggle_nap_mode(request: Request):
         await autonomy.exit_nap()
     return {"status": "ok", "is_napping": autonomy.is_napping}
 
+@app.post("/api/autoresearch", dependencies=[Depends(verify_token)])
+async def toggle_autoresearch(request: Request):
+    """Active ou désactive le mode Autoresearch (expérimentation paramètres 4h)."""
+    data = await request.json()
+    enabled = data.get("enabled", False)
+    if enabled:
+        accepted = await autonomy.enter_autoresearch()
+        if not accepted:
+            return {"status": "blocked", "is_autoresearch": False, "reason": "Mode sieste actif"}
+    else:
+        await autonomy.exit_autoresearch()
+    return {
+        "status": "ok",
+        "is_autoresearch": autonomy.is_autoresearch,
+        "autoresearch_info": {
+            "experiments": autonomy._autoresearch_experiments,
+            "kept": autonomy._autoresearch_kept,
+        } if autonomy.is_autoresearch else None,
+    }
+
 @app.get("/api/journal")
 async def api_journal():
     """Retourne le journal stratégique complet + métadonnées."""

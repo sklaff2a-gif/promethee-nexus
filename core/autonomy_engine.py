@@ -210,6 +210,10 @@ NAP_PERIOD_DURATION = 3600    # 60 min par période
 NAP_MAX_RENEWALS = 1          # 1 renouvellement max (= 2h total)
 NAP_COOLDOWN = 300            # 5 min avant de pouvoir re-siester
 
+# Mode Autoresearch : focus exclusif sur PARAM_EXPERIMENT
+AUTORESEARCH_DURATION = 4 * 3600   # 4h par session
+AUTORESEARCH_INTERVAL = 60         # 1 min entre expériences (observation incluse dans la routine)
+
 # Anti-gaspillage : seuil d'échecs consécutifs pour blacklister un intent FORCED
 FORCED_FAILURE_THRESHOLD = 3  # après 3 échecs consécutifs, l'intent FORCED est ignoré pour la session
 
@@ -653,6 +657,13 @@ class AutonomyEngine:
         self._nap_renewals_used: int = persisted.get("_nap_renewals_used", 0)
         self._nap_last_exit: float = persisted.get("_nap_last_exit", 0.0)
 
+        # Mode Autoresearch : optimisation autonome des paramètres (Karpathy-inspired)
+        self.is_autoresearch: bool = persisted.get("is_autoresearch", False)
+        self._autoresearch_started_at: float = persisted.get("_autoresearch_started_at", 0.0)
+        self._autoresearch_experiments: int = persisted.get("_autoresearch_experiments", 0)
+        self._autoresearch_kept: int = persisted.get("_autoresearch_kept", 0)
+        self._autoresearch_baseline_metrics: dict = persisted.get("_autoresearch_baseline_metrics", {})
+
         # Rituel hebdomadaire : introspection GitHub apres payday
         self._weekly_ritual_pending: bool = False
 
@@ -860,6 +871,11 @@ class AutonomyEngine:
             "_nap_started_at": self._nap_started_at,
             "_nap_renewals_used": self._nap_renewals_used,
             "_nap_last_exit": self._nap_last_exit,
+            "is_autoresearch": getattr(self, "is_autoresearch", False),
+            "_autoresearch_started_at": getattr(self, "_autoresearch_started_at", 0.0),
+            "_autoresearch_experiments": getattr(self, "_autoresearch_experiments", 0),
+            "_autoresearch_kept": getattr(self, "_autoresearch_kept", 0),
+            "_autoresearch_baseline_metrics": getattr(self, "_autoresearch_baseline_metrics", {}),
             "lif_potentials": getattr(self, "_lif_potentials", {}),
         }
         AutonomyStatePersistence.save(state)
@@ -1516,6 +1532,13 @@ class AutonomyEngine:
             "is_running": self.is_running,
             "is_processing": self.is_processing,
             "is_napping": self.is_napping,
+            "is_autoresearch": getattr(self, "is_autoresearch", False),
+            "autoresearch_info": {
+                "experiments": getattr(self, "_autoresearch_experiments", 0),
+                "kept": getattr(self, "_autoresearch_kept", 0),
+                "elapsed_min": int((time.time() - getattr(self, "_autoresearch_started_at", 0)) / 60) if getattr(self, "_autoresearch_started_at", 0) else 0,
+                "duration_min": AUTORESEARCH_DURATION // 60,
+            } if getattr(self, "is_autoresearch", False) else None,
             "daily_count": self.daily_count,
             "max_daily_routines": MAX_DAILY_ROUTINES,
             "last_reset_day": self.last_reset_day.isoformat() if self.last_reset_day else None,
@@ -3714,6 +3737,107 @@ class AutonomyEngine:
         })
         logger.info(f"[AUTONOMY] {summary}")
 
+    # ================================================================
+    # MODE AUTORESEARCH — optimisation autonome des paramètres
+    # ================================================================
+
+    async def enter_autoresearch(self) -> bool:
+        """Active le mode Autoresearch : focus exclusif sur PARAM_EXPERIMENT pendant 4h."""
+        if self.is_autoresearch:
+            return True  # Déjà actif
+        if self.is_napping:
+            logger.warning("[AUTORESEARCH] Impossible — mode sieste actif.")
+            return False
+
+        self.is_autoresearch = True
+        self._autoresearch_started_at = time.time()
+        self._autoresearch_experiments = 0
+        self._autoresearch_kept = 0
+        # Capturer les métriques globales de début de session
+        self._autoresearch_baseline_metrics = self._capture_experiment_metrics("phi")
+
+        # Décharger les modèles LLM (pas besoin de GPU)
+        await self._unload_ollama_models()
+        self._persist_state()
+
+        await bus.publish("AUTORESEARCH_MODE", {"active": True})
+        await bus.publish("THOUGHT_STREAM", {
+            "agent": "SYSTEM",
+            "content": f"Mode AUTORESEARCH activé — {AUTORESEARCH_DURATION // 3600}h d'expérimentation autonome. GPU libéré.",
+            "type": "info"
+        })
+        print(f"   🔬 AUTORESEARCH: Session démarrée ({AUTORESEARCH_DURATION // 3600}h)")
+        logger.info(f"[AUTORESEARCH] Session démarrée. Baseline: {self._autoresearch_baseline_metrics}")
+        return True
+
+    async def exit_autoresearch(self):
+        """Termine le mode Autoresearch, génère un rapport de session."""
+        duration = time.time() - self._autoresearch_started_at if self._autoresearch_started_at else 0
+        minutes = int(duration // 60)
+        experiments = self._autoresearch_experiments
+        kept = self._autoresearch_kept
+        baseline = self._autoresearch_baseline_metrics
+
+        # Capturer les métriques finales
+        final_metrics = self._capture_experiment_metrics("phi")
+
+        self.is_autoresearch = False
+        self._autoresearch_started_at = 0.0
+        self._persist_state()
+
+        # Rapport
+        improvements = []
+        for k in final_metrics:
+            if k in baseline:
+                diff = final_metrics[k] - baseline[k]
+                if abs(diff) > 0.001:
+                    improvements.append(f"{k}: {baseline[k]:.4f} → {final_metrics[k]:.4f} ({diff:+.4f})")
+
+        summary = (
+            f"AUTORESEARCH terminé ({minutes}min). "
+            f"{experiments} expériences, {kept} gardées. "
+        )
+        if improvements:
+            summary += "Améliorations: " + ", ".join(improvements)
+        else:
+            summary += "Pas de changement net sur les métriques."
+
+        # Sauvegarder le rapport dans le journal
+        self._save_autoresearch_report(minutes, experiments, kept, baseline, final_metrics)
+
+        await bus.publish("AUTORESEARCH_MODE", {"active": False})
+        await bus.publish("THOUGHT_STREAM", {
+            "agent": "SYSTEM",
+            "content": summary,
+            "type": "info"
+        })
+        print(f"   🔬 AUTORESEARCH: {summary}")
+        logger.info(f"[AUTORESEARCH] {summary}")
+
+    def _save_autoresearch_report(self, minutes: int, experiments: int, kept: int,
+                                   baseline: dict, final: dict):
+        """Sauvegarde un rapport de session autoresearch dans le journal."""
+        try:
+            journal_path = self._EXPERIMENT_JOURNAL_PATH
+            now = datetime.now().strftime("%Y-%m-%d %H:%M")
+            baseline_str = ", ".join(f"{k}={v:.4f}" for k, v in baseline.items())
+            final_str = ", ".join(f"{k}={v:.4f}" for k, v in final.items())
+
+            report = (
+                f"\n{'=' * 60}\n"
+                f"# SESSION AUTORESEARCH [{now}] — {minutes}min\n"
+                f"# Expériences: {experiments} | Gardées: {kept} "
+                f"({kept * 100 // max(experiments, 1)}%)\n"
+                f"# Baseline: {baseline_str}\n"
+                f"# Final:    {final_str}\n"
+                f"{'=' * 60}\n"
+            )
+
+            with open(journal_path, "a", encoding="utf-8") as f:
+                f.write(report)
+        except Exception as e:
+            logger.debug(f"[AUTORESEARCH] Rapport sauvegarde échoué: {e}")
+
     async def _unload_ollama_models(self):
         """Décharge tous les modèles Ollama pour libérer la VRAM."""
         try:
@@ -4487,6 +4611,31 @@ class AutonomyEngine:
                     self.is_processing = False
                     self._persist_state()
                 await asyncio.sleep(NAP_SLEEP_INTERVAL)
+                continue
+
+            # Mode Autoresearch : expériences PARAM_EXPERIMENT exclusives
+            if self.is_autoresearch:
+                ar_elapsed = time.time() - self._autoresearch_started_at if self._autoresearch_started_at else 0
+                if ar_elapsed >= AUTORESEARCH_DURATION:
+                    logger.info(f"[AUTORESEARCH] Session terminée ({AUTORESEARCH_DURATION // 3600}h écoulées).")
+                    await self.exit_autoresearch()
+                    continue
+                self.is_processing = True
+                try:
+                    response = await self._execute_param_experiment()
+                    if response and response.get("status") == "success":
+                        self._autoresearch_experiments += 1
+                        result_text = response.get("result", "")
+                        if "KEPT" in result_text:
+                            self._autoresearch_kept += 1
+                        self._persist_state()
+                    elif response and response.get("status") == "skipped":
+                        pass  # Normal — expérience en cours ou paramètre inchangé
+                except Exception as e:
+                    logger.warning(f"[AUTORESEARCH] Erreur expérience: {e}")
+                finally:
+                    self.is_processing = False
+                await asyncio.sleep(AUTORESEARCH_INTERVAL)
                 continue
 
             budget_status = self._check_daily_budget()
