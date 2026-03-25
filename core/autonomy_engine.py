@@ -5323,7 +5323,7 @@ HYPOTHESE: <1 phrase courte>"""
         # Appel Ollama
         try:
             import httpx
-            from core.gpu_scheduler import gpu_scheduler
+            from core.base_agent import gpu_scheduler
             async with gpu_scheduler.access("autoresearch"):
                 async with httpx.AsyncClient() as client:
                     resp = await client.post(
