@@ -1,0 +1,56 @@
+{
+  "lif_leak_rate": {
+    "module": "core.autonomy_engine",
+    "attr": "LIF_LEAK_RATE",
+    "value": 0.4225284,
+    "timestamp": "2026-03-25T20:19:13.196744"
+  },
+  "sync_strengthen_rate": {
+    "module": "core.brain_vm",
+    "attr": "_SYNC_STRENGTHEN_RATE",
+    "value": 0.0052899999999999996,
+    "timestamp": "2026-03-25T19:36:41.278488"
+  },
+  "hebbian_learning_rate": {
+    "module": "core.synaptic_network",
+    "attr": "HEBBIAN_LEARNING_RATE",
+    "value": 0.05832000000000001,
+    "timestamp": "2026-03-25T19:50:51.578663"
+  },
+  "neuron_fire_threshold": {
+    "module": "core.synaptic_network",
+    "attr": "NEURON_FIRE_THRESHOLD",
+    "value": 0.6885,
+    "timestamp": "2026-03-25T20:05:03.090320"
+  },
+  "anti_hebbian_rate": {
+    "module": "core.synaptic_network",
+    "attr": "ANTI_HEBBIAN_RATE",
+    "value": 0.0297,
+    "timestamp": "2026-03-25T20:12:08.228904"
+  },
+  "kuramoto_coupling": {
+    "module": "core.brain_vm",
+    "attr": "_KURAMOTO_COUPLING",
+    "value": 0.12544,
+    "timestamp": "2026-03-25T18:11:40.969792"
+  },
+  "persistence_bonus": {
+    "module": "core.global_workspace",
+    "attr": "PERSISTENCE_BONUS",
+    "value": 0.0575,
+    "timestamp": "2026-03-25T19:22:32.722165"
+  },
+  "neurochemistry_decay": {
+    "module": "core.neurochemistry",
+    "attr": "DECAY_RATE",
+    "value": 0.9,
+    "timestamp": "2026-03-25T19:43:46.358706"
+  },
+  "ignition_threshold": {
+    "module": "core.global_workspace",
+    "attr": "IGNITION_BASE_THRESHOLD",
+    "value": 0.25515,
+    "timestamp": "2026-03-25T19:57:58.054191"
+  }
+}
