@@ -2070,17 +2070,23 @@ class AutonomyEngine:
         # Fallback : si LLM indisponible, le scoring mécanique décide (scored[0]).
         llm_choice = await self._llm_select_routine(scored)
         if llm_choice:
-            # Le LLM a choisi — trouver la routine correspondante
+            llm_intent = llm_choice["intent"]
+            # Le LLM a choisi — trouver la routine correspondante dans la liste scored
+            found = False
             for r, s in scored:
-                if r["intent"] == llm_choice["intent"]:
+                if r["intent"] == llm_intent:
                     selected, score = r, s
+                    found = True
                     break
-            else:
-                selected, score = scored[0]  # Fallback si intent invalide
-            print(f"   🧠 LLM ARBITRE: {llm_choice['intent']} — {llm_choice.get('reason', '?')}")
-            if llm_choice["intent"] != scored[0][0]["intent"]:
-                print(f"   🔀 LLM a overridé le scoring mécanique ({scored[0][0]['intent']} → {llm_choice['intent']})")
-                logger.info(f"[AUTONOMY] LLM override: {scored[0][0]['intent']}→{llm_choice['intent']} — {llm_choice.get('reason', '?')}")
+            if not found:
+                # Intent LLM absent de la liste (filtré par circadien/budget?) → fallback
+                available = [r["intent"] for r, _ in scored[:5]]
+                logger.warning(f"[AUTONOMY] LLM a proposé '{llm_intent}' absent de scored. Disponibles: {available}")
+                selected, score = scored[0]
+            print(f"   🧠 LLM ARBITRE: {llm_intent} — {llm_choice.get('reason', '?')}")
+            if found and llm_intent != scored[0][0]["intent"]:
+                print(f"   🔀 LLM a overridé le scoring mécanique ({scored[0][0]['intent']} → {llm_intent})")
+                logger.info(f"[AUTONOMY] LLM override: {scored[0][0]['intent']}→{llm_intent} — {llm_choice.get('reason', '?')}")
         else:
             selected, score = scored[0]
             logger.info(f"[AUTONOMY] LLM arbitre: fallback mécanique → {selected['intent']} (score={score:.1f})")
@@ -4589,6 +4595,7 @@ class AutonomyEngine:
         self.is_running = True
         self._loop_alive = True
         self._loop_last_tick = time.time()
+        self._load_overrides()  # Restaurer les découvertes autoresearch
         print(f"   🧠 AUTONOMY: Moteur V24 (Health-Aware Sentinel) activé. Limite: {MAX_DAILY_ROUTINES} routines/jour.")
 
         while self.is_running:
@@ -5161,6 +5168,7 @@ else:
     _TUNABLE_PARAMS_PATH = os.path.join("config", "tunable_params.json")
 
     _RESULTS_TSV_PATH = os.path.join("memory", "autoresearch_results.tsv")
+    _OVERRIDES_PATH = os.path.join("config", "tunable_overrides.json")
     _AUTORESEARCH_MODEL = "qwen3.5:9b"
 
     async def _execute_param_experiment(self) -> dict:
@@ -5266,6 +5274,7 @@ else:
 
         if keep:
             decision = "KEPT"
+            self._save_override(param_id, module_path, attr_name, new_val)
             print(f"   ✅ EXPERIMENT: {param_id} KEPT — phi: {phi_before:.4f} → {phi_after:.4f} (+{delta_phi:.4f})")
         else:
             decision = "ROLLBACK"
@@ -5294,6 +5303,56 @@ else:
             f"Décision: {decision}"
         )
         return {"status": "success", "result": result_text}
+
+    def _load_overrides(self):
+        """Charge les valeurs KEPT persistées et les applique aux modules.
+
+        Appelé au démarrage — les découvertes autoresearch survivent aux reboots.
+        """
+        try:
+            if not os.path.exists(self._OVERRIDES_PATH):
+                return
+            with open(self._OVERRIDES_PATH, "r", encoding="utf-8") as f:
+                overrides = json.load(f)
+            applied = 0
+            for param_id, entry in overrides.items():
+                module_path = entry.get("module", "")
+                attr_name = entry.get("attr", "")
+                value = entry.get("value")
+                if not module_path or not attr_name or value is None:
+                    continue
+                try:
+                    module = self._import_module(module_path)
+                    current = self._get_param_value(module, attr_name)
+                    if current is not None:
+                        self._set_param_value(module, attr_name, value)
+                        applied += 1
+                except Exception as e:
+                    logger.warning(f"[AUTORESEARCH] Override {param_id} échoué: {e}")
+            if applied:
+                logger.info(f"[AUTORESEARCH] {applied} override(s) appliqué(s) depuis tunable_overrides.json")
+                print(f"   🔬 AUTORESEARCH: {applied} paramètre(s) optimisé(s) restauré(s)")
+        except Exception as e:
+            logger.warning(f"[AUTORESEARCH] Chargement overrides échoué: {e}")
+
+    def _save_override(self, param_id: str, module_path: str, attr_name: str, value: float):
+        """Persiste une valeur KEPT dans tunable_overrides.json."""
+        try:
+            overrides = {}
+            if os.path.exists(self._OVERRIDES_PATH):
+                with open(self._OVERRIDES_PATH, "r", encoding="utf-8") as f:
+                    overrides = json.load(f)
+            overrides[param_id] = {
+                "module": module_path,
+                "attr": attr_name,
+                "value": value,
+                "timestamp": datetime.now().isoformat(),
+            }
+            with open(self._OVERRIDES_PATH, "w", encoding="utf-8") as f:
+                json.dump(overrides, f, indent=2, ensure_ascii=False)
+            logger.info(f"[AUTORESEARCH] Override sauvé: {param_id} = {value:.6f}")
+        except Exception as e:
+            logger.warning(f"[AUTORESEARCH] Sauvegarde override {param_id} échouée: {e}")
 
     def _get_phi(self) -> float:
         """Retourne phi actuel. UNE seule métrique, verrouillée."""
