@@ -2083,6 +2083,7 @@ class AutonomyEngine:
                 logger.info(f"[AUTONOMY] LLM override: {scored[0][0]['intent']}→{llm_choice['intent']} — {llm_choice.get('reason', '?')}")
         else:
             selected, score = scored[0]
+            logger.info(f"[AUTONOMY] LLM arbitre: fallback mécanique → {selected['intent']} (score={score:.1f})")
 
         agent = selected["agent"]
         intent = selected["intent"]
@@ -5507,7 +5508,12 @@ RAISON: <1 phrase courte>"""
                     )
                 if resp.status_code == 200:
                     raw = resp.json().get("response", "")
-                    return self._parse_routine_choice(raw, scored)
+                    parsed = self._parse_routine_choice(raw, scored)
+                    if parsed:
+                        return parsed
+                    logger.info(f"[AUTONOMY] LLM arbitre: parse échoué. Réponse brute: {raw[:200]}")
+                else:
+                    logger.warning(f"[AUTONOMY] LLM arbitre: Ollama HTTP {resp.status_code}")
         except Exception as e:
             logger.info(f"[AUTONOMY] LLM arbitre indisponible ({e}), fallback scoring mécanique.")
 
