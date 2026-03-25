@@ -3770,8 +3770,7 @@ class AutonomyEngine:
         # Capturer les métriques globales de début de session
         self._autoresearch_baseline_metrics = self._capture_experiment_metrics("phi")
 
-        # Décharger les modèles LLM (pas besoin de GPU)
-        await self._unload_ollama_models()
+        # V2 Karpathy : on GARDE Ollama chargé (le LLM propose les expériences)
         self._persist_state()
 
         await bus.publish("AUTORESEARCH_MODE", {"active": True})
@@ -5138,170 +5137,265 @@ else:
     _experiment_in_progress = False
     _experiment_history = []  # Journal des expériences récentes (en mémoire)
     _experiment_skip_blacklist: set = set()  # Params introuvables cette session (skip-loop guard)
-    _EXPERIMENT_OBSERVE_TICKS = 30  # Nombre de ticks d'observation (~15 min) — était 10 (5 min), trop court
+    _EXPERIMENT_OBSERVE_TICKS = 10  # 10 ticks × 30s = 5 min (Karpathy: volume > durée)
     _EXPERIMENT_JOURNAL_PATH = os.path.join("memory", "experiment_journal.md")
     _TUNABLE_PARAMS_PATH = os.path.join("config", "tunable_params.json")
 
-    async def _execute_param_experiment(self) -> dict:
-        """Expérimentation autonome : varier un paramètre, observer, comparer, garder/rollback.
+    _RESULTS_TSV_PATH = os.path.join("memory", "autoresearch_results.tsv")
+    _AUTORESEARCH_MODEL = "qwen3.5:9b"
 
-        Inspiré d'autoresearch (Karpathy) : boucle modify → benchmark → compare → keep/reject.
-        0 appel LLM. 100% déterministe.
+    async def _execute_param_experiment(self) -> dict:
+        """Autoresearch V3 (Karpathy-inspired) : le LLM propose, le système exécute.
+
+        Boucle : LLM lit historique → propose {param, direction, hypothèse}
+        → système applique → observe 5 min → phi amélioré ? KEEP : ROLLBACK
+        → log dans results.tsv → GOTO 1
         """
         if self._experiment_in_progress:
             return {"status": "skipped", "result": "Expérience déjà en cours."}
 
-        # Charger le catalogue de paramètres
+        # 1. Charger le catalogue
         try:
             with open(self._TUNABLE_PARAMS_PATH, "r", encoding="utf-8") as f:
                 catalog = json.load(f)
             params = catalog.get("params", [])
             if not params:
-                return {"status": "skipped", "result": "Catalogue de paramètres vide."}
+                return {"status": "skipped", "result": "Catalogue vide."}
         except Exception as e:
-            return {"status": "error", "result": f"Impossible de charger tunable_params.json: {e}"}
+            return {"status": "error", "result": f"tunable_params.json: {e}"}
 
-        # Choisir un paramètre en rotation (pas le même 2 fois de suite)
-        recent_ids = [e.get("param_id") for e in self._experiment_history[-3:]]
-        # Anti-cascade : exclure aussi les params ajustés ET gardés sans preuve dans les 5 dernières
-        cascade_blacklist = set()
-        for e in self._experiment_history[-5:]:
-            pid = e.get("param_id")
-            if e.get("decision") == "KEPT" and abs(e.get("improvement", 0)) < 0.001:
-                cascade_blacklist.add(pid)
-        # Anti-skip-loop : exclure les params introuvables cette session
-        exclude_ids = set(recent_ids) | cascade_blacklist | self._experiment_skip_blacklist
-        candidates = [p for p in params if p["id"] not in exclude_ids]
-        if not candidates:
-            # Fallback progressif : relâcher les contraintes une par une
-            candidates = [p for p in params if p["id"] not in (set(recent_ids) | self._experiment_skip_blacklist)]
-        if not candidates:
-            candidates = [p for p in params if p["id"] not in self._experiment_skip_blacklist]
-        if not candidates:
-            return {"status": "skipped", "result": f"Tous les params sont blacklistés ({len(self._experiment_skip_blacklist)} introuvables, {len(cascade_blacklist)} cascade)."}
-        param = candidates[self.total_routines_executed % len(candidates)]
+        # Indexer les params par id (pour validation LLM)
+        params_by_id = {p["id"]: p for p in params
+                        if p["id"] not in self._experiment_skip_blacklist}
+        if not params_by_id:
+            return {"status": "skipped", "result": "Tous les params blacklistés."}
 
-        param_id = param["id"]
+        # 2. Mesurer phi actuel
+        phi_before = self._get_phi()
+
+        # 3. Demander au LLM de proposer l'expérience
+        proposal = await self._llm_propose_experiment(params_by_id, phi_before)
+        param_id = proposal.get("param_id", "")
+        direction = proposal.get("direction", "down")
+        variation_pct = proposal.get("variation_pct", 10) / 100.0
+        hypothesis = proposal.get("hypothesis", "exploration")
+
+        # Validation : le param doit exister dans le catalogue
+        if param_id not in params_by_id:
+            # Fallback random si le LLM hallucine
+            param_id = random.choice(list(params_by_id.keys()))
+            direction = random.choice(["up", "down"])
+            variation_pct = 0.10
+            hypothesis = "fallback random (LLM invalide)"
+            logger.info(f"[AUTORESEARCH] LLM a proposé un param invalide, fallback: {param_id}")
+
+        param = params_by_id[param_id]
         module_path = param["module"]
         attr_name = param["attr"]
-        default_val = param["default"]
-        val_min = param["min"]
-        val_max = param["max"]
-        variation_pct = param.get("variation_pct", 0.10)
-        target_metric = param.get("metric", "phi")
+        val_min, val_max = param["min"], param["max"]
 
-        # Lire la valeur actuelle du paramètre
+        # 4. Lire la valeur actuelle
         try:
             module = self._import_module(module_path)
             current_val = self._get_param_value(module, attr_name)
             if current_val is None:
                 self._experiment_skip_blacklist.add(param_id)
-                return {"status": "skipped", "result": f"Paramètre {attr_name} introuvable dans {module_path}. Blacklisté pour cette session."}
+                return {"status": "skipped", "result": f"{attr_name} introuvable dans {module_path}."}
         except Exception as e:
             self._experiment_skip_blacklist.add(param_id)
-            return {"status": "error", "result": f"Import {module_path} échoué: {e}. Blacklisté pour cette session."}
+            return {"status": "error", "result": f"Import {module_path}: {e}"}
 
-        # Capturer les métriques baseline
-        baseline = self._capture_experiment_metrics(target_metric)
-
-        # Calculer la nouvelle valeur (variation aléatoire dans la plage)
-        direction = random.choice([-1, 1])
-        delta = current_val * variation_pct * direction
-        new_val = current_val + delta
-        new_val = max(val_min, min(val_max, new_val))  # Clamping strict
+        # 5. Calculer et appliquer la nouvelle valeur
+        sign = 1 if direction == "up" else -1
+        delta = current_val * variation_pct * sign
+        new_val = max(val_min, min(val_max, current_val + delta))
 
         if abs(new_val - current_val) < 1e-8:
-            return {"status": "skipped", "result": f"{param_id}: valeur inchangée après clamping."}
+            return {"status": "skipped", "result": f"{param_id}: inchangé après clamping."}
 
-        # Appliquer la modification
         self._experiment_in_progress = True
-        print(f"   🔬 EXPERIMENT: {param_id} = {current_val:.6f} → {new_val:.6f} ({direction:+d}{variation_pct*100:.0f}%)")
+        print(f"   🔬 EXPERIMENT: {param_id} = {current_val:.6f} → {new_val:.6f} ({direction} {variation_pct*100:.0f}%)")
+        print(f"   💡 HYPOTHÈSE: {hypothesis}")
 
         try:
             self._set_param_value(module, attr_name, new_val)
         except Exception as e:
             self._experiment_in_progress = False
-            return {"status": "error", "result": f"Impossible de modifier {attr_name}: {e}"}
+            return {"status": "error", "result": f"Set {attr_name}: {e}"}
 
-        # Observer pendant N ticks (~5 min)
-        observe_ticks = self._EXPERIMENT_OBSERVE_TICKS
-        tick_interval = 30  # secondes par tick
-        print(f"   ⏱️ EXPERIMENT: Observation pendant {observe_ticks} ticks ({observe_ticks * tick_interval}s)...")
-        await asyncio.sleep(observe_ticks * tick_interval)
+        # 6. Observer 5 min
+        observe_s = self._EXPERIMENT_OBSERVE_TICKS * 30
+        print(f"   ⏱️ EXPERIMENT: Observation {observe_s}s...")
+        await asyncio.sleep(observe_s)
 
-        # Capturer les métriques après
-        after = self._capture_experiment_metrics(target_metric)
+        # 7. Mesurer phi après
+        phi_after = self._get_phi()
+        delta_phi = phi_after - phi_before
 
-        # Comparer
-        improvement = after.get(target_metric, 0) - baseline.get(target_metric, 0)
-
-        # Décision : garder ou rollback — critère strict (V2)
-        # V1 gardait tout ce qui ne cassait rien → marche aléatoire avec biais de conservation
-        # V2 : garder SEULEMENT si amélioration réelle sur la cible OU sur des métriques secondaires
-        if improvement > 0.001:
-            # Amélioration claire sur la métrique cible
-            keep = True
-        elif abs(improvement) < 0.01:
-            # Métrique cible stable — vérifier les métriques secondaires
-            secondary_up = sum(
-                1 for k in after if k != target_metric and k in baseline
-                and after[k] > baseline[k] + 0.001
-            )
-            secondary_down = sum(
-                1 for k in after if k != target_metric and k in baseline
-                and after[k] < baseline[k] - 0.01
-            )
-            keep = secondary_up > 0 and secondary_down == 0
-        else:
-            # Dégradation de la métrique cible
-            keep = False
+        # 8. Décision binaire stricte (Karpathy) : phi amélioré → KEEP, sinon → ROLLBACK
+        keep = delta_phi > 0
 
         if keep:
             decision = "KEPT"
-            emoji = "✅"
-            print(f"   {emoji} EXPERIMENT: {param_id} GARDE — {target_metric}: {baseline.get(target_metric, 0):.4f} → {after.get(target_metric, 0):.4f} (+{improvement:.4f})")
+            print(f"   ✅ EXPERIMENT: {param_id} KEPT — phi: {phi_before:.4f} → {phi_after:.4f} (+{delta_phi:.4f})")
         else:
             decision = "ROLLBACK"
-            emoji = "↩️"
-            # Restaurer la valeur précédente
             try:
                 self._set_param_value(module, attr_name, current_val)
             except Exception:
                 pass
-            print(f"   {emoji} EXPERIMENT: {param_id} ROLLBACK — {target_metric}: {baseline.get(target_metric, 0):.4f} → {after.get(target_metric, 0):.4f} ({improvement:+.4f})")
+            print(f"   ↩️ EXPERIMENT: {param_id} ROLLBACK — phi: {phi_before:.4f} → {phi_after:.4f} ({delta_phi:+.4f})")
 
         self._experiment_in_progress = False
 
-        # Journal
-        entry = {
-            "param_id": param_id,
-            "module": module_path,
-            "attr": attr_name,
-            "old_value": current_val,
-            "new_value": new_val if keep else current_val,
-            "tried_value": new_val,
-            "baseline": baseline,
-            "after": after,
-            "improvement": improvement,
-            "metric": target_metric,
-            "decision": decision,
-            "timestamp": datetime.now().isoformat(),
-        }
-        self._experiment_history.append(entry)
+        # 9. Log dans results.tsv
+        self._append_results_tsv(param_id, current_val, new_val, phi_before, phi_after, decision, hypothesis)
 
-        # Sauvegarder dans le journal persistant
-        self._save_experiment_journal(entry)
+        # 10. Historique en mémoire (pour compteurs)
+        self._experiment_history.append({
+            "param_id": param_id, "decision": decision,
+            "improvement": delta_phi, "timestamp": datetime.now().isoformat(),
+        })
 
         result_text = (
             f"PARAM_EXPERIMENT: {param_id}\n"
+            f"Hypothèse: {hypothesis}\n"
             f"Valeur: {current_val:.6f} → {new_val:.6f}\n"
-            f"Métrique ({target_metric}): {baseline.get(target_metric, 0):.4f} → {after.get(target_metric, 0):.4f} ({improvement:+.4f})\n"
-            f"Décision: {decision}\n"
-            f"Baseline: {baseline}\n"
-            f"After: {after}"
+            f"phi: {phi_before:.4f} → {phi_after:.4f} ({delta_phi:+.4f})\n"
+            f"Décision: {decision}"
+        )
+        return {"status": "success", "result": result_text}
+
+    def _get_phi(self) -> float:
+        """Retourne phi actuel. UNE seule métrique, verrouillée."""
+        try:
+            from core.brain_vm import brain
+            if brain.current_state:
+                return brain.current_state.phi
+        except Exception:
+            pass
+        # Fallback : global_coherence
+        try:
+            from core.brain_vm import brain
+            if brain.current_state:
+                return brain.current_state.global_coherence
+        except Exception:
+            return 0.0
+
+    async def _llm_propose_experiment(self, params_by_id: dict, current_phi: float) -> dict:
+        """Demande au LLM de proposer la prochaine expérience basé sur l'historique."""
+        # Construire le catalogue lisible
+        catalog_text = "\n".join(
+            f"  {pid}: {p['description']} (actuel: module={p['module']}.{p['attr']}, "
+            f"min={p['min']}, max={p['max']}, variation_max={p.get('variation_pct', 0.10)*100:.0f}%)"
+            for pid, p in params_by_id.items()
         )
 
-        return {"status": "success", "result": result_text}
+        # Lire les 20 dernières lignes du results.tsv
+        history_text = "(aucun historique)"
+        try:
+            if os.path.exists(self._RESULTS_TSV_PATH):
+                with open(self._RESULTS_TSV_PATH, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                if len(lines) > 1:  # header + data
+                    history_text = "".join(lines[:1] + lines[-20:])
+        except Exception:
+            pass
+
+        prompt = f"""Tu es un chercheur qui optimise les paramètres internes d'un système IA.
+
+OBJECTIF : maximiser phi (intégration d'information). Valeur actuelle : {current_phi:.4f}
+
+PARAMÈTRES DISPONIBLES :
+{catalog_text}
+
+HISTORIQUE DES EXPÉRIENCES :
+{history_text}
+
+Analyse l'historique. Quels params ont amélioré phi ? Lesquels l'ont dégradé ? Propose la prochaine expérience.
+
+Réponds UNIQUEMENT dans ce format exact (4 lignes, rien d'autre) :
+PARAM: <param_id>
+DIRECTION: up ou down
+VARIATION: <nombre entier entre 5 et 25>
+HYPOTHESE: <1 phrase courte>"""
+
+        # Appel Ollama
+        try:
+            import httpx
+            from core.gpu_scheduler import gpu_scheduler
+            async with gpu_scheduler.access("autoresearch"):
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        "http://localhost:11434/api/generate",
+                        json={
+                            "model": self._AUTORESEARCH_MODEL,
+                            "prompt": prompt,
+                            "stream": False,
+                            "think": False,
+                            "options": {"temperature": 0.3, "num_ctx": 4096},
+                        },
+                        timeout=120,
+                    )
+                if resp.status_code == 200:
+                    raw = resp.json().get("response", "")
+                    return self._parse_llm_proposal(raw, params_by_id)
+        except Exception as e:
+            logger.warning(f"[AUTORESEARCH] LLM échoué: {e}")
+
+        # Fallback random si LLM indisponible
+        pid = random.choice(list(params_by_id.keys()))
+        return {"param_id": pid, "direction": random.choice(["up", "down"]),
+                "variation_pct": 10, "hypothesis": "fallback random (LLM indisponible)"}
+
+    @staticmethod
+    def _parse_llm_proposal(raw: str, params_by_id: dict) -> dict:
+        """Parse la réponse LLM au format PARAM/DIRECTION/VARIATION/HYPOTHESE."""
+        import re
+        result = {"param_id": "", "direction": "down", "variation_pct": 10, "hypothesis": "?"}
+
+        for line in raw.split("\n"):
+            line = line.strip()
+            if line.upper().startswith("PARAM:"):
+                val = line.split(":", 1)[1].strip().lower()
+                # Chercher le param_id le plus proche
+                if val in params_by_id:
+                    result["param_id"] = val
+                else:
+                    # Match partiel
+                    for pid in params_by_id:
+                        if pid in val or val in pid:
+                            result["param_id"] = pid
+                            break
+            elif line.upper().startswith("DIRECTION:"):
+                val = line.split(":", 1)[1].strip().lower()
+                result["direction"] = "up" if "up" in val else "down"
+            elif line.upper().startswith("VARIATION:"):
+                m = re.search(r"(\d+)", line)
+                if m:
+                    result["variation_pct"] = max(5, min(25, int(m.group(1))))
+            elif line.upper().startswith("HYPOTHE"):
+                result["hypothesis"] = line.split(":", 1)[1].strip()[:120]
+
+        return result
+
+    def _append_results_tsv(self, param_id: str, old_val: float, new_val: float,
+                             phi_before: float, phi_after: float, decision: str,
+                             hypothesis: str):
+        """Ajoute une ligne au fichier results.tsv (lisible par le LLM au prochain tour)."""
+        try:
+            header = "timestamp\tparam_id\told_value\tnew_value\tphi_before\tphi_after\tdelta_phi\tdecision\thypothesis\n"
+            path = self._RESULTS_TSV_PATH
+            if not os.path.exists(path):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(header)
+            delta = phi_after - phi_before
+            now = datetime.now().strftime("%Y-%m-%d %H:%M")
+            line = f"{now}\t{param_id}\t{old_val:.6f}\t{new_val:.6f}\t{phi_before:.4f}\t{phi_after:.4f}\t{delta:+.4f}\t{decision}\t{hypothesis}\n"
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line)
+        except Exception as e:
+            logger.warning(f"[AUTORESEARCH] Erreur écriture results.tsv: {e}")
 
     @staticmethod
     def _import_module(module_path: str):
