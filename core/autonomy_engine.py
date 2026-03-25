@@ -5170,11 +5170,21 @@ else:
         if not params_by_id:
             return {"status": "skipped", "result": "Tous les params blacklistés."}
 
+        # Anti-obsession : exclure les params testés >3 fois dans les 5 dernières exp
+        recent_param_counts = {}
+        for e in self._experiment_history[-5:]:
+            pid = e.get("param_id", "")
+            recent_param_counts[pid] = recent_param_counts.get(pid, 0) + 1
+        overused = {pid for pid, cnt in recent_param_counts.items() if cnt >= 3}
+        available_for_llm = {pid: p for pid, p in params_by_id.items() if pid not in overused}
+        if not available_for_llm:
+            available_for_llm = params_by_id  # Fallback : tout ouvrir si tout est overused
+
         # 2. Mesurer phi actuel
         phi_before = self._get_phi()
 
         # 3. Demander au LLM de proposer l'expérience
-        proposal = await self._llm_propose_experiment(params_by_id, phi_before)
+        proposal = await self._llm_propose_experiment(available_for_llm, phi_before)
         param_id = proposal.get("param_id", "")
         direction = proposal.get("direction", "down")
         variation_pct = proposal.get("variation_pct", 10) / 100.0
@@ -5312,9 +5322,11 @@ PARAMÈTRES DISPONIBLES :
 HISTORIQUE DES EXPÉRIENCES :
 {history_text}
 
-Analyse l'historique. Quels params ont amélioré phi ? Lesquels l'ont dégradé ? Propose la prochaine expérience.
+Analyse l'historique. Quels params ont amélioré phi ? Lesquels l'ont dégradé ?
 
-Réponds UNIQUEMENT dans ce format exact (4 lignes, rien d'autre) :
+RÈGLE CRITIQUE : tu DOIS varier les paramètres. Ne teste PAS le même param plus de 2 fois de suite. Explore des params différents pour trouver de nouveaux leviers.
+
+Propose la prochaine expérience. Réponds UNIQUEMENT dans ce format exact (4 lignes, rien d'autre) :
 PARAM: <param_id>
 DIRECTION: up ou down
 VARIATION: <nombre entier entre 5 et 25>
