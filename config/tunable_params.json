@@ -29,7 +29,7 @@
       "id": "ignition_threshold",
       "module": "core.global_workspace",
       "attr": "IGNITION_BASE_THRESHOLD",
-      "default": 0.35,
+      "default": 0.2835,
       "min": 0.15,
       "max": 0.60,
       "variation_pct": 0.15,

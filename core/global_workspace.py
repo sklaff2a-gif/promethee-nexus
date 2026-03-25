@@ -38,7 +38,7 @@ MAX_COMPOSITES = 3          # Max composites par cycle (eviter la sur-fusion)
 # Le seuil de conscience est module par l'arousal cardiaque.
 # En panique (BPM haut) : seuil bas → plus de contenus accedent a la conscience
 # Au repos (BPM bas) : seuil haut → seuls les plus saillants passent
-IGNITION_BASE_THRESHOLD = 0.35   # Seuil de base (saillance minimale pour acceder)
+IGNITION_BASE_THRESHOLD = 0.2835  # Optimisé par autoresearch V3 (était 0.35, phi +0.147)
 IGNITION_K = 5.0                 # Pente de la sigmoid
 IGNITION_MIDPOINT = 0.5          # Point d'inflexion de l'arousal [0,1]
 
