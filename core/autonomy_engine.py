@@ -2065,7 +2065,25 @@ class AutonomyEngine:
         except Exception:
             pass
 
-        selected, score = scored[0]
+        # --- Arbitrage LLM (Karpathy-inspired) ---
+        # Les 26 couches ont voté. Le LLM voit le top 5 + contexte et arbitre.
+        # Fallback : si LLM indisponible, le scoring mécanique décide (scored[0]).
+        llm_choice = await self._llm_select_routine(scored)
+        if llm_choice:
+            # Le LLM a choisi — trouver la routine correspondante
+            for r, s in scored:
+                if r["intent"] == llm_choice["intent"]:
+                    selected, score = r, s
+                    break
+            else:
+                selected, score = scored[0]  # Fallback si intent invalide
+            print(f"   🧠 LLM ARBITRE: {llm_choice['intent']} — {llm_choice.get('reason', '?')}")
+            if llm_choice["intent"] != scored[0][0]["intent"]:
+                print(f"   🔀 LLM a overridé le scoring mécanique ({scored[0][0]['intent']} → {llm_choice['intent']})")
+                logger.info(f"[AUTONOMY] LLM override: {scored[0][0]['intent']}→{llm_choice['intent']} — {llm_choice.get('reason', '?')}")
+        else:
+            selected, score = scored[0]
+
         agent = selected["agent"]
         intent = selected["intent"]
 
@@ -5408,6 +5426,119 @@ HYPOTHESE: <1 phrase courte>"""
                 f.write(line)
         except Exception as e:
             logger.warning(f"[AUTORESEARCH] Erreur écriture results.tsv: {e}")
+
+    # ================================================================
+    # LLM ARBITRE — sélection intelligente de la prochaine routine
+    # ================================================================
+
+    _ROUTINE_SELECT_MODEL = "qwen3.5:9b"
+
+    async def _llm_select_routine(self, scored: list) -> dict | None:
+        """Le LLM voit le top 5 scoré + contexte et choisit la routine.
+
+        Retourne {"intent": ..., "reason": ...} ou None si fallback mécanique.
+        """
+        if not scored:
+            return None
+
+        # Construire le top 5 avec détails
+        top5_lines = []
+        for i, (r, s) in enumerate(scored[:5]):
+            top5_lines.append(f"  {i+1}. {r['intent']} (score={s:.1f}, agent={r['agent']}, coût={RESOURCE_COSTS.get(r['intent'], 2)}pt)")
+        top5_text = "\n".join(top5_lines)
+
+        # Résumé des 5 dernières routines
+        history_lines = []
+        for h in self.routine_history[-5:]:
+            status = h.get("status", "?")
+            quality = h.get("quality_score", 0)
+            history_lines.append(f"  {h.get('intent', '?')} → {status} (quality={quality:.1f})")
+        history_text = "\n".join(history_lines) if history_lines else "  (aucun historique)"
+
+        # État synthétique
+        budget_pct = f"{self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt" if hasattr(self, 'daily_budget_used') else "?"
+        routine_count = f"{self.daily_count}/{MAX_DAILY_ROUTINES}"
+
+        # Objectif actif
+        objective_text = ""
+        try:
+            from core.objectives_engine import objectives as obj_engine
+            active = obj_engine.get_active_objectives()
+            if active:
+                objective_text = f"Objectif actif: {active[0].get('title', '?')}"
+        except Exception:
+            pass
+
+        prompt = f"""Tu es le décideur de Prométhée, un système IA autonome. Choisis la prochaine routine.
+
+ROUTINES CANDIDATES (triées par score des organes) :
+{top5_text}
+
+DERNIÈRES ROUTINES :
+{history_text}
+
+ÉTAT : budget {budget_pct}, routines {routine_count}, error_streak={self.error_streak}
+{objective_text}
+
+RÈGLES :
+- Évite de répéter la même routine 2 fois de suite sauf raison forte
+- Les routines avec un score très négatif sont vetoed par le préfrontal — respecte-les
+- Privilégie la diversité et l'adaptation au contexte
+
+Choisis UNE routine parmi les candidates. Réponds UNIQUEMENT en 2 lignes :
+ROUTINE: <intent exact>
+RAISON: <1 phrase courte>"""
+
+        try:
+            import httpx
+            from core.base_agent import gpu_scheduler
+            async with gpu_scheduler.access("routine_select"):
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        "http://localhost:11434/api/generate",
+                        json={
+                            "model": self._ROUTINE_SELECT_MODEL,
+                            "prompt": prompt,
+                            "stream": False,
+                            "think": False,
+                            "options": {"temperature": 0.3, "num_ctx": 2048},
+                        },
+                        timeout=60,
+                    )
+                if resp.status_code == 200:
+                    raw = resp.json().get("response", "")
+                    return self._parse_routine_choice(raw, scored)
+        except Exception as e:
+            logger.info(f"[AUTONOMY] LLM arbitre indisponible ({e}), fallback scoring mécanique.")
+
+        return None  # Fallback : le scoring mécanique décide
+
+    @staticmethod
+    def _parse_routine_choice(raw: str, scored: list) -> dict | None:
+        """Parse la réponse LLM au format ROUTINE/RAISON."""
+        valid_intents = {r["intent"] for r, _ in scored}
+        result = {"intent": "", "reason": "?"}
+
+        for line in raw.split("\n"):
+            line = line.strip()
+            if line.upper().startswith("ROUTINE:"):
+                val = line.split(":", 1)[1].strip()
+                # Match exact ou partiel
+                if val in valid_intents:
+                    result["intent"] = val
+                else:
+                    # Chercher match partiel (le LLM peut ajouter des espaces ou changer la casse)
+                    val_upper = val.upper().replace(" ", "_")
+                    for intent in valid_intents:
+                        if intent in val_upper or val_upper in intent:
+                            result["intent"] = intent
+                            break
+            elif line.upper().startswith("RAISON:"):
+                result["reason"] = line.split(":", 1)[1].strip()[:150]
+
+        if result["intent"]:
+            return result
+        return None  # Parse échoué → fallback mécanique
 
     @staticmethod
     def _import_module(module_path: str):
