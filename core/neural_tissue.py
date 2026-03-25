@@ -1090,16 +1090,20 @@ class NeuralTissue:
             if cell.alive:
                 cell_density[cell.y][cell.x] += 1
 
-        # 1e. Bonus rareté : les genomes rares reçoivent un boost d'énergie
+        # 1e. Bonus rareté homéostatique : fort quand diversité basse, quasi-nul quand haute
         if self.tick_count % 10 == 0:  # Toutes les 10 ticks (~20s)
             alive_cells = [c for c in self.cells if c.alive]
             if len(alive_cells) > 10:
                 genome_counts = Counter(c.genome for c in alive_cells)
                 pop_total = len(alive_cells)
+                diversity_ratio = len(genome_counts) / pop_total
+                # Bonus inversement proportionnel à la diversité existante
+                # 152/500=0.304 → bonus=1.3 | 10/500=0.02 → bonus=14.1
+                scaled_bonus = RARITY_ENERGY_BONUS * max(0.0, 1.0 - diversity_ratio * 3.0)
                 for cell in alive_cells:
                     freq = genome_counts[cell.genome] / pop_total
-                    if freq < 0.05:  # Genome < 5% de la population
-                        cell.energy += RARITY_ENERGY_BONUS
+                    if freq < 0.05:
+                        cell.energy += scaled_bonus
 
         # 1f. Index spatial pour lookup voisins O(25) au lieu de O(n)
         spatial_index = self._build_spatial_index()
