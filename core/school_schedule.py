@@ -50,16 +50,15 @@ SLOT_BULLETIN = "BULLETIN"
 SLOT_SLEEP = "SLEEP"
 
 # (heure_debut, heure_fin, type_slot)
+# Emploi du temps nocturne (0h-6h) : fenêtre ininterrompue, 0 reboot.
+# La journée (6h-18h) est réservée aux routines normales + interventions humaines.
 DAILY_SCHEDULE = [
-    (6, 8, SLOT_REVEIL),
-    (8, 10, SLOT_CODE_REVIEW),
-    (10, 12, SLOT_RESEARCH),
-    (12, 13, SLOT_PAUSE),
-    (13, 15, SLOT_WORKSHOP),
-    (15, 16, SLOT_CREATION),
-    (16, 17, SLOT_FREE_TIME),
-    (17, 18, SLOT_BULLETIN),
-    # 18h-6h = SLEEP (defaut)
+    (0, 1, SLOT_CODE_REVIEW),
+    (1, 3, SLOT_RESEARCH),
+    (3, 4, SLOT_WORKSHOP),
+    (4, 5, SLOT_CREATION),
+    (5, 6, SLOT_BULLETIN),
+    # 6h-0h = pas de créneau scolaire (routines normales + maintenance humaine)
 ]
 
 # Mapping slot -> intent autonomy_engine

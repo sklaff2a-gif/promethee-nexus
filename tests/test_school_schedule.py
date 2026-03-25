@@ -65,51 +65,59 @@ class TestSlotDetection:
     def _mock_hour(self, hour):
         return patch("core.school_schedule.datetime") if False else None
 
-    def test_morning_code_review(self, isolate_schedule):
+    def test_night_code_review(self, isolate_schedule):
+        """0h-1h = CODE_REVIEW (créneau nocturne ininterrompu)."""
         with patch("core.school_schedule.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 3, 13, 9, 0)
+            mock_dt.now.return_value = datetime(2026, 3, 13, 0, 30)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             assert isolate_schedule.get_current_slot() == SLOT_CODE_REVIEW
 
-    def test_research_slot(self, isolate_schedule):
+    def test_night_research(self, isolate_schedule):
+        """1h-3h = RESEARCH (2h de recherche profonde)."""
         with patch("core.school_schedule.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 3, 13, 11, 0)
+            mock_dt.now.return_value = datetime(2026, 3, 13, 2, 0)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             assert isolate_schedule.get_current_slot() == SLOT_RESEARCH
 
-    def test_workshop_slot(self, isolate_schedule):
+    def test_night_workshop(self, isolate_schedule):
+        """3h-4h = WORKSHOP."""
         with patch("core.school_schedule.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 3, 13, 14, 0)
+            mock_dt.now.return_value = datetime(2026, 3, 13, 3, 30)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             assert isolate_schedule.get_current_slot() == SLOT_WORKSHOP
 
-    def test_creation_slot(self, isolate_schedule):
+    def test_night_creation(self, isolate_schedule):
+        """4h-5h = CREATION."""
         with patch("core.school_schedule.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 3, 13, 15, 30)
+            mock_dt.now.return_value = datetime(2026, 3, 13, 4, 30)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             assert isolate_schedule.get_current_slot() == SLOT_CREATION
 
-    def test_sleep_night(self, isolate_schedule):
+    def test_night_bulletin(self, isolate_schedule):
+        """5h-6h = BULLETIN (auto-évaluation de fin de nuit)."""
+        with patch("core.school_schedule.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 3, 13, 5, 30)
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            assert isolate_schedule.get_current_slot() == SLOT_BULLETIN
+
+    def test_daytime_no_school(self, isolate_schedule):
+        """10h = pas de créneau scolaire (journée = maintenance humaine)."""
+        with patch("core.school_schedule.datetime") as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 3, 13, 10, 0)
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            assert isolate_schedule.get_current_slot() == SLOT_SLEEP
+
+    def test_evening_no_school(self, isolate_schedule):
+        """22h = pas de créneau scolaire."""
         with patch("core.school_schedule.datetime") as mock_dt:
             mock_dt.now.return_value = datetime(2026, 3, 13, 22, 0)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             assert isolate_schedule.get_current_slot() == SLOT_SLEEP
 
-    def test_sleep_early_morning(self, isolate_schedule):
-        with patch("core.school_schedule.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 3, 13, 3, 0)
-            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-            assert isolate_schedule.get_current_slot() == SLOT_SLEEP
-
-    def test_reveil(self, isolate_schedule):
-        with patch("core.school_schedule.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 3, 13, 7, 0)
-            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
-            assert isolate_schedule.get_current_slot() == SLOT_REVEIL
-
     def test_bulletin(self, isolate_schedule):
+        """5h-6h = BULLETIN (nocturne)."""
         with patch("core.school_schedule.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 3, 13, 17, 30)
+            mock_dt.now.return_value = datetime(2026, 3, 13, 5, 30)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             assert isolate_schedule.get_current_slot() == SLOT_BULLETIN
 
@@ -182,30 +190,33 @@ class TestPromptGeneration:
 
 class TestScheduleBonus:
     def test_exact_match_bonus(self, isolate_schedule):
+        """0h30 = CODE_REVIEW → SCHOOL_CODE_REVIEW = +5.0."""
         with patch("core.school_schedule.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 3, 13, 9, 0)
+            mock_dt.now.return_value = datetime(2026, 3, 13, 0, 30)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             bonus = isolate_schedule.compute_schedule_bonus("SCHOOL_CODE_REVIEW")
             assert bonus == 5.0
 
     def test_no_match_zero(self, isolate_schedule):
+        """0h30 = CODE_REVIEW → SCHOOL_CREATION = 0."""
         with patch("core.school_schedule.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 3, 13, 9, 0)
+            mock_dt.now.return_value = datetime(2026, 3, 13, 0, 30)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             bonus = isolate_schedule.compute_schedule_bonus("SCHOOL_CREATION")
             assert bonus == 0.0
 
     def test_adjacent_slot_bonus(self, isolate_schedule):
+        """1h = RESEARCH, adjacent à CODE_REVIEW (0-1) → +2.0."""
         with patch("core.school_schedule.datetime") as mock_dt:
-            # 10h = RESEARCH, adjacent a CODE_REVIEW (8-10)
-            mock_dt.now.return_value = datetime(2026, 3, 13, 10, 0)
+            mock_dt.now.return_value = datetime(2026, 3, 13, 1, 0)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             bonus = isolate_schedule.compute_schedule_bonus("SCHOOL_CODE_REVIEW")
             assert bonus == 2.0
 
-    def test_sleep_zero_bonus(self, isolate_schedule):
+    def test_daytime_zero_bonus(self, isolate_schedule):
+        """10h = pas de créneau scolaire → 0."""
         with patch("core.school_schedule.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 3, 13, 22, 0)
+            mock_dt.now.return_value = datetime(2026, 3, 13, 10, 0)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             bonus = isolate_schedule.compute_schedule_bonus("SCHOOL_CODE_REVIEW")
             assert bonus == 0.0
@@ -258,8 +269,9 @@ class TestScheduleContext:
             assert len(ctx) > 20
 
     def test_context_contains_slot(self, isolate_schedule):
+        """0h30 = CODE_REVIEW → contexte mentionne CODE_REVIEW."""
         with patch("core.school_schedule.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 3, 13, 9, 0)
+            mock_dt.now.return_value = datetime(2026, 3, 13, 0, 30)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             ctx = isolate_schedule.get_schedule_context()
             assert "CODE_REVIEW" in ctx
@@ -299,13 +311,14 @@ class TestPersistence:
 
 class TestSlotInfo:
     def test_slot_info_complete(self, isolate_schedule):
+        """0h30 = CODE_REVIEW nocturne."""
         with patch("core.school_schedule.datetime") as mock_dt:
-            mock_dt.now.return_value = datetime(2026, 3, 13, 9, 0)
+            mock_dt.now.return_value = datetime(2026, 3, 13, 0, 30)
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             info = isolate_schedule.get_current_slot_info()
             assert info["slot"] == SLOT_CODE_REVIEW
-            assert info["start_hour"] == 8
-            assert info["end_hour"] == 10
+            assert info["start_hour"] == 0
+            assert info["end_hour"] == 1
             assert info["agent"] == "security"
             assert info["intent"] == "SCHOOL_CODE_REVIEW"
             assert len(info["prompt"]) > 0
@@ -335,12 +348,12 @@ class TestSlotInfo:
 
 class TestConstants:
     def test_all_slots_covered(self):
+        """0h-6h doivent être couverts (créneau nocturne)."""
         hours_covered = set()
         for start, end, _ in DAILY_SCHEDULE:
             for h in range(start, min(end, 24)):
                 hours_covered.add(h)
-        # 6h-18h doivent etre couverts
-        for h in range(6, 18):
+        for h in range(0, 6):
             assert h in hours_covered, f"Hour {h} not covered"
 
     def test_school_intents_match_slots(self):
