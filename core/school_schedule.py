@@ -185,22 +185,10 @@ class SchoolSchedule:
         if self._subscribed:
             return
         self._subscribed = True
-        try:
-            from core.event_bus.bus import bus
-            bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
-        except Exception:
-            pass
-
-    async def _on_routine_complete(self, event: dict):
-        """Enregistre automatiquement les livrables scolaires."""
-        intent = event.get("intent", "")
-        if intent in SCHOOL_INTENTS:
-            result = event.get("result", "")
-            slot = intent.replace("SCHOOL_", "")
-            self.record_deliverable(slot, intent, {
-                "result_preview": str(result)[:500],
-                "quality_score": event.get("quality_score", 0.5),
-            })
+        # NOTE: on ne subscribe plus à AUTONOMY_ROUTINE_COMPLETE ici.
+        # L'enregistrement des livrables est fait par autonomy_engine.py
+        # (avec la note du professeur + contenu complet).
+        # L'ancien handler écrasait le livrable complet avec une version tronquée.
 
     # ── API publique ────────────────────────────────────────────────────
 

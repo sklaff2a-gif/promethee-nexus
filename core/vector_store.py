@@ -36,6 +36,7 @@ class ChromaMemoryManager:
             try:
                 client = chromadb.PersistentClient(path=self.db_path)
                 client.heartbeat()  # Vérifier que la connexion fonctionne
+                logger.info(f"[MÉMOIRE] ChromaDB PersistentClient actif ({self.db_path})")
                 return client
             except Exception as e1:
                 logger.warning(f"PersistentClient échoué ({e1}), tentative de recovery...")
@@ -58,7 +59,7 @@ class ChromaMemoryManager:
             logger.warning(f"Recovery PersistentClient échoué ({e2})")
 
         # Tentative 3 : dernier recours — EphemeralClient
-        logger.warning("Fallback EphemeralClient (mémoire non persistante)")
+        logger.warning(f"[MÉMOIRE] ⚠️ Fallback EphemeralClient — MÉMOIRE NON PERSISTANTE (path tenté: {self.db_path})")
         return chromadb.EphemeralClient()
 
     def __init__(self, project_id: str = "default"):
@@ -80,8 +81,9 @@ class ChromaMemoryManager:
             base_dir = os.path.dirname(getattr(Config, "CHROMA_PERSIST_PATH", os.path.join(".", "memory", "chroma_db")))
         except ImportError:
             base_dir = os.path.join(".", "memory")
-        self.db_path = os.path.join(base_dir, project_id, "chroma_db")
+        self.db_path = os.path.abspath(os.path.join(base_dir, project_id, "chroma_db"))
         os.makedirs(self.db_path, exist_ok=True)
+        logger.info(f"[MÉMOIRE] ChromaDB path: {self.db_path}")
 
         # Initialisation du client (avec recovery si database corrompue)
         self.client = self._init_persistent_client()

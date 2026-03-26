@@ -950,13 +950,16 @@ class Hippocampus:
                 f"{len(nearby)} evenements lies."
             )
 
+            emotions = [e.cardiac_emotion for e in arc_eps if e.cardiac_emotion]
+            emotional_arc_str = " -> ".join(dict.fromkeys(emotions)) if emotions else ""
+
             arc = NarrativeArc(
                 id=str(uuid.uuid4())[:8],
                 arc_type="transition",
                 title=f"Transition {ep.intent}",
                 narrative=narrative,
                 episode_ids=[e.id for e in arc_eps],
-                emotional_arc="",
+                emotional_arc=emotional_arc_str,
                 timestamp=time.time(),
                 intent=ep.intent,
                 marked=False,
@@ -991,13 +994,16 @@ class Hippocampus:
             )
 
             avg_salience = sum(e.salience for e in arc_eps) / len(arc_eps)
+            emotions = [e.cardiac_emotion for e in arc_eps if e.cardiac_emotion]
+            emotional_arc_str = " -> ".join(dict.fromkeys(emotions)) if emotions else ""
+
             arc = NarrativeArc(
                 id=str(uuid.uuid4())[:8],
                 arc_type="crisis",
                 title=f"Crise ({ep.intent})",
                 narrative=narrative,
                 episode_ids=[e.id for e in arc_eps],
-                emotional_arc="",
+                emotional_arc=emotional_arc_str,
                 timestamp=time.time(),
                 intent=ep.intent,
                 marked=avg_salience >= 0.8,

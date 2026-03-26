@@ -230,11 +230,32 @@ AGENTS_CONFIG = [
 ]
 
 async def _on_smart_restart(data: dict):
-    """Smart Restart propre : laisse les opérations en cours finir, puis exit(65)."""
+    """Smart Restart propre : sauvegarde état critique, puis exit(65)."""
     filename = data.get("filename", "?")
     logger.info(f"[SMART RESTART] Programmé suite à modification: {filename}")
     await asyncio.sleep(3)
+    _emergency_save()
     os._exit(65)
+
+
+def _emergency_save():
+    """Sauvegarde d'urgence avant os._exit() — le lifespan cleanup ne tourne PAS avec _exit."""
+    try:
+        from core.synaptic_network import cortex
+        cortex.save()
+        logger.info("[MAIN] Emergency save: cortex synaptique OK")
+    except Exception as e:
+        logger.warning(f"[MAIN] Emergency save cortex échoué: {e}")
+    try:
+        from core.hippocampus import hippocampus
+        hippocampus._save()
+    except Exception:
+        pass
+    try:
+        from core.autonomy_engine import autonomy
+        autonomy._persist_state()
+    except Exception:
+        pass
 
 
 @asynccontextmanager
@@ -1063,6 +1084,7 @@ async def api_reboot(request: Request):
     })
     await bus.publish("SYSTEM_OVERRIDE", {"active": True, "reboot": True})
     await asyncio.sleep(2)
+    _emergency_save()
     os._exit(65)
 
 async def strategic_feedback_loop(agent_name: str, mission: str, result: str):

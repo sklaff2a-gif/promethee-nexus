@@ -585,6 +585,7 @@ class SynapticNetwork:
         syn["formation_count"] += 1
         syn["last_strengthened"] = time.time()
         self._mutations_since_save += 1
+        self._auto_save()
 
     def homeostatic_normalize(self):
         """Normalisation homeostatique — ramene l'energie moyenne vers HOMEOSTATIC_TARGET."""
@@ -973,6 +974,9 @@ class SynapticNetwork:
 
     def _seed_organ_nodes(self):
         """Cree les noeuds desire et trait au demarrage (idempotent)."""
+        # Désactiver auto_save pendant le seed pour éviter une save partielle
+        self._seeding = True
+
         # 7 pulsions
         DRIVE_NAMES = [
             "curiosite", "maitrise", "stabilite", "connexion",
@@ -1011,10 +1015,16 @@ class SynapticNetwork:
         except ImportError:
             logger.warning("SYNAPSE: desire_engine non disponible pour seed")
 
+        # Réactiver auto_save et sauver l'état COMPLET (noeuds + synapses)
+        self._seeding = False
+        self._mutations_since_save = 0
+
         count_d = sum(1 for n in self.nodes.values() if n["node_type"] == "desire")
         count_t = sum(1 for n in self.nodes.values() if n["node_type"] == "trait")
+        count_s = len(self.synapses)
+        self.save()
         logger.info(
-            f"SYNAPSE: Seed organes -> {count_d} desire, {count_t} trait noeuds"
+            f"SYNAPSE: Seed organes -> {count_d} desire, {count_t} trait noeuds, {count_s} synapses"
         )
 
     async def _on_psyche_update(self, event: dict):
@@ -1967,6 +1977,8 @@ class SynapticNetwork:
 
     def _auto_save(self):
         """Sauvegarde automatique toutes les 10 mutations."""
+        if getattr(self, '_seeding', False):
+            return  # Pas de save pendant le seed (save explicite après)
         if self._mutations_since_save >= 10:
             self.save()
 
