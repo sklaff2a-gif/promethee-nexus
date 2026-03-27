@@ -5248,7 +5248,8 @@ else:
         new_val = max(val_min, min(val_max, current_val + delta))
 
         if abs(new_val - current_val) < 1e-8:
-            return {"status": "skipped", "result": f"{param_id}: inchangé après clamping."}
+            self._experiment_skip_blacklist.add(param_id)
+            return {"status": "skipped", "result": f"{param_id}: inchangé après clamping. Blacklisté."}
 
         self._experiment_in_progress = True
         print(f"   🔬 EXPERIMENT: {param_id} = {current_val:.6f} → {new_val:.6f} ({direction} {variation_pct*100:.0f}%)")
