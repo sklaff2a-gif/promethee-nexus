@@ -2347,6 +2347,9 @@ class AutonomyEngine:
         # Score qualité post-routine
         quality_score = self._score_result_quality(response, intent)
 
+        # === SNAPSHOT PHI × QUALITY — protocole expérimental ===
+        self._log_routine_phi_snapshot(intent, agent, quality_score)
+
         # MASTER_PROMPT : vérifier si l'agent sous-performe (3 échecs → optimiser prompt)
         try:
             await self._master_prompt_check(agent, intent, quality_score)
@@ -5616,6 +5619,81 @@ Réponds UNIQUEMENT avec le nouveau prompt complet."""
 
         except Exception as e:
             logger.info(f"[MASTER_PROMPT] Échec optimisation {intent}: {e}")
+
+    # ================================================================
+    # PROTOCOLE EXPÉRIMENTAL — Corrélation Phi composantes × Quality
+    # ================================================================
+
+    _PHI_LOG_PATH = os.path.join("memory", "routine_phi_log.jsonl")
+
+    def _log_routine_phi_snapshot(self, intent: str, agent: str, quality_score: float):
+        """Capture un snapshot complet Phi × Quality à chaque routine.
+
+        Stocké en JSONL (append). Après 200-300 routines, corrélation de Pearson
+        entre chaque métrique et quality_score pour identifier le vrai prédicteur.
+        """
+        try:
+            snapshot = {
+                "timestamp": time.time(),
+                "intent": intent,
+                "agent": agent,
+                "quality_score": quality_score,
+            }
+
+            # Composantes brain_vm
+            try:
+                from core.brain_vm import brain
+                if brain.current_state:
+                    s = brain.current_state
+                    snapshot["phi"] = s.phi
+                    snapshot["global_coherence"] = s.global_coherence
+                    snapshot["cognitive_state"] = s.cognitive_state
+                    snapshot["dominant_mode"] = s.dominant_mode
+                    # Phase coherence (Kuramoto R — binding oscillatoire)
+                    snapshot["kuramoto_r"] = brain.phase_coherence
+                    # 7 signaux descendants
+                    for sig_name, sig_val in s.descending_signals.items():
+                        snapshot[f"signal_{sig_name}"] = round(sig_val, 4)
+            except Exception:
+                pass
+
+            # Dopamine
+            try:
+                from core.dopamine_system import dopamine
+                snapshot["dopamine"] = round(dopamine.level, 4)
+            except Exception:
+                pass
+
+            # Cardiac
+            try:
+                from core.cardiac_engine import heart
+                snapshot["cardiac_bpm"] = round(heart.bpm, 1)
+                snapshot["cardiac_coherence"] = round(heart.compute_coherence(), 4)
+                snapshot["cardiac_emotion"] = heart.current_emotion
+            except Exception:
+                pass
+
+            # Note scolaire (si créneau école)
+            try:
+                from core.school_schedule import schedule as _school
+                slot = _school.get_current_slot()
+                if slot != "SLEEP":
+                    snapshot["school_slot"] = slot
+                    # La note sera dans le dernier livrable
+                    deliverables = _school.get_daily_deliverables()
+                    if deliverables:
+                        last_grade = deliverables[-1].get("grade")
+                        if last_grade is not None:
+                            snapshot["school_grade"] = last_grade
+            except Exception:
+                pass
+
+            # Append JSONL
+            with open(self._PHI_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(snapshot, ensure_ascii=False) + "\n")
+
+        except Exception as e:
+            logger.debug(f"[PHI_LOG] Erreur snapshot: {e}")
 
     def _load_overrides(self):
         """Charge les valeurs KEPT persistées et les applique aux modules.
