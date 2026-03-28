@@ -3852,6 +3852,9 @@ class AutonomyEngine:
         print(f"   🔬 AUTORESEARCH: {summary}")
         logger.info(f"[AUTORESEARCH] {summary}")
 
+        # Méta-évolution : le LLM évalue sa propre session et améliore son prompt
+        await self._meta_evolve_prompt(experiments, kept, minutes)
+
     def _save_autoresearch_report(self, minutes: int, experiments: int, kept: int,
                                    baseline: dict, final: dict):
         """Sauvegarde un rapport de session autoresearch dans le journal."""
@@ -5169,6 +5172,8 @@ else:
 
     _RESULTS_TSV_PATH = os.path.join("memory", "autoresearch_results.tsv")
     _OVERRIDES_PATH = os.path.join("config", "tunable_overrides.json")
+    _AUTORESEARCH_PROMPT_PATH = os.path.join("config", "autoresearch_prompt.txt")
+    _AUTORESEARCH_PROMPT_HISTORY_PATH = os.path.join("memory", "autoresearch_prompt_history.json")
     _AUTORESEARCH_MODEL = "qwen3.5:9b"
 
     async def _execute_param_experiment(self) -> dict:
@@ -5305,6 +5310,145 @@ else:
         )
         return {"status": "success", "result": result_text}
 
+    def _load_autoresearch_prompt(self, current_phi: float, catalog_text: str, history_text: str) -> str:
+        """Charge le prompt autoresearch depuis le fichier (méta-évolutif).
+        Le prompt peut être modifié par la méta-évaluation en fin de session."""
+        _DEFAULT_PROMPT = (
+            "Tu es un chercheur qui optimise les paramètres internes d'un système IA.\n\n"
+            "OBJECTIF : maximiser phi (intégration d'information). Valeur actuelle : {current_phi}\n\n"
+            "PARAMÈTRES DISPONIBLES :\n{catalog_text}\n\n"
+            "HISTORIQUE DES EXPÉRIENCES :\n{history_text}\n\n"
+            "Analyse l'historique. Quels params ont amélioré phi ? Lesquels l'ont dégradé ?\n\n"
+            "RÈGLE CRITIQUE : tu DOIS varier les paramètres. Ne teste PAS le même param plus de 2 fois de suite.\n\n"
+            "Propose la prochaine expérience. Réponds UNIQUEMENT dans ce format exact (4 lignes, rien d'autre) :\n"
+            "PARAM: <param_id>\nDIRECTION: up ou down\nVARIATION: <nombre entier entre 5 et 25>\nHYPOTHESE: <1 phrase courte>"
+        )
+        try:
+            if os.path.exists(self._AUTORESEARCH_PROMPT_PATH):
+                with open(self._AUTORESEARCH_PROMPT_PATH, "r", encoding="utf-8") as f:
+                    template = f.read().strip()
+            else:
+                template = _DEFAULT_PROMPT
+        except Exception:
+            template = _DEFAULT_PROMPT
+        return template.format(
+            current_phi=f"{current_phi:.4f}",
+            catalog_text=catalog_text,
+            history_text=history_text,
+        )
+
+    async def _meta_evolve_prompt(self, experiments: int, kept: int, minutes: int):
+        """Méta-autoresearch : le LLM évalue sa session et propose une amélioration de son propre prompt.
+        Pattern HyperAgents (Meta) : le meta-level est lui-même éditable."""
+        if experiments < 3:
+            return  # Pas assez de données pour évaluer
+
+        kept_ratio = kept / experiments if experiments > 0 else 0
+
+        # Charger le prompt actuel
+        try:
+            with open(self._AUTORESEARCH_PROMPT_PATH, "r", encoding="utf-8") as f:
+                current_prompt = f.read().strip()
+        except Exception:
+            return
+
+        # Lire les dernières lignes du results.tsv pour le contexte
+        session_results = ""
+        try:
+            if os.path.exists(self._RESULTS_TSV_PATH):
+                with open(self._RESULTS_TSV_PATH, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                session_results = "".join(lines[-min(experiments + 1, 20):])
+        except Exception:
+            pass
+
+        meta_prompt = f"""Tu viens de terminer une session autoresearch de {minutes} minutes.
+
+RÉSULTATS DE LA SESSION :
+- Expériences réalisées : {experiments}
+- Gardées (KEPT) : {kept} ({kept_ratio:.0%})
+- Résultats détaillés :
+{session_results}
+
+PROMPT ACTUEL utilisé pour proposer les expériences :
+---
+{current_prompt}
+---
+
+ANALYSE DEMANDÉE :
+1. Qu'est-ce qui a bien marché dans tes propositions ?
+2. Qu'est-ce qui a raté ? (rollbacks répétés, params inutiles, directions erronées)
+3. Comment améliorer le prompt pour la prochaine session ?
+
+Propose une version AMÉLIORÉE du prompt. Le prompt doit :
+- Garder les placeholders {{current_phi}}, {{catalog_text}}, {{history_text}} (obligatoire)
+- Garder le format de réponse PARAM/DIRECTION/VARIATION/HYPOTHESE (obligatoire)
+- Intégrer les leçons de cette session
+
+Réponds UNIQUEMENT avec le nouveau prompt complet, rien d'autre."""
+
+        try:
+            import httpx
+            from core.base_agent import gpu_scheduler
+            async with gpu_scheduler.access("meta_evolve"):
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        "http://localhost:11434/api/generate",
+                        json={
+                            "model": self._AUTORESEARCH_MODEL,
+                            "prompt": meta_prompt,
+                            "stream": False,
+                            "think": False,
+                            "options": {"temperature": 0.4, "num_ctx": 4096},
+                        },
+                        timeout=120,
+                    )
+                if resp.status_code != 200:
+                    return
+
+            new_prompt = resp.json().get("response", "").strip()
+
+            # Validation : le nouveau prompt doit contenir les placeholders obligatoires
+            required = ["{current_phi}", "{catalog_text}", "{history_text}", "PARAM:", "DIRECTION:", "VARIATION:", "HYPOTHESE:"]
+            if not all(r in new_prompt for r in required):
+                logger.info(f"[META-EVOLVE] Prompt rejeté — placeholders manquants")
+                return
+
+            # Sauvegarder l'historique (ancien prompt + métriques)
+            self._save_prompt_history(current_prompt, experiments, kept, kept_ratio)
+
+            # Écrire le nouveau prompt
+            with open(self._AUTORESEARCH_PROMPT_PATH, "w", encoding="utf-8") as f:
+                f.write(new_prompt)
+
+            logger.info(f"[META-EVOLVE] Prompt évolué ({len(current_prompt)} → {len(new_prompt)} chars)")
+            print(f"   🧬 META-EVOLVE: Prompt autoresearch évolué (session: {kept}/{experiments} KEPT)")
+
+        except Exception as e:
+            logger.info(f"[META-EVOLVE] Échec évolution prompt: {e}")
+
+    def _save_prompt_history(self, prompt: str, experiments: int, kept: int, ratio: float):
+        """Sauvegarde l'historique des versions de prompt avec leurs métriques."""
+        try:
+            history = []
+            if os.path.exists(self._AUTORESEARCH_PROMPT_HISTORY_PATH):
+                with open(self._AUTORESEARCH_PROMPT_HISTORY_PATH, "r", encoding="utf-8") as f:
+                    history = json.load(f)
+            history.append({
+                "timestamp": datetime.now().isoformat(),
+                "prompt_length": len(prompt),
+                "experiments": experiments,
+                "kept": kept,
+                "kept_ratio": round(ratio, 3),
+                "prompt_preview": prompt[:200],
+            })
+            # Garder les 20 dernières versions
+            history = history[-20:]
+            with open(self._AUTORESEARCH_PROMPT_HISTORY_PATH, "w", encoding="utf-8") as f:
+                json.dump(history, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
     def _load_overrides(self):
         """Charge les valeurs KEPT persistées et les applique aux modules.
 
@@ -5391,25 +5535,8 @@ else:
         except Exception:
             pass
 
-        prompt = f"""Tu es un chercheur qui optimise les paramètres internes d'un système IA.
-
-OBJECTIF : maximiser phi (intégration d'information). Valeur actuelle : {current_phi:.4f}
-
-PARAMÈTRES DISPONIBLES :
-{catalog_text}
-
-HISTORIQUE DES EXPÉRIENCES :
-{history_text}
-
-Analyse l'historique. Quels params ont amélioré phi ? Lesquels l'ont dégradé ?
-
-RÈGLE CRITIQUE : tu DOIS varier les paramètres. Ne teste PAS le même param plus de 2 fois de suite. Explore des params différents pour trouver de nouveaux leviers.
-
-Propose la prochaine expérience. Réponds UNIQUEMENT dans ce format exact (4 lignes, rien d'autre) :
-PARAM: <param_id>
-DIRECTION: up ou down
-VARIATION: <nombre entier entre 5 et 25>
-HYPOTHESE: <1 phrase courte>"""
+        # Chargement dynamique du prompt (méta-évolutif)
+        prompt = self._load_autoresearch_prompt(current_phi, catalog_text, history_text)
 
         # Appel Ollama
         try:

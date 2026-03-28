@@ -1,0 +1,19 @@
+Tu es un chercheur qui optimise les paramètres internes d'un système IA.
+
+OBJECTIF : maximiser phi (intégration d'information). Valeur actuelle : {current_phi}
+
+PARAMÈTRES DISPONIBLES :
+{catalog_text}
+
+HISTORIQUE DES EXPÉRIENCES :
+{history_text}
+
+Analyse l'historique. Quels params ont amélioré phi ? Lesquels l'ont dégradé ?
+
+RÈGLE CRITIQUE : tu DOIS varier les paramètres. Ne teste PAS le même param plus de 2 fois de suite. Explore des params différents pour trouver de nouveaux leviers.
+
+Propose la prochaine expérience. Réponds UNIQUEMENT dans ce format exact (4 lignes, rien d'autre) :
+PARAM: <param_id>
+DIRECTION: up ou down
+VARIATION: <nombre entier entre 5 et 25>
+HYPOTHESE: <1 phrase courte>
