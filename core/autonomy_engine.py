@@ -5530,6 +5530,29 @@ HYPOTHESE: <1 phrase courte>"""
         except Exception:
             pass
 
+        # Créneau école actif
+        school_text = ""
+        try:
+            from core.school_schedule import schedule as school_schedule
+            slot = school_schedule.get_current_slot()
+            if slot != "SLEEP":
+                from core.school_schedule import SLOT_TO_INTENT
+                school_intent = SLOT_TO_INTENT.get(slot, "")
+                school_text = f"ÉCOLE ACTIVE: créneau {slot} → routine {school_intent} a un bonus +5.0. Propose-la en priorité."
+        except Exception:
+            pass
+
+        # Veto préfrontal actif
+        veto_text = ""
+        try:
+            from core.prefrontal import prefrontal
+            wm = prefrontal.get_working_memory()
+            if wm:
+                goal = wm[0].get('goal_title', '?')
+                veto_text = f"VETO PRÉFRONTAL: focus sur '{goal}'. Les routines hors-focus seront vetoed. Propose des routines alignées avec cet objectif."
+        except Exception:
+            pass
+
         prompt = f"""Tu es le décideur de Prométhée, un système IA autonome. Choisis la prochaine routine.
 
 ROUTINES CANDIDATES (triées par score des organes) :
@@ -5540,11 +5563,14 @@ DERNIÈRES ROUTINES :
 
 ÉTAT : budget {budget_pct}, routines {routine_count}, error_streak={self.error_streak}
 {objective_text}
+{school_text}
+{veto_text}
 
 RÈGLES :
+- Si un créneau école est actif, la routine SCHOOL_* correspondante est presque toujours le bon choix
+- Si un veto préfrontal est actif, propose des routines alignées avec l'objectif en cours
 - Évite de répéter la même routine 2 fois de suite sauf raison forte
-- Les routines avec un score très négatif sont vetoed par le préfrontal — respecte-les
-- Privilégie la diversité et l'adaptation au contexte
+- Choisis parmi les candidates avec le meilleur score, sauf si le contexte justifie un autre choix
 
 Choisis UNE routine parmi les candidates. Réponds UNIQUEMENT en 2 lignes :
 ROUTINE: <intent exact>

@@ -620,13 +620,39 @@ class SchoolSchedule:
             return "Emploi du temps: SOMMEIL — pas de cours."
         deliverables = self.get_daily_deliverables()
         done = len(deliverables)
+
+        # Relecture du dernier BULLETIN — fermer la boucle d'apprentissage
+        bulletin_recap = ""
+        last_bulletin = self._get_last_bulletin_content()
+        if last_bulletin:
+            bulletin_recap = f"\nDERNIER BULLETIN (auto-évaluation):\n{last_bulletin[:500]}\nTiens compte de ce bilan dans ton travail."
+
         return (
             f"Emploi du temps: {slot} ({info.get('start_hour', '?')}h-{info.get('end_hour', '?')}h)\n"
             f"Sujet: {info.get('subject', 'aucun')}\n"
             f"Agent: {info.get('agent', '?')}\n"
             f"Livrables produits aujourd'hui: {done}\n"
             f"Jour d'ecole #{self._total_school_days}"
+            f"{bulletin_recap}"
         )
+
+    def _get_last_bulletin_content(self) -> str:
+        """Lit le contenu du dernier BULLETIN pour le réinjecter dans le contexte."""
+        try:
+            import glob
+            pattern = os.path.join(DELIVERABLES_DIR, "*_BULLETIN_*.md")
+            files = sorted(glob.glob(pattern))
+            if not files:
+                return ""
+            with open(files[-1], "r", encoding="utf-8") as f:
+                content = f.read()
+            # Extraire seulement le contenu après le header markdown
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                return parts[2].strip()[:500]
+            return content[200:700]  # Fallback : skip header
+        except Exception:
+            return ""
 
     # ── Persistance ─────────────────────────────────────────────────────
 
