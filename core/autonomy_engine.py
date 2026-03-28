@@ -2346,6 +2346,12 @@ class AutonomyEngine:
         # Score qualité post-routine
         quality_score = self._score_result_quality(response, intent)
 
+        # MASTER_PROMPT : vérifier si l'agent sous-performe (3 échecs → optimiser prompt)
+        try:
+            await self._master_prompt_check(agent, intent, quality_score)
+        except Exception:
+            pass
+
         # Feedback reptilien via le bus (AUTONOMY_ROUTINE_COMPLETE → reptile._on_routine_complete)
         # Pas d'appel direct pour éviter le double-comptage.
 
@@ -5448,6 +5454,125 @@ Réponds UNIQUEMENT avec le nouveau prompt complet, rien d'autre."""
                 json.dump(history, f, indent=2, ensure_ascii=False)
         except Exception:
             pass
+
+    # ================================================================
+    # MASTER_PROMPT — optimisation des prompts agents par sous-performance
+    # ================================================================
+
+    _PROMPTS_DIR = os.path.join("config", "prompts")
+
+    async def _master_prompt_check(self, agent: str, intent: str, quality: float):
+        """Vérifie si un agent sous-performe et déclenche l'optimisation du prompt.
+
+        Se déclenche si 3 routines consécutives du même intent ont quality < 0.80.
+        Pattern MASTER_PROMPT : le LLM évalue et améliore le prompt de l'agent.
+        """
+        # Compter les échecs consécutifs récents pour cet intent
+        recent_same = [
+            h for h in self.routine_history[-10:]
+            if h.get("intent") == intent
+        ]
+        consecutive_low = 0
+        for h in reversed(recent_same):
+            if h.get("quality_score", 1.0) < 0.80:
+                consecutive_low += 1
+            else:
+                break
+
+        if consecutive_low < 3:
+            return  # Pas assez d'échecs consécutifs
+
+        # Identifier le fichier prompt correspondant
+        prompt_files = {
+            "EXPANSION_CODE": "evolution_synthesis.txt",
+        }
+        prompt_file = prompt_files.get(intent)
+        if not prompt_file:
+            return  # Pas de prompt externalisé pour cet intent
+
+        prompt_path = os.path.join(self._PROMPTS_DIR, prompt_file)
+        if not os.path.exists(prompt_path):
+            return
+
+        # Charger le prompt actuel
+        try:
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                current_prompt = f.read().strip()
+        except Exception:
+            return
+
+        # Construire le contexte des échecs
+        failure_details = []
+        for h in recent_same[-3:]:
+            failure_details.append(
+                f"  quality={h.get('quality_score', '?')}, "
+                f"result={str(h.get('result_preview', ''))[:100]}"
+            )
+        failures_text = "\n".join(failure_details)
+
+        meta_prompt = f"""Un agent de Prométhée sous-performe. Tu dois améliorer son prompt.
+
+AGENT : {agent} (intent: {intent})
+ÉCHECS CONSÉCUTIFS : {consecutive_low}
+DÉTAILS DES DERNIERS ÉCHECS :
+{failures_text}
+
+PROMPT ACTUEL DE L'AGENT :
+---
+{current_prompt}
+---
+
+ANALYSE :
+1. Pourquoi le prompt actuel mène à des résultats de faible qualité ?
+2. Que manque-t-il ? (exemples, contraintes, structure ?)
+3. Quel changement spécifique améliorerait la qualité ?
+
+Propose une version AMÉLIORÉE du prompt. Garde TOUS les placeholders existants ({{seeds}}, {{bridges}}, etc.).
+Réponds UNIQUEMENT avec le nouveau prompt complet."""
+
+        try:
+            import httpx
+            from core.base_agent import gpu_scheduler
+            async with gpu_scheduler.access("master_prompt"):
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        "http://localhost:11434/api/generate",
+                        json={
+                            "model": "qwen3.5:9b",
+                            "prompt": meta_prompt,
+                            "stream": False,
+                            "think": False,
+                            "options": {"temperature": 0.4, "num_ctx": 4096},
+                        },
+                        timeout=120,
+                    )
+                if resp.status_code != 200:
+                    return
+
+            new_prompt = resp.json().get("response", "").strip()
+
+            # Validation : les placeholders requis doivent être présents
+            required = ["{seeds}", "{bridges}", "{anomalies}"]
+            if not all(r in new_prompt for r in required):
+                logger.info(f"[MASTER_PROMPT] Prompt rejeté pour {intent} — placeholders manquants")
+                return
+
+            # Backup + écriture
+            backup_path = prompt_path + ".bak"
+            try:
+                import shutil
+                shutil.copy2(prompt_path, backup_path)
+            except Exception:
+                pass
+
+            with open(prompt_path, "w", encoding="utf-8") as f:
+                f.write(new_prompt)
+
+            logger.info(f"[MASTER_PROMPT] Prompt {intent} évolué ({len(current_prompt)}→{len(new_prompt)} chars)")
+            print(f"   🧬 MASTER_PROMPT: Prompt {intent} optimisé (3 échecs consécutifs détectés)")
+
+        except Exception as e:
+            logger.info(f"[MASTER_PROMPT] Échec optimisation {intent}: {e}")
 
     def _load_overrides(self):
         """Charge les valeurs KEPT persistées et les applique aux modules.

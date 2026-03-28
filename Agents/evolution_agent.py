@@ -294,6 +294,31 @@ class DivineEvolution(BaseAgent):
         if len(filtered) >= 5:
             seeds = filtered
 
+        # Source 4 : Objectif préfrontal actif → graines ciblées
+        try:
+            from core.prefrontal import prefrontal
+            wm = prefrontal.get_working_memory()
+            if wm:
+                goal_title = wm[0].get("goal_title", "")
+                for word in goal_title.split():
+                    clean = word.strip(".,;:!?()[]\"'").lower()
+                    if len(clean) > 4 and clean not in seeds:
+                        seeds.append(clean)
+        except Exception:
+            pass
+
+        # Source 5 : Dernier bulletin scolaire → insights récents
+        try:
+            from core.school_schedule import schedule as _school
+            bulletin = _school._get_last_bulletin_content()
+            if bulletin:
+                for word in bulletin.split()[:30]:
+                    clean = word.strip(".,;:!?()[]\"'").lower()
+                    if len(clean) > 5 and clean not in seeds:
+                        seeds.append(clean)
+        except Exception:
+            pass
+
         # Shuffle pour varier l'ordre
         import random as _rng
         _rng.shuffle(seeds)
@@ -373,6 +398,11 @@ class DivineEvolution(BaseAgent):
 
         return result
 
+    _SYNTHESIS_PROMPT_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "config", "prompts", "evolution_synthesis.txt"
+    )
+
     async def _synthesize_insight(self, seeds: list, cross_result: dict) -> str:
         """Synthétise un insight via LLM local (1 appel, narration)."""
         # Collecter contexte
@@ -393,12 +423,41 @@ class DivineEvolution(BaseAgent):
         bridges_str = ", ".join(f"{c}({e:.2f})" for c, e in cross_result.get("bridges", []))
         anomalies_str = ", ".join(f"{c}({e:.2f})" for c, e in cross_result.get("anomalies", []))
 
-        prompt = _KNOWLEDGE_SYNTHESIS_PROMPT.format(
+        # Extra contexte : objectif actif + dernier bulletin
+        extra_parts = []
+        try:
+            from core.prefrontal import prefrontal
+            wm = prefrontal.get_working_memory()
+            if wm:
+                extra_parts.append(f"Objectif: {wm[0].get('goal_title', '?')}")
+        except Exception:
+            pass
+        try:
+            from core.school_schedule import schedule as _school
+            bulletin = _school._get_last_bulletin_content()
+            if bulletin:
+                extra_parts.append(f"Dernier bilan: {bulletin[:150]}")
+        except Exception:
+            pass
+        extra_context = " | ".join(extra_parts) if extra_parts else "aucun"
+
+        # Chargement dynamique du prompt (méta-évolutif via MASTER_PROMPT)
+        try:
+            if os.path.exists(self._SYNTHESIS_PROMPT_PATH):
+                with open(self._SYNTHESIS_PROMPT_PATH, "r", encoding="utf-8") as f:
+                    prompt_template = f.read()
+            else:
+                prompt_template = _KNOWLEDGE_SYNTHESIS_PROMPT + "\n{extra_context}"
+        except Exception:
+            prompt_template = _KNOWLEDGE_SYNTHESIS_PROMPT + "\n{extra_context}"
+
+        prompt = prompt_template.format(
             seeds=", ".join(seeds[:10]),
             bridges=bridges_str or "aucun",
             anomalies=anomalies_str or "aucune",
             cognitive_ctx=cognitive_ctx or "standard",
-            desire_narrative=desire_narrative or "equilibre"
+            desire_narrative=desire_narrative or "equilibre",
+            extra_context=extra_context,
         )
 
         try:
