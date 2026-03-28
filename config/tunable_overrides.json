@@ -2,44 +2,44 @@
   "lif_leak_rate": {
     "module": "core.autonomy_engine",
     "attr": "LIF_LEAK_RATE",
-    "value": 0.4225284,
-    "timestamp": "2026-03-25T20:19:13.196744"
+    "value": 0.4,
+    "timestamp": "2026-03-26T14:30:14.196167"
   },
   "sync_strengthen_rate": {
     "module": "core.brain_vm",
     "attr": "_SYNC_STRENGTHEN_RATE",
-    "value": 0.0052899999999999996,
-    "timestamp": "2026-03-25T19:36:41.278488"
+    "value": 0.007695627499999999,
+    "timestamp": "2026-03-27T17:58:52.394637"
   },
   "hebbian_learning_rate": {
     "module": "core.synaptic_network",
     "attr": "HEBBIAN_LEARNING_RATE",
-    "value": 0.05832000000000001,
-    "timestamp": "2026-03-25T19:50:51.578663"
+    "value": 0.030993639120000006,
+    "timestamp": "2026-03-27T19:59:21.920246"
   },
   "neuron_fire_threshold": {
     "module": "core.synaptic_network",
     "attr": "NEURON_FIRE_THRESHOLD",
-    "value": 0.6885,
-    "timestamp": "2026-03-25T20:05:03.090320"
+    "value": 0.6,
+    "timestamp": "2026-03-27T18:55:37.750687"
   },
   "anti_hebbian_rate": {
     "module": "core.synaptic_network",
     "attr": "ANTI_HEBBIAN_RATE",
-    "value": 0.0297,
-    "timestamp": "2026-03-25T20:12:08.228904"
+    "value": 0.01948617,
+    "timestamp": "2026-03-27T18:20:12.665120"
   },
   "kuramoto_coupling": {
     "module": "core.brain_vm",
     "attr": "_KURAMOTO_COUPLING",
-    "value": 0.12544,
-    "timestamp": "2026-03-25T18:11:40.969792"
+    "value": 0.169996288,
+    "timestamp": "2026-03-27T17:37:38.860975"
   },
   "persistence_bonus": {
     "module": "core.global_workspace",
     "attr": "PERSISTENCE_BONUS",
-    "value": 0.0575,
-    "timestamp": "2026-03-25T19:22:32.722165"
+    "value": 0.06785000000000001,
+    "timestamp": "2026-03-27T18:05:57.434589"
   },
   "neurochemistry_decay": {
     "module": "core.neurochemistry",
@@ -50,7 +50,25 @@
   "ignition_threshold": {
     "module": "core.global_workspace",
     "attr": "IGNITION_BASE_THRESHOLD",
-    "value": 0.25515,
-    "timestamp": "2026-03-25T19:57:58.054191"
+    "value": 0.167403915,
+    "timestamp": "2026-03-27T19:52:16.810530"
+  },
+  "connectivity_hebbian_strengthen": {
+    "module": "core.connectivity_matrix",
+    "attr": "HEBBIAN_STRENGTHEN_RATE",
+    "value": 0.027847999999999998,
+    "timestamp": "2026-03-26T16:04:36.008410"
+  },
+  "lif_threshold": {
+    "module": "core.autonomy_engine",
+    "attr": "LIF_THRESHOLD",
+    "value": 6.48,
+    "timestamp": "2026-03-27T17:51:46.747931"
+  },
+  "salience_decay": {
+    "module": "core.global_workspace",
+    "attr": "SALIENCE_DECAY",
+    "value": 0.081,
+    "timestamp": "2026-03-27T19:31:01.554956"
   }
 }
