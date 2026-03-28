@@ -779,6 +779,7 @@ class AutonomyEngine:
             self.daily_budget_used = 0
             self.last_reset_day = today
             self._daily_analysis_done = False
+            self._nap_refund_used_today = False  # Nouveau second souffle disponible
             self._forced_failure_counts.clear()  # Reset blacklist pour la nouvelle journee
             self._persist_state()
 
@@ -3756,8 +3757,11 @@ class AutonomyEngine:
         logger.info("[AUTONOMY] Mode sieste activé. VRAM libérée.")
         return True
 
+    _NAP_BUDGET_REFUND = 20  # Second souffle post-sieste (points)
+    _nap_refund_used_today: bool = False  # 1 seul refund par jour
+
     async def exit_nap(self):
-        """Désactive le mode sieste, génère un résumé des tâches effectuées."""
+        """Désactive le mode sieste, génère un résumé + restauration énergie."""
         duration = time.time() - self._nap_started_at if self._nap_started_at else 0
         minutes = int(duration // 60)
         tasks_done = list(self._nap_tasks_done)
@@ -3766,18 +3770,57 @@ class AutonomyEngine:
         self._nap_tasks_done = []
         self._nap_last_exit = time.time()
         self._nap_renewals_used = 0
+
+        # === RESTAURATION POST-SIESTE ===
+        restored = []
+
+        # 1. Second souffle budget (1x/jour max)
+        if not self._nap_refund_used_today and hasattr(self, 'daily_budget_used'):
+            self.daily_budget_used = max(0, self.daily_budget_used - self._NAP_BUDGET_REFUND)
+            self._nap_refund_used_today = True
+            restored.append(f"budget +{self._NAP_BUDGET_REFUND}pt")
+
+        # 2. Dopamine boost
+        try:
+            from core.dopamine_system import dopamine
+            dopamine.level = min(1.0, dopamine.level + 0.15)
+            restored.append("dopamine +0.15")
+        except Exception:
+            pass
+
+        # 3. Réduction stress hypothalamus
+        try:
+            from core.hypothalamus import hypothalamus
+            for key in hypothalamus._current_values:
+                if key in ("stress", "sleep_pressure"):
+                    hypothalamus._current_values[key] *= 0.5
+            restored.append("stress/sleep_pressure -50%")
+        except Exception:
+            pass
+
+        # 4. Reset fatigue attentionnelle thalamus
+        try:
+            from core.thalamus import thalamus
+            thalamus._attention_fatigue = 1.0  # Reset à pleine attention
+            restored.append("attention reset")
+        except Exception:
+            pass
+
         self._persist_state()
+
         # Résumé
+        restore_text = f" Restauration: {', '.join(restored)}." if restored else ""
         if tasks_done:
-            summary = f"Sieste terminée ({minutes}min). Tâches effectuées : {', '.join(tasks_done)}"
+            summary = f"Sieste terminée ({minutes}min). Tâches effectuées : {', '.join(tasks_done)}.{restore_text}"
         else:
-            summary = f"Sieste terminée ({minutes}min). Aucune tâche de maintenance effectuée."
+            summary = f"Sieste terminée ({minutes}min). Aucune tâche de maintenance.{restore_text}"
         await bus.publish("NAP_MODE", {"active": False})
         await bus.publish("THOUGHT_STREAM", {
             "agent": "SYSTEM",
             "content": summary,
             "type": "info"
         })
+        print(f"   💤 SIESTE: {summary}")
         logger.info(f"[AUTONOMY] {summary}")
 
     # ================================================================
