@@ -5661,7 +5661,7 @@ Réponds UNIQUEMENT avec le nouveau prompt complet."""
             # Dopamine
             try:
                 from core.dopamine_system import dopamine
-                snapshot["dopamine"] = round(dopamine.level, 4)
+                snapshot["dopamine"] = round(dopamine.dopamine_level, 4)
             except Exception:
                 pass
 
