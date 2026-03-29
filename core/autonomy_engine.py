@@ -804,8 +804,9 @@ class AutonomyEngine:
 
     def reset_timer(self, event):
         self.last_user_interaction = time.time()
-        if "mission" in event:
-            self.recent_context.append(event["mission"][:50])
+        mission = event.get("mission", "")
+        if mission:
+            self.recent_context.append(mission[:50])
             if len(self.recent_context) > 5: self.recent_context.pop(0)
 
     def _get_routines(self) -> list:

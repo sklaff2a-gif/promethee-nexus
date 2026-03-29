@@ -646,7 +646,17 @@ async def _on_artifact_created(data: dict):
         return
 
     logger.info(f"[CI/CD] Pipeline déclenché pour : {filename}")
-    asyncio.create_task(run_pipeline(filename, filepath))
+    task = asyncio.create_task(run_pipeline(filename, filepath))
+
+    def _on_pipeline_done(t):
+        try:
+            exc = t.exception()
+        except asyncio.CancelledError:
+            return
+        if exc:
+            logger.error(f"[CI/CD] Pipeline crash silencieux: {exc}")
+
+    task.add_done_callback(_on_pipeline_done)
 
 
 # --- Start / Stop ---
