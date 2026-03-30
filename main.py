@@ -1163,21 +1163,95 @@ async def mission(request: Request, background_tasks: BackgroundTasks):
 
 @app.post("/api/chat", dependencies=[Depends(check_rate_limit), Depends(verify_token)])
 async def chat_message(request: Request, background_tasks: BackgroundTasks):
-    """Message chat direct — reponse streamee via WebSocket (CHAT_STREAM)."""
+    """Message chat direct — reponse streamee via WebSocket (CHAT_STREAM).
+
+    Payload JSON:
+        message (str): texte du message (obligatoire)
+        image_b64 (str, optionnel): image encodee en base64
+        image_path (str, optionnel): chemin relatif dans USER_DROPZONE/photos/
+        image_filename (str, optionnel): nom du fichier (pour classifier le type)
+    """
     from core.chat_engine import chat_engine
     data = await request.json()
     message = data.get("message", "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="Message vide")
 
+    # Recuperer l'image si fournie (b64 direct ou chemin fichier)
+    image_b64 = data.get("image_b64")
+    image_filename = data.get("image_filename")
+    image_path = data.get("image_path")
+
+    # Si chemin relatif fourni, encoder le fichier en base64
+    if image_path and not image_b64:
+        import base64
+        photos_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "USER_DROPZONE", "photos")
+        full_path = os.path.join(photos_dir, image_path)
+        if os.path.isfile(full_path):
+            try:
+                with open(full_path, "rb") as f:
+                    image_b64 = base64.b64encode(f.read()).decode("utf-8")
+                if not image_filename:
+                    image_filename = os.path.basename(full_path)
+            except Exception as e:
+                logger.error(f"CHAT: Impossible de lire l'image {full_path}: {e}")
+        else:
+            logger.warning(f"CHAT: Image introuvable: {full_path}")
+
     async def _do_chat():
         try:
-            await chat_engine.chat(message)
+            await chat_engine.chat(message, image_b64=image_b64,
+                                   image_filename=image_filename)
         except Exception as e:
             logger.error(f"CHAT: Erreur — {e}")
 
     background_tasks.add_task(_do_chat)
-    return {"status": "ok", "message": "Chat en cours..."}
+    has_image = bool(image_b64)
+    return {"status": "ok", "message": "Chat en cours...",
+            **({"image": True} if has_image else {})}
+
+@app.post("/api/chat/upload", dependencies=[Depends(check_rate_limit), Depends(verify_token)])
+async def chat_upload(request: Request, background_tasks: BackgroundTasks):
+    """Chat avec upload image multipart/form-data.
+
+    Form fields:
+        message (str): texte du message (obligatoire)
+        image (UploadFile): fichier image (optionnel)
+    """
+    from fastapi import UploadFile, Form, File
+    import base64
+
+    form = await request.form()
+    message = form.get("message", "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message vide")
+
+    image_b64 = None
+    image_filename = None
+    image_file = form.get("image")
+
+    if image_file and hasattr(image_file, "read"):
+        # Verifier la taille (max 10 MB)
+        contents = await image_file.read()
+        if len(contents) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Image trop volumineuse (max 10 MB)")
+        image_b64 = base64.b64encode(contents).decode("utf-8")
+        image_filename = getattr(image_file, "filename", "upload.jpg")
+        logger.info(f"CHAT: Upload image recu: {image_filename} ({len(contents)} bytes)")
+
+    from core.chat_engine import chat_engine
+
+    async def _do_chat():
+        try:
+            await chat_engine.chat(message, image_b64=image_b64,
+                                   image_filename=image_filename)
+        except Exception as e:
+            logger.error(f"CHAT: Erreur upload chat — {e}")
+
+    background_tasks.add_task(_do_chat)
+    return {"status": "ok", "message": "Chat en cours...",
+            **({"image": True, "filename": image_filename} if image_b64 else {})}
 
 @app.get("/api/chat/history", dependencies=[Depends(verify_token)])
 async def chat_history(n: int = Query(default=50, ge=1, le=200)):

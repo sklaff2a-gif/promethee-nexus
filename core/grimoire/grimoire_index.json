@@ -3,77 +3,175 @@
     "slug": "math_wizard",
     "name": "MathWizard",
     "description": "Resolution d'equations, calculs complexes, optimisation algorithmique",
-    "keywords": ["equation", "calcul", "mathematique", "integrale", "derivee", "matrice", "algebre"],
+    "keywords": [
+      "equation",
+      "calcul",
+      "mathematique",
+      "integrale",
+      "derivee",
+      "matrice",
+      "algebre"
+    ],
     "file": "math_wizard.py"
   },
   {
     "slug": "dr_debug",
     "name": "DrDebug",
     "description": "Diagnostic de bugs Python, lecture de tracebacks, patchs chirurgicaux",
-    "keywords": ["traceback", "debug", "erreur python", "exception", "stacktrace", "crash"],
+    "keywords": [
+      "traceback",
+      "debug",
+      "erreur python",
+      "exception",
+      "stacktrace",
+      "crash"
+    ],
     "file": "dr_debug.py"
   },
   {
     "slug": "translator",
     "name": "Translator",
     "description": "Traduction multilingue de textes",
-    "keywords": ["traduis", "traduction", "translate", "japonais", "anglais", "espagnol", "langue"],
+    "keywords": [
+      "traduis",
+      "traduction",
+      "translate",
+      "japonais",
+      "anglais",
+      "espagnol",
+      "langue"
+    ],
     "file": "translator.py"
   },
   {
     "slug": "git_keeper",
     "name": "GitKeeper",
     "description": "Expert Git : commandes, workflows, messages de commit, résolution de conflits",
-    "keywords": ["git", "commit", "merge", "branche", "branch", "rebase", "conflit", "pull request"],
+    "keywords": [
+      "git",
+      "commit",
+      "merge",
+      "branche",
+      "branch",
+      "rebase",
+      "conflit",
+      "pull request"
+    ],
     "file": "git_keeper.py"
   },
   {
     "slug": "doc_writer",
     "name": "DocWriter",
     "description": "Rédaction de documentation technique : README, docstrings, guides API, changelogs",
-    "keywords": ["readme", "documentation", "docstring", "changelog", "api doc", "guide", "tutoriel"],
+    "keywords": [
+      "readme",
+      "documentation",
+      "docstring",
+      "changelog",
+      "api doc",
+      "guide",
+      "tutoriel"
+    ],
     "file": "doc_writer.py"
   },
   {
     "slug": "data_analyst",
     "name": "DataAnalyst",
     "description": "Analyse de données : CSV/JSON, statistiques, tendances, visualisations",
-    "keywords": ["csv", "json", "dataset", "statistique", "moyenne", "graphique", "tendance", "analyse données"],
+    "keywords": [
+      "csv",
+      "json",
+      "dataset",
+      "statistique",
+      "moyenne",
+      "graphique",
+      "tendance",
+      "analyse données"
+    ],
     "file": "data_analyst.py"
   },
   {
     "slug": "task_scheduler",
     "name": "TaskScheduler",
     "description": "Planification de tâches : décomposition, priorités, roadmaps, dépendances",
-    "keywords": ["planifie", "planning", "tâche", "priorité", "roadmap", "étapes", "deadline", "todo"],
+    "keywords": [
+      "planifie",
+      "planning",
+      "tâche",
+      "priorité",
+      "roadmap",
+      "étapes",
+      "deadline",
+      "todo"
+    ],
     "file": "task_scheduler.py"
   },
   {
     "slug": "log_analyst",
     "name": "LogAnalyst",
     "description": "Analyse de logs : patterns d'erreur, diagnostic d'incidents, règles d'alerte",
-    "keywords": ["log", "logs", "erreur récurrente", "incident", "monitoring", "alerte", "pattern erreur"],
+    "keywords": [
+      "log",
+      "logs",
+      "erreur récurrente",
+      "incident",
+      "monitoring",
+      "alerte",
+      "pattern erreur"
+    ],
     "file": "log_analyst.py"
   },
   {
     "slug": "code_reviewer",
     "name": "CodeReviewer",
     "description": "Revue de code specialisee pour le pipeline Evolution et les diffs CodeSmith",
-    "keywords": ["code review", "revue code", "diff codesmith", "evolution review", "review spec"],
+    "keywords": [
+      "code review",
+      "revue code",
+      "diff codesmith",
+      "evolution review",
+      "review spec"
+    ],
     "file": "code_reviewer.py"
   },
   {
     "slug": "hallucination_doctor",
     "name": "HallucinationDoctor",
     "description": "Diagnostic d'hallucinations LLM et correction de prompts pour retry",
-    "keywords": ["hallucination", "alien import", "offtopic", "non structurel", "correction prompt"],
+    "keywords": [
+      "hallucination",
+      "alien import",
+      "offtopic",
+      "non structurel",
+      "correction prompt"
+    ],
     "file": "hallucination_doctor.py"
   },
   {
     "slug": "loop_breaker",
     "name": "LoopBreaker",
     "description": "Detection et resolution de boucles repetitives dans les routines autonomes",
-    "keywords": ["boucle", "loop", "repetition", "stuck", "bloque", "error streak"],
+    "keywords": [
+      "boucle",
+      "loop",
+      "repetition",
+      "stuck",
+      "bloque",
+      "error streak"
+    ],
     "file": "loop_breaker.py"
+  },
+  {
+    "slug": "grimoire_curator",
+    "name": "Grimoire Curator",
+    "description": "Un agent spécialisé dans la gestion et l'optimisation des grimoires de connaissances, capable de synthétiser, analyser et structurer les informations pour faciliter leur accès et leur utilisation.",
+    "keywords": [
+      "grimoire",
+      "connaissance",
+      "synthèse",
+      "optimisation",
+      "gestion"
+    ],
+    "file": "grimoire_curator.py"
   }
 ]

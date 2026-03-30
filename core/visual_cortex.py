@@ -355,6 +355,63 @@ class VisualCortex:
             "is_targeted": True,
         }
 
+    async def observe_from_b64(self, image_b64: str, filename: str = "upload.jpg",
+                                prompt: str = None) -> Optional[Dict[str, Any]]:
+        """Observe une image fournie directement en base64 (upload chat).
+
+        Args:
+            image_b64: image encodee en base64
+            filename: nom du fichier (pour classifier le type)
+            prompt: prompt personnalise (sinon auto-detecte par type)
+        """
+        image_type = self._classify_image_type(filename)
+        if not prompt:
+            prompt = self._get_prompt_for_type(image_type)
+
+        logger.info(f"VISUAL: Observation directe b64 — {filename} (type={image_type})")
+
+        try:
+            response_text = await self._call_ollama_vision(prompt, image_b64)
+        except Exception as e:
+            logger.error(f"VISUAL: Erreur observation b64: {e}")
+            response_text = ""
+
+        if not response_text or len(response_text) < 50:
+            try:
+                gemini_text = await self._call_gemini_vision(prompt, image_b64)
+                if gemini_text and len(gemini_text) >= 50:
+                    response_text = gemini_text
+                    logger.info("VISUAL: Observation Gemini b64 utilisee")
+            except Exception:
+                pass
+
+        if not response_text or len(response_text) < 50:
+            return None
+
+        emotion = self._detect_emotion(response_text)
+
+        # Nourrir les organes comme une observation normale
+        try:
+            await self._feed_desires(emotion)
+            self._feed_cardiac(emotion)
+            await bus.publish("VISUAL_OBSERVATION_COMPLETE", {
+                "photo": f"[upload] {filename}",
+                "emotion": emotion,
+                "is_revisit": False,
+                "observation_count": self._total_observations,
+            })
+        except Exception:
+            pass
+
+        return {
+            "photo_path": f"[upload] {filename}",
+            "observation": response_text,
+            "emotion": emotion,
+            "image_type": image_type,
+            "is_targeted": True,
+            "is_upload": True,
+        }
+
     async def observe(self, subfolder_hint: str = None) -> Optional[Dict[str, Any]]:
         """Observe une photo et retourne l'observation structuree."""
         if self._session_observations >= MAX_OBSERVATIONS_PER_SESSION:

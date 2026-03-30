@@ -2141,17 +2141,28 @@ class ChatEngine:
 
     # --- CHAT PRINCIPAL (streaming via bus) ---
 
-    async def chat(self, user_message: str) -> Optional[str]:
-        """Envoie un message et stream la reponse via le bus. Retourne la reponse complete."""
+    async def chat(self, user_message: str, image_b64: str = None,
+                   image_filename: str = None) -> Optional[str]:
+        """Envoie un message et stream la reponse via le bus. Retourne la reponse complete.
+
+        Args:
+            user_message: message texte de l'utilisateur
+            image_b64: image en base64 (optionnel — upload direct)
+            image_filename: nom du fichier image (pour classifier le type)
+        """
         import httpx
         from core.base_agent import BaseAgent
 
         # 1. Ajouter le message user a l'historique
-        self.messages.append({
+        msg_entry = {
             "role": "user",
             "content": user_message,
             "timestamp": time.time(),
-        })
+        }
+        if image_b64:
+            msg_entry["has_image"] = True
+            msg_entry["image_filename"] = image_filename or "upload.jpg"
+        self.messages.append(msg_entry)
 
         # 2. Publier l'evenement USER_CHAT
         await bus.publish("USER_CHAT", {
@@ -2170,10 +2181,38 @@ class ChatEngine:
             command_result = await self._execute_command(cmd, cmd_args)
             logger.info(f"CHAT: Commande !{cmd} executee ({len(command_result)} chars)")
 
-        # 3c. Detecter les demandes visuelles et declencher le cortex
+        # 3c. Image uploadee directement — priorite absolue sur la detection heuristique
         visual_context = ""
         visual_request_detected = False
-        if not parsed and self._is_visual_request(user_message):
+        if image_b64 and not parsed:
+            visual_request_detected = True
+            logger.info(f"CHAT: Image uploadee detectee ({image_filename or 'upload.jpg'})")
+            try:
+                from core.visual_cortex import vision as visual_cortex
+                result = await visual_cortex.observe_from_b64(
+                    image_b64, filename=image_filename or "upload.jpg"
+                )
+                if result:
+                    obs_text = result.get("observation", "")
+                    emotion = result.get("emotion", "?")
+                    path = result.get("photo_path", "upload")
+                    visual_context = (
+                        f"Photo: {path}\n"
+                        f"Emotion: {emotion}\n"
+                        f"Observation:\n{obs_text}"
+                    )
+                    logger.info(f"CHAT: Observation upload obtenue ({len(visual_context)} chars)")
+                    self.messages.append({
+                        "role": "assistant",
+                        "content": f"[OBSERVATION VISUELLE]\n{visual_context}",
+                        "timestamp": time.time(),
+                        "badge": "visual_observation",
+                    })
+            except Exception as e:
+                logger.error(f"CHAT: Erreur observation upload: {e}")
+
+        # 3d. Detecter les demandes visuelles heuristiques (si pas d'image uploadee)
+        if not visual_context and not parsed and self._is_visual_request(user_message):
             visual_request_detected = True
             logger.info("CHAT: Demande visuelle detectee, declenchement cortex visuel...")
             visual_context = await self._trigger_visual_observation(user_message)
