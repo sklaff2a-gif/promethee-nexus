@@ -1201,18 +1201,18 @@ class NeuralTissue:
         forced_children = []
         for cell in self.cells:
             if cell.alive and cell.energy > FORCED_DIVISION_ENERGY:
-                child = cell._replicate(
-                    self.grid, mutation_rate=MUTATION_RATE * FORCED_DIVISION_MUTATION_MULTIPLIER,
-                    partner_genome=None,
-                )
+                # Sauvegarder l'énergie pré-division (pour le log)
+                pre_energy = cell.energy
+                # _replicate divise déjà self.energy /= 2 en interne
+                cell._eff_mutation_rate = MUTATION_RATE * FORCED_DIVISION_MUTATION_MULTIPLIER
+                child = cell._replicate(partner_genome=None)
                 if child:
-                    cell.energy /= 2
                     child.energy = cell.energy  # Partage équitable
                     forced_children.append(child)
                     self.total_births += 1
                     logger.info(
                         f"TISSUE: Mitose forcée {cell.genome} "
-                        f"(énergie {cell.energy * 2:.0f} → 2×{cell.energy:.0f})"
+                        f"(énergie {pre_energy:.0f} → 2×{cell.energy:.0f})"
                     )
         for child in forced_children:
             if len(self.cells) < MAX_CELLS:
