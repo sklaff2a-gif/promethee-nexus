@@ -1199,6 +1199,9 @@ class NeuralTissue:
 
         # 3c. Mitose forcée — soupape anti-monopole (cellules trop riches DOIVENT se diviser)
         forced_children = []
+        rich_cells = sum(1 for c in self.cells if c.alive and c.energy > FORCED_DIVISION_ENERGY)
+        if rich_cells > 0:
+            logger.info(f"TISSUE: {rich_cells} cellule(s) au-dessus du seuil mitose ({FORCED_DIVISION_ENERGY})")
         for cell in self.cells:
             if cell.alive and cell.energy > FORCED_DIVISION_ENERGY:
                 # Sauvegarder l'énergie pré-division (pour le log)
