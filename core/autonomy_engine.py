@@ -1148,7 +1148,7 @@ class AutonomyEngine:
         try:
             from core.dopamine_system import dopamine
             snapshot["dopamine"] = {
-                "level": dopamine.level,
+                "level": dopamine.dopamine_level,
                 "baseline": dopamine.baseline,
             }
         except Exception:
@@ -1324,7 +1324,7 @@ class AutonomyEngine:
             pass
         try:
             from core.dopamine_system import dopamine
-            signals["exploration"] *= max(0.3, dopamine.level)
+            signals["exploration"] *= max(0.3, dopamine.dopamine_level)
         except Exception:
             pass
 
@@ -3787,7 +3787,7 @@ class AutonomyEngine:
         # 2. Dopamine boost
         try:
             from core.dopamine_system import dopamine
-            dopamine.level = min(1.0, dopamine.level + 0.15)
+            dopamine.dopamine_level = min(1.0, dopamine.dopamine_level + 0.15)
             restored.append("dopamine +0.15")
         except Exception:
             pass
@@ -6047,7 +6047,7 @@ RAISON: <1 phrase courte>"""
         # Dopamine
         try:
             from core.dopamine_system import dopamine
-            metrics["dopamine"] = dopamine.level
+            metrics["dopamine"] = dopamine.dopamine_level
         except Exception:
             pass
 

@@ -40,6 +40,8 @@ MAINTENANCE_COST = 1.8              # Augmenté (était 1.0) — crée pression 
 MAINTENANCE_COST_BASAL = 0.3       # Coût réduit quand énergie < seuil (hibernation cellulaire)
 BASAL_ENERGY_THRESHOLD = 50.0      # Seuil d'activation du mode basal
 ACTION_COST = 0.5
+METABOLIC_REFERENCE = 500.0        # Coût métabolique progressif : énergie/ref → facteur multiplicatif
+FORCED_DIVISION_ENERGY = 1500.0    # Mitose forcée au-dessus de ce seuil (soupape anti-monopole)
 CAPTURE_REWARD = 3.0
 GENERATE_REWARD = 2.0
 MUTATION_RATE = 0.03            # 3% par nucléotide (augmenté: diversité génétique)
@@ -363,6 +365,8 @@ class NeuralCell:
             cost *= HEAT_TOLERANT_COST_FACTOR
         if self._has_marker("famine_adapted"):
             cost *= FAMINE_ADAPTED_COST_FACTOR
+        # Coût métabolique progressif : plus d'énergie = plus de maintenance (loi de Kleiber)
+        cost *= (1.0 + self.energy / METABOLIC_REFERENCE)
         self.energy -= cost
         if self.energy <= 0:
             self.alive = False
@@ -1192,6 +1196,27 @@ class NeuralTissue:
                         # Taxe proportionnelle à la dominance
                         tax = (freq - 0.05) * MAINTENANCE_COST * 2.0
                         cell.energy -= tax
+
+        # 3c. Mitose forcée — soupape anti-monopole (cellules trop riches DOIVENT se diviser)
+        forced_children = []
+        for cell in self.cells:
+            if cell.alive and cell.energy > FORCED_DIVISION_ENERGY:
+                child = cell._replicate(
+                    self.grid, mutation_rate=MUTATION_RATE * FORCED_DIVISION_MUTATION_MULTIPLIER,
+                    partner_genome=None,
+                )
+                if child:
+                    cell.energy /= 2
+                    child.energy = cell.energy  # Partage équitable
+                    forced_children.append(child)
+                    self.total_births += 1
+                    logger.info(
+                        f"TISSUE: Mitose forcée {cell.genome} "
+                        f"(énergie {cell.energy * 2:.0f} → 2×{cell.energy:.0f})"
+                    )
+        for child in forced_children:
+            if len(self.cells) < MAX_CELLS:
+                self.cells.append(child)
 
         # 4. Supprimer les morts
         before = len(self.cells)
