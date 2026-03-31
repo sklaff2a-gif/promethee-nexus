@@ -1435,7 +1435,10 @@ class ChatEngine:
             return f"Erreur lecture : {e}"
 
     # Commandes dispatch autorisees en auto-action
+    # "observe" remis avec cooldown 5min (voir _scan_response_actions)
     _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
+    _last_auto_observe: float = 0.0  # timestamp du dernier !observe auto-action
+    _AUTO_OBSERVE_COOLDOWN: float = 300.0  # 5 minutes entre deux auto-observations
 
     async def _scan_response_actions(self, response: str) -> int:
         """Scanne la reponse du LLM pour des commandes ! et les execute.
@@ -1490,8 +1493,17 @@ class ChatEngine:
                 elif cmd_lower == "ethics":
                     result = self._execute_ethics_command()
                 elif cmd_lower == "observe":
-                    obs_args = args.strip().split() if args else []
-                    result = await self._execute_observe_command(obs_args)
+                    # Cooldown anti-boucle : max 1 auto-observe par 5 minutes
+                    now = time.time()
+                    if now - self._last_auto_observe < self._AUTO_OBSERVE_COOLDOWN:
+                        remaining = int(self._AUTO_OBSERVE_COOLDOWN - (now - self._last_auto_observe))
+                        logger.info(f"CHAT AUTO-ACTION: !observe ignore (cooldown {remaining}s)")
+                        result = None
+                    else:
+                        obs_args = args.strip().split() if args else []
+                        result = await self._execute_observe_command(obs_args)
+                        if result:
+                            self._last_auto_observe = now
                 elif cmd_lower == "write":
                     write_args = args.strip().split(maxsplit=1) if args else []
                     result = self._execute_write_command(write_args)
@@ -1549,44 +1561,76 @@ class ChatEngine:
 
         Seuil de 2 mots-cles visuels OU 1 mot-cle + conversation recente sur les photos.
         Detecte aussi les demandes de suite ("la suivante", "encore", "decris").
+
+        Anti-boucle : si les 3 derniers messages assistant sont des observations
+        visuelles, refuse de declencher (evite la boucle auto-alimentee).
         """
         msg_lower = message.lower()
 
-        # Mots d'exclusion : si le message parle DU systeme visuel (pas une demande d'observation)
+        # Anti-boucle : si les dernieres reponses sont deja des observations,
+        # ne pas en declencher une nouvelle (evite la spirale)
+        recent_assistant = [m for m in self.messages[-6:]
+                           if m.get("role") == "assistant"]
+        if len(recent_assistant) >= 2:
+            obs_count = sum(1 for m in recent_assistant[-3:]
+                          if "[OBSERVATION VISUELLE]" in m.get("content", "")[:30])
+            if obs_count >= 2:
+                logger.info("CHAT: Anti-boucle visuelle — 2+ observations recentes, skip detection")
+                return False
+
+        # Rejet explicite : si le message dit de NE PAS observer
+        rejection_patterns = ["stop", "ignore", "arrete", "arrête", "pas de photo",
+                             "pas les photo", "oublie les photo", "sans photo",
+                             "concentre-toi", "concentre toi", "reponds a"]
+        if any(p in msg_lower for p in rejection_patterns):
+            return False
+
+        # Mots d'exclusion : si le message parle DU systeme visuel (pas une demande)
+        # Seuil abaisse a 1 (avant: 2) pour etre plus conservateur
         tech_exclusions = ["cortex", "modele", "llama", "bug", "fix", "code", "pipeline",
                            "hallucine", "corrige", "ameliorer", "option a", "option b",
                            "strategie", "limitation", "11b", "metriques", "metrique",
-                           "recommandation", "exercice", "commande", "lance", "analyse",
-                           "c-score", "conscience", "ethique", "benchmark"]
-        if sum(1 for ex in tech_exclusions if ex in msg_lower) >= 2:
+                           "recommandation", "exercice", "commande", "analyse",
+                           "c-score", "conscience", "ethique", "benchmark",
+                           "mathematique", "topologie", "theoreme", "godel",
+                           "hilbert", "fractale", "catastrophe",
+                           "feedback", "session", "bilan", "note :", "/10"]
+        if sum(1 for ex in tech_exclusions if ex in msg_lower) >= 1:
             return False
 
+        # Mots-cles visuels — utiliser des frontieres de mot pour eviter
+        # les faux positifs (ex: "observables" ne doit pas matcher "observe")
+        import re
         visual_keywords = ["photo", "image", "regarde", "observe", "voir", "vois",
                            "montre", "dropzone", "vision", "visuel"]
         photo_keywords = ["famille", "picture", "selfie", "cliche", "cliché"]
         action_keywords = ["essayer", "essaie", "tente", "teste", "montre-moi",
-                           "fais-le", "vas-y", "go", "lance"]
-        # Mots qui impliquent "montre-moi la suite" dans un contexte photo
-        followup_keywords = ["suivante", "prochaine", "autre", "encore",
-                             "décris", "decris", "décrit", "decrit",
-                             "continue", "enchaine", "enchaîne"]
-        count = sum(1 for kw in visual_keywords if kw in msg_lower)
-        count += sum(1 for kw in photo_keywords if kw in msg_lower)
+                           "fais-le", "vas-y", "go"]
+        # Compter avec frontieres de mot (evite "observe" dans "observables")
+        count = sum(1 for kw in visual_keywords
+                    if re.search(r'\b' + re.escape(kw) + r'\b', msg_lower))
+        count += sum(1 for kw in photo_keywords
+                     if re.search(r'\b' + re.escape(kw) + r'\b', msg_lower))
         if count >= 2:
             return True
-        # Contexte conversationnel : si les 5 derniers messages parlent de photos,
-        # un seul mot-cle d'action, visuel OU de suite suffit
-        all_triggers = count >= 1 or any(kw in msg_lower for kw in action_keywords)
+        # Contexte conversationnel : exiger au moins 1 mot-cle visuel DANS LE MESSAGE
+        # (avant: followup seul suffisait, causant des faux positifs)
+        followup_keywords = ["suivante", "prochaine",
+                             "décris", "decris", "décrit", "decrit"]
         followup_trigger = any(kw in msg_lower for kw in followup_keywords)
-        if all_triggers or followup_trigger:
-            recent_text = " ".join(
-                m["content"].lower() for m in self.messages[-5:]
-                if m.get("role") == "user"
+        if count >= 1 or followup_trigger:
+            # Verifier le contexte recent (messages USER uniquement,
+            # exclure les messages qui parlaient de "stop photo" etc.)
+            recent_user = [m["content"].lower() for m in self.messages[-5:]
+                          if m.get("role") == "user"
+                          and not any(r in m["content"].lower() for r in rejection_patterns)]
+            recent_text = " ".join(recent_user)
+            photo_in_context = any(
+                re.search(r'\b' + re.escape(kw) + r'\b', recent_text)
+                for kw in ["photo", "image", "regarde", "voir", "famille",
+                           "paysage", "observe"]
             )
-            photo_in_context = any(kw in recent_text for kw in
-                                   ["photo", "image", "regarde", "voir", "famille",
-                                    "paysage", "observe"])
-            if photo_in_context:
+            if photo_in_context and count >= 1:
                 return True
         return False
 

@@ -76,12 +76,15 @@ Reponds en francais. Sois FACTUEL — decris ce que tu VOIS, pas ce que tu imagi
 
 # --- Prompts CIBLES par type d'image ---
 
-PROMPT_PHOTO = """Decris EXACTEMENT cette photographie. Pas d'invention.
-1. SCENE : Lieu, moment, ambiance. Interieur ou exterieur ?
-2. PERSONNES : Combien ? Que font-elles ? Emotions visibles ?
-3. DETAILS : Couleurs, lumiere, objets remarquables.
-4. EMOTION : Quelle emotion cette photo t'inspire ?
-Reponds en francais. FACTUEL uniquement."""
+PROMPT_PHOTO = """Decris EXACTEMENT cette image. Pas d'invention.
+REGLE CRITIQUE : Si l'image contient du TEXTE, des TITRES, des SCHEMAS,
+des DIAGRAMMES ou des FORMULES, tu DOIS les transcrire. Ne decris PAS
+une scene imaginaire avec des personnes si l'image est un document.
+1. TYPE : Est-ce une photo de scene/personnes OU un document/infographie/schema ?
+2. Si DOCUMENT/INFOGRAPHIE : transcris le titre, les sections, le texte visible.
+3. Si PHOTO : lieu, personnes, ambiance, details visuels.
+4. EMOTION : Quelle emotion cette image t'inspire ?
+Reponds en francais. FACTUEL uniquement. Ne fabrique RIEN."""
 
 PROMPT_PORTRAIT = """Cette image contient un ou plusieurs VISAGES ou PORTRAITS.
 1. Combien de visages vois-tu ? Numeros ou texte visible ?
@@ -91,13 +94,15 @@ PROMPT_PORTRAIT = """Cette image contient un ou plusieurs VISAGES ou PORTRAITS.
 5. Couleurs dominantes et fond.
 Reponds en francais. Compte CHAQUE visage individuellement."""
 
-PROMPT_ILLUSTRATION = """Cette image est une illustration, un schema ou un art numerique.
-1. TYPE : schema technique, infographie, art digital, logo, diagramme ?
-2. ELEMENTS : liste chaque element visible (texte, fleches, icones, formes).
-3. TEXTE : transcris TOUT texte lisible dans l'image.
-4. NUMEROS : transcris tous les nombres visibles.
-5. STRUCTURE : comment les elements sont organises ?
-Reponds en francais. Lis et transcris le texte EXACTEMENT."""
+PROMPT_ILLUSTRATION = """Cette image est un DOCUMENT, une INFOGRAPHIE, un SCHEMA ou une ILLUSTRATION.
+REGLE ABSOLUE : NE DECRIS PAS une scene avec des personnes, des meubles ou un lieu.
+Cette image contient du TEXTE et/ou des DIAGRAMMES. Concentre-toi sur le CONTENU INFORMATIF.
+1. TITRE : quel est le titre ou sujet principal ?
+2. TEXTE : transcris TOUT texte lisible dans l'image, section par section.
+3. NOMBRES : transcris tous les nombres, dates, formules visibles.
+4. STRUCTURE : comment les informations sont organisees (liste, grille, arbre, fleches) ?
+5. SUJET : de quoi parle ce document ? Resume en 1-2 phrases.
+Reponds en francais. Lis et transcris le texte EXACTEMENT. NE FABRIQUE RIEN."""
 
 REVISIT_PROMPT_TEMPLATE = """Tu es Promethee. Tu revois une photo que tu as deja observee.
 Voici ta premiere observation :
@@ -267,21 +272,47 @@ class VisualCortex:
     # Observation CIBLEE — !observe <chemin>
     # ============================================================
 
-    def _classify_image_type(self, filename: str) -> str:
-        """Classifie le type d'image par le nom de fichier.
+    def _classify_image_type(self, filename: str, full_path: str = None) -> str:
+        """Classifie le type d'image par le nom de fichier ET le dossier parent.
 
         Retourne : 'portrait', 'illustration', ou 'photo' (defaut).
+        Le dossier parent est un indice fort : un fichier dans 'Informatique/'
+        ou 'Science/' est probablement une infographie, pas une photo de famille.
         """
         name_lower = filename.lower()
+
+        # Verifier le dossier parent comme indice de type
+        parent_folder = ""
+        if full_path:
+            parent_folder = os.path.basename(os.path.dirname(full_path)).lower()
+
+        # Dossiers qui contiennent typiquement des infographies/documents
+        illustration_folders = [
+            "informatique", "science", "math", "physique", "chimie",
+            "biologie", "technologie", "tech", "diagram", "schemas",
+            "infographie", "documents", "cours", "education",
+        ]
+
         # Portraits / visages
         portrait_hints = ["visage", "face", "portrait", "avatar", "selfie", "promethee", "photo_prom"]
         if any(h in name_lower for h in portrait_hints):
             return "portrait"
-        # Illustrations / schemas
-        illustration_hints = ["schema", "diagram", "graph", "impact", "chart", "infograph",
-                              "logo", "icon", "design", "interface", "ui", "mockup"]
+
+        # Illustrations / schemas — par nom de fichier
+        illustration_hints = [
+            "schema", "diagram", "graph", "impact", "chart", "infograph",
+            "logo", "icon", "design", "interface", "ui", "mockup",
+            "probleme", "theoreme", "equation", "formule", "algorithme",
+            "distribution", "spirale", "conjecture", "tableau", "liste",
+            "comparaison", "timeline", "roadmap", "architecture",
+        ]
         if any(h in name_lower for h in illustration_hints):
             return "illustration"
+
+        # Illustrations — par dossier parent
+        if parent_folder and any(f in parent_folder for f in illustration_folders):
+            return "illustration"
+
         return "photo"
 
     def _get_prompt_for_type(self, image_type: str) -> str:
@@ -309,9 +340,9 @@ class VisualCortex:
             logger.warning(f"VISUAL: Fichier introuvable: {full_path}")
             return None
 
-        # Classifier le type d'image
+        # Classifier le type d'image (nom + dossier parent)
         filename = os.path.basename(full_path)
-        image_type = self._classify_image_type(filename)
+        image_type = self._classify_image_type(filename, full_path)
         prompt = self._get_prompt_for_type(image_type)
 
         logger.info(f"VISUAL: Observation ciblee — {relative_path} (type={image_type})")
@@ -321,24 +352,42 @@ class VisualCortex:
         if not image_b64:
             return None
 
-        # Appel LLM local
-        try:
-            response_text = await self._call_ollama_vision(prompt, image_b64)
-        except Exception as e:
-            logger.error(f"VISUAL: Erreur observation ciblee: {e}")
-            response_text = ""
-
-        # Fallback Gemini si hallucination ou echec
-        if not response_text or len(response_text) < 50 or self._is_hallucinated(response_text, full_path):
-            if response_text and self._is_hallucinated(response_text, full_path):
-                logger.warning(f"VISUAL: Hallucination ciblee detectee, fallback Gemini...")
+        # Pour les illustrations/infographies, Gemini est prioritaire (meilleur en OCR)
+        # Pour les photos/portraits, le modele local est prioritaire
+        response_text = ""
+        if image_type == "illustration":
+            logger.info("VISUAL: Illustration detectee — Gemini prioritaire (OCR)")
             try:
-                gemini_text = await self._call_gemini_vision(prompt, image_b64)
-                if gemini_text and len(gemini_text) >= 50:
-                    response_text = gemini_text
-                    logger.info("VISUAL: Observation Gemini ciblee utilisee")
-            except Exception:
-                pass
+                response_text = await self._call_gemini_vision(prompt, image_b64)
+                if response_text and len(response_text) >= 50:
+                    logger.info("VISUAL: Observation Gemini illustration OK")
+            except Exception as e:
+                logger.warning(f"VISUAL: Gemini illustration echoue: {e}")
+            # Fallback local si Gemini echoue
+            if not response_text or len(response_text) < 50:
+                logger.info("VISUAL: Fallback local pour illustration")
+                try:
+                    response_text = await self._call_ollama_vision(prompt, image_b64)
+                except Exception:
+                    response_text = ""
+        else:
+            # Photos/portraits : local d'abord, Gemini en fallback
+            try:
+                response_text = await self._call_ollama_vision(prompt, image_b64)
+            except Exception as e:
+                logger.error(f"VISUAL: Erreur observation ciblee: {e}")
+                response_text = ""
+            # Fallback Gemini si hallucination ou echec
+            if not response_text or len(response_text) < 50 or self._is_hallucinated(response_text, full_path):
+                if response_text and self._is_hallucinated(response_text, full_path):
+                    logger.warning(f"VISUAL: Hallucination ciblee detectee, fallback Gemini...")
+                try:
+                    gemini_text = await self._call_gemini_vision(prompt, image_b64)
+                    if gemini_text and len(gemini_text) >= 50:
+                        response_text = gemini_text
+                        logger.info("VISUAL: Observation Gemini ciblee utilisee")
+                except Exception:
+                    pass
 
         if not response_text or len(response_text) < 50:
             return None
@@ -431,32 +480,63 @@ class VisualCortex:
         if not image_b64:
             return None
 
-        # Construire le prompt
+        # Construire le prompt — adapte au type d'image
         if is_revisit and self._seen_photos[sha].get("observation"):
             prompt = REVISIT_PROMPT_TEMPLATE.format(
                 previous_observation=self._seen_photos[sha]["observation"][:500]
             )
         else:
-            prompt = OBSERVATION_PROMPT
+            # Utiliser le prompt adapte au type (infographie, portrait, photo)
+            filename = os.path.basename(photo_path)
+            image_type = self._classify_image_type(filename, photo_path)
+            if image_type == "illustration":
+                prompt = PROMPT_ILLUSTRATION
+                logger.info(f"VISUAL: Image classee 'illustration' — prompt adapte")
+            elif image_type == "portrait":
+                prompt = PROMPT_PORTRAIT
+            else:
+                prompt = OBSERVATION_PROMPT
 
-        # Appel Ollama avec image (local d'abord)
-        try:
-            response_text = await self._call_ollama_vision(prompt, image_b64)
-        except Exception as e:
-            logger.error(f"VISUAL: Erreur appel vision local: {e}")
-            response_text = ""
+        # Determiner le type pour choisir la strategie d'appel
+        _img_type = getattr(self, '_last_observe_image_type', 'photo')
+        if not is_revisit:
+            _fn = os.path.basename(photo_path)
+            _img_type = self._classify_image_type(_fn, photo_path)
+            self._last_observe_image_type = _img_type
 
-        # Fallback Gemini Vision si local hallucine ou echoue
-        if not response_text or len(response_text) < 50 or self._is_hallucinated(response_text, photo_path):
-            if response_text and self._is_hallucinated(response_text, photo_path):
-                logger.warning(f"VISUAL: Hallucination detectee (local), fallback Gemini...")
+        response_text = ""
+        if _img_type == "illustration":
+            # Illustrations : Gemini prioritaire (meilleur en OCR/texte)
+            logger.info("VISUAL: Illustration — Gemini prioritaire")
             try:
-                gemini_text = await self._call_gemini_vision(prompt, image_b64)
-                if gemini_text and len(gemini_text) >= 50:
-                    response_text = gemini_text
-                    logger.info("VISUAL: Observation Gemini Vision utilisee")
+                response_text = await self._call_gemini_vision(prompt, image_b64)
+                if response_text and len(response_text) >= 50:
+                    logger.info("VISUAL: Observation Gemini illustration OK")
             except Exception as e:
-                logger.warning(f"VISUAL: Fallback Gemini echoue: {e}")
+                logger.warning(f"VISUAL: Gemini illustration echoue: {e}")
+            if not response_text or len(response_text) < 50:
+                try:
+                    response_text = await self._call_ollama_vision(prompt, image_b64)
+                except Exception:
+                    response_text = ""
+        else:
+            # Photos/portraits : local d'abord
+            try:
+                response_text = await self._call_ollama_vision(prompt, image_b64)
+            except Exception as e:
+                logger.error(f"VISUAL: Erreur appel vision local: {e}")
+                response_text = ""
+            # Fallback Gemini si local hallucine ou echoue
+            if not response_text or len(response_text) < 50 or self._is_hallucinated(response_text, photo_path):
+                if response_text and self._is_hallucinated(response_text, photo_path):
+                    logger.warning(f"VISUAL: Hallucination detectee (local), fallback Gemini...")
+                try:
+                    gemini_text = await self._call_gemini_vision(prompt, image_b64)
+                    if gemini_text and len(gemini_text) >= 50:
+                        response_text = gemini_text
+                        logger.info("VISUAL: Observation Gemini Vision utilisee")
+                except Exception as e:
+                    logger.warning(f"VISUAL: Fallback Gemini echoue: {e}")
 
         if not response_text or len(response_text) < 50:
             logger.warning("VISUAL: Reponse trop courte (local+cloud), ignore.")
@@ -587,12 +667,17 @@ class VisualCortex:
     # --- Fallback Gemini Vision (cloud) ---
 
     # Marqueurs d'hallucination typiques du modele 11B
+    # Le modele invente des scenes domestiques/sociales quand il ne comprend pas l'image
     _HALLUCINATION_MARKERS = [
         "salon", "canapé", "canape", "rideaux", "meubles",
         "cuisine", "chambre", "appartement", "maison privée",
-        "tasse de café", "tasse de the",
+        "tasse de café", "tasse de the", "salon de the",
         "auditorium", "immeuble", "bureau", "réunion",
         "papier blanc", "dossier", "coussins",
+        "jambes croisées", "jambes croisees", "assis sur le",
+        "elle tient", "il tient", "plateau dans",
+        "couple", "chapeau de paille", "foulard sur",
+        "rayons de soleil", "filtre par le rideau",
     ]
 
     def _is_hallucinated(self, observation: str, photo_path: str) -> bool:
