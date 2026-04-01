@@ -50,14 +50,15 @@ def _strip_thinking_tags(text: str) -> str:
 # ── GPU Scheduler — File d'attente stricte pour protéger le GPU ─────────────
 class _GpuAccess:
     """Context manager pour un accès exclusif au GPU."""
-    __slots__ = ("_scheduler", "_caller")
+    __slots__ = ("_scheduler", "_caller", "_timeout")
 
-    def __init__(self, scheduler, caller="unknown"):
+    def __init__(self, scheduler, caller="unknown", timeout=None):
         self._scheduler = scheduler
         self._caller = caller
+        self._timeout = timeout
 
     async def __aenter__(self):
-        await self._scheduler.acquire(self._caller)
+        await self._scheduler.acquire(self._caller, timeout=self._timeout)
         return self
 
     async def __aexit__(self, *args):
@@ -117,8 +118,18 @@ class GpuScheduler:
         except Exception:
             return self._last_gpu_temp
 
-    async def acquire(self, caller: str = "unknown"):
-        """Acquiert l'accès exclusif au GPU avec cooldown et monitoring."""
+    # Budget de blocage par défaut pour les actions proactives (inspiré KAIROS)
+    PROACTIVE_TIMEOUT = 15.0  # secondes max d'attente dans la queue
+
+    async def acquire(self, caller: str = "unknown", timeout: float = None):
+        """Acquiert l'accès exclusif au GPU avec cooldown et monitoring.
+
+        Args:
+            caller: nom de l'appelant (pour les logs)
+            timeout: durée max d'attente dans la queue (secondes).
+                     None = pas de limite (défaut, compatible existant).
+                     Lève asyncio.TimeoutError si dépassé.
+        """
         self._queue_depth += 1
         if self._queue_depth > 1:
             logger.info(
@@ -128,7 +139,18 @@ class GpuScheduler:
 
         start = time.time()
         lock = self._ensure_lock()
-        await lock.acquire()
+        if timeout is not None:
+            try:
+                await asyncio.wait_for(lock.acquire(), timeout=timeout)
+            except asyncio.TimeoutError:
+                self._queue_depth -= 1
+                logger.warning(
+                    f"[GPU_QUEUE] {caller} TIMEOUT après {timeout:.0f}s "
+                    f"(occupé par {self._current_agent}) — action différée"
+                )
+                raise
+        else:
+            await lock.acquire()
         wait = time.time() - start
         self._total_wait_time += wait
         self._total_calls += 1
@@ -162,9 +184,14 @@ class GpuScheduler:
         lock = self._ensure_lock()
         lock.release()
 
-    def access(self, caller: str = "unknown"):
-        """Retourne un context manager pour accéder au GPU."""
-        return _GpuAccess(self, caller)
+    def access(self, caller: str = "unknown", timeout: float = None):
+        """Retourne un context manager pour accéder au GPU.
+
+        Args:
+            caller: nom de l'appelant
+            timeout: budget max d'attente en secondes (None = illimité)
+        """
+        return _GpuAccess(self, caller, timeout=timeout)
 
     def get_stats(self) -> dict:
         """Statistiques pour le monitoring."""

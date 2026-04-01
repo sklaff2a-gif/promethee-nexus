@@ -2197,7 +2197,14 @@ class AutonomyEngine:
         elif intent == "REFACTOR_RANDOM":
             response = await self._execute_refactor_random()
         elif intent == "MEMORY_CONSOLIDATION":
-            response = await self._execute_memory_consolidation()
+            # Consolidation forkee avec timeout (inspire autoDream/KAIROS)
+            try:
+                response = await asyncio.wait_for(
+                    self._execute_memory_consolidation(), timeout=120
+                )
+            except asyncio.TimeoutError:
+                logger.warning("[AUTONOMY] MEMORY_CONSOLIDATION timeout (120s)")
+                response = {"status": "error", "result": "Consolidation interrompue (timeout 120s)."}
         elif intent == "SOLILOQUE_INTERNE":
             response = await self._execute_soliloque()
         elif intent == "SELF_INSPECT":
@@ -2664,7 +2671,14 @@ class AutonomyEngine:
         elif intent == "REFACTOR_RANDOM":
             response = await self._execute_refactor_random()
         elif intent == "MEMORY_CONSOLIDATION":
-            response = await self._execute_memory_consolidation()
+            # Consolidation forkee avec timeout (inspire autoDream/KAIROS)
+            try:
+                response = await asyncio.wait_for(
+                    self._execute_memory_consolidation(), timeout=120
+                )
+            except asyncio.TimeoutError:
+                logger.warning("[AUTONOMY] MEMORY_CONSOLIDATION timeout (120s)")
+                response = {"status": "error", "result": "Consolidation interrompue (timeout 120s)."}
         elif intent == "SOLILOQUE_INTERNE":
             response = await self._execute_soliloque()
         elif intent == "SELF_INSPECT":
