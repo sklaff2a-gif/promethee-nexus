@@ -96,6 +96,11 @@ class SelfAwarenessEngine:
         self._voice_identity: str = ""
         self._voice_precision: float = 0.5
         self._active_goals_count: int = 0
+        # Observation du flux de pensée (THOUGHT_STREAM)
+        self._thought_buffer: List[str] = []
+        self._thought_buffer_max: int = 200
+        self._thought_count: int = 0
+        self._thought_themes: Dict[str, int] = {}  # mots-cles recurrents
         self._load()
 
     # --- Init & Reset ---
@@ -128,6 +133,9 @@ class SelfAwarenessEngine:
         self._voice_identity = ""
         self._voice_precision = 0.5
         self._active_goals_count = 0
+        self._thought_buffer = []
+        self._thought_count = 0
+        self._thought_themes = {}
 
     @classmethod
     def reset_singleton(cls):
@@ -153,6 +161,7 @@ class SelfAwarenessEngine:
         bus.subscribe("INNER_VOICE_IDENTITY", self._on_inner_voice_identity)
         bus.subscribe("INNER_VOICE_STATE", self._on_inner_voice_state)
         bus.subscribe("PREFRONTAL_STATE", self._on_prefrontal_state)
+        bus.subscribe("THOUGHT_STREAM", self._on_thought_stream)
 
     async def _on_agent_response(self, event: dict):
         self._mission_count += 1
@@ -209,6 +218,53 @@ class SelfAwarenessEngine:
     async def _on_prefrontal_state(self, event: dict):
         if isinstance(event, dict):
             self._active_goals_count = event.get("goals_active", 0)
+
+    async def _on_thought_stream(self, event: dict):
+        """Observe le flux de pensee interne (inner voice, autonomy).
+
+        Accumule les pensees dans un buffer circulaire et detecte
+        les themes recurrents. C'est le mecanisme par lequel
+        self_awareness peut observer les pensees de Promethee.
+        """
+        data = event if isinstance(event, dict) else {}
+        thought = data.get("thought", data.get("text", data.get("content", "")))
+        if not thought or not isinstance(thought, str):
+            return
+        thought = thought.strip()[:200]  # Tronquer pour economiser la memoire
+        if not thought:
+            return
+
+        self._thought_count += 1
+        self._thought_buffer.append(thought)
+        if len(self._thought_buffer) > self._thought_buffer_max:
+            self._thought_buffer = self._thought_buffer[-self._thought_buffer_max:]
+
+        # Extraction legere de themes (mots de 4+ lettres, hors stopwords)
+        _stopwords = {"dans", "pour", "avec", "plus", "mais", "donc", "tout",
+                      "cette", "sont", "être", "avoir", "fait", "peut", "nous",
+                      "vous", "leur", "elles", "comme", "aussi", "encore"}
+        words = [w.lower() for w in thought.split() if len(w) >= 4 and w.lower() not in _stopwords]
+        for w in words:
+            self._thought_themes[w] = self._thought_themes.get(w, 0) + 1
+
+        # Garder les themes sous controle (top 100)
+        if len(self._thought_themes) > 150:
+            sorted_themes = sorted(self._thought_themes.items(), key=lambda x: -x[1])[:100]
+            self._thought_themes = dict(sorted_themes)
+
+    def get_thought_summary(self) -> Dict[str, Any]:
+        """Resume du flux de pensee observe.
+
+        Retourne les statistiques et themes dominants des pensees
+        captees via THOUGHT_STREAM.
+        """
+        top_themes = sorted(self._thought_themes.items(), key=lambda x: -x[1])[:10]
+        return {
+            "total_thoughts_observed": self._thought_count,
+            "buffer_size": len(self._thought_buffer),
+            "top_themes": top_themes,
+            "recent_thoughts": self._thought_buffer[-5:] if self._thought_buffer else [],
+        }
 
     async def _on_objective_completed(self, event: dict):
         """Un objectif atteint enrichit le snapshot."""
@@ -573,6 +629,10 @@ class SelfAwarenessEngine:
             snapshot["signal_bus"] = signal_bus.get_stats()
         except Exception:
             pass
+
+        # Flux de pensee observe (THOUGHT_STREAM)
+        if self._thought_count > 0:
+            snapshot["thought_stream"] = self.get_thought_summary()
 
         self._snapshots.append(snapshot)
         if len(self._snapshots) > MAX_SNAPSHOTS:
