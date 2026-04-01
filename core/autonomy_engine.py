@@ -2901,7 +2901,13 @@ class AutonomyEngine:
         return ""
 
     async def _execute_memory_consolidation(self) -> dict:
-        """Consolide les mémoires récentes en synthèses thématiques. Zero LLM."""
+        """Consolide les mémoires récentes en synthèses thématiques. Zero LLM.
+
+        Inspiré autoDream (KAIROS) : déduplication + consolidation + dream.
+        Phase 1: Dédup — supprime les doublons (bigram overlap > 60%)
+        Phase 2: Consolidation — regroupe par source, crée des résumés
+        Phase 3: Dream — consolidation synaptique (renforcement/élagage)
+        """
         try:
             from core.vector_store import ChromaMemoryManager
             mgr = ChromaMemoryManager.get_instance()
@@ -2921,11 +2927,51 @@ class AutonomyEngine:
                 if now - ts < 30 * 86400:  # 30 jours
                     recent.append((doc, meta, doc_id, int(meta.get("recall_count", 0))))
 
-            # Grouper par source
+            # --- Phase 1: Déduplication (inspiré autoDream/KAIROS) ---
+            dedup_count = 0
+            try:
+                from core.memory_gatekeeper import _bigram_overlap
+                # Limiter le scan pour la performance
+                scan_pool = recent[:200]
+                ids_to_delete = set()
+                seen_texts = []  # (doc_text, doc_id, timestamp)
+
+                for doc, meta, doc_id, rc in scan_pool:
+                    if doc_id in ids_to_delete:
+                        continue
+                    doc_text = doc[:300].lower().strip()
+                    if not doc_text:
+                        continue
+                    # Comparer avec les textes déjà vus
+                    is_dup = False
+                    for seen_text, seen_id, seen_ts in seen_texts:
+                        overlap = _bigram_overlap(doc_text, seen_text)
+                        if overlap > 0.60:
+                            # Garder le plus récent, supprimer le plus ancien
+                            doc_ts = float(meta.get("timestamp", 0))
+                            if doc_ts < seen_ts:
+                                ids_to_delete.add(doc_id)
+                            else:
+                                ids_to_delete.add(seen_id)
+                            is_dup = True
+                            break
+                    if not is_dup:
+                        seen_texts.append((doc_text, doc_id, float(meta.get("timestamp", 0))))
+
+                if ids_to_delete:
+                    col.delete(ids=list(ids_to_delete))
+                    dedup_count = len(ids_to_delete)
+                    logger.info(f"[CONSOLIDATION] Dedup: {dedup_count} doublons supprimes")
+            except Exception as e:
+                logger.warning(f"[CONSOLIDATION] Dedup echouee: {e}")
+
+            # --- Phase 2: Regroupement par source ---
+            _deleted = ids_to_delete if dedup_count > 0 else set()
             groups = {}
             for doc, meta, doc_id, rc in recent:
-                source = meta.get("source", "unknown")
-                groups.setdefault(source, []).append(doc[:200])
+                if doc_id not in _deleted:
+                    source = meta.get("source", "unknown")
+                    groups.setdefault(source, []).append(doc[:200])
 
             # Pour chaque groupe avec 5+ entrées, créer un résumé déterministe
             consolidated = 0
@@ -2941,7 +2987,7 @@ class AutonomyEngine:
                     )
                     consolidated += 1
 
-            # --- Dream Mode (consolidation synaptique) ---
+            # --- Phase 3: Dream Mode (consolidation synaptique) ---
             try:
                 from core.cardiac_engine import heart
                 heart.react("dream")
@@ -2953,13 +2999,15 @@ class AutonomyEngine:
                 if dream_report.get("dream_connections", 0) > 0:
                     result_msg = (f"Consolidation: {consolidated} groupes synthétisés"
                                   f" à partir de {len(recent)} documents récents."
+                                  f" | Dedup: {dedup_count} doublons supprimés"
                                   f" | Dream: +{dream_report['dream_connections']} connexions"
                                   f", -{dream_report['pruned_synapses']} pruned")
                     return {"status": "success", "result": result_msg}
             except Exception:
                 pass
 
-            return {"status": "success", "result": f"Consolidation: {consolidated} groupes synthétisés à partir de {len(recent)} documents récents."}
+            dedup_msg = f" | Dedup: {dedup_count} doublons supprimés" if dedup_count else ""
+            return {"status": "success", "result": f"Consolidation: {consolidated} groupes synthétisés à partir de {len(recent)} documents récents.{dedup_msg}"}
         except Exception as e:
             return {"status": "error", "result": f"Erreur consolidation: {e}"}
 
