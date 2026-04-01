@@ -6207,14 +6207,45 @@ RAISON: <1 phrase courte>"""
         return response or {"status": "error", "result": "Dispatch echoue."}
 
     async def _execute_veille_ia(self, routine: dict) -> dict:
-        """Veille IA active : recherche web sur l'écosystème IA, synthèse et mémorisation.
+        """Veille IA active : recherche web + surveillance technologique GitHub.
 
         Objectif: Donner à Prométhée une conscience de son environnement technologique.
-        Le researcher cherche sur le web, synthétise, et les découvertes sont stockées
-        en mémoire + publiées sur le bus pour que les autres organes réagissent.
+        1. Check tech_watch (PRs GitHub critiques — TurboQuant, Voxtral, etc.)
+        2. Recherche web sur un sujet en rotation
         Coût: 2pt (recherche web + 1 appel LLM pour synthèse).
         """
         try:
+            # --- Phase 1: Surveillance GitHub (tech_watch) ---
+            tech_report = None
+            tech_alerts = []
+            try:
+                from core.tech_watch import check_all, format_report
+                tech_report = check_all()
+                tech_alerts = tech_report.get("alerts", [])
+                if tech_alerts:
+                    print(f"   🔔 TECH_WATCH: {len(tech_alerts)} alerte(s)!")
+                    for alert in tech_alerts:
+                        print(f"      → {alert}")
+                elif not tech_report.get("from_cache"):
+                    print(f"   🔭 TECH_WATCH: {tech_report.get('total_issues_checked', 0)} PRs verifiees — RAS")
+            except Exception as e:
+                logger.warning(f"[VEILLE_IA] tech_watch echoue: {e}")
+
+            # Publier les alertes critiques sur le bus
+            if tech_alerts:
+                try:
+                    critical = [a for a in tech_alerts if "MERGE" in a]
+                    if critical:
+                        await bus.publish("VEILLE_IA_DISCOVERY", {
+                            "topic": "TechWatch — MERGE DETECTE",
+                            "findings": "\n".join(critical),
+                            "actionable": True,
+                            "source": "tech_watch",
+                        })
+                except Exception:
+                    pass
+
+            # --- Phase 2: Recherche web (rotation de sujets) ---
             veille_ia_index = self.total_routines_executed % len(VEILLE_IA_TOPICS)
             topic = VEILLE_IA_TOPICS[veille_ia_index]
 
@@ -6292,7 +6323,18 @@ RAISON: <1 phrase courte>"""
             if is_actionable:
                 print(f"   🎯 VEILLE IA: Découverte actionnable détectée!")
 
-            return response or {"status": "error", "result": "Pas de réponse."}
+            # Combiner le rapport tech_watch dans le resultat
+            combined_result = result_text or ""
+            if tech_report and not tech_report.get("from_cache"):
+                try:
+                    from core.tech_watch import format_report as fmt
+                    combined_result += "\n\n" + fmt(tech_report)
+                except Exception:
+                    pass
+
+            if response:
+                response["result"] = combined_result
+            return response or {"status": "error", "result": combined_result or "Pas de réponse."}
 
         except Exception as e:
             return {"status": "error", "result": f"Veille IA échouée: {e}"}

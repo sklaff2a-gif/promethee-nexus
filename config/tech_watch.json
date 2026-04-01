@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "check_interval_minutes": 60,
+  "github_watches": [
+    {
+      "id": "turboquant_ollama",
+      "label": "TurboQuant KV cache (Ollama)",
+      "repo": "ollama/ollama",
+      "issues": [15090, 15125, 15051],
+      "keywords": ["turboquant", "kv cache", "tq3", "tq4"],
+      "priority": "critical",
+      "action_on_merge": "Mettre a jour Ollama. Setter OLLAMA_KV_CACHE_TYPE=tq3. Tester avec qwen3.5:9b."
+    },
+    {
+      "id": "turboquant_llamacpp",
+      "label": "TurboQuant KV cache (llama.cpp)",
+      "repo": "ggml-org/llama.cpp",
+      "issues": [21089, 20977],
+      "keywords": ["turboquant", "tbq3", "tbq4"],
+      "priority": "high",
+      "action_on_merge": "Attendre integration Ollama en aval."
+    },
+    {
+      "id": "turboquant_fork",
+      "label": "TurboQuant fork communautaire",
+      "repo": "TheTom/llama-cpp-turboquant",
+      "issues": [],
+      "keywords": [],
+      "priority": "medium",
+      "watch_stars": true,
+      "action_on_merge": "Tester si stable comme alternative avant merge officiel."
+    },
+    {
+      "id": "voxtral_tts",
+      "label": "Voxtral TTS (Mistral)",
+      "repo": "mistralai/voxtral",
+      "issues": [],
+      "keywords": ["voxtral", "tts", "text-to-speech"],
+      "priority": "low",
+      "action_on_merge": "Attendre TurboQuant (liberer VRAM). Puis tester voix francaise."
+    }
+  ]
+}
