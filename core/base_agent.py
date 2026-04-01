@@ -770,6 +770,14 @@ class BaseAgent:
             pass
 
         # Note: council.py injecte aussi un contexte projet (_COUNCIL_PROJECT_CONTEXT) — garder cohérent
+        # Guardrail anti-hallucination 9B (suffixe — biais de recence)
+        _anti_halluc = ""
+        try:
+            from core.prompt_templates import LLM_9B_ANTI_HALLUCINATION
+            _anti_halluc = LLM_9B_ANTI_HALLUCINATION
+        except ImportError:
+            pass
+
         full_prompt = (
             f"\n[SYSTEM: Nexus V20 (Local First) | AGENT: {self.name.upper()}]\n"
             f"[CONTRAINTE: Projet sur UN SEUL PC Windows + Ollama local. "
@@ -777,6 +785,7 @@ class BaseAgent:
             f"{context_memory}"
             f"{intuition_block}"
             f"{prompt}"
+            f"{_anti_halluc}"
         )
 
         # Modèles Locaux

@@ -629,6 +629,9 @@ class AutonomyEngine:
         self.error_streak = persisted.get("error_streak", 0)
         self.total_routines_executed = persisted.get("total_routines_executed", 0)
         self.last_health_check = persisted.get("last_health_check")
+        # Historique des vetos recents (inspire Claude Code / KAIROS)
+        # Reinjecte dans le contexte pour que les agents adaptent leur comportement
+        self._recent_vetos: list = []  # max 3, format: {"intent": str, "reason": str}
         # Historique d'apprentissage ciblé {topic: timestamp_iso}
         self._learning_history: dict = persisted.get("learning_history", {})
         # Flag : max 1 apprentissage par cycle de routine
@@ -2117,6 +2120,10 @@ class AutonomyEngine:
                 pass
             if veto_reason:
                 print(f"   🚫 VETO: {veto_reason}")
+                # Enregistrer le veto pour reinjection dans le contexte suivant
+                self._recent_vetos.append({"intent": intent, "reason": veto_reason})
+                if len(self._recent_vetos) > 3:
+                    self._recent_vetos = self._recent_vetos[-3:]
                 try:
                     from core.hippocampus import hippocampus
                     hippocampus.record_veto(intent, agent, veto_reason)
@@ -2329,6 +2336,15 @@ class AutonomyEngine:
             context_parts = ["PROTOCOLE_AUTONOMIE"]
             if purpose_ctx and isinstance(purpose_ctx, str):
                 context_parts.append(purpose_ctx)
+            # Reinjection des vetos recents (inspire Claude Code / KAIROS)
+            # L'agent voit pourquoi les routines precedentes ont ete bloquees
+            # et adapte son comportement au lieu de repeter les memes erreurs
+            if self._recent_vetos:
+                veto_lines = [f"- {v['intent']}: {v['reason']}" for v in self._recent_vetos[-3:]]
+                context_parts.append(
+                    "[VETOS RECENTS — routines bloquees recemment, adapte-toi]\n"
+                    + "\n".join(veto_lines)
+                )
             context_parts.append(AUTONOMY_GUARDRAIL)
             response = await orchestrator.dispatch_task(agent, {
                 "mission": mission_text,

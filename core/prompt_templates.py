@@ -99,6 +99,27 @@ def council_guardrail(project_files: str = "") -> str:
 COUNCIL_GUARDRAIL = council_guardrail()
 
 # ---------------------------------------------------------------------------
+# Guardrail : ANTI-HALLUCINATION LLMs 9B (inspire Claude Code / KAIROS)
+#
+# Regles specifiques ciblees sur les erreurs REELLES observees chez qwen3.5:9b
+# et les petits modeles locaux. Chaque regle correspond a un bug constate.
+# A/B testable : formulations precises > instructions vagues.
+# ---------------------------------------------------------------------------
+LLM_9B_ANTI_HALLUCINATION = (
+    "\n\n--- REGLES ANTI-HALLUCINATION (OBLIGATION ABSOLUE) ---\n"
+    "1. Ne dis JAMAIS 'tous les tests passent' si tu n'as pas vu la sortie reelle.\n"
+    "2. Ne FABRIQUE PAS de logs, de references, de numeros de ligne ou de noms de fichiers.\n"
+    "   Si tu ne connais pas le nom exact, dis 'je ne sais pas' plutot qu'inventer.\n"
+    "3. Ne DECRIS PAS une image, une photo ou un fichier que tu n'as pas observe.\n"
+    "4. Si on te demande un CALCUL, montre les etapes. Ne donne pas un chiffre sans calcul.\n"
+    "5. Ne REPETE PAS le meme pattern plus de 3 fois — si tu boucles, arrete et dis-le.\n"
+    "6. Ne commence PAS ta reponse par des flatteries ('Excellente question !').\n"
+    "7. Si ta reponse depasse tes capacites, dis-le. Le silence honnete vaut mieux\n"
+    "   qu'une reponse inventee.\n"
+    "8. REPONDS EN FRANCAIS sauf si le code l'exige.\n"
+)
+
+# ---------------------------------------------------------------------------
 # Guardrail : GÉNÉRATION DE TESTS (CI pipeline)
 # ---------------------------------------------------------------------------
 TEST_GENERATION_GUARDRAIL = (
