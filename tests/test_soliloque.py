@@ -149,14 +149,17 @@ class TestThemeSelection:
             theme = s._select_theme()
         assert theme == "frustrations"
 
-    def test_all_seven_themes_accessible(self, isolate_soliloque):
-        """Les 7 thèmes sont accessibles par rotation."""
+    def test_all_themes_accessible(self, isolate_soliloque):
+        """Tous les thèmes sont accessibles par rotation (chat inactif)."""
         s = isolate_soliloque
         from core.soliloque import THEME_ORDER
         themes = set()
+        # Mocker le chat_engine pour éviter la priorité graines_ouvertes
+        mock_chat = type("MockChat", (), {"messages": []})()
         with patch.object(s, "_get_connexion_deprivation", return_value=40.0), \
              patch.object(s, "_get_current_emotion", return_value="serenite"), \
-             patch.object(s, "_get_strategic_mode", return_value="standard"):
+             patch.object(s, "_get_strategic_mode", return_value="standard"), \
+             patch("core.soliloque.chat_engine", mock_chat, create=True):
             for i in range(len(THEME_ORDER)):
                 s.theme_index = i
                 themes.add(s._select_theme())
