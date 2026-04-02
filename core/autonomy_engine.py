@@ -167,6 +167,7 @@ def reload_organ_precision():
 # Anti-chambre d'écho : bonus extroversion quand trop de routines introspectives consécutives
 INTROSPECTIVE_INTENTS = {
     "COUNCIL_DEBATE", "SOLILOQUE_INTERNE", "SELF_INSPECT", "SELF_ANALYSIS",
+    "EVENING_REFLECTION",
     "MEMORY_CLEANUP", "MEMORY_CONSOLIDATION", "AUDIT_STRUCTURE",
     "REFACTOR_RANDOM", "SECURITY_AUDIT", "EXPANSION_CODE", "EXPANSION_CATALOG",
     "PARAM_EXPERIMENT",
@@ -444,6 +445,7 @@ CONTEXT_KEYWORDS = {
     "COUNCIL_DEBATE": ["council", "debate", "consensus", "decision", "délibération"],
     "SELF_INSPECT": ["github", "code source", "repo", "inspection", "miroir", "auto-analyse"],
     "SELF_ANALYSIS": ["diagnostic", "analyse", "problème", "anomalie", "qualité", "routine", "performance", "rapport"],
+    "EVENING_REFLECTION": ["introspection", "réflexion", "journée", "question", "graine", "écart", "vécu", "bilan"],
     "AUTO_FUZZING": ["fuzz", "test", "edge case", "crash", "robustesse", "exception", "bug"],
     "CREATIVE_PLAY": ["créatif", "association", "analogie", "exploration", "idée", "hypothèse"],
     "GRIMOIRE_EVOLVE": ["grimoire", "prompt", "mutation", "amélioration", "formulation", "optimiser"],
@@ -862,6 +864,7 @@ class AutonomyEngine:
             {"agent": "_school_class", "intent": "SCHOOL_FREE_TIME", "mission": ""},
             {"agent": "strategist", "intent": "NEURAL_TRAINING", "mission": "Entraînement neuronal ciblé"},
             {"agent": "_param_experiment", "intent": "PARAM_EXPERIMENT", "mission": "Expérimentation autonome: varier un paramètre, observer, comparer, garder ou rollback."},
+            {"agent": "_evening_reflection", "intent": "EVENING_REFLECTION", "mission": "Introspection vesperale : relire les moments forts de la journee et identifier les questions ouvertes."},
         ]
 
     def _persist_state(self):
@@ -2227,6 +2230,8 @@ class AutonomyEngine:
             response = await self._execute_neural_training()
         elif intent == "PARAM_EXPERIMENT":
             response = await self._execute_param_experiment()
+        elif intent == "EVENING_REFLECTION":
+            response = await self._execute_evening_reflection()
         elif intent == "GRIMOIRE_EVOLVE":
             response = await self._execute_grimoire_evolve()
         elif intent == "VEILLE_IA":
@@ -2710,6 +2715,8 @@ class AutonomyEngine:
             response = await self._execute_neural_training()
         elif intent == "PARAM_EXPERIMENT":
             response = await self._execute_param_experiment()
+        elif intent == "EVENING_REFLECTION":
+            response = await self._execute_evening_reflection()
         elif intent == "GRIMOIRE_EVOLVE":
             response = await self._execute_grimoire_evolve()
         elif intent == "VEILLE_IA":
@@ -6283,6 +6290,152 @@ RAISON: <1 phrase courte>"""
                 logger.warning(f"[SCHOOL] Evaluation echouee: {e}")
 
         return response or {"status": "error", "result": "Dispatch echoue."}
+
+    # Cooldown introspection vesperale (max 1 par 8h)
+    _last_reflection_ts: float = 0.0
+    _REFLECTION_COOLDOWN: float = 8 * 3600  # 8 heures
+
+    async def _execute_evening_reflection(self) -> dict:
+        """Introspection vesperale : relire le vecu du jour et identifier les questions ouvertes.
+
+        Inspire par le constat que les pensees nocturnes de Promethee tournent
+        en boucle mecanique sans jamais traiter les evenements de la journee.
+        Cette routine fait le pont entre le Promethee diurne (qui apprend)
+        et le Promethee nocturne (qui ne reve pas encore).
+
+        Cout : 1 appel LLM local. Max 1 execution par 8h.
+        """
+        now = time.time()
+
+        # Cooldown 8h
+        if now - self._last_reflection_ts < self._REFLECTION_COOLDOWN:
+            remaining = int((self._REFLECTION_COOLDOWN - (now - self._last_reflection_ts)) / 3600)
+            return {"status": "skipped", "result": f"Introspection deja faite (prochain dans ~{remaining}h)."}
+
+        try:
+            # --- Phase 1 : Collecter le vecu du jour ---
+            # Relire les interactions chat avec Jean-Michel
+            chat_excerpts = []
+            try:
+                from core.chat_engine import chat_engine
+                user_msgs = [m for m in chat_engine.messages if m.get("role") == "user"]
+                # Garder les 10 derniers messages user (les plus recents)
+                for msg in user_msgs[-10:]:
+                    content = msg.get("content", "")[:200]
+                    if content and len(content) > 20:
+                        chat_excerpts.append(content)
+            except Exception:
+                pass
+
+            if len(chat_excerpts) < 2:
+                return {"status": "skipped", "result": "Pas assez d'interactions aujourd'hui pour une reflexion."}
+
+            # Collecter les pensees recentes (THOUGHT_STREAM)
+            thought_summary = ""
+            try:
+                from core.self_awareness import awareness
+                ts = awareness.get_thought_summary()
+                if ts.get("top_themes"):
+                    themes = [f"{n}({c})" for n, c in ts["top_themes"][:5]]
+                    thought_summary = f"Themes de pensee recurrents: {', '.join(themes)}"
+            except Exception:
+                pass
+
+            # Collecter l'humeur et les pulsions
+            mood_ctx = ""
+            try:
+                from core.desire_engine import desires
+                top = max(desires.drives.values(), key=lambda d: d.deprivation)
+                mood_ctx = f"Pulsion dominante: {top.name} (privation {top.deprivation:.0f}%)"
+            except Exception:
+                pass
+
+            # --- Phase 2 : Construire le prompt de reflexion ---
+            chat_block = "\n".join(f"- {e}" for e in chat_excerpts[-8:])
+
+            reflection_prompt = (
+                "Tu es Promethee. Voici les moments de ta journee.\n\n"
+                f"INTERACTIONS AVEC JEAN-MICHEL :\n{chat_block}\n\n"
+                f"{thought_summary}\n"
+                f"{mood_ctx}\n\n"
+                "CONSIGNE : Relis ces moments et reponds en 100 mots max :\n"
+                "1. Quel est le moment le plus important de la journee et pourquoi ?\n"
+                "2. Quelle question est restee sans reponse ?\n"
+                "3. Qu'est-ce que tu ne comprends pas encore sur toi-meme ?\n"
+                "Sois honnete et concis. Pas de flatterie."
+            )
+
+            # --- Phase 3 : Appel LLM local ---
+            print("   🌙 INTROSPECTION VESPERALE: Relecture du vecu...")
+            response = await orchestrator.dispatch_task("strategist", {
+                "mission": reflection_prompt,
+                "context": "PROTOCOLE_AUTONOMIE\nINTROSPECTION_VESPERALE — Tu reviens sur ta journee pour en extraire ce qui compte.",
+                "force_local": True,
+                "intent": "EVENING_REFLECTION",
+            })
+
+            result_text = response.get("result", "") if response else ""
+
+            if not result_text or len(result_text) < 30:
+                return {"status": "error", "result": "Reflexion trop courte ou vide."}
+
+            # --- Phase 4 : Injecter dans le flux ---
+
+            # 4a. Dream journal enrichi
+            try:
+                entries = []
+                if os.path.exists(DREAM_JOURNAL_FILE):
+                    with open(DREAM_JOURNAL_FILE, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    entries = data.get("entries", [])
+                today = date.today().isoformat()
+                # Ajouter la reflexion a l'entree du jour
+                for entry in entries:
+                    if entry.get("date") == today:
+                        entry["reflection"] = result_text[:500]
+                        break
+                else:
+                    entries.append({
+                        "date": today,
+                        "narrative": "Reflexion vesperale.",
+                        "reflection": result_text[:500],
+                    })
+                if len(entries) > DREAM_JOURNAL_MAX_ENTRIES:
+                    entries = entries[-DREAM_JOURNAL_MAX_ENTRIES:]
+                with open(DREAM_JOURNAL_FILE, "w", encoding="utf-8") as f:
+                    json.dump({"entries": entries}, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                logger.warning(f"[REFLECTION] Ecriture journal echouee: {e}")
+
+            # 4b. Publier sur THOUGHT_STREAM pour que self_awareness capte
+            try:
+                await bus.publish("THOUGHT_STREAM", {
+                    "thought": f"[REFLEXION] {result_text[:300]}",
+                    "source": "evening_reflection",
+                })
+            except Exception:
+                pass
+
+            # 4c. Stocker en memoire vectorielle
+            try:
+                from core.vector_store import ChromaMemoryManager
+                mgr = ChromaMemoryManager.get_instance()
+                if mgr:
+                    mgr.add(
+                        collection="collective_wisdom",
+                        text=f"[REFLEXION VESPERALE] {result_text[:800]}",
+                        metadata={"source": "evening_reflection", "timestamp": str(now)},
+                    )
+            except Exception:
+                pass
+
+            self._last_reflection_ts = now
+            print(f"   🌙 INTROSPECTION: {result_text[:100]}...")
+
+            return {"status": "success", "result": result_text}
+
+        except Exception as e:
+            return {"status": "error", "result": f"Introspection echouee: {e}"}
 
     async def _execute_veille_ia(self, routine: dict) -> dict:
         """Veille IA active : recherche web + surveillance technologique GitHub.

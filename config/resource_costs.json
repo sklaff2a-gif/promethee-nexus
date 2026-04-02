@@ -130,5 +130,9 @@
   "PARAM_EXPERIMENT": {
     "cost": 0,
     "description": "Expérimentation paramètres: variation → observation 10 ticks → comparaison → garder/rollback. 0 appel LLM."
+  },
+  "EVENING_REFLECTION": {
+    "cost": 2,
+    "description": "Introspection vesperale: relecture chat + 1 appel LLM local. Max 1x/8h. Le pont entre le jour et la nuit."
   }
 }
