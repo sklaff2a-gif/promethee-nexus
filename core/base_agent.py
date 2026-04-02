@@ -1010,7 +1010,7 @@ class BaseAgent:
                 except Exception:
                     _temperature = 0.7
                 _num_ctx = getattr(Config, "AGENT_NUM_CTX", {}).get(self.name, getattr(Config, "AGENT_NUM_CTX", {}).get("default", 8192))
-                payload = { "model": model, "prompt": prompt, "stream": False, "think": False, "options": { "temperature": _temperature, "num_ctx": _num_ctx } }
+                payload = { "model": model, "prompt": prompt, "stream": False, "think": False, "options": { "temperature": _temperature, "num_ctx": _num_ctx, "num_predict": -1 } }
                 if images:
                     payload["images"] = images
                 async with httpx.AsyncClient() as client:
@@ -1046,7 +1046,7 @@ class BaseAgent:
                 except Exception:
                     _temperature = 0.7
                 _num_ctx = getattr(Config, "AGENT_NUM_CTX", {}).get(self.name, getattr(Config, "AGENT_NUM_CTX", {}).get("default", 8192))
-                payload = { "model": model, "prompt": prompt, "stream": True, "think": False, "options": { "temperature": _temperature, "num_ctx": _num_ctx } }
+                payload = { "model": model, "prompt": prompt, "stream": True, "think": False, "options": { "temperature": _temperature, "num_ctx": _num_ctx, "num_predict": -1 } }
 
                 # Signal de début
                 await bus.publish("AGENT_STREAM", {
