@@ -3060,9 +3060,9 @@ class TestVeilleIA:
         assert mission_0 != mission_1
 
     def test_veille_ia_topics_count(self):
-        """Il y a exactement 8 sujets de veille IA."""
+        """Il y a au moins 8 sujets de veille IA (8 originaux + topics eveil)."""
         from core.autonomy_engine import VEILLE_IA_TOPICS
-        assert len(VEILLE_IA_TOPICS) == 8
+        assert len(VEILLE_IA_TOPICS) >= 8
 
     def test_veille_ia_topics_structure(self):
         """Chaque topic a les champs query, focus, actionable."""
