@@ -1239,6 +1239,10 @@ class SelfAwarenessEngine:
             self._routine_success = data.get("routine_success", 0)
             self._knowledge_gaps = data.get("knowledge_gaps", [])
             self._personality_events = data.get("personality_events", [])
+            # THOUGHT_STREAM persisté (ajouté pour survivre aux reboots)
+            self._thought_buffer = data.get("thought_buffer", [])
+            self._thought_count = data.get("thought_count", 0)
+            self._thought_themes = data.get("thought_themes", {})
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
@@ -1258,6 +1262,12 @@ class SelfAwarenessEngine:
             "routine_success": self._routine_success,
             "knowledge_gaps": self._knowledge_gaps,
             "personality_events": self._personality_events,
+            # THOUGHT_STREAM persisté (survit aux reboots)
+            "thought_buffer": self._thought_buffer[-200:],  # max 200
+            "thought_count": self._thought_count,
+            "thought_themes": dict(sorted(
+                self._thought_themes.items(), key=lambda x: -x[1]
+            )[:100]),  # top 100 themes
         }
         tmp_path = STATE_FILE + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
