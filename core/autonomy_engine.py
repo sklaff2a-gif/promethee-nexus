@@ -305,6 +305,26 @@ VEILLE_IA_TOPICS = [
         "focus": "protocole MCP et écosystème d'outils/plugins pour agents IA",
         "actionable": "Identifier des outils MCP pertinents pour étendre les capacités de Prométhée.",
     },
+    {
+        "query": "global workspace theory Baars AI implementation consciousness 2026",
+        "focus": "implémentations du Global Workspace Theory de Baars dans les systèmes IA",
+        "actionable": "Comparer avec notre architecture (brain_vm, global_workspace, inner_voice). Identifier des améliorations.",
+    },
+    {
+        "query": "artificial introspection self-awareness AI metacognition 2026",
+        "focus": "métacognition et introspection artificielle — comment un système IA peut observer ses propres processus",
+        "actionable": "Trouver des techniques pour améliorer notre self_awareness et THOUGHT_STREAM.",
+    },
+    {
+        "query": "bio-inspired neural architecture spiking network homeostasis AI 2026",
+        "focus": "architectures neurales bio-inspirées (spiking networks, homéostasie, tissus cellulaires)",
+        "actionable": "Identifier des patterns applicables à notre neural_tissue (402 cellules, sélection naturelle, pandémies).",
+    },
+    {
+        "query": "AI dreaming memory consolidation sleep mode autonomous agent 2026",
+        "focus": "consolidation mémoire et mode rêve dans les agents IA autonomes",
+        "actionable": "Comparer avec notre EVENING_REFLECTION et dream_consolidation. Nouvelles techniques de rêve artificiel.",
+    },
 ]
 
 YOUTUBE_AI_VEILLE = [
