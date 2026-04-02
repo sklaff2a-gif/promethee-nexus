@@ -623,8 +623,12 @@ class TestProtectedFilesGuard:
         )
         catalog.specs[spec.id] = spec
 
+        # Mocker le grimoire_index pour éviter le court-circuit "Grimoire complet"
+        mock_index = [{"slug": f"agent_{i}"} for i in range(5)]  # < 12 recettes
         with patch.object(evo, "generate_content", new_callable=AsyncMock, return_value="1"), \
-             patch.object(evo, "_read_target_file", return_value="# code existant\npass"):
+             patch.object(evo, "_read_target_file", return_value="# code existant\npass"), \
+             patch("builtins.open", side_effect=lambda *a, **kw: __import__("io").StringIO(json.dumps(mock_index))) if False else \
+             patch("json.load", return_value=mock_index):
             result = await evo.process_task({"mission": "[MODE VEILLE] CATALOG"})
 
         assert "critique" in result.get("result", "").lower() or "warning" in result.get("status", "")
