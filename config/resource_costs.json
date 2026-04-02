@@ -134,5 +134,9 @@
   "EVENING_REFLECTION": {
     "cost": 2,
     "description": "Introspection vesperale: relecture chat + 1 appel LLM local. Max 1x/8h. Le pont entre le jour et la nuit."
+  },
+  "COFFEE_BREAK": {
+    "cost": 3,
+    "description": "Cafe avec Alfred: 3-5 echanges non structures. Satisfait CONNEXION. Max 1x/8h."
   }
 }
