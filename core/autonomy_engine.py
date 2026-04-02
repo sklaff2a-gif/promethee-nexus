@@ -1533,6 +1533,64 @@ class AutonomyEngine:
                 breakdown["school"] = round(school_raw, 3)
         except Exception:
             pass
+
+        # --- COUCHE 24 : Urgence de réflexion (Phase 1 réforme autonomie) ---
+        # Boost EVENING_REFLECTION si le chat a été actif ET pas de réflexion récente.
+        # Inspiré par le constat que les graines des exercices ne germent pas la nuit
+        # car EVENING_REFLECTION n'est jamais sélectionnée par le scoring standard.
+        if intent == "EVENING_REFLECTION":
+            reflection_bonus = 0.0
+            # Compter les messages user dans le chat du jour
+            try:
+                from core.chat_engine import chat_engine
+                user_msg_count = sum(
+                    1 for m in chat_engine.messages
+                    if m.get("role") == "user"
+                )
+                if user_msg_count >= 5:
+                    reflection_bonus += 2.0  # Journée avec interaction intense
+                elif user_msg_count >= 2:
+                    reflection_bonus += 1.0  # Journée avec quelques interactions
+            except Exception:
+                pass
+            # Boost si pas de réflexion depuis > 12h
+            if time.time() - self._last_reflection_ts > 12 * 3600:
+                reflection_bonus += 1.5
+            if reflection_bonus > 0:
+                breakdown["reflection_urgency"] = round(min(reflection_bonus, 3.5), 3)
+
+        # --- COUCHE 25 : Rythme circadien cognitif (Phase 2 réforme autonomie) ---
+        # Le cerveau humain a des phases : exploration le matin, production l'après-midi,
+        # consolidation le soir, rêve la nuit. Prométhée devrait faire pareil.
+        hour = datetime.now().hour
+        circadian_bonus = 0.0
+
+        # 6h-12h : exploration (matin frais, idées nouvelles)
+        MORNING_INTENTS = {"EXPANSION_CODE", "VEILLE_IA", "CREATIVE_PLAY",
+                          "ROADMAP_RESEARCH", "CURIOSITY_REFLEX", "VEILLE_SILENCIEUSE"}
+        # 12h-18h : production (après-midi, focus)
+        AFTERNOON_INTENTS = {"SCHOOL_CODE_REVIEW", "SCHOOL_RESEARCH", "SCHOOL_WORKSHOP",
+                            "SCHOOL_CREATION", "SCHOOL_BULLETIN", "SECURITY_AUDIT",
+                            "REFACTOR_RANDOM"}
+        # 18h-00h : consolidation (soir, digérer la journée)
+        EVENING_INTENTS = {"MEMORY_CONSOLIDATION", "SOLILOQUE_INTERNE", "SELF_ANALYSIS",
+                          "EVENING_REFLECTION", "MEMORY_CLEANUP"}
+        # 00h-06h : rêve et introspection profonde (nuit)
+        NIGHT_INTENTS = {"EVENING_REFLECTION", "CREATIVE_PLAY", "SOLILOQUE_INTERNE",
+                        "MEMORY_CONSOLIDATION", "EXPANSION_CODE"}
+
+        if 6 <= hour < 12 and intent in MORNING_INTENTS:
+            circadian_bonus = 1.5
+        elif 12 <= hour < 18 and intent in AFTERNOON_INTENTS:
+            circadian_bonus = 1.5
+        elif 18 <= hour < 24 and intent in EVENING_INTENTS:
+            circadian_bonus = 2.0  # Soir = consolidation prioritaire
+        elif (hour >= 0 and hour < 6) and intent in NIGHT_INTENTS:
+            circadian_bonus = 2.0  # Nuit = rêve prioritaire
+
+        if circadian_bonus > 0:
+            breakdown["circadian_cognitive"] = round(circadian_bonus, 3)
+
         return breakdown
 
     def get_status(self) -> dict:
