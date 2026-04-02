@@ -136,7 +136,7 @@ class TestRouterGrimoireScoring:
     def test_no_match_returns_none(self):
         """Mission sans match Grimoire → None."""
         RouterAgent._grimoire_index_cache = None
-        result = RouterAgent._check_grimoire_index("quelle est la philosophie du système")
+        result = RouterAgent._check_grimoire_index("quel temps fait-il dehors aujourd'hui")
         assert result is None
 
     @pytest.mark.asyncio
