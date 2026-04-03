@@ -700,6 +700,8 @@ class AutonomyEngine:
 
         # Auto-analyse quotidienne : garantir 1 SELF_ANALYSIS par jour
         self._daily_analysis_done: bool = False
+        # Introspection vesperale quotidienne : garantir 1 EVENING_REFLECTION par jour
+        self._daily_reflection_done: bool = False
 
         # SensoriumLoop : dernier snapshot post-action pour boucle fermee
         self._last_feedback_snapshot: dict = {}
@@ -804,6 +806,7 @@ class AutonomyEngine:
             self.daily_budget_used = 0
             self.last_reset_day = today
             self._daily_analysis_done = False
+            self._daily_reflection_done = False
             self._nap_refund_used_today = False  # Nouveau second souffle disponible
             self._forced_failure_counts.clear()  # Reset blacklist pour la nouvelle journee
             self._persist_state()
@@ -1556,10 +1559,16 @@ class AutonomyEngine:
 
         # --- COUCHE 24 : Urgence de réflexion (Phase 1 réforme autonomie) ---
         # Boost EVENING_REFLECTION si le chat a été actif ET pas de réflexion récente.
+        # GARANTIE QUOTIDIENNE : si pas encore fait aujourd'hui → bonus imbattable (+10)
         # Inspiré par le constat que les graines des exercices ne germent pas la nuit
-        # car EVENING_REFLECTION n'est jamais sélectionnée par le scoring standard.
+        # car l'école (bonus +5.0) écrasait EVENING_REFLECTION.
         if intent == "EVENING_REFLECTION":
             reflection_bonus = 0.0
+
+            # Garantie quotidienne : si pas encore fait → bonus massif
+            if not self._daily_reflection_done:
+                reflection_bonus += 5.0  # Garanti au moins 1x/jour
+
             # Compter les messages user dans le chat du jour
             try:
                 from core.chat_engine import chat_engine
@@ -1577,7 +1586,7 @@ class AutonomyEngine:
             if time.time() - self._last_reflection_ts > 12 * 3600:
                 reflection_bonus += 1.5
             if reflection_bonus > 0:
-                breakdown["reflection_urgency"] = round(min(reflection_bonus, 3.5), 3)
+                breakdown["reflection_urgency"] = round(min(reflection_bonus, 8.5), 3)
 
         # --- COUCHE 25 : Rythme circadien cognitif (Phase 2 réforme autonomie) ---
         # Le cerveau humain a des phases : exploration le matin, production l'après-midi,
@@ -6508,6 +6517,7 @@ RAISON: <1 phrase courte>"""
                 pass
 
             self._last_reflection_ts = now
+            self._daily_reflection_done = True
             print(f"   🌙 INTROSPECTION: {result_text[:100]}...")
 
             return {"status": "success", "result": result_text}
