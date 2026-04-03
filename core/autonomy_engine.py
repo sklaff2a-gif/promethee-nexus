@@ -23,7 +23,7 @@ DAILY_BUDGET_POINTS = 200
 BUDGET_RESERVE_POINTS = 20
 
 # Routines 0-LLM qui continuent même quand le budget est épuisé
-POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE", "SELF_INSPECT", "PARAM_EXPERIMENT"}
+POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE", "SELF_INSPECT", "PARAM_EXPERIMENT", "EVENING_REFLECTION"}
 
 # Clamping final du score total (après toutes les couches de scoring)
 FINAL_SCORE_CLAMP_MIN = -5.0
@@ -3881,6 +3881,11 @@ class AutonomyEngine:
                 response = await self._execute_memory_cleanup()
             elif intent == "NEURAL_COMPILE":
                 response = await self._execute_neural_compile()
+            elif intent == "EVENING_REFLECTION":
+                if not self._daily_reflection_done:
+                    response = await self._execute_evening_reflection()
+                else:
+                    continue  # Deja fait aujourd'hui
             if response is None:
                 continue
             # Tracking (coût 0 — budget intact)
