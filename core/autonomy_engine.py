@@ -6481,11 +6481,10 @@ RAISON: <1 phrase courte>"""
                     resp = await client.post(
                         "http://localhost:11434/api/generate",
                         json={
-                            "model": "qwen3.5:9b",
+                            "model": "gemma4:e4b",
                             "prompt": reflection_prompt,
                             "stream": False,
-                            "think": False,
-                            "options": {"temperature": 0.7, "num_ctx": 4096, "num_predict": -1},
+                            "options": {"temperature": 0.7, "num_ctx": 8192, "num_predict": -1},
                         },
                         timeout=120,
                     )
