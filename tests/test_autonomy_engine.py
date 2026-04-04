@@ -1924,6 +1924,7 @@ class TestBudgetPostEpuisement:
     async def test_post_budget_executes_free_routine(self):
         """En exhausted, AUDIT_STRUCTURE, MEMORY_CLEANUP ou NEURAL_COMPILE s'exécutent."""
         self.engine.routine_history = []  # Pas de cooldown
+        self.engine._daily_reflection_done = True  # EVENING_REFLECTION deja faite
         with patch.object(self.engine, "_execute_audit_structure", new_callable=AsyncMock,
                          return_value={"status": "success", "result": "audit ok"}) as mock_audit, \
              patch.object(self.engine, "_execute_memory_cleanup", new_callable=AsyncMock,
