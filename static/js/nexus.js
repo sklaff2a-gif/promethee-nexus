@@ -631,6 +631,41 @@ function updateNapButton() {
     }
 }
 
+// --- Mode Café (socialisation libre 20 min) ---
+let coffeeModeActive = false;
+
+function toggleCoffeeMode() {
+    const newState = !coffeeModeActive;
+    fetch('/api/coffee-mode', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ enabled: newState })
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'blocked') {
+            addLog('SYSTEM', 'Mode café bloqué: ' + (data.reason || 'cooldown'), 'err');
+            return;
+        }
+        coffeeModeActive = data.is_coffee_mode;
+        updateCoffeeModeButton();
+        addLog('SYSTEM', coffeeModeActive ? '☕ MODE CAFÉ ACTIVÉ — socialisation libre' : '☕ FIN DU CAFÉ — reprise normale', coffeeModeActive ? 'sys' : 'success');
+    }).catch(err => addLog('API', 'Erreur café: ' + err, 'err'));
+}
+
+function updateCoffeeModeButton() {
+    const btn = document.getElementById('coffee-mode-button');
+    const banner = document.getElementById('coffee-mode-banner');
+    if (!btn) return;
+    if (coffeeModeActive) {
+        btn.textContent = 'FIN CAFÉ';
+        btn.className = 'bg-amber-700 border border-amber-400 text-white px-3 py-0 text-[10px] font-bold hover:bg-amber-600 transition h-6 shadow-[0_0_8px_rgba(245,158,11,0.6)]';
+        if (banner) banner.classList.remove('hidden');
+    } else {
+        btn.textContent = 'CAFÉ';
+        btn.className = 'border border-amber-700 text-amber-400 px-3 py-0 text-[10px] font-bold hover:bg-amber-800 hover:text-white transition h-6';
+        if (banner) banner.classList.add('hidden');
+    }
+}
+
 // Chart Init (Psyché - Radar) — 6 dimensions dynamiques
 const psycheLabels = ['Curiosite', 'Creativite', 'Audace', 'Savoir', 'Survie', 'Respect'];
 const ctx = document.getElementById('psycheChart').getContext('2d');
@@ -865,6 +900,15 @@ function syncAutonomyStatus(data) {
     if (data && typeof data.is_napping === 'boolean') {
         napModeActive = data.is_napping;
         updateNapButton();
+    }
+    if (data && typeof data.is_coffee_mode === 'boolean') {
+        coffeeModeActive = data.is_coffee_mode;
+        updateCoffeeModeButton();
+        if (coffeeModeActive && data._coffee_started_at) {
+            const elapsed = Math.floor((Date.now() / 1000 - data._coffee_started_at) / 60);
+            const el = document.getElementById('coffee-elapsed');
+            if (el) el.textContent = elapsed;
+        }
     }
     if (data && typeof data.is_autoresearch === 'boolean') {
         autoresearchActive = data.is_autoresearch;

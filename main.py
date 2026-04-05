@@ -700,6 +700,27 @@ async def toggle_nap_mode(request: Request):
         await autonomy.exit_nap()
     return {"status": "ok", "is_napping": autonomy.is_napping}
 
+@app.post("/api/coffee-mode")
+async def toggle_coffee_mode(request: Request):
+    """Active ou désactive le mode café (socialisation libre 20 min)."""
+    data = await request.json()
+    enabled = data.get("enabled", False)
+    if enabled:
+        accepted = await autonomy.enter_coffee_mode()
+        if not accepted:
+            elapsed = time.time() - autonomy._coffee_last_exit if autonomy._coffee_last_exit else 0
+            from core.autonomy_engine import COFFEE_MODE_COOLDOWN
+            remaining = max(0, int(COFFEE_MODE_COOLDOWN - elapsed))
+            reason = "cooldown"
+            if autonomy.is_napping:
+                reason = "sieste active"
+            elif autonomy.is_autoresearch:
+                reason = "autoresearch actif"
+            return {"status": "blocked", "is_coffee_mode": False, "reason": reason, "cooldown_remaining": remaining}
+    else:
+        await autonomy.exit_coffee_mode()
+    return {"status": "ok", "is_coffee_mode": autonomy.is_coffee_mode}
+
 @app.post("/api/autoresearch", dependencies=[Depends(verify_token)])
 async def toggle_autoresearch(request: Request):
     """Active ou désactive le mode Autoresearch (expérimentation paramètres 4h)."""

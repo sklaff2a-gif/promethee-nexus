@@ -211,6 +211,11 @@ NAP_PERIOD_DURATION = 3600    # 60 min par période
 NAP_MAX_RENEWALS = 1          # 1 renouvellement max (= 2h total)
 NAP_COOLDOWN = 300            # 5 min avant de pouvoir re-siester
 
+# Mode café : socialisation libre avec Alfred (et Stefan si matériel)
+COFFEE_MODE_DURATION = 20 * 60     # 20 min par session
+COFFEE_MODE_INTERVAL = 5 * 60     # 5 min entre chaque café (laisser les pensées s'accumuler)
+COFFEE_MODE_COOLDOWN = 3600       # 1h avant de pouvoir relancer un mode café
+
 # Mode Autoresearch : focus exclusif sur PARAM_EXPERIMENT
 AUTORESEARCH_DURATION = 4 * 3600   # 4h par session
 AUTORESEARCH_INTERVAL = 60         # 1 min entre expériences (observation incluse dans la routine)
@@ -690,6 +695,12 @@ class AutonomyEngine:
         self._nap_renewals_used: int = persisted.get("_nap_renewals_used", 0)
         self._nap_last_exit: float = persisted.get("_nap_last_exit", 0.0)
 
+        # Mode café : socialisation libre avec Alfred
+        self.is_coffee_mode: bool = persisted.get("is_coffee_mode", False)
+        self._coffee_started_at: float = persisted.get("_coffee_started_at", 0.0)
+        self._coffee_sessions: int = 0
+        self._coffee_last_exit: float = persisted.get("_coffee_last_exit", 0.0)
+
         # Mode Autoresearch : optimisation autonome des paramètres (Karpathy-inspired)
         self.is_autoresearch: bool = persisted.get("is_autoresearch", False)
         self._autoresearch_started_at: float = persisted.get("_autoresearch_started_at", 0.0)
@@ -915,6 +926,9 @@ class AutonomyEngine:
             "_nap_started_at": self._nap_started_at,
             "_nap_renewals_used": self._nap_renewals_used,
             "_nap_last_exit": self._nap_last_exit,
+            "is_coffee_mode": getattr(self, "is_coffee_mode", False),
+            "_coffee_started_at": getattr(self, "_coffee_started_at", 0.0),
+            "_coffee_last_exit": getattr(self, "_coffee_last_exit", 0.0),
             "is_autoresearch": getattr(self, "is_autoresearch", False),
             "_autoresearch_started_at": getattr(self, "_autoresearch_started_at", 0.0),
             "_autoresearch_experiments": getattr(self, "_autoresearch_experiments", 0),
@@ -1640,6 +1654,8 @@ class AutonomyEngine:
             "is_running": self.is_running,
             "is_processing": self.is_processing,
             "is_napping": self.is_napping,
+            "is_coffee_mode": getattr(self, "is_coffee_mode", False),
+            "_coffee_started_at": getattr(self, "_coffee_started_at", 0.0),
             "is_autoresearch": getattr(self, "is_autoresearch", False),
             "autoresearch_info": {
                 "experiments": getattr(self, "_autoresearch_experiments", 0),
@@ -3960,6 +3976,9 @@ class AutonomyEngine:
                 remaining = int(NAP_COOLDOWN - elapsed)
                 logger.info(f"[AUTONOMY] Sieste refusée — cooldown {remaining}s restant.")
                 return False
+        if getattr(self, "is_coffee_mode", False):
+            logger.info("[AUTONOMY] Sieste refusée — mode café actif.")
+            return False
         self.is_napping = True
         self._nap_started_at = time.time()
         self._nap_tasks_done = []
@@ -4052,6 +4071,84 @@ class AutonomyEngine:
         logger.info(f"[AUTONOMY] {summary}")
 
     # ================================================================
+    # MODE CAFÉ — socialisation libre avec Alfred (et Stefan)
+    # ================================================================
+
+    async def enter_coffee_mode(self) -> bool:
+        """Active le mode café : socialisation libre pendant 20 min."""
+        if self.is_coffee_mode:
+            return True  # Déjà actif
+        if self.is_napping:
+            logger.info("[COFFEE_MODE] Impossible — mode sieste actif.")
+            return False
+        if self.is_autoresearch:
+            logger.info("[COFFEE_MODE] Impossible — mode autoresearch actif.")
+            return False
+        # Cooldown
+        if self._coffee_last_exit:
+            elapsed = time.time() - self._coffee_last_exit
+            if elapsed < COFFEE_MODE_COOLDOWN:
+                remaining = int(COFFEE_MODE_COOLDOWN - elapsed)
+                logger.info(f"[COFFEE_MODE] Cooldown — {remaining}s restant.")
+                return False
+
+        self.is_coffee_mode = True
+        self._coffee_started_at = time.time()
+        self._coffee_sessions = 0
+
+        # Reset cooldown Alfred pour qu'il puisse enchaîner les cafés
+        try:
+            from core.ami import alfred
+            alfred.last_coffee = 0.0
+        except Exception:
+            pass
+
+        self._persist_state()
+        await bus.publish("COFFEE_MODE", {"active": True})
+        await bus.publish("THOUGHT_STREAM", {
+            "agent": "SYSTEM",
+            "content": "Mode café activé — pause sociale avec Alfred. Pas de routines, juste du lien.",
+            "type": "info"
+        })
+        print(f"   ☕ MODE CAFÉ: Activé — 20 min de socialisation libre.")
+        logger.info("[COFFEE_MODE] Activé — 20 min de socialisation libre.")
+        return True
+
+    async def exit_coffee_mode(self):
+        """Désactive le mode café, génère un résumé."""
+        duration = time.time() - self._coffee_started_at if self._coffee_started_at else 0
+        minutes = int(duration // 60)
+        sessions = self._coffee_sessions
+
+        self.is_coffee_mode = False
+        self._coffee_started_at = 0.0
+        self._coffee_last_exit = time.time()
+
+        # Boost dopamine + satisfaction CONNEXION
+        try:
+            from core.dopamine_system import dopamine
+            dopamine.dopamine_level = min(1.0, dopamine.dopamine_level + 0.1)
+        except Exception:
+            pass
+        try:
+            from core.desire_engine import desires
+            desires.on_event("COFFEE_BREAK_COMPLETE")
+        except Exception:
+            pass
+
+        self._persist_state()
+
+        summary = f"Pause café terminée ({minutes}min, {sessions} conversations)."
+        await bus.publish("COFFEE_MODE", {"active": False})
+        await bus.publish("THOUGHT_STREAM", {
+            "agent": "SYSTEM",
+            "content": summary,
+            "type": "info"
+        })
+        print(f"   ☕ MODE CAFÉ: {summary}")
+        logger.info(f"[COFFEE_MODE] {summary}")
+
+    # ================================================================
     # MODE AUTORESEARCH — optimisation autonome des paramètres
     # ================================================================
 
@@ -4061,6 +4158,9 @@ class AutonomyEngine:
             return True  # Déjà actif
         if self.is_napping:
             logger.warning("[AUTORESEARCH] Impossible — mode sieste actif.")
+            return False
+        if getattr(self, "is_coffee_mode", False):
+            logger.warning("[AUTORESEARCH] Impossible — mode café actif.")
             return False
 
         self.is_autoresearch = True
@@ -4948,6 +5048,34 @@ class AutonomyEngine:
                     self.is_processing = False
                     self._persist_state()
                 await asyncio.sleep(NAP_SLEEP_INTERVAL)
+                continue
+
+            # Mode café : socialisation libre avec Alfred
+            if self.is_coffee_mode:
+                coffee_elapsed = time.time() - self._coffee_started_at if self._coffee_started_at else 0
+                if coffee_elapsed >= COFFEE_MODE_DURATION:
+                    logger.info(f"[COFFEE_MODE] Fin automatique — {int(coffee_elapsed // 60)} min écoulées.")
+                    await self.exit_coffee_mode()
+                    continue
+                self.is_processing = True
+                try:
+                    result = await self._execute_coffee_break()
+                    status = result.get("status", "unknown")
+                    if status == "success":
+                        self._coffee_sessions += 1
+                        # Reset cooldown Alfred pour le prochain café dans la session
+                        try:
+                            from core.ami import alfred
+                            alfred.last_coffee = 0.0
+                        except Exception:
+                            pass
+                    logger.info(f"[COFFEE_MODE] Café #{self._coffee_sessions}: {result.get('result', '?')[:120]}")
+                except Exception as e:
+                    logger.warning(f"[COFFEE_MODE] Erreur café: {e}")
+                finally:
+                    self.is_processing = False
+                    self._persist_state()
+                await asyncio.sleep(COFFEE_MODE_INTERVAL)
                 continue
 
             # Mode Autoresearch : expériences PARAM_EXPERIMENT exclusives

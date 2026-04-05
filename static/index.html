@@ -246,10 +246,12 @@
         <div class="flex gap-2 items-center">
             <button id="btn-chat-toggle" onclick="toggleChatPanel()" class="btn-bio" style="color: #ffb860;">CHAT</button>
             <button id="autoresearch-button" onclick="toggleAutoresearch()" class="btn-bio" style="color: #00ff88;">RESEARCH</button>
+            <button id="coffee-mode-button" onclick="toggleCoffeeMode()" class="btn-bio" style="color: #ffb860;">CAFÉ</button>
             <button id="nap-button" onclick="toggleNapMode()" class="btn-bio" style="color: #a0a0ff;">SIESTE</button>
             <button id="reboot-button" onclick="triggerReboot()" class="btn-bio" style="color: #ff6060;">REBOOT</button>
         </div>
     </header>
+    <div id="coffee-mode-banner" class="hidden shrink-0 bg-amber-900 text-amber-200 text-center text-xs font-bold py-1 tracking-widest animate-pulse">☕ MODE CAFÉ — socialisation libre avec Alfred — <span id="coffee-elapsed">0</span>min / 20min</div>
     <div id="autoresearch-banner" class="hidden shrink-0 bg-emerald-900 text-emerald-200 text-center text-xs font-bold py-1 tracking-widest animate-pulse">MODE AUTORESEARCH — <span id="ar-experiments">0</span> exp. / <span id="ar-kept">0</span> gardees / <span id="ar-elapsed">0</span>min</div>
     <div id="nap-banner" class="hidden shrink-0 bg-indigo-900 text-indigo-200 text-center text-xs font-bold py-1 tracking-widest animate-pulse">MODE SIESTE ACTIF — GPU libre, reptilien apaise</div>
 
