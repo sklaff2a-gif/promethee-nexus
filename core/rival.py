@@ -173,11 +173,12 @@ class StefanEngine:
                             "model": STEFAN_MODEL,
                             "prompt": prompt,
                             "stream": False,
+                            "think": True,
                             "keep_alive": "30s",
                             "options": {
                                 "temperature": 0.8,
                                 "num_ctx": 8192,
-                                "num_predict": 200,  # Court — une question
+                                "num_predict": 2048,
                             },
                         },
                         timeout=60,
