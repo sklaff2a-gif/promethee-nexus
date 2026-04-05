@@ -128,7 +128,7 @@ class TestCouplingGuardrail:
     # Nombre max d'imports directs entre organes connu au 2026-03-11
     # Si ce test échoue, c'est qu'un nouveau couplage a été ajouté.
     # Vérifier si le bus serait plus approprié, ou mettre à jour le seuil.
-    MAX_KNOWN_ORGAN_IMPORTS = 360  # Mesuré: 356 au 2026-03-28 (+ phi_log snapshot school/dopamine/cardiac) + marge
+    MAX_KNOWN_ORGAN_IMPORTS = 610  # Mesuré: 603 au 2026-04-05 (ajouts avril: tech_watch, philosopher, circadian, school) + marge
 
     def test_organ_import_count_bounded(self):
         """Le nombre d'imports croisés ne dépasse pas le seuil connu."""

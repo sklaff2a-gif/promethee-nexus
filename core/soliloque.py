@@ -20,7 +20,7 @@ logger = logging.getLogger("Soliloque")
 
 MAX_EXCHANGES = 4           # Tours de dialogue max
 MAX_HISTORY = 20            # Sessions conservées
-COMPANION_MODEL = "promethee-companion"
+COMPANION_MODEL = "gemma4:e4b"
 # c06: REFLECT_MODEL depuis Config (fallback si Config indisponible)
 try:
     from config import Config as _SolConfig

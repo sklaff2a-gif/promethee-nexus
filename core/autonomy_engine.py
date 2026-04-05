@@ -702,6 +702,8 @@ class AutonomyEngine:
         self._daily_analysis_done: bool = False
         # Introspection vesperale quotidienne : garantir 1 EVENING_REFLECTION par jour
         self._daily_reflection_done: bool = False
+        # Soliloque quotidien : garantir 1 SOLILOQUE_INTERNE par jour
+        self._daily_soliloque_done: bool = False
 
         # SensoriumLoop : dernier snapshot post-action pour boucle fermee
         self._last_feedback_snapshot: dict = {}
@@ -807,6 +809,7 @@ class AutonomyEngine:
             self.last_reset_day = today
             self._daily_analysis_done = False
             self._daily_reflection_done = False
+            self._daily_soliloque_done = False
             self._nap_refund_used_today = False  # Nouveau second souffle disponible
             self._forced_failure_counts.clear()  # Reset blacklist pour la nouvelle journee
             self._persist_state()
@@ -2109,6 +2112,15 @@ class AutonomyEngine:
                 print("   🔬 AUTO-ANALYSE: Promethee va s'auto-diagnostiquer (force 1x/jour)")
                 self._daily_analysis_done = True  # Marquer immediatement pour eviter double-force
 
+        # --- Soliloque quotidien garanti (Couche 26c) ---
+        # Garantir 1 SOLILOQUE_INTERNE par jour : dialogue introspectif avec le compagnon
+        # Après 20 routines (assez de vécu pour nourrir le dialogue)
+        if not self._daily_soliloque_done and self.daily_count >= 20:
+            if not self._forced_next_intent:
+                self._forced_next_intent = "SOLILOQUE_INTERNE"
+                print("   🪞 SOLILOQUE: Prométhée va dialoguer avec son compagnon intérieur (force 1x/jour)")
+                self._daily_soliloque_done = True
+
         # --- Rituel hebdomadaire d'introspection (Couche 27) ---
         # Apres payday, SELF_INSPECT est garanti d'etre selectionne pour le rituel
         if self._weekly_ritual_pending:
@@ -2304,6 +2316,7 @@ class AutonomyEngine:
                 response = {"status": "error", "result": "Consolidation interrompue (timeout 120s)."}
         elif intent == "SOLILOQUE_INTERNE":
             response = await self._execute_soliloque()
+            self._daily_soliloque_done = True
         elif intent == "SELF_INSPECT":
             response = await self._execute_self_inspect()
         elif intent == "SELF_ANALYSIS":
@@ -2789,6 +2802,7 @@ class AutonomyEngine:
                 response = {"status": "error", "result": "Consolidation interrompue (timeout 120s)."}
         elif intent == "SOLILOQUE_INTERNE":
             response = await self._execute_soliloque()
+            self._daily_soliloque_done = True
         elif intent == "SELF_INSPECT":
             response = await self._execute_self_inspect()
         elif intent == "SELF_ANALYSIS":

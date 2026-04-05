@@ -48,7 +48,7 @@
     "description": "Synthèse thématique des mémoires récentes, appels ChromaDB + 1 LLM"
   },
   "SOLILOQUE_INTERNE": {
-    "cost": 5,
+    "cost": 3,
     "description": "Dialogue introspectif multi-tours avec compagnon intérieur (~7 appels LLM)"
   },
   "NEURAL_COMPILE": {

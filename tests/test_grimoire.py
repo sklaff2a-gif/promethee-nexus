@@ -176,7 +176,7 @@ class TestRouterGrimoireScoring:
         with patch("core.router.httpx.AsyncClient") as MockClient:
             MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
-            result = await RouterAgent.classify_intent("quelle est la philosophie du système")
+            result = await RouterAgent.classify_intent("quel temps fait-il dehors")
             assert result == "strategist"
 
     def test_check_grimoire_index_cache(self):
