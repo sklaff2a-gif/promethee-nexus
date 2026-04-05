@@ -413,6 +413,16 @@ async def lifespan(app: FastAPI):
     soliloque.init()
     print(f"   🪞 SOLILOQUE: Compagnon intérieur actif ({soliloque.session_count} sessions).")
 
+    # --- ALFRED (Ami / Coffee Break) ---
+    from core.ami import alfred
+    alfred.init()
+    print(f"   ☕ ALFRED: Ami actif ({alfred.session_count} cafés partagés).")
+
+    # --- STEFAN (Rival / Confrontation) ---
+    from core.rival import stefan
+    stefan.init()
+    print(f"   ⚔️ STEFAN: Rival actif ({stefan.confrontation_count} confrontations).")
+
     # --- CHAT DIRECT (Conversation Humain <-> Promethee) ---
     from core.chat_engine import chat_engine
     print(f"   💬 CHAT: Canal direct actif ({len(chat_engine.messages)} messages en memoire).")
@@ -968,6 +978,71 @@ async def soliloque_history():
     """Retourne les 10 dernières sessions de soliloque."""
     from core.soliloque import soliloque
     return soliloque.get_history(n=10)
+
+@app.get("/api/alfred/status")
+async def alfred_status():
+    """Retourne l'état d'Alfred."""
+    from core.ami import alfred
+    return alfred.get_status()
+
+@app.get("/api/alfred/conversations")
+async def alfred_conversations():
+    """Retourne les journaux des cafés avec Alfred (markdown)."""
+    import os, glob
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "coffee_breaks")
+    if not os.path.isdir(log_dir):
+        return {"conversations": [], "total_files": 0}
+    files = sorted(glob.glob(os.path.join(log_dir, "cafe_*.md")), reverse=True)
+    conversations = []
+    for fpath in files[:10]:
+        with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+            conversations.append({
+                "date": os.path.basename(fpath).replace("cafe_", "").replace(".md", ""),
+                "content": f.read(),
+            })
+    return {"conversations": conversations, "total_files": len(files)}
+
+@app.post("/api/alfred/coffee")
+async def alfred_force_coffee():
+    """Force un café avec Alfred (ignore le cooldown)."""
+    from core.ami import alfred
+    alfred.last_coffee = 0.0  # Reset cooldown
+    result = await alfred.coffee_break()
+    return result
+
+@app.get("/api/stefan/status")
+async def stefan_status():
+    """Retourne l'état de Stefan."""
+    from core.rival import stefan
+    return stefan.get_status()
+
+@app.get("/api/stefan/confrontations")
+async def stefan_confrontations():
+    """Retourne les journaux des confrontations avec Stefan."""
+    import os, glob
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "confrontations")
+    if not os.path.isdir(log_dir):
+        return {"confrontations": [], "total_files": 0}
+    files = sorted(glob.glob(os.path.join(log_dir, "confrontation_*.txt")), reverse=True)
+    confrontations = []
+    for fpath in files[:10]:
+        with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+            confrontations.append({
+                "date": os.path.basename(fpath).replace("confrontation_", "").replace(".txt", ""),
+                "content": f.read(),
+            })
+    return {"confrontations": confrontations, "total_files": len(files)}
+
+@app.post("/api/stefan/confront")
+async def stefan_force_confront():
+    """Force une confrontation Stefan (ignore le cooldown, cherche le matériel)."""
+    from core.rival import stefan
+    stefan.last_confrontation = 0.0  # Reset cooldown
+    material = stefan.find_confrontation_material()
+    if not material:
+        return {"status": "skipped", "result": "Rien à confronter — aucun texte avec affirmation sur soi."}
+    result = await stefan.confront(material["text"], material["source"])
+    return result
 
 @app.get("/api/signal-bus/status")
 async def signal_bus_status():

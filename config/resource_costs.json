@@ -138,5 +138,9 @@
   "COFFEE_BREAK": {
     "cost": 3,
     "description": "Cafe avec Alfred: 3-5 echanges non structures. Satisfait CONNEXION. Max 1x/8h."
+  },
+  "STEFAN_CONFRONTATION": {
+    "cost": 2,
+    "description": "Confrontation avec Stefan: 1 question tranchante sur une affirmation de Promethee. Max 1x/6h."
   }
 }

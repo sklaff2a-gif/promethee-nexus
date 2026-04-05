@@ -174,7 +174,7 @@ INTROSPECTIVE_INTENTS = {
 }
 EXTROVERTED_INTENTS = {
     "VEILLE_SILENCIEUSE", "VEILLE_IA", "DROPZONE_SCAN", "ROADMAP_RESEARCH", "ROADMAP_SPEC",
-    "VISUAL_OBSERVATION",
+    "VISUAL_OBSERVATION", "COFFEE_BREAK",
 }
 EXTROVERSION_STREAK_THRESHOLD = 3   # Apres 3 routines introspectives consecutives
 EXTROVERSION_BONUS_PER_STREAK = 0.8 # Bonus par routine au-dela du seuil
@@ -478,6 +478,8 @@ CONTEXT_KEYWORDS = {
     "SCHOOL_BULLETIN": ["bulletin", "bilan", "évaluation", "note", "progrès", "résumé"],
     "SCHOOL_FREE_TIME": ["libre", "choix", "explorer", "curiosité", "méditer", "improviser"],
     "NEURAL_TRAINING": ["réseau", "synaptique", "renforcer", "rappel", "synthèse", "consolider", "hebbian", "connexion"],
+    "COFFEE_BREAK": ["café", "ami", "alfred", "social", "discussion", "pote", "pause"],
+    "STEFAN_CONFRONTATION": ["rival", "stefan", "confronter", "question", "mensonge", "vérité", "miroir"],
 }
 
 
@@ -891,6 +893,8 @@ class AutonomyEngine:
             {"agent": "strategist", "intent": "NEURAL_TRAINING", "mission": "Entraînement neuronal ciblé"},
             {"agent": "_param_experiment", "intent": "PARAM_EXPERIMENT", "mission": "Expérimentation autonome: varier un paramètre, observer, comparer, garder ou rollback."},
             {"agent": "_evening_reflection", "intent": "EVENING_REFLECTION", "mission": "Introspection vesperale : relire les moments forts de la journee et identifier les questions ouvertes."},
+            {"agent": "_coffee_break", "intent": "COFFEE_BREAK", "mission": "Pause café avec Alfred — conversation amicale et décontractée."},
+            {"agent": "_stefan_confrontation", "intent": "STEFAN_CONFRONTATION", "mission": "Confrontation avec Stefan — une question que Prométhée a évitée."},
         ]
 
     def _persist_state(self):
@@ -2317,6 +2321,10 @@ class AutonomyEngine:
         elif intent == "SOLILOQUE_INTERNE":
             response = await self._execute_soliloque()
             self._daily_soliloque_done = True
+        elif intent == "COFFEE_BREAK":
+            response = await self._execute_coffee_break()
+        elif intent == "STEFAN_CONFRONTATION":
+            response = await self._execute_stefan_confrontation()
         elif intent == "SELF_INSPECT":
             response = await self._execute_self_inspect()
         elif intent == "SELF_ANALYSIS":
@@ -2803,6 +2811,10 @@ class AutonomyEngine:
         elif intent == "SOLILOQUE_INTERNE":
             response = await self._execute_soliloque()
             self._daily_soliloque_done = True
+        elif intent == "COFFEE_BREAK":
+            response = await self._execute_coffee_break()
+        elif intent == "STEFAN_CONFRONTATION":
+            response = await self._execute_stefan_confrontation()
         elif intent == "SELF_INSPECT":
             response = await self._execute_self_inspect()
         elif intent == "SELF_ANALYSIS":
@@ -3143,6 +3155,27 @@ class AutonomyEngine:
             return result
         except Exception as e:
             return {"status": "error", "result": f"Erreur soliloque: {e}"}
+
+    async def _execute_coffee_break(self) -> dict:
+        """Pause café avec Alfred — conversation amicale."""
+        try:
+            from core.ami import alfred
+            result = await alfred.coffee_break()
+            return result
+        except Exception as e:
+            return {"status": "error", "result": f"Erreur café: {e}"}
+
+    async def _execute_stefan_confrontation(self) -> dict:
+        """Confrontation avec Stefan — une question que Prométhée a évitée."""
+        try:
+            from core.rival import stefan
+            material = stefan.find_confrontation_material()
+            if not material:
+                return {"status": "skipped", "result": "Stefan n'a rien à confronter."}
+            result = await stefan.confront(material["text"], material["source"])
+            return result
+        except Exception as e:
+            return {"status": "error", "result": f"Erreur Stefan: {e}"}
 
     async def _execute_grimoire_routine(self) -> dict:
         """Invoque un agent Grimoire en rotation (le moins récemment utilisé)."""

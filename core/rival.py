@@ -173,6 +173,7 @@ class StefanEngine:
                             "model": STEFAN_MODEL,
                             "prompt": prompt,
                             "stream": False,
+                            "keep_alive": "30s",
                             "options": {
                                 "temperature": 0.8,
                                 "num_ctx": 8192,
