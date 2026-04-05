@@ -69,12 +69,14 @@ class GpuScheduler:
     """File d'attente GPU — sérialise les appels Ollama et protège le GPU.
 
     Remplace l'ancien Semaphore(2) par un Lock strict (1 seul appel à la fois)
-    + cooldown inter-appels + monitoring température GPU.
+    + cooldown inter-appels + monitoring température GPU + monitoring VRAM.
     """
 
     GPU_COOLDOWN_SECONDS = 1.5       # Pause minimale entre deux appels consécutifs
     GPU_TEMP_MAX = 75                # Température max avant throttle (°C) — abaissé de 82 pour stabilité driver 595.79
     GPU_TEMP_CHECK_INTERVAL = 30     # Vérifier la temp GPU max toutes les 30s
+    GPU_VRAM_MAX_PERCENT = 85        # Seuil VRAM (%) au-delà duquel on décharge les modèles Ollama
+    GPU_VRAM_CHECK_INTERVAL = 30     # Rate-limit du check VRAM (secondes)
 
     def __init__(self):
         self._lock = None
@@ -83,6 +85,9 @@ class GpuScheduler:
         self._last_call_end = 0.0
         self._last_temp_check = 0.0
         self._last_gpu_temp = 0
+        self._last_vram_check = 0.0
+        self._last_vram_percent = 0
+        self._vram_unloads = 0
         self._total_calls = 0
         self._total_wait_time = 0.0
         self._current_agent = None
@@ -117,6 +122,63 @@ class GpuScheduler:
             return temp
         except Exception:
             return self._last_gpu_temp
+
+    async def _check_vram(self) -> int:
+        """Vérifie l'utilisation VRAM via nvidia-smi (rate-limited).
+
+        Retourne le pourcentage d'utilisation (0-100).
+        Si VRAM > GPU_VRAM_MAX_PERCENT, décharge les modèles Ollama inactifs.
+        """
+        now = time.time()
+        if now - self._last_vram_check < self.GPU_VRAM_CHECK_INTERVAL:
+            return self._last_vram_percent
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "nvidia-smi", "--query-gpu=memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            parts = stdout.decode().strip().split(",")
+            used_mb = int(parts[0].strip())
+            total_mb = int(parts[1].strip())
+            percent = int(100 * used_mb / total_mb) if total_mb > 0 else 0
+            self._last_vram_percent = percent
+            self._last_vram_check = now
+
+            if percent >= self.GPU_VRAM_MAX_PERCENT:
+                logger.warning(
+                    f"[GPU_VRAM] VRAM à {percent}% ({used_mb}/{total_mb} MB) "
+                    f"— déchargement modèles Ollama"
+                )
+                await self._unload_ollama_models()
+                self._vram_unloads += 1
+            return percent
+        except Exception:
+            return self._last_vram_percent
+
+    async def _unload_ollama_models(self):
+        """Décharge tous les modèles Ollama inactifs pour libérer la VRAM."""
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                # Lister les modèles chargés
+                resp = await client.get("http://localhost:11434/api/ps", timeout=10)
+                if resp.status_code != 200:
+                    return
+                models = resp.json().get("models", [])
+                for model in models:
+                    name = model.get("name", "")
+                    if name:
+                        await client.post(
+                            "http://localhost:11434/api/generate",
+                            json={"model": name, "keep_alive": "0", "prompt": ""},
+                            timeout=30,
+                        )
+                        logger.info(f"[GPU_VRAM] Modèle déchargé: {name}")
+        except Exception as e:
+            logger.warning(f"[GPU_VRAM] Erreur déchargement: {e}")
 
     # Budget de blocage par défaut pour les actions proactives (inspiré KAIROS)
     PROACTIVE_TIMEOUT = 15.0  # secondes max d'attente dans la queue
@@ -170,6 +232,9 @@ class GpuScheduler:
                 temp = await self._check_gpu_temp()
             logger.info(f"[GPU_QUEUE] GPU refroidi à {temp}°C — reprise")
 
+        # Vérification VRAM — décharge les modèles Ollama si saturation
+        await self._check_vram()
+
         if wait > 0.5:
             logger.info(
                 f"[GPU_QUEUE] {caller} accède au GPU "
@@ -201,6 +266,8 @@ class GpuScheduler:
             "total_calls": self._total_calls,
             "avg_wait_s": round(self._total_wait_time / max(1, self._total_calls), 2),
             "last_gpu_temp": self._last_gpu_temp,
+            "last_vram_percent": self._last_vram_percent,
+            "vram_unloads": self._vram_unloads,
         }
 
     def reset(self):
@@ -211,6 +278,9 @@ class GpuScheduler:
         self._last_call_end = 0.0
         self._last_temp_check = 0.0
         self._last_gpu_temp = 0
+        self._last_vram_check = 0.0
+        self._last_vram_percent = 0
+        self._vram_unloads = 0
         self._total_calls = 0
         self._total_wait_time = 0.0
         self._current_agent = None

@@ -348,6 +348,7 @@ class AlfredEngine:
                     "messages": messages,
                     "stream": False,
                     "think": False,
+                    "keep_alive": "30s",
                     "options": {"temperature": 0.75, "num_ctx": 4096, "num_predict": -1},
                 }
                 async with httpx.AsyncClient() as client:
@@ -399,6 +400,7 @@ class AlfredEngine:
                     "prompt": prompt,
                     "stream": False,
                     "think": False,
+                    "keep_alive": "30s",
                     "options": {"temperature": 0.7, "num_ctx": 4096, "num_predict": -1},
                 }
                 async with httpx.AsyncClient() as client:

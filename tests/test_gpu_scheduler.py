@@ -284,7 +284,131 @@ class TestBackwardCompat:
 
 
 # ============================================================
-# 6. Reset et Smart Restart
+# 6. Monitoring VRAM
+# ============================================================
+
+class TestVramMonitoring:
+
+    @pytest.mark.asyncio
+    async def test_vram_check_called_in_acquire(self):
+        """Le check VRAM est appelé dans acquire()."""
+        s = GpuScheduler()
+        s.GPU_COOLDOWN_SECONDS = 0
+        s.GPU_TEMP_CHECK_INTERVAL = 999
+        s.GPU_VRAM_CHECK_INTERVAL = 0  # Vérifier à chaque appel
+
+        with patch.object(s, "_check_gpu_temp", new_callable=AsyncMock, return_value=50), \
+             patch.object(s, "_check_vram", new_callable=AsyncMock, return_value=30) as mock_vram:
+            async with s.access("test"):
+                pass
+            mock_vram.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_vram_under_threshold_no_unload(self):
+        """Sous le seuil VRAM, pas de déchargement."""
+        s = GpuScheduler()
+        s._last_vram_check = 0  # Forcer un check
+        s.GPU_VRAM_CHECK_INTERVAL = 0
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"8000, 16000", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc), \
+             patch.object(s, "_unload_ollama_models", new_callable=AsyncMock) as mock_unload:
+            percent = await s._check_vram()
+            assert percent == 50
+            mock_unload.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_vram_over_threshold_triggers_unload(self):
+        """Au-delà du seuil VRAM, décharge les modèles Ollama."""
+        s = GpuScheduler()
+        s._last_vram_check = 0
+        s.GPU_VRAM_CHECK_INTERVAL = 0
+        s.GPU_VRAM_MAX_PERCENT = 85
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"14000, 16000", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc), \
+             patch.object(s, "_unload_ollama_models", new_callable=AsyncMock) as mock_unload:
+            percent = await s._check_vram()
+            assert percent == 87
+            mock_unload.assert_called_once()
+            assert s._vram_unloads == 1
+
+    @pytest.mark.asyncio
+    async def test_vram_rate_limited(self):
+        """Le check VRAM est rate-limité."""
+        s = GpuScheduler()
+        s._last_vram_check = time.time()  # Tout juste vérifié
+        s._last_vram_percent = 42
+        s.GPU_VRAM_CHECK_INTERVAL = 999
+
+        # Ne doit PAS appeler nvidia-smi
+        with patch("asyncio.create_subprocess_exec") as mock_exec:
+            percent = await s._check_vram()
+            assert percent == 42
+            mock_exec.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_vram_nvidia_smi_error_graceful(self):
+        """Si nvidia-smi échoue, fallback sur la dernière valeur."""
+        s = GpuScheduler()
+        s._last_vram_check = 0
+        s._last_vram_percent = 30
+        s.GPU_VRAM_CHECK_INTERVAL = 0
+
+        with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError):
+            percent = await s._check_vram()
+            assert percent == 30
+
+    @pytest.mark.asyncio
+    async def test_unload_ollama_models(self):
+        """_unload_ollama_models appelle keep_alive=0 sur chaque modèle chargé."""
+        s = GpuScheduler()
+
+        mock_ps_resp = MagicMock()
+        mock_ps_resp.status_code = 200
+        mock_ps_resp.json.return_value = {
+            "models": [
+                {"name": "qwen3.5:9b"},
+                {"name": "gemma4:e4b"},
+            ]
+        }
+        mock_unload_resp = MagicMock()
+        mock_unload_resp.status_code = 200
+
+        import httpx
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_ps_resp)
+            mock_client.post = AsyncMock(return_value=mock_unload_resp)
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await s._unload_ollama_models()
+
+            assert mock_client.post.call_count == 2
+            # Vérifier que keep_alive=0 est envoyé
+            for call in mock_client.post.call_args_list:
+                payload = call[1]["json"]
+                assert payload["keep_alive"] == "0"
+
+    @pytest.mark.asyncio
+    async def test_stats_include_vram(self):
+        """Les stats incluent les métriques VRAM."""
+        s = GpuScheduler()
+        s._last_vram_percent = 60
+        s._vram_unloads = 3
+        stats = s.get_stats()
+        assert stats["last_vram_percent"] == 60
+        assert stats["vram_unloads"] == 3
+
+
+# ============================================================
+# 7. Reset et Smart Restart
 # ============================================================
 
 class TestReset:
