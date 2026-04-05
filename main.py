@@ -706,6 +706,9 @@ async def toggle_coffee_mode(request: Request):
     data = await request.json()
     enabled = data.get("enabled", False)
     if enabled:
+        force = data.get("force", False)
+        if force:
+            autonomy._coffee_last_exit = 0.0
         accepted = await autonomy.enter_coffee_mode()
         if not accepted:
             elapsed = time.time() - autonomy._coffee_last_exit if autonomy._coffee_last_exit else 0

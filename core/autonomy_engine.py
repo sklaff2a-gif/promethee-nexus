@@ -5011,8 +5011,10 @@ class AutonomyEngine:
                 if self.error_streak >= 3:
                     self.error_streak -= 1
 
-            # Mode autoresearch : bypass le sleep cardiaque, intervalle court
-            if getattr(self, "is_autoresearch", False):
+            # Modes spéciaux : bypass le sleep cardiaque
+            if getattr(self, "is_coffee_mode", False):
+                await asyncio.sleep(10)  # Check rapide en mode café
+            elif getattr(self, "is_autoresearch", False):
                 await asyncio.sleep(AUTORESEARCH_INTERVAL)
             else:
                 # Modulation circadienne du sleep
@@ -5021,7 +5023,14 @@ class AutonomyEngine:
                     sleep_time = int(sleep_time * circadian.get_sleep_multiplier())
                 except Exception:
                     pass
-                await asyncio.sleep(sleep_time)
+                # Sleep interruptible : permet au mode café/sieste de réveiller la boucle
+                remaining = sleep_time
+                while remaining > 0:
+                    chunk = min(remaining, 15)
+                    await asyncio.sleep(chunk)
+                    remaining -= chunk
+                    if getattr(self, "is_coffee_mode", False) or self.is_napping:
+                        break
 
             if orchestrator.kill_switch_active or self.is_processing:
                 continue
@@ -5059,16 +5068,16 @@ class AutonomyEngine:
                     continue
                 self.is_processing = True
                 try:
+                    # Reset cooldown Alfred AVANT chaque café du mode
+                    try:
+                        from core.ami import alfred
+                        alfred.last_coffee = 0.0
+                    except Exception:
+                        pass
                     result = await self._execute_coffee_break()
                     status = result.get("status", "unknown")
                     if status == "success":
                         self._coffee_sessions += 1
-                        # Reset cooldown Alfred pour le prochain café dans la session
-                        try:
-                            from core.ami import alfred
-                            alfred.last_coffee = 0.0
-                        except Exception:
-                            pass
                     logger.info(f"[COFFEE_MODE] Café #{self._coffee_sessions}: {result.get('result', '?')[:120]}")
                 except Exception as e:
                     logger.warning(f"[COFFEE_MODE] Erreur café: {e}")
