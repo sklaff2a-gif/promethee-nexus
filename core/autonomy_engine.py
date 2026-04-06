@@ -3244,6 +3244,91 @@ class AutonomyEngine:
         except Exception as e:
             return {"status": "error", "result": f"Erreur café: {e}"}
 
+    async def _execute_coffee_game(self) -> dict:
+        """Partie de jeu vs Alfred pendant le cafe — 0 LLM, repos GPU."""
+        try:
+            from core.games.game_hub import game_hub
+            import random
+
+            # Choisir un jeu aleatoirement
+            game_type = random.choice(["morpion", "puissance4"])
+            promethee_starts = random.choice([True, False])
+
+            result = game_hub.new_game(game_type, opponent="alfred",
+                                       promethee_starts=promethee_starts)
+            if "error" in result:
+                return {"status": "error", "result": result["error"]}
+
+            # Jouer la partie en automatique (Promethee = IA hard, Alfred = IA medium)
+            from core.games.morpion import ai_move as morpion_ai
+            from core.games.puissance4 import ai_move as puissance4_ai
+
+            max_turns = 50
+            for _ in range(max_turns):
+                state = result.get("state", {})
+                if state.get("game_over"):
+                    break
+
+                # C'est le tour de qui ?
+                current = state.get("current_player", "")
+                promethee_symbol = result.get("promethee_symbol", "")
+                is_promethee_turn = (current == promethee_symbol)
+
+                if is_promethee_turn:
+                    # Promethee joue (hard)
+                    if game_type == "morpion":
+                        game = game_hub._active_morpion
+                        move = morpion_ai(game, "hard")
+                        if move:
+                            result = game_hub.play_move(list(move), player="promethee")
+                    else:
+                        game = game_hub._active_puissance4
+                        col = puissance4_ai(game, "hard")
+                        if col is not None:
+                            result = game_hub.play_move(col, player="promethee")
+                else:
+                    # Alfred joue (deja gere par play_move avec opponent=alfred)
+                    # Si c'est le tour d'Alfred mais pas encore joue, forcer
+                    if game_hub._active_session:
+                        game = game_hub._get_active_game()
+                        if not game.game_over:
+                            ai_result = game_hub._alfred_play()
+                            if ai_result:
+                                result["state"] = game_hub._get_active_game().get_state()
+
+                # Rafraichir l'etat
+                if game_hub._active_session:
+                    result["state"] = game_hub._get_active_game().get_state()
+                else:
+                    break
+
+            # Resultat
+            stats = game_hub.stats
+            winner_info = "Promethee" if result.get("state", {}).get("game_over") and \
+                          stats.get(f"{game_type}_wins", 0) > 0 else "Alfred ou nul"
+
+            summary = (f"Partie de {game_type} vs Alfred — "
+                       f"{result.get('state', {}).get('moves_count', '?')} coups. "
+                       f"Score: {stats.get(f'{game_type}_wins', 0)}V "
+                       f"{stats.get(f'{game_type}_losses', 0)}D "
+                       f"{stats.get(f'{game_type}_draws', 0)}N")
+
+            # Publier sur THOUGHT_STREAM
+            try:
+                await bus.publish("THOUGHT_STREAM", {
+                    "thought": f"[JEU] {summary}",
+                    "source": "coffee_game",
+                })
+            except Exception:
+                pass
+
+            print(f"   🎮 JEU CAFÉ: {summary}")
+            return {"status": "success", "result": summary}
+
+        except Exception as e:
+            logger.warning(f"[COFFEE_GAME] Erreur: {e}")
+            return {"status": "error", "result": f"Erreur jeu: {e}"}
+
     async def _execute_stefan_confrontation(self) -> dict:
         """Confrontation avec Stefan — une question que Prométhée a évitée."""
         try:
@@ -5132,17 +5217,35 @@ class AutonomyEngine:
                     continue
                 self.is_processing = True
                 try:
-                    # Reset cooldown Alfred AVANT chaque café du mode
-                    try:
-                        from core.ami import alfred
-                        alfred.last_coffee = 0.0
-                    except Exception:
-                        pass
-                    result = await self._execute_coffee_break()
-                    status = result.get("status", "unknown")
-                    if status == "success":
-                        self._coffee_sessions += 1
-                    logger.info(f"[COFFEE_MODE] Café #{self._coffee_sessions}: {result.get('result', '?')[:120]}")
+                    # 1 session sur 3 = partie de jeu vs Alfred (0 LLM, repos GPU)
+                    if self._coffee_sessions > 0 and self._coffee_sessions % 3 == 2:
+                        game_result = await self._execute_coffee_game()
+                        if game_result.get("status") == "success":
+                            self._coffee_sessions += 1
+                            logger.info(f"[COFFEE_MODE] Jeu #{self._coffee_sessions}: {game_result.get('result', '?')[:120]}")
+                        else:
+                            # Fallback café si le jeu echoue
+                            try:
+                                from core.ami import alfred
+                                alfred.last_coffee = 0.0
+                            except Exception:
+                                pass
+                            result = await self._execute_coffee_break()
+                            if result.get("status") == "success":
+                                self._coffee_sessions += 1
+                            logger.info(f"[COFFEE_MODE] Café #{self._coffee_sessions}: {result.get('result', '?')[:120]}")
+                    else:
+                        # Reset cooldown Alfred AVANT chaque café du mode
+                        try:
+                            from core.ami import alfred
+                            alfred.last_coffee = 0.0
+                        except Exception:
+                            pass
+                        result = await self._execute_coffee_break()
+                        status = result.get("status", "unknown")
+                        if status == "success":
+                            self._coffee_sessions += 1
+                        logger.info(f"[COFFEE_MODE] Café #{self._coffee_sessions}: {result.get('result', '?')[:120]}")
                 except Exception as e:
                     logger.warning(f"[COFFEE_MODE] Erreur café: {e}")
                 finally:
