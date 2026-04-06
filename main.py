@@ -584,6 +584,11 @@ async def lifespan(app: FastAPI):
     alfred._save()
     stefan._save()
     soliloque._save()
+    try:
+        from core.games.game_hub import game_hub
+        game_hub._save()
+    except Exception:
+        pass
     print("🔌 Arrêt.")
     tracemalloc.stop()
 
@@ -1093,6 +1098,41 @@ async def stefan_force_confront():
         return {"status": "skipped", "result": "Rien à confronter — aucun texte avec affirmation sur soi."}
     result = await stefan.confront(material["text"], material["source"])
     return result
+
+# ─── JEUX ────────────────────────────────────────────────────────────────
+
+@app.get("/api/games/status")
+async def games_status():
+    """Retourne l'etat du hub de jeux (parties actives, stats, competences)."""
+    from core.games.game_hub import game_hub
+    return game_hub.get_status()
+
+@app.post("/api/games/new")
+async def games_new(request: Request):
+    """Cree une nouvelle partie. Body: {game, opponent?, promethee_starts?}"""
+    from core.games.game_hub import game_hub
+    body = await request.json()
+    game_type = body.get("game", "")
+    opponent = body.get("opponent", "alfred")
+    promethee_starts = body.get("promethee_starts", True)
+    return game_hub.new_game(game_type, opponent, promethee_starts)
+
+@app.post("/api/games/move")
+async def games_move(request: Request):
+    """Joue un coup. Body: {move, player?}"""
+    from core.games.game_hub import game_hub
+    body = await request.json()
+    move = body.get("move")
+    player = body.get("player", "promethee")
+    return game_hub.play_move(move, player)
+
+@app.post("/api/games/forfeit")
+async def games_forfeit():
+    """Abandonne la partie en cours."""
+    from core.games.game_hub import game_hub
+    return game_hub.forfeit()
+
+# ─── SIGNAL BUS ──────────────────────────────────────────────────────────
 
 @app.get("/api/signal-bus/status")
 async def signal_bus_status():
