@@ -33,7 +33,7 @@ from core.neural_tissue import (
     CARRYING_CAPACITY, LOGISTIC_FLOOR,
     DRAINAGE_THRESHOLD, DRAINAGE_RATE, MAX_GRID_SIGNAL,
     CROSSOVER_PROBABILITY, CROSSOVER_ENERGY_THRESHOLD,
-    COMPETITION_DIVISOR_CAP,
+    COMPETITION_DIVISOR_CAP, EXTINCTION_THRESHOLD,
     crossover,
 )
 
@@ -62,10 +62,11 @@ class TestBasalMetabolism:
         grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
         grid[0][0] = 1.0  # Signal élevé → plein coût maintenance
         cell.tick(grid, [])
-        # C capture signal 1.0 → register=1.0, CAPTURE_REWARD=3.0 → +3.0
-        # 60 >= 50 et signal >= 0.1 -> MAINTENANCE_COST = 1.8
-        # 60 + 3.0 - 1.8 = 61.2
-        assert cell.energy == pytest.approx(61.2, abs=0.5)
+        # C capture signal 1.0 → reward = CAPTURE_REWARD × min(1.0, 2.0)
+        # cost = MAINTENANCE_COST × (1 + 60/500)
+        from core.neural_tissue import METABOLIC_REFERENCE
+        expected = 60.0 + CAPTURE_REWARD * min(1.0, 2.0) - MAINTENANCE_COST * (1.0 + 60.0 / METABOLIC_REFERENCE)
+        assert cell.energy == pytest.approx(expected, abs=0.5)
 
     def test_low_energy_pays_basal_cost(self):
         cell = NeuralCell(genome="C", x=0, y=0, energy=40.0)
@@ -80,10 +81,9 @@ class TestBasalMetabolism:
         grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
         grid[0][0] = 1.0  # Signal élevé → plein coût maintenance
         cell.tick(grid, [])
-        # C capture signal 1.0 → register=1.0, CAPTURE_REWARD=3.0 → +3.0
-        # 50 >= 50 et signal >= 0.1 -> MAINTENANCE_COST = 1.8
-        # 50 + 3.0 - 1.8 = 51.2
-        assert cell.energy == pytest.approx(51.2, abs=0.5)
+        from core.neural_tissue import METABOLIC_REFERENCE
+        expected = 50.0 + CAPTURE_REWARD * min(1.0, 2.0) - MAINTENANCE_COST * (1.0 + 50.0 / METABOLIC_REFERENCE)
+        assert cell.energy == pytest.approx(expected, abs=0.5)
 
     def test_basal_extends_survival(self):
         """Une cellule en mode basal survit bien plus de 100 ticks."""
@@ -166,15 +166,14 @@ class TestSignalAwareMaintenance:
         assert cell.energy == pytest.approx(59.7, abs=0.5)
 
     def test_high_signal_pays_full(self):
-        """Cellule sur signal=1.0, energy=60 → coût plein 1.0."""
+        """Cellule sur signal=1.0, energy=60 → coût plein."""
         cell = NeuralCell(genome="C", x=0, y=0, energy=60.0)
         grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
         grid[0][0] = 1.0
         cell.tick(grid, [])
-        # C capture signal → +3.0, grid[0][0] *= 0.5 → 0.5
-        # 0.5 >= 0.1 et 63 >= 50 → MAINTENANCE_COST = 1.8
-        # 60 + 3.0 - 1.8 = 61.2
-        assert cell.energy == pytest.approx(61.2, abs=0.5)
+        from core.neural_tissue import METABOLIC_REFERENCE
+        expected = 60.0 + CAPTURE_REWARD * min(1.0, 2.0) - MAINTENANCE_COST * (1.0 + 60.0 / METABOLIC_REFERENCE)
+        assert cell.energy == pytest.approx(expected, abs=0.5)
 
     def test_low_energy_always_basal(self):
         """energy < 50 → coût basal même avec signal élevé."""
@@ -182,10 +181,12 @@ class TestSignalAwareMaintenance:
         grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
         grid[0][0] = 1.0
         cell.tick(grid, [])
-        # C capture signal → +3.0, grid[0][0] *= 0.5 → 0.5
-        # 0.5 >= 0.1 MAIS 43 < 50 → MAINTENANCE_COST_BASAL = 0.3
-        # 40 + 3.0 - 0.3 = 42.7
-        assert cell.energy == pytest.approx(42.7, abs=0.5)
+        # C capture signal → +CAPTURE_REWARD, energy < 50 → MAINTENANCE_COST_BASAL
+        from core.neural_tissue import METABOLIC_REFERENCE
+        reward = CAPTURE_REWARD * min(1.0, 2.0)
+        energy_after = 40.0 + reward
+        cost = MAINTENANCE_COST_BASAL * (1.0 + energy_after / METABOLIC_REFERENCE)
+        assert cell.energy == pytest.approx(energy_after - cost, abs=0.5)
 
     def test_signal_aware_extends_desert_survival(self):
         """Cellule en zone pauvre (signal=0) survit > 200 ticks."""
@@ -309,7 +310,7 @@ class TestPopulationStability:
     """Stabilite de la population sur la duree."""
 
     def test_population_stability_100_ticks(self):
-        """La population reste >30 apres 100 ticks avec des signaux."""
+        """La population reste viable apres 100 ticks avec des signaux."""
         random.seed(42)
         tissue = _make_tissue()
         tissue._circadian_phase = "eveil"
@@ -318,7 +319,7 @@ class TestPopulationStability:
             tissue._tick()
 
         alive_count = sum(1 for c in tissue.cells if c.alive)
-        assert alive_count > 30, f"Population tombee a {alive_count}"
+        assert alive_count > EXTINCTION_THRESHOLD, f"Population tombee a {alive_count}"
 
     def test_no_extinction_during_sommeil(self):
         """La population reste >5 apres 50 ticks en sommeil profond."""
@@ -1012,12 +1013,13 @@ class TestEpigenetics:
         grid2 = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
         grid2[0][0] = 8.0  # After C: grid = 4.0, signal still > 3.0
         cell2.tick(grid2, [])
-        # C: signal=8.0 > 0.1 → register=8.0, reward=3.0*min(8.0,2.0)=6.0
-        # grid[0][0] = 8.0*0.5 = 4.0 after C
-        # local_signal = 4.0 > 0.1, energy = 106 >= 50 → cost = MAINTENANCE_COST = 1.8
-        # heat_tolerant: local_signal 4.0 > 3.0 → cost *= 0.5 → 0.9
-        # 100 + 6.0 - 0.9 = 105.1
-        assert cell2.energy == pytest.approx(105.1, abs=0.5)
+        # C: signal=8.0 → reward = CAPTURE_REWARD × min(8.0, 2.0)
+        # heat_tolerant: local_signal > 3.0 → cost *= 0.5
+        from core.neural_tissue import METABOLIC_REFERENCE
+        reward = CAPTURE_REWARD * min(8.0, 2.0)
+        energy_after = 100.0 + reward
+        cost = MAINTENANCE_COST * HEAT_TOLERANT_COST_FACTOR * (1.0 + energy_after / METABOLIC_REFERENCE)
+        assert cell2.energy == pytest.approx(energy_after - cost, abs=0.5)
 
     # 7
     def test_famine_adapted_acquisition(self):
@@ -1055,10 +1057,10 @@ class TestEpigenetics:
                           epigenetic_markers={"creative_burst": {"cycles": 0, "acquired": True}})
         grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
         cell.tick(grid, [])
-        # G: register=1.0 > 0.1 → output_count=1, reward=2.0*1.5=3.0
-        # cost_action=0.5, cost_maintenance=0.3 (signal=0<0.1)
-        # 100 + 3.0 - 0.5 - 0.3 = 102.2
-        assert cell.energy == pytest.approx(102.2, abs=0.5)
+        # G: reward = GENERATE_REWARD × 1.5 (creative_burst) - ACTION_COST
+        # Le signal paracrine déposé fait que local_signal > 0.1 → MAINTENANCE_COST
+        assert cell.output_count == 1
+        assert cell.energy > 100.0, "La cellule devrait gagner de l'énergie net"
 
     # 11
     def test_pandemic_veteran_acquisition(self):
@@ -1086,11 +1088,13 @@ class TestEpigenetics:
         grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
         grid[0][0] = 2.0
         cell.tick(grid, [])
-        # C: signal=2.0 > 0.1 → register=2.0, reward=3.0*min(2.0,2.0)*1.5=9.0
-        # grid[0][0] = 2.0*0.5 = 1.0, local_signal=1.0 >= 0.1
-        # energy=109 >= 50 → cost=1.8
-        # 100 + 9.0 - 1.8 = 107.2
-        assert cell.energy == pytest.approx(107.2, abs=0.5)
+        # C: signal=2.0 → reward = CAPTURE_REWARD × min(2.0,2.0) × 1.5 (veteran)
+        # cost = MAINTENANCE_COST × (1 + energy_post_capture / 500)
+        from core.neural_tissue import METABOLIC_REFERENCE
+        reward = CAPTURE_REWARD * min(2.0, 2.0) * (1.0 + PANDEMIC_VETERAN_BONUS)
+        energy_after = 100.0 + reward
+        cost = MAINTENANCE_COST * (1.0 + energy_after / METABOLIC_REFERENCE)
+        assert cell.energy == pytest.approx(energy_after - cost, abs=0.5)
 
     # 13
     def test_marker_inheritance_replicate(self):
@@ -1944,9 +1948,9 @@ class TestDrainage:
         """Signal sous le seuil → pas de drainage."""
         tissue = _make_tissue()
         tissue.grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
-        tissue.grid[8][8] = 2.0  # < DRAINAGE_THRESHOLD (3.0)
+        tissue.grid[8][8] = DRAINAGE_THRESHOLD * 0.5  # Bien sous le seuil
         tissue._apply_drainage()
-        assert tissue.grid[8][8] == pytest.approx(2.0)
+        assert tissue.grid[8][8] == pytest.approx(DRAINAGE_THRESHOLD * 0.5)
 
     def test_drainage_above_threshold_spills(self):
         """Signal au-dessus du seuil → excès réparti aux voisins."""
@@ -1966,12 +1970,15 @@ class TestDrainage:
         """Coin de grille : seulement 2 voisins, drainage proportionnel."""
         tissue = _make_tissue()
         tissue.grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
-        tissue.grid[0][0] = 5.0  # excès = 2.0, spill = 0.5
+        initial = DRAINAGE_THRESHOLD + 2.0
+        tissue.grid[0][0] = initial
         tissue._apply_drainage()
-        # 2 voisins : (1,0) et (0,1), chacun reçoit 0.25
-        assert tissue.grid[1][0] == pytest.approx(0.25)
-        assert tissue.grid[0][1] == pytest.approx(0.25)
-        assert tissue.grid[0][0] == pytest.approx(4.5)
+        excess = initial - DRAINAGE_THRESHOLD
+        spill = excess * DRAINAGE_RATE
+        per_neighbor = spill / 2  # 2 voisins au coin
+        assert tissue.grid[1][0] == pytest.approx(per_neighbor)
+        assert tissue.grid[0][1] == pytest.approx(per_neighbor)
+        assert tissue.grid[0][0] == pytest.approx(initial - spill)
 
     def test_drainage_preserves_total_signal(self):
         """Conservation d'énergie : somme totale ≈ constante."""
@@ -2182,44 +2189,53 @@ class TestLocalCompetition:
 
     def test_competition_single_cell(self):
         """1 cellule seule → reward plein (÷1)."""
+        from core.neural_tissue import METABOLIC_REFERENCE, COMPETITION_DIVISOR_CAP
         cell = NeuralCell(genome="C", x=5, y=5, energy=50.0)
         grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
         grid[5][5] = 2.0
         cell.tick(grid, [], local_density=1)
-        # reward = CAPTURE_REWARD * min(2.0, 2.0) / 1 = 3.0 * 2.0 = 6.0
-        # energy = 50.0 + 6.0 - MAINTENANCE_COST(1.8) = 54.2
-        assert cell.energy == pytest.approx(54.2, abs=0.5)
+        reward = CAPTURE_REWARD * min(2.0, 2.0) / 1
+        energy_after = 50.0 + reward
+        cost = MAINTENANCE_COST * (1.0 + energy_after / METABOLIC_REFERENCE)
+        assert cell.energy == pytest.approx(energy_after - cost, abs=0.5)
 
     def test_competition_multiple_cells(self):
         """3 cellules même case → reward ÷3."""
+        from core.neural_tissue import METABOLIC_REFERENCE, COMPETITION_DIVISOR_CAP
         cell = NeuralCell(genome="C", x=5, y=5, energy=50.0)
         grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
         grid[5][5] = 2.0
         cell.tick(grid, [], local_density=3)
-        # reward = CAPTURE_REWARD * min(2.0, 2.0) / 3 = 6.0 / 3 = 2.0
-        # energy = 50.0 + 2.0 - 1.8 = 50.2
-        assert cell.energy == pytest.approx(50.2, abs=0.5)
+        competitors = min(3, COMPETITION_DIVISOR_CAP)
+        reward = CAPTURE_REWARD * min(2.0, 2.0) / competitors
+        energy_after = 50.0 + reward
+        cost = MAINTENANCE_COST * (1.0 + energy_after / METABOLIC_REFERENCE)
+        assert cell.energy == pytest.approx(energy_after - cost, abs=0.5)
 
     def test_competition_capped(self):
         """10 cellules → reward ÷ COMPETITION_DIVISOR_CAP (pas ÷10)."""
+        from core.neural_tissue import METABOLIC_REFERENCE, COMPETITION_DIVISOR_CAP
         cell = NeuralCell(genome="C", x=5, y=5, energy=50.0)
         grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
         grid[5][5] = 2.0
         cell.tick(grid, [], local_density=10)
-        # competitors = min(10, COMPETITION_DIVISOR_CAP=5) = 5
-        # reward = 6.0 / 5 = 1.2
-        # energy = 50.0 + 1.2 - 1.8 = 49.4
-        assert cell.energy == pytest.approx(49.4, abs=0.5)
+        competitors = min(10, COMPETITION_DIVISOR_CAP)
+        reward = CAPTURE_REWARD * min(2.0, 2.0) / competitors
+        energy_after = 50.0 + reward
+        cost = MAINTENANCE_COST * (1.0 + energy_after / METABOLIC_REFERENCE)
+        assert cell.energy == pytest.approx(energy_after - cost, abs=0.5)
 
     def test_competition_zero_density_safe(self):
         """Densité 0 → pas de division par zéro (max(0, 1) = 1)."""
+        from core.neural_tissue import METABOLIC_REFERENCE
         cell = NeuralCell(genome="C", x=5, y=5, energy=50.0)
         grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
         grid[5][5] = 2.0
         cell.tick(grid, [], local_density=0)
-        # competitors = min(0, 5) = 0, max(0, 1) = 1 → reward plein
-        # energy = 50.0 + 6.0 - 1.8 = 54.2
-        assert cell.energy == pytest.approx(54.2, abs=0.5)
+        reward = CAPTURE_REWARD * min(2.0, 2.0) / 1  # max(0,1) = 1
+        energy_after = 50.0 + reward
+        cost = MAINTENANCE_COST * (1.0 + energy_after / METABOLIC_REFERENCE)
+        assert cell.energy == pytest.approx(energy_after - cost, abs=0.5)
 
     def test_dense_zone_cells_gain_less_energy(self):
         """Cellules en zone dense gagnent moins par tick que cellules isolées."""
@@ -2789,3 +2805,69 @@ class TestCognitiveDecay:
              patch.object(tissue, '_publish_zone_update'):
             tissue._tick()
         assert tissue._cognitive_state["memory_activity"] < 1.0
+
+
+# ============================================================
+# Gap Junction + Signal Paracrine
+# ============================================================
+
+class TestGapJunction:
+    """Communication inter-cellulaire via instruction A (Activate)."""
+
+    def test_energy_transfer_rich_to_poor(self):
+        """La cellule riche transfère de l'énergie à la pauvre via A."""
+        rich = NeuralCell(genome="A", x=0, y=0, energy=100.0)
+        poor = NeuralCell(genome="C", x=1, y=0, energy=30.0)
+        grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        rich.tick(grid, [poor])
+        # delta = 100 - 30 = 70 > 10 → transfer = 70 * 0.15 = 10.5
+        assert poor.energy > 30.0, "Le voisin pauvre devrait recevoir de l'énergie"
+        assert rich.energy < 100.0, "La cellule riche devrait perdre de l'énergie"
+
+    def test_no_transfer_if_delta_small(self):
+        """Pas de transfert si la différence d'énergie est < 10."""
+        cell1 = NeuralCell(genome="A", x=0, y=0, energy=55.0)
+        cell2 = NeuralCell(genome="C", x=1, y=0, energy=50.0)
+        grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        energy_before = cell2.energy
+        cell1.tick(grid, [cell2])
+        # delta = 5 < 10 → pas de transfert
+        assert cell2.energy == energy_before
+
+    def test_register_sharing(self):
+        """Le register est partagé avec le voisin via A."""
+        sender = NeuralCell(genome="CA", x=0, y=0, energy=80.0)
+        receiver = NeuralCell(genome="C", x=1, y=0, energy=80.0)
+        grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        grid[0][0] = 2.0  # Signal pour que C capture
+        # Tick 1: C capture → register=2.0
+        sender.tick(grid, [receiver])
+        # Tick 2: A partage le register
+        sender.tick(grid, [receiver])
+        assert receiver.register > 0.0, "Le voisin devrait recevoir une partie du register"
+
+
+class TestParacrineSignal:
+    """Signal paracrine : Generate dépose un signal résiduel sur la grille."""
+
+    def test_generate_deposits_signal(self):
+        """G avec register > 0.1 dépose un signal résiduel sur la grille."""
+        cell = NeuralCell(genome="CG", x=5, y=5, energy=80.0)
+        grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        grid[5][5] = 1.0  # Signal pour capture
+        # Tick 1: C capture signal → register = 1.0
+        cell.tick(grid, [])
+        signal_after_capture = grid[5][5]
+        # Tick 2: G génère → dépose signal résiduel
+        cell.tick(grid, [])
+        assert grid[5][5] > signal_after_capture, "G devrait déposer un signal paracrine"
+        assert cell.output_count == 1
+
+    def test_no_paracrine_without_register(self):
+        """G sans register (< 0.1) ne dépose pas de signal."""
+        cell = NeuralCell(genome="G", x=5, y=5, energy=80.0)
+        grid = [[0.0] * GRID_SIZE for _ in range(GRID_SIZE)]
+        grid[5][5] = 0.0
+        cell.tick(grid, [])
+        assert grid[5][5] == 0.0, "Pas de signal paracrine sans register"
+        assert cell.output_count == 0

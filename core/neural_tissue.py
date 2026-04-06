@@ -36,13 +36,13 @@ MAX_CELLS = 500
 INITIAL_CELLS = 50
 INITIAL_ENERGY = 100.0
 DIVISION_THRESHOLD = 115.0
-MAINTENANCE_COST = 1.8              # Augmenté (était 1.0) — crée pression sélective réelle
+MAINTENANCE_COST = 1.2              # Abaissé (était 1.8) — les cellules mouraient avant de produire
 MAINTENANCE_COST_BASAL = 0.3       # Coût réduit quand énergie < seuil (hibernation cellulaire)
 BASAL_ENERGY_THRESHOLD = 50.0      # Seuil d'activation du mode basal
 ACTION_COST = 0.5
 METABOLIC_REFERENCE = 500.0        # Coût métabolique progressif : énergie/ref → facteur multiplicatif
 FORCED_DIVISION_ENERGY = 1500.0    # Mitose forcée au-dessus de ce seuil (soupape anti-monopole)
-CAPTURE_REWARD = 3.0
+CAPTURE_REWARD = 4.0                # Augmenté (était 3.0) — compense la compétition locale
 GENERATE_REWARD = 2.0
 MUTATION_RATE = 0.03            # 3% par nucléotide (augmenté: diversité génétique)
 INSERTION_RATE = 0.007          # Augmenté pour plus de variété structurelle
@@ -50,7 +50,7 @@ DELETION_RATE = 0.004
 RARITY_ENERGY_BONUS = 15.0     # Bonus énergie pour genomes rares (< 5% population)
 MAX_GENOME_LENGTH = 24
 MIN_GENOME_LENGTH = 2
-SIGNAL_DECAY = 0.92
+SIGNAL_DECAY = 0.95                 # Ralenti (était 0.92) — les signaux persistent plus longtemps
 MAX_GRID_SIGNAL = 5.0              # Saturation : signal max par cellule de grille
 TICK_INTERVAL = 2.0
 SAVE_EVERY_N_TICKS = 50
@@ -219,11 +219,11 @@ EPIGENETIC_INHERITANCE_DECAY = 0.15
 # --- Écologie cellulaire ---
 CARRYING_CAPACITY = 500       # K — capacité de charge logistique (Verhulst)
 LOGISTIC_FLOOR = 0.15         # Nourriture minimum même à population max
-DRAINAGE_THRESHOLD = 3.0      # Signal au-dessus duquel l'excès déborde
+DRAINAGE_THRESHOLD = 1.5      # Abaissé (était 3.0) — les signaux diffusent vers les voisins plus tôt
 DRAINAGE_RATE = 0.25           # 25% de l'excès distribué aux 4 voisins
 CROSSOVER_PROBABILITY = 0.6   # 60% crossover vs clone quand conditions remplies
 CROSSOVER_ENERGY_THRESHOLD = 100.0  # Énergie min pour participer au crossover
-COMPETITION_DIVISOR_CAP = 5          # Max compétiteurs comptés (évite division trop brutale)
+COMPETITION_DIVISOR_CAP = 3          # Abaissé (était 5) — compétition moins punitive
 HYBRID_VIGOR_MULTIPLIER = 20.0      # Bonus énergie enfant = divergence × ce facteur
 MATE_DIVERSITY_WEIGHT = 3.0         # Poids de la distance génétique dans la sélection de partenaire
 
@@ -379,10 +379,18 @@ class NeuralCell:
                  waste_grid=None):
         """Exécute une instruction cognitive."""
         if instruction == 'A':
-            # Activate — propager signal vers un voisin
+            # Activate — gap junction : soutien énergétique + partage de signal
             if neighbors:
                 target = random.choice(neighbors)
-                target.energy += self.register * 0.3
+                # Transfert de signal (register) si on en a
+                if self.register > 0.1:
+                    target.register = max(target.register, self.register * 0.5)
+                # Gap junction énergétique : le plus riche aide le plus pauvre
+                delta = self.energy - target.energy
+                if delta > 10.0:
+                    transfer = delta * 0.15  # 15% du déséquilibre
+                    self.energy -= transfer
+                    target.energy += transfer
             self.energy -= ACTION_COST
             if waste_grid is not None:
                 waste_grid[self.y][self.x] = min(
@@ -413,6 +421,12 @@ class NeuralCell:
                 if self._has_marker("creative_burst"):
                     reward *= (1.0 + CREATIVE_BURST_BONUS)
                 self.energy += reward
+                # Signal paracrine : la génération dépose un signal résiduel
+                # Les cellules voisines pourront le capter au prochain tick
+                grid[self.y][self.x] = min(
+                    grid[self.y][self.x] + self.register * 0.2,
+                    MAX_GRID_SIGNAL,
+                )
             self.energy -= ACTION_COST
             if waste_grid is not None:
                 waste_grid[self.y][self.x] = min(
