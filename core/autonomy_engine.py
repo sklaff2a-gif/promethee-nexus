@@ -710,6 +710,7 @@ class AutonomyEngine:
 
         # Rituel hebdomadaire : introspection GitHub apres payday
         self._weekly_ritual_pending: bool = False
+        self._weekly_ritual_attempts: int = 0  # Fusible anti-boucle (max 3)
 
         # Auto-analyse quotidienne : garantir 1 SELF_ANALYSIS par jour
         self._daily_analysis_done: bool = False
@@ -2143,16 +2144,32 @@ class AutonomyEngine:
 
         # --- Rituel hebdomadaire d'introspection (Couche 27) ---
         # Apres payday, SELF_INSPECT est garanti d'etre selectionne pour le rituel
+        # Le flag _weekly_ritual_force empêche l'override LLM (bug: le LLM overridait
+        # SELF_INSPECT à chaque cycle → boucle infinie → saturation GPU → crash driver)
+        # Fusible : max 3 tentatives, après quoi le rituel est abandonné
+        self._weekly_ritual_force = False
         if self._weekly_ritual_pending:
-            for i, (routine, s) in enumerate(scored):
-                if routine["intent"] == "SELF_INSPECT":
-                    scored[i] = (routine, s + 15.0)  # Boost massif, depasse le clamp
-                    print("   📖 RITUEL HEBDOMADAIRE: Promethee va relire son histoire sur GitHub")
-                    break
+            if self._weekly_ritual_attempts >= 3:
+                logger.warning("[RITUAL] Rituel abandonné après 3 tentatives (fusible anti-boucle)")
+                self._weekly_ritual_pending = False
+                self._weekly_ritual_attempts = 0
+            else:
+                self._weekly_ritual_attempts += 1
+                for i, (routine, s) in enumerate(scored):
+                    if routine["intent"] == "SELF_INSPECT":
+                        scored[i] = (routine, s + 15.0)  # Boost massif, depasse le clamp
+                        self._weekly_ritual_force = True
+                        print("   📖 RITUEL HEBDOMADAIRE: Promethee va relire son histoire sur GitHub")
+                        break
 
         # --- Clamping final du score total ---
         # Empêche le score d'exploser quand beaucoup de couches poussent dans la même direction
-        scored = [(r, max(FINAL_SCORE_CLAMP_MIN, min(FINAL_SCORE_CLAMP_MAX, s))) for r, s in scored]
+        # Exception: le rituel hebdomadaire échappe au clamp pour garantir sa sélection
+        scored = [
+            (r, s) if (self._weekly_ritual_force and r["intent"] == "SELF_INSPECT")
+            else (r, max(FINAL_SCORE_CLAMP_MIN, min(FINAL_SCORE_CLAMP_MAX, s)))
+            for r, s in scored
+        ]
         scored.sort(key=lambda x: x[1], reverse=True)
 
         # --- Modele LIF (Leaky Integrate-and-Fire) ---
@@ -2195,7 +2212,13 @@ class AutonomyEngine:
         # --- Arbitrage LLM (Karpathy-inspired) ---
         # Les 26 couches ont voté. Le LLM voit le top 5 + contexte et arbitre.
         # Fallback : si LLM indisponible, le scoring mécanique décide (scored[0]).
-        llm_choice = await self._llm_select_routine(scored)
+        # Exception: rituel hebdomadaire forcé → pas d'arbitrage LLM (le LLM overridait
+        # systématiquement SELF_INSPECT, empêchant le rituel de jamais s'exécuter)
+        if self._weekly_ritual_force:
+            llm_choice = None
+            logger.info("[AUTONOMY] Rituel hebdomadaire: arbitrage LLM désactivé (SELF_INSPECT forcé)")
+        else:
+            llm_choice = await self._llm_select_routine(scored)
         if llm_choice:
             llm_intent = llm_choice["intent"]
             # Le LLM a choisi — trouver la routine correspondante dans la liste scored
@@ -3345,6 +3368,7 @@ class AutonomyEngine:
             if self._weekly_ritual_pending:
                 reflection = await self._reflect_on_self_inspect(result_text, label)
                 self._weekly_ritual_pending = False
+                self._weekly_ritual_attempts = 0
                 logger.info("[RITUAL] Rituel hebdomadaire complété.")
 
             final_result = f"Inspection: {label}\n{result_text[:1000]}"

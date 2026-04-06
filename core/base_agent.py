@@ -75,7 +75,7 @@ class GpuScheduler:
     GPU_COOLDOWN_SECONDS = 1.5       # Pause minimale entre deux appels consécutifs
     GPU_TEMP_MAX = 75                # Température max avant throttle (°C) — abaissé de 82 pour stabilité driver 595.79
     GPU_TEMP_CHECK_INTERVAL = 30     # Vérifier la temp GPU max toutes les 30s
-    GPU_VRAM_MAX_PERCENT = 85        # Seuil VRAM (%) au-delà duquel on décharge les modèles Ollama
+    GPU_VRAM_MAX_PERCENT = 80        # Seuil VRAM (%) — abaissé de 85 après crash 06/04 (saturation 87-88%)
     GPU_VRAM_CHECK_INTERVAL = 30     # Rate-limit du check VRAM (secondes)
 
     def __init__(self):

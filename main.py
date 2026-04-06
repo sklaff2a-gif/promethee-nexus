@@ -262,6 +262,13 @@ def _emergency_save():
 async def lifespan(app: FastAPI):
     tracemalloc.start()
     from config import Config as _cfg
+    # --- GPU POWER CAP (survit pas aux reboots, doit être réappliqué) ---
+    import subprocess as _sp
+    try:
+        _sp.run(["nvidia-smi", "-pl", "250"], capture_output=True, timeout=5)
+        print("   ⚡ GPU: Power cap 250W appliqué.")
+    except Exception:
+        print("   ⚠️ GPU: Power cap 250W non appliqué (droits admin requis).")
     print(f"🤖 PROMÉTHÉE {_cfg.VERSION} (Smart Restart) [Projet: {_cfg.PROJECT_ID}]: Chargement des modules...")
     for slug, class_name, file_name in AGENTS_CONFIG:
         try:
