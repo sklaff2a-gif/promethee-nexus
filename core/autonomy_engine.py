@@ -6763,6 +6763,10 @@ RAISON: <1 phrase courte>"""
             "intent": intent,
         })
 
+        # Normaliser response en dict (dispatch_task peut retourner un str)
+        if not isinstance(response, dict):
+            response = {"status": "success", "result": str(response)} if response else {"status": "error", "result": "Dispatch echoue."}
+
         # Evaluation par le professeur
         if response and response.get("status") == "success":
             deliverable = str(response.get("result", ""))
