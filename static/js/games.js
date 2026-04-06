@@ -173,15 +173,14 @@ const GamesView = {
         html += '</div>';
 
         // Boutons
+        html += '<div style="margin-top:12px; display:flex; gap:8px; justify-content:center;">';
         if (gameOver) {
-            html += `<div style="margin-top:8px;">
-                <button onclick="GamesView.loadStatus()" style="background:#00e5c8; color:#000; border:none; padding:6px 16px; font-size:11px; font-weight:bold; cursor:pointer; border-radius:4px;">RETOUR</button>
-            </div>`;
+            html += `<button onclick="GamesView.loadStatus()" style="background:#00e5c8; color:#000; border:none; padding:6px 16px; font-size:11px; font-weight:bold; cursor:pointer; border-radius:4px;">NOUVELLE PARTIE</button>`;
         } else {
-            html += `<div style="margin-top:8px;">
-                <button onclick="GamesView.forfeit()" style="background:none; color:#ff5050; border:1px solid #ff5050; padding:4px 12px; font-size:9px; cursor:pointer; border-radius:3px;">ABANDONNER</button>
-            </div>`;
+            html += `<button onclick="GamesView.forfeit()" style="background:none; color:#ff5050; border:1px solid #ff5050; padding:4px 12px; font-size:9px; cursor:pointer; border-radius:3px;">ABANDONNER</button>`;
         }
+        html += `<button onclick="GamesView.backToHub()" style="background:none; color:#888; border:1px solid #555; padding:4px 12px; font-size:9px; cursor:pointer; border-radius:3px;">RETOUR HUB</button>`;
+        html += '</div>';
 
         html += '</div>';
         el.innerHTML = html;
@@ -252,15 +251,14 @@ const GamesView = {
         }
         html += '</div>';
 
+        html += '<div style="margin-top:12px; display:flex; gap:8px; justify-content:center;">';
         if (gameOver) {
-            html += `<div style="margin-top:12px;">
-                <button onclick="GamesView.loadStatus()" style="background:#ffb860; color:#000; border:none; padding:6px 16px; font-size:11px; font-weight:bold; cursor:pointer; border-radius:4px;">RETOUR</button>
-            </div>`;
+            html += `<button onclick="GamesView.loadStatus()" style="background:#ffb860; color:#000; border:none; padding:6px 16px; font-size:11px; font-weight:bold; cursor:pointer; border-radius:4px;">NOUVELLE PARTIE</button>`;
         } else {
-            html += `<div style="margin-top:12px;">
-                <button onclick="GamesView.forfeit()" style="background:none; color:#ff5050; border:1px solid #ff5050; padding:4px 12px; font-size:9px; cursor:pointer; border-radius:3px;">ABANDONNER</button>
-            </div>`;
+            html += `<button onclick="GamesView.forfeit()" style="background:none; color:#ff5050; border:1px solid #ff5050; padding:4px 12px; font-size:9px; cursor:pointer; border-radius:3px;">ABANDONNER</button>`;
         }
+        html += `<button onclick="GamesView.backToHub()" style="background:none; color:#888; border:1px solid #555; padding:4px 12px; font-size:9px; cursor:pointer; border-radius:3px;">RETOUR HUB</button>`;
+        html += '</div>';
 
         html += '</div>';
         el.innerHTML = html;
@@ -281,6 +279,11 @@ const GamesView = {
             }
             this.renderPuissance4(data.state, data.render);
         } catch (e) { alert('Erreur: ' + e.message); }
+    },
+
+    backToHub() {
+        this.currentGame = null;
+        this.loadStatus();
     },
 
     async forfeit() {
