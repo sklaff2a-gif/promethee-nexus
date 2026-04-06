@@ -6688,6 +6688,57 @@ RAISON: <1 phrase courte>"""
             "result": f"Observation visuelle ({emotion}): {obs_text}",
         }
 
+    async def _execute_school_playground(self) -> dict:
+        """Session Physics Playground scolaire — 0 LLM, entrainement incarne."""
+        try:
+            from core.physics_playground import PhysicsPlayground, Level, RuleBasedController, run_simulation
+            from core.games.game_hub import game_hub
+            import os
+
+            levels_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                      "config", "levels")
+            results = []
+            best_level = 0
+
+            for lvl_num in range(1, 6):
+                lvl_path = os.path.join(levels_dir, f"level_{lvl_num}.json")
+                if not os.path.exists(lvl_path):
+                    continue
+                level = Level.from_json(lvl_path)
+                controller = RuleBasedController()
+                sim = run_simulation(level, controller, max_ticks=500)
+                won = sim.get("status") == "WIN"
+                results.append({
+                    "level": lvl_num,
+                    "status": sim.get("status"),
+                    "ticks": sim.get("ticks", 0),
+                })
+                if won:
+                    best_level = lvl_num
+                    game_hub.record_playground_clear(lvl_num)
+
+            summary = f"Physics Playground: {len(results)} niveaux testes, meilleur={best_level}"
+            for r in results:
+                summary += f"\n  Niveau {r['level']}: {r['status']} ({r['ticks']} ticks)"
+
+            # Publier sur THOUGHT_STREAM
+            try:
+                await bus.publish("THOUGHT_STREAM", {
+                    "thought": f"[PLAYGROUND] {summary}",
+                    "source": "school_playground",
+                })
+            except Exception:
+                pass
+
+            print(f"   🎮 PLAYGROUND SCOLAIRE: meilleur niveau={best_level}")
+            logger.info(f"[SCHOOL] Playground: best={best_level}, results={results}")
+
+            return {"status": "success", "result": summary}
+
+        except Exception as e:
+            logger.warning(f"[SCHOOL] Playground echoue: {e}")
+            return {"status": "error", "result": f"Playground echoue: {e}"}
+
     async def _execute_school_class(self, routine: dict, intent: str) -> dict:
         """Execute un cours scolaire : dispatch agent + evaluation professeur."""
         try:
@@ -6697,6 +6748,11 @@ RAISON: <1 phrase courte>"""
 
         slot = intent.replace("SCHOOL_", "")
         info = schedule.get_current_slot_info()
+
+        # Physics Playground — session de jeu solo (0 LLM, 0 GPU)
+        if info.get("subject", {}).get("is_playground"):
+            return await self._execute_school_playground()
+
         agent_name = schedule.get_slot_agent(slot)
         prompt = schedule.get_slot_prompt(slot)
 

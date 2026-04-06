@@ -259,6 +259,14 @@ class SchoolSchedule:
             topic = RESEARCH_TOPICS[h % len(RESEARCH_TOPICS)]
             return {"topic": topic, "target_file": ""}
         elif slot == SLOT_WORKSHOP:
+            # Mercredi (2) et Samedi (5) = session Physics Playground
+            weekday = today.weekday()
+            if weekday in (2, 5):
+                return {
+                    "topic": "PLAYGROUND: Session Physics Playground — entrainement incarné",
+                    "target_file": "",
+                    "is_playground": True,
+                }
             # Tente de trouver une spec evolution en attente
             try:
                 from core.evolution_catalog import EvolutionCatalog
