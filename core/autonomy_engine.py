@@ -1642,6 +1642,28 @@ class AutonomyEngine:
         if circadian_bonus > 0:
             breakdown["circadian_cognitive"] = round(circadian_bonus, 3)
 
+        # --- COUCHE 26 : Résonance thématique (Phase 3 autonomie) ---
+        # Les thèmes récurrents dans THOUGHT_STREAM colorent le scoring.
+        # Si Prométhée pense souvent à "douleur", les routines introspectives
+        # sont légèrement boostées. Soft : max +1.5, proportionnel aux matches.
+        try:
+            from core.self_awareness import awareness
+            ts = awareness.get_thought_summary()
+            top_themes = ts.get("top_themes", [])
+            if top_themes:
+                # Extraire les 10 mots-thèmes les plus fréquents
+                theme_words = {w.lower() for w, _ in top_themes[:10]}
+                # Comparer avec les keywords de cet intent
+                intent_kws = CONTEXT_KEYWORDS.get(intent, [])
+                if intent_kws:
+                    matches = sum(1 for kw in intent_kws if kw.lower() in theme_words)
+                    if matches > 0:
+                        # Boost proportionnel : 0.5 par match, max 1.5
+                        thematic_bonus = min(matches * 0.5, 1.5)
+                        breakdown["thematic_resonance"] = round(thematic_bonus, 3)
+        except Exception:
+            pass
+
         return breakdown
 
     def get_status(self) -> dict:
@@ -2132,6 +2154,24 @@ class AutonomyEngine:
                 self._forced_next_intent = "SELF_ANALYSIS"
                 print("   🔬 AUTO-ANALYSE: Promethee va s'auto-diagnostiquer (force 1x/jour)")
                 self._daily_analysis_done = True  # Marquer immediatement pour eviter double-force
+
+        # --- Résonance thématique THOUGHT_STREAM (Couche 26b2) ---
+        # Les thèmes récurrents de la pensée colorent le scoring : si Prométhée
+        # pense souvent à "réflexion", les routines introspectives sont boostées.
+        try:
+            from core.self_awareness import awareness
+            ts = awareness.get_thought_summary()
+            top_themes = ts.get("top_themes", [])
+            if top_themes:
+                theme_words = {w.lower() for w, _ in top_themes[:10]}
+                for i, (routine, s) in enumerate(scored):
+                    intent_kws = CONTEXT_KEYWORDS.get(routine["intent"], [])
+                    matches = sum(1 for kw in intent_kws if kw.lower() in theme_words)
+                    if matches > 0:
+                        thematic_bonus = min(matches * 0.5, 1.5)
+                        scored[i] = (routine, s + thematic_bonus)
+        except Exception:
+            pass
 
         # --- Soliloque quotidien garanti (Couche 26c) ---
         # Garantir 1 SOLILOQUE_INTERNE par jour : dialogue introspectif avec le compagnon

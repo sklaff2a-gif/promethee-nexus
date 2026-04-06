@@ -225,8 +225,8 @@ class SoliloqueEngine:
 
     def _select_theme(self) -> str:
         """Choisit le thème du dialogue selon le contexte émotionnel."""
-        # Priorité 0 : graines ouvertes si le chat a été actif récemment
-        # (les exercices laissent des questions qui doivent être revisitées)
+        # Priorité 0 : graines ouvertes si le chat a été actif
+        # OU si EVENING_REFLECTION a produit des questions
         try:
             from core.chat_engine import chat_engine
             user_msgs = sum(1 for m in chat_engine.messages if m.get("role") == "user")
@@ -234,6 +234,9 @@ class SoliloqueEngine:
                 return "graines_ouvertes"
         except Exception:
             pass
+        # Priorité 0b : graines issues d'EVENING_REFLECTION (nuit → matin)
+        if self.last_theme != "graines_ouvertes" and self._has_evening_reflection_seeds():
+            return "graines_ouvertes"
 
         # Priorité 1 : CONNEXION très frustrée
         connexion_dep = self._get_connexion_deprivation()
@@ -299,6 +302,11 @@ class SoliloqueEngine:
                     opening += "\n".join(f"- {m}" for m in recent_user[-3:])
             except Exception:
                 pass
+
+            # Injecter la derniere reflexion vesperale comme graine
+            reflection = self._get_evening_reflection_text()
+            if reflection:
+                opening += f"\n\nMa reflexion de la nuit derniere :\n{reflection[:400]}"
 
         return opening.strip()
 
@@ -582,6 +590,36 @@ class SoliloqueEngine:
             return awareness.compute_strategic_mode()
         except Exception:
             return "standard"
+
+    def _has_evening_reflection_seeds(self) -> bool:
+        """Verifie si EVENING_REFLECTION a produit une reflexion recente (< 24h)."""
+        try:
+            reflection = self._get_evening_reflection_text()
+            return len(reflection) > 30
+        except Exception:
+            return False
+
+    def _get_evening_reflection_text(self) -> str:
+        """Extrait la derniere reflexion vesperale du dream_journal."""
+        try:
+            import json
+            dream_path = os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                "memory", "dream_journal.json"
+            )
+            if not os.path.exists(dream_path):
+                return ""
+            with open(dream_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entries = data.get("entries", [])
+            # Chercher la derniere entree avec une reflexion
+            for entry in reversed(entries):
+                reflection = entry.get("reflection", "")
+                if reflection and len(reflection) > 30:
+                    return reflection
+            return ""
+        except Exception:
+            return ""
 
     # ─── API PUBLIQUE ────────────────────────────────────────────────────
 

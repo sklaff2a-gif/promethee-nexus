@@ -256,6 +256,21 @@ def _emergency_save():
         autonomy._persist_state()
     except Exception:
         pass
+    try:
+        from core.self_awareness import awareness
+        awareness._save()
+    except Exception:
+        pass
+    try:
+        from core.ami import alfred
+        alfred._save()
+    except Exception:
+        pass
+    try:
+        from core.rival import stefan
+        stefan._save()
+    except Exception:
+        pass
 
 
 @asynccontextmanager
@@ -565,6 +580,10 @@ async def lifespan(app: FastAPI):
     chat_engine._save()
     outreach._save()
     hippocampus._save()
+    awareness._save()
+    alfred._save()
+    stefan._save()
+    soliloque._save()
     print("🔌 Arrêt.")
     tracemalloc.stop()
 

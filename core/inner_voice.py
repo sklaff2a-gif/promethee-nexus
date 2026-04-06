@@ -95,6 +95,7 @@ _BROCA_TEMPLATES = {
     ("dmn", "self"):              "{mood}. {competence}.",
     ("dmn", "wander"):            "{concept_a}... {concept_b}... lien?",
     ("sensorium", "somatic"):       "{content}.",
+    ("metacognition", "neutral"):    "Je remarque: {insight}.",
 }
 
 _MOOD_PREFIXES = {
@@ -204,6 +205,10 @@ class InnerVoice:
         # Sensorium (Sprint 6 Sensorium)
         self._last_sensorium_alert: Dict = {}
 
+        # Metacognition — feedback de self_awareness
+        self._metacognition_insight: str = ""
+        self._metacognition_ts: float = 0.0
+
         # Stats
         self.stats: Dict = {
             "total_thoughts": 0,
@@ -268,6 +273,8 @@ class InnerVoice:
             bus.subscribe("SENSORIUM_THERMAL_CRITICAL", self._on_thermal_critical)
             bus.subscribe("SENSORIUM_THERMAL_ALERT", self._on_thermal_alert)
             bus.subscribe("SENSORIUM_SUFFOCATION", self._on_sensorium_suffocation)
+            # Metacognition — feedback de self_awareness
+            bus.subscribe("METACOGNITION_INSIGHT", self._on_metacognition_insight)
         except Exception as e:
             logger.warning(f"INNER_VOICE: subscribe failed: {e}")
 
@@ -353,6 +360,13 @@ class InnerVoice:
     async def _on_sensorium_suffocation(self, event: dict):
         self._last_sensorium_alert = {**event, "type": "suffocation"}
 
+    async def _on_metacognition_insight(self, event: dict):
+        """Reçoit un insight metacognitif de self_awareness."""
+        insight = event.get("insight", "")
+        if insight:
+            self._metacognition_insight = insight
+            self._metacognition_ts = time.time()
+
     # ─── Le Cycle de Pensée ───────────────────────────────────────────────
 
     async def _think_cycle(self):
@@ -371,6 +385,16 @@ class InnerVoice:
         if self._is_idle:
             self._perceive_dmn()
 
+        # 1b. METACOGNITION — injecter le dernier insight comme candidat
+        if self._metacognition_insight and (time.time() - self._metacognition_ts < 300):
+            self.workspace.append(WorkspaceEntry(
+                source="metacognition",
+                raw_signal={"insight": self._metacognition_insight},
+                salience=0.55,
+                timestamp=self._metacognition_ts,
+            ))
+            self._metacognition_insight = ""  # consommé
+
         if not self.workspace:
             return
 
@@ -379,6 +403,9 @@ class InnerVoice:
         self._modulate_by_thalamus_focus()
         self.workspace.sort(key=lambda e: e.salience, reverse=True)
         candidates = self.workspace[:MAX_DRAFTS]
+
+        # 2d. METACOGNITION — exposer le workspace à self_awareness
+        await self._publish_workspace(candidates)
 
         # 2c. Coloration tissulaire — profil pour Broca
         self._color_profile = self._compute_color_profile()
@@ -420,6 +447,30 @@ class InnerVoice:
         # 9. Auto-save périodique (toutes les 20 ticks = ~600s)
         if self._tick_count % 20 == 0:
             self.save()
+
+    # ─── METACOGNITION WORKSPACE ────────────────────────────────────────
+
+    async def _publish_workspace(self, candidates: List[WorkspaceEntry]):
+        """Expose les candidats du workspace pour l'observation metacognitive."""
+        if not candidates:
+            return
+        try:
+            from core.event_bus.bus import bus
+            await bus.publish("METACOGNITION_WORKSPACE", {
+                "tick": self._tick_count,
+                "candidates": [
+                    {
+                        "source": c.source,
+                        "salience": round(c.salience, 3),
+                        "draft": c.draft[:100] if c.draft else "",
+                    }
+                    for c in candidates
+                ],
+                "winner_source": candidates[0].source if candidates else "",
+                "timestamp": time.time(),
+            })
+        except Exception:
+            pass
 
     # ─── MODULATION THALAMIQUE ──────────────────────────────────────────
 

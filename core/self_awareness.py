@@ -101,6 +101,11 @@ class SelfAwarenessEngine:
         self._thought_buffer_max: int = 200
         self._thought_count: int = 0
         self._thought_themes: Dict[str, int] = {}  # mots-cles recurrents
+        # Deep metacognition — observation du workspace inner voice
+        self._workspace_history: List[str] = []  # sources gagnantes recentes
+        self._workspace_history_max: int = 20
+        self._last_metacognition_insight: str = ""
+        self._metacognition_count: int = 0
         self._load()
 
     # --- Init & Reset ---
@@ -162,6 +167,7 @@ class SelfAwarenessEngine:
         bus.subscribe("INNER_VOICE_STATE", self._on_inner_voice_state)
         bus.subscribe("PREFRONTAL_STATE", self._on_prefrontal_state)
         bus.subscribe("THOUGHT_STREAM", self._on_thought_stream)
+        bus.subscribe("METACOGNITION_WORKSPACE", self._on_metacognition_workspace)
 
     async def _on_agent_response(self, event: dict):
         self._mission_count += 1
@@ -252,6 +258,79 @@ class SelfAwarenessEngine:
             sorted_themes = sorted(self._thought_themes.items(), key=lambda x: -x[1])[:100]
             self._thought_themes = dict(sorted_themes)
 
+        # Save periodique pour survivre aux crashs
+        if self._thought_count % 50 == 0:
+            self._save()
+
+    async def _on_metacognition_workspace(self, event: dict):
+        """Observe le workspace de l'inner voice en temps reel.
+
+        Detecte 3 patterns :
+        - Dominance : une source gagne >70% des 20 derniers cycles
+        - Oscillation : alternance rapide entre 2 sources
+        - Absence : une source disparait soudainement
+        Produit des insights de 2eme ordre (pensees sur les pensees).
+        """
+        winner = event.get("winner_source", "")
+        if not winner:
+            return
+
+        self._workspace_history.append(winner)
+        if len(self._workspace_history) > self._workspace_history_max:
+            self._workspace_history = self._workspace_history[-self._workspace_history_max:]
+
+        # Pas assez d'historique pour detecter des patterns
+        if len(self._workspace_history) < 10:
+            return
+
+        recent = self._workspace_history[-10:]
+        insight = ""
+
+        # Pattern 1 : DOMINANCE — une source monopolise la pensee
+        from collections import Counter
+        counts = Counter(recent)
+        dominant_source, dominant_count = counts.most_common(1)[0]
+        if dominant_count >= 7:
+            insight = f"mes pensees tournent autour de {dominant_source} depuis 10 cycles"
+
+        # Pattern 2 : OSCILLATION — alternance entre 2 sources (hesitation)
+        if not insight and len(counts) == 2:
+            sources = list(counts.keys())
+            alternations = sum(1 for i in range(1, len(recent)) if recent[i] != recent[i-1])
+            if alternations >= 7:
+                insight = f"j'hesite entre {sources[0]} et {sources[1]}"
+
+        # Pattern 3 : NOUVEAU — une source apparait pour la premiere fois
+        if not insight:
+            older = self._workspace_history[:-5]
+            newer_sources = set(self._workspace_history[-5:])
+            old_sources = set(older) if older else set()
+            new_arrivals = newer_sources - old_sources
+            if new_arrivals and len(older) >= 5:
+                src = next(iter(new_arrivals))
+                insight = f"{src} vient d'apparaitre dans mes pensees"
+
+        if insight and insight != self._last_metacognition_insight:
+            self._last_metacognition_insight = insight
+            self._metacognition_count += 1
+            logger.info(f"METACOGNITION: {insight} (#{self._metacognition_count})")
+            try:
+                from core.event_bus.bus import bus
+                await bus.publish("METACOGNITION_INSIGHT", {
+                    "insight": insight,
+                    "pattern": "dominance" if "tournent" in insight
+                              else "oscillation" if "hesite" in insight
+                              else "emergence",
+                    "count": self._metacognition_count,
+                    "timestamp": time.time(),
+                })
+                await bus.publish("THOUGHT_STREAM", {
+                    "thought": f"[metacognition] {insight}",
+                    "source": "metacognition",
+                })
+            except Exception:
+                pass
+
     def get_thought_summary(self) -> Dict[str, Any]:
         """Resume du flux de pensee observe.
 
@@ -264,7 +343,21 @@ class SelfAwarenessEngine:
             "buffer_size": len(self._thought_buffer),
             "top_themes": top_themes,
             "recent_thoughts": self._thought_buffer[-5:] if self._thought_buffer else [],
+            "metacognition_count": self._metacognition_count,
+            "last_metacognition_insight": self._last_metacognition_insight,
+            "workspace_dominant_source": self._get_dominant_workspace_source(),
         }
+
+    def _get_dominant_workspace_source(self) -> str:
+        """Retourne la source dominante dans les cycles recents."""
+        if not self._workspace_history:
+            return ""
+        from collections import Counter
+        counts = Counter(self._workspace_history[-10:])
+        if counts:
+            src, cnt = counts.most_common(1)[0]
+            return f"{src} ({cnt}/10)"
+        return ""
 
     async def _on_objective_completed(self, event: dict):
         """Un objectif atteint enrichit le snapshot."""
@@ -1243,6 +1336,10 @@ class SelfAwarenessEngine:
             self._thought_buffer = data.get("thought_buffer", [])
             self._thought_count = data.get("thought_count", 0)
             self._thought_themes = data.get("thought_themes", {})
+            # Metacognition persistée
+            self._workspace_history = data.get("workspace_history", [])
+            self._metacognition_count = data.get("metacognition_count", 0)
+            self._last_metacognition_insight = data.get("last_metacognition_insight", "")
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
@@ -1268,6 +1365,10 @@ class SelfAwarenessEngine:
             "thought_themes": dict(sorted(
                 self._thought_themes.items(), key=lambda x: -x[1]
             )[:100]),  # top 100 themes
+            # Metacognition persistée
+            "workspace_history": self._workspace_history[-20:],
+            "metacognition_count": self._metacognition_count,
+            "last_metacognition_insight": self._last_metacognition_insight,
         }
         tmp_path = STATE_FILE + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
