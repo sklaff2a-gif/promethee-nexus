@@ -3248,59 +3248,46 @@ class AutonomyEngine:
         """Partie de jeu vs Alfred pendant le cafe — 0 LLM, repos GPU."""
         try:
             from core.games.game_hub import game_hub
+            from core.games.morpion import ai_move as morpion_ai
+            from core.games.puissance4 import ai_move as puissance4_ai
             import random
 
             # Choisir un jeu aleatoirement
             game_type = random.choice(["morpion", "puissance4"])
-            promethee_starts = random.choice([True, False])
 
             result = game_hub.new_game(game_type, opponent="alfred",
-                                       promethee_starts=promethee_starts)
+                                       promethee_starts=True)
             if "error" in result:
                 return {"status": "error", "result": result["error"]}
 
-            # Jouer la partie en automatique (Promethee = IA hard, Alfred = IA medium)
-            from core.games.morpion import ai_move as morpion_ai
-            from core.games.puissance4 import ai_move as puissance4_ai
-
-            max_turns = 50
-            for _ in range(max_turns):
-                state = result.get("state", {})
-                if state.get("game_over"):
+            # Boucle simple : Promethee joue, Alfred repond auto via play_move
+            promethee_symbol = result.get("promethee_symbol", "")
+            for _ in range(25):
+                if not game_hub._active_session:
+                    break  # Partie terminee
+                game = game_hub._get_active_game()
+                if game.game_over:
                     break
-
-                # C'est le tour de qui ?
-                current = state.get("current_player", "")
-                promethee_symbol = result.get("promethee_symbol", "")
-                is_promethee_turn = (current == promethee_symbol)
-
-                if is_promethee_turn:
-                    # Promethee joue (hard)
-                    if game_type == "morpion":
-                        game = game_hub._active_morpion
-                        move = morpion_ai(game, "hard")
-                        if move:
-                            result = game_hub.play_move(list(move), player="promethee")
+                # Attendre le tour de Promethee
+                if game.current_player != promethee_symbol:
+                    break  # Ne devrait pas arriver (Alfred joue auto)
+                # Promethee joue (hard) — Alfred repond automatiquement
+                if game_type == "morpion":
+                    move = morpion_ai(game, "hard")
+                    if move:
+                        result = game_hub.play_move(list(move), player="promethee")
                     else:
-                        game = game_hub._active_puissance4
-                        col = puissance4_ai(game, "hard")
-                        if col is not None:
-                            result = game_hub.play_move(col, player="promethee")
+                        break
                 else:
-                    # Alfred joue (deja gere par play_move avec opponent=alfred)
-                    # Si c'est le tour d'Alfred mais pas encore joue, forcer
-                    if game_hub._active_session:
-                        game = game_hub._get_active_game()
-                        if not game.game_over:
-                            ai_result = game_hub._alfred_play()
-                            if ai_result:
-                                result["state"] = game_hub._get_active_game().get_state()
+                    col = puissance4_ai(game, "hard")
+                    if col is not None:
+                        result = game_hub.play_move(col, player="promethee")
+                    else:
+                        break
 
-                # Rafraichir l'etat
-                if game_hub._active_session:
-                    result["state"] = game_hub._get_active_game().get_state()
-                else:
-                    break
+            # Nettoyer si la partie est restee bloquee
+            if game_hub._active_session:
+                game_hub.forfeit()
 
             # Resultat
             stats = game_hub.stats
