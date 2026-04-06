@@ -103,6 +103,9 @@ EVENT_IMPACT: Dict[str, Any] = {
     "SCHOOL_GRADE_LOW":       {"MAITRISE": +8, "CROISSANCE": +5},
     # Vision — observation de photos
     "VISUAL_OBSERVATION":     {"CURIOSITE": -8, "COMPREHENSION": -5, "CONNEXION": -5},
+    # Jeux — victoire/defaite
+    "GAME_WON":               {"MAITRISE": -15, "CONNEXION": -8, "CROISSANCE": -5},
+    "GAME_LOST":              {"MAITRISE": +10, "CONNEXION": -3},
 }
 
 # --- Seuil de qualité par intent pour considérer un succès ---

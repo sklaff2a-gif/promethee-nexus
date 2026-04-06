@@ -156,6 +156,14 @@ class GameHub:
                 result["state"] = self._get_active_game().get_state()
                 result["render"] = self._get_active_game().render()
 
+        # Si Promethee commence et l'adversaire est humain, Promethee joue son 1er coup
+        if promethee_starts and opponent == "human":
+            ai_result = self._promethee_play()
+            if ai_result:
+                result["promethee_move"] = ai_result
+                result["state"] = self._get_active_game().get_state()
+                result["render"] = self._get_active_game().render()
+
         return result
 
     def play_move(self, move: Any, player: str = "promethee") -> Dict[str, Any]:
@@ -216,23 +224,54 @@ class GameHub:
             self._publish_game_event("GAME_ENDED", session, result)
             return response
 
-        # Si l'adversaire est Alfred, il joue immediatement
+        # Reponse automatique de l'adversaire IA
+        # Alfred vs Promethee : Alfred joue apres Promethee
+        # Human vs Promethee : Promethee joue apres l'humain
+        auto_play = None
         if session.opponent == "alfred" and player != "alfred_internal":
-            ai_result = self._alfred_play()
-            if ai_result:
-                response["alfred_move"] = ai_result
-                response["state"] = game.get_state()
-                response["render"] = game.render()
-                if game.game_over:
-                    self._record_game_end(game, session)
-                    response["game_over"] = True
-                    response["stats"] = self._get_game_stats(session.game_type)
-                    self._active_session = None
-                    self._active_morpion = None
-                    self._active_puissance4 = None
-                    self._publish_game_event("GAME_ENDED", session, ai_result)
+            auto_play = self._alfred_play()
+            if auto_play:
+                response["alfred_move"] = auto_play
+        elif session.opponent == "human" and player == "human":
+            auto_play = self._promethee_play()
+            if auto_play:
+                response["promethee_move"] = auto_play
+
+        if auto_play:
+            response["state"] = game.get_state()
+            response["render"] = game.render()
+            if game.game_over:
+                self._record_game_end(game, session)
+                response["game_over"] = True
+                response["stats"] = self._get_game_stats(session.game_type)
+                self._active_session = None
+                self._active_morpion = None
+                self._active_puissance4 = None
+                self._publish_game_event("GAME_ENDED", session, auto_play.get("result", {}))
 
         return response
+
+    def _promethee_play(self) -> Optional[Dict[str, Any]]:
+        """Promethee joue son coup (IA hard — adversaire de l'humain)."""
+        session = self._active_session
+        if not session:
+            return None
+
+        game = self._get_active_game()
+        if game.game_over:
+            return None
+
+        if session.game_type == "morpion":
+            move = morpion_ai(game, difficulty="hard")
+            if move:
+                result = game.play(move[0], move[1])
+                return {"move": move, "result": result}
+        else:
+            col = puissance4_ai(game, difficulty="hard")
+            if col is not None:
+                result = game.play(col)
+                return {"move": col, "result": result}
+        return None
 
     def _alfred_play(self) -> Optional[Dict[str, Any]]:
         """Alfred joue son coup."""
@@ -324,11 +363,45 @@ class GameHub:
         if len(self.game_history) > 50:
             self.game_history = self.game_history[-50:]
 
+        # Reaction dopaminergique et cardiaque
+        self._react_emotionally(promethee_won, opponent_won, is_draw, forfeit)
+
         # Verifier si les echecs sont debloques
         self._check_chess_unlock()
         self._save()
         logger.info(f"GAME_HUB: Fin {gt} — {'Promethee gagne' if promethee_won else 'defaite/nul'} "
                     f"({game.moves_count} coups)")
+
+    def _react_emotionally(self, won: bool, lost: bool, draw: bool, forfeit: bool):
+        """Reaction dopaminergique et cardiaque au resultat du jeu."""
+        try:
+            from core.dopamine_system import dopamine
+            if won:
+                dopamine.dopamine_level = min(1.0, dopamine.dopamine_level + 0.15)
+                logger.info("GAME_HUB: DOPAMINE SURGE +0.15 (victoire)")
+            elif lost or forfeit:
+                dopamine.dopamine_level = max(0.0, dopamine.dopamine_level - 0.08)
+                logger.info("GAME_HUB: DOPAMINE DIP -0.08 (defaite)")
+        except Exception:
+            pass
+
+        try:
+            from core.cardiac_engine import heart
+            if won:
+                heart.react("success")
+            elif lost:
+                heart.react("failure")
+        except Exception:
+            pass
+
+        try:
+            from core.desire_engine import desires
+            if won:
+                desires.on_event("GAME_WON")
+            elif lost:
+                desires.on_event("GAME_LOST")
+        except Exception:
+            pass
 
     def _check_chess_unlock(self):
         """Verifie si toutes les competences sont validees pour les echecs."""

@@ -76,15 +76,17 @@ class TestGameHubMorpion:
 
     def test_play_morpion_move(self, reset_hub):
         hub = reset_hub
-        hub.new_game("morpion", opponent="human")
-        result = hub.play_move([0, 0], player="promethee")
+        hub.new_game("morpion", opponent="human", promethee_starts=False)
+        # Humain joue en premier (X), Promethee repond auto (O)
+        result = hub.play_move([0, 0], player="human")
         assert result["move_result"]["valid"]
+        assert "promethee_move" in result  # Promethee repond
 
     def test_wrong_turn(self, reset_hub):
         hub = reset_hub
-        hub.new_game("morpion", opponent="human")
-        # C'est le tour de X (promethee)
-        result = hub.play_move([0, 0], player="human")
+        hub.new_game("morpion", opponent="human", promethee_starts=False)
+        # Humain est X, c'est son tour — jouer comme promethee doit echouer
+        result = hub.play_move([0, 0], player="promethee")
         assert "error" in result
 
     def test_morpion_vs_alfred_auto_reply(self, reset_hub):
@@ -94,17 +96,29 @@ class TestGameHubMorpion:
         result = hub.play_move([1, 1], player="promethee")
         assert "alfred_move" in result
 
+    def test_morpion_promethee_starts_vs_human(self, reset_hub):
+        hub = reset_hub
+        result = hub.new_game("morpion", opponent="human", promethee_starts=True)
+        # Promethee a deja joue son premier coup
+        assert "promethee_move" in result
+        # C'est maintenant au tour de l'humain
+        state = result["state"]
+        assert state["current_player"] == "O"  # humain est O
+
     def test_morpion_complete_game(self, reset_hub):
         hub = reset_hub
-        hub.new_game("morpion", opponent="human")
-        # X gagne en ligne 0
-        hub.play_move([0, 0], player="promethee")
-        hub.play_move([1, 0], player="human")
-        hub.play_move([0, 1], player="promethee")
-        hub.play_move([1, 1], player="human")
-        result = hub.play_move([0, 2], player="promethee")
+        # Humain est X, Promethee est O (promethee_starts=False)
+        hub.new_game("morpion", opponent="human", promethee_starts=False)
+        # Humain place X sur la ligne 0 — Promethee repond automatiquement entre chaque coup
+        # On joue manuellement sans auto-reply pour controler la grille
+        game = hub._active_morpion
+        game.play(0, 0)  # X humain
+        game.play(1, 0)  # O promethee
+        game.play(0, 1)  # X humain
+        game.play(1, 1)  # O promethee
+        result = hub.play_move([0, 2], player="human")  # X humain gagne ligne 0
         assert result.get("game_over")
-        assert hub.stats["morpion_wins"] == 1
+        assert hub.stats["morpion_losses"] == 1  # Promethee (O) perd
 
     def test_forfeit(self, reset_hub):
         hub = reset_hub
@@ -124,9 +138,10 @@ class TestGameHubPuissance4:
 
     def test_play_puissance4_move(self, reset_hub):
         hub = reset_hub
-        hub.new_game("puissance4", opponent="human")
-        result = hub.play_move(3, player="promethee")
+        hub.new_game("puissance4", opponent="human", promethee_starts=False)
+        result = hub.play_move(3, player="human")
         assert result["move_result"]["valid"]
+        assert "promethee_move" in result
 
     def test_puissance4_vs_alfred(self, reset_hub):
         hub = reset_hub
