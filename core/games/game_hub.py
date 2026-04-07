@@ -53,6 +53,7 @@ class GameSession:
     opponent: str   # "human" ou "alfred"
     started_at: float = field(default_factory=time.time)
     promethee_symbol: str = ""  # X/O pour morpion, R/J pour puissance4
+    difficulty: str = "hard"  # easy, medium, hard
 
 
 class GameHub:
@@ -102,6 +103,13 @@ class GameHub:
         # Historique des parties (dernieres 50)
         self.game_history: List[Dict[str, Any]] = []
 
+        # Scoring adaptatif par adversaire — estime la force de chaque joueur
+        # Score 0-100 : <30 = debutant, 30-60 = intermediaire, >60 = fort
+        self.opponent_scores: Dict[str, float] = {
+            "human": 50.0,   # inconnu → moyen par defaut
+            "alfred": 40.0,  # Alfred joue en medium
+        }
+
         self._load()
 
     @classmethod
@@ -111,13 +119,15 @@ class GameHub:
     # --- Gestion des parties ---
 
     def new_game(self, game_type: str, opponent: str = "alfred",
-                 promethee_starts: bool = True) -> Dict[str, Any]:
+                 promethee_starts: bool = True,
+                 difficulty: str = "hard") -> Dict[str, Any]:
         """Cree une nouvelle partie.
 
         Args:
             game_type: "morpion" ou "puissance4"
             opponent: "human" ou "alfred"
             promethee_starts: True si Promethee joue en premier
+            difficulty: "easy", "medium", "hard" (IA de Promethee)
         """
         if game_type not in ("morpion", "puissance4"):
             return {"error": f"Jeu inconnu: {game_type}. Disponibles: morpion, puissance4"}
@@ -125,7 +135,15 @@ class GameHub:
         if self._active_session:
             return {"error": f"Partie en cours ({self._active_session.game_type}). Terminez-la d'abord."}
 
-        session = GameSession(game_type=game_type, opponent=opponent)
+        # Difficulte adaptive : calculer en fonction du score de l'adversaire
+        effective_difficulty = difficulty
+        if difficulty == "adaptive":
+            effective_difficulty = self._compute_adaptive_difficulty(opponent)
+            logger.info(f"GAME_HUB: Difficulte adaptive -> {effective_difficulty} "
+                        f"(score {opponent} = {self.opponent_scores.get(opponent, 50):.1f})")
+
+        session = GameSession(game_type=game_type, opponent=opponent,
+                              difficulty=effective_difficulty)
 
         if game_type == "morpion":
             game = MorpionGame()
@@ -138,12 +156,14 @@ class GameHub:
 
         self._active_session = session
         logger.info(f"GAME_HUB: Nouvelle partie {game_type} vs {opponent} "
-                    f"(Promethee={session.promethee_symbol})")
+                    f"(Promethee={session.promethee_symbol}, diff={session.difficulty})")
 
         result = {
             "game": game_type,
             "opponent": opponent,
             "promethee_symbol": session.promethee_symbol,
+            "difficulty": session.difficulty,
+            "opponent_score": round(self.opponent_scores.get(opponent, 50.0), 1),
             "state": game.get_state(),
             "render": game.render(),
         }
@@ -158,7 +178,7 @@ class GameHub:
 
         # Si Promethee commence et l'adversaire est humain, Promethee joue son 1er coup
         if promethee_starts and opponent == "human":
-            ai_result = self._promethee_play()
+            ai_result = self._promethee_play(difficulty=difficulty)
             if ai_result:
                 result["promethee_move"] = ai_result
                 result["state"] = self._get_active_game().get_state()
@@ -233,7 +253,7 @@ class GameHub:
             if auto_play:
                 response["alfred_move"] = auto_play
         elif session.opponent == "human" and player == "human":
-            auto_play = self._promethee_play()
+            auto_play = self._promethee_play(difficulty=session.difficulty)
             if auto_play:
                 response["promethee_move"] = auto_play
 
@@ -251,8 +271,8 @@ class GameHub:
 
         return response
 
-    def _promethee_play(self) -> Optional[Dict[str, Any]]:
-        """Promethee joue son coup (IA hard — adversaire de l'humain)."""
+    def _promethee_play(self, difficulty: str = "hard") -> Optional[Dict[str, Any]]:
+        """Promethee joue son coup (IA configurable — adversaire de l'humain)."""
         session = self._active_session
         if not session:
             return None
@@ -262,12 +282,12 @@ class GameHub:
             return None
 
         if session.game_type == "morpion":
-            move = morpion_ai(game, difficulty="hard")
+            move = morpion_ai(game, difficulty=difficulty)
             if move:
                 result = game.play(move[0], move[1])
                 return {"move": move, "result": result}
         else:
-            col = puissance4_ai(game, difficulty="hard")
+            col = puissance4_ai(game, difficulty=difficulty)
             if col is not None:
                 result = game.play(col)
                 return {"move": col, "result": result}
@@ -346,7 +366,10 @@ class GameHub:
             self.stats[f"{gt}_consecutive_losses"] = self.stats.get(f"{gt}_consecutive_losses", 0) + 1
         elif is_draw:
             self.stats[f"{gt}_draws"] += 1
-            # Un nul ne casse pas la serie de defaites
+
+        # Scoring adaptatif — evaluer la force de l'adversaire
+        self._update_opponent_score(
+            session.opponent, promethee_won, opponent_won, game.moves_count)
 
         # Historique
         entry = {
@@ -403,6 +426,52 @@ class GameHub:
         except Exception:
             pass
 
+    def _compute_adaptive_difficulty(self, opponent: str) -> str:
+        """Calcule la difficulte de Promethee en fonction du score de l'adversaire.
+
+        Promethee ne cherche pas a dominer — il s'adapte pour creer
+        des parties interessantes. Contre un debutant il joue relache,
+        contre un expert il joue a fond.
+        """
+        score = self.opponent_scores.get(opponent, 50.0)
+        if score < 30:
+            return "easy"
+        elif score < 60:
+            return "medium"
+        else:
+            return "hard"
+
+    def _update_opponent_score(self, opponent: str, promethee_won: bool,
+                                opponent_won: bool, moves: int):
+        """Met a jour le score de force de l'adversaire apres une partie.
+
+        Victoire adversaire → son score monte (il est fort)
+        Defaite adversaire → son score baisse (il est faible)
+        Match nul → leger ajustement vers le centre
+        Victoire rapide de l'adversaire → gros bonus (il est tres fort)
+        """
+        score = self.opponent_scores.get(opponent, 50.0)
+
+        if opponent_won:
+            # L'adversaire a gagne — il est fort
+            bonus = 8.0
+            if moves <= 15:
+                bonus = 12.0  # victoire rapide = tres fort
+            score = min(100.0, score + bonus)
+        elif promethee_won:
+            # Promethee a gagne — l'adversaire est (un peu) plus faible
+            malus = -5.0
+            if moves <= 10:
+                malus = -8.0  # victoire ecrasante = adversaire faible
+            score = max(0.0, score + malus)
+        else:
+            # Match nul — convergence vers 50
+            score += (50.0 - score) * 0.1
+
+        self.opponent_scores[opponent] = round(score, 1)
+        difficulty = self._compute_adaptive_difficulty(opponent)
+        logger.info(f"GAME_HUB: Score {opponent} = {score:.1f} -> difficulte {difficulty}")
+
     def _check_chess_unlock(self):
         """Verifie si toutes les competences sont validees pour les echecs."""
         if self.stats.get("chess_unlocked"):
@@ -449,6 +518,7 @@ class GameHub:
             "competences": competences,
             "chess_unlocked": self.stats.get("chess_unlocked", False),
             "games_available": self._list_available_games(),
+            "opponent_scores": dict(self.opponent_scores),
             "recent_history": self.game_history[-10:],
         }
 
@@ -496,6 +566,7 @@ class GameHub:
                 "version": "1.0",
                 "stats": self.stats,
                 "game_history": self.game_history[-50:],
+                "opponent_scores": self.opponent_scores,
             }
             tmp = STATE_FILE + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -512,6 +583,8 @@ class GameHub:
                 loaded_stats = data.get("stats", {})
                 self.stats.update(loaded_stats)
                 self.game_history = data.get("game_history", [])
+                loaded_scores = data.get("opponent_scores", {})
+                self.opponent_scores.update(loaded_scores)
         except Exception as e:
             logger.warning(f"GAME_HUB: load failed: {e}")
 

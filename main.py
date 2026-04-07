@@ -1115,7 +1115,8 @@ async def games_new(request: Request):
     game_type = body.get("game", "")
     opponent = body.get("opponent", "alfred")
     promethee_starts = body.get("promethee_starts", True)
-    return game_hub.new_game(game_type, opponent, promethee_starts)
+    difficulty = body.get("difficulty", "hard")
+    return game_hub.new_game(game_type, opponent, promethee_starts, difficulty)
 
 @app.post("/api/games/move")
 async def games_move(request: Request):

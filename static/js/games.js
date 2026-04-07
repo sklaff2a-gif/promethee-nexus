@@ -44,10 +44,15 @@ const GamesView = {
         // Hub principal
         let html = '<div style="max-width:600px; margin:0 auto; padding:20px;">';
 
-        // Stats globales
+        // Stats globales + score adaptatif
+        const scores = data.opponent_scores || {};
+        const humanScore = scores.human || 50;
+        const humanDiff = humanScore < 30 ? 'EASY' : humanScore < 60 ? 'MEDIUM' : 'HARD';
+        const diffColor = humanScore < 30 ? '#4dff88' : humanScore < 60 ? '#ffb860' : '#ff5050';
         html += `<div style="text-align:center; margin-bottom:24px;">
             <div style="color:#4dff88; font-size:16px; font-weight:bold; letter-spacing:0.2em;">SALLE DE JEUX</div>
             <div style="color:#666; font-size:10px; margin-top:4px;">${stats.total_games_played || 0} parties jouees</div>
+            <div style="color:#888; font-size:9px; margin-top:4px;">Ton score : <strong style="color:${diffColor}">${humanScore.toFixed(0)}/100</strong> — Promethee joue <strong style="color:${diffColor}">${humanDiff}</strong></div>
         </div>`;
 
         // Cartes des jeux
@@ -73,9 +78,9 @@ const GamesView = {
                 ${g.locked ? '<div style="color:#883333; font-size:9px; margin-top:8px;">VERROUILLE</div>' :
                   g.id === 'echecs' ? '<div style="color:#4dff88; font-size:9px; margin-top:8px;">BIENTOT</div>' :
                   `<div style="color:#888; font-size:10px; margin-top:8px;">${g.w}V ${g.l}D ${g.d}N</div>
-                   <div style="margin-top:8px; display:flex; gap:4px; justify-content:center;">
-                       <button onclick="GamesView.newGame('${g.id}', true)" style="background:${g.color}; color:#000; border:none; padding:3px 8px; font-size:9px; font-weight:bold; cursor:pointer; border-radius:3px;">JOUER (1er)</button>
-                       <button onclick="GamesView.newGame('${g.id}', false)" style="background:none; color:${g.color}; border:1px solid ${g.color}; padding:3px 8px; font-size:9px; cursor:pointer; border-radius:3px;">JOUER (2e)</button>
+                   <div style="margin-top:8px; display:flex; gap:4px; justify-content:center; flex-wrap:wrap;">
+                       <button onclick="GamesView.newGame('${g.id}', true, 'adaptive')" style="background:${g.color}; color:#000; border:none; padding:3px 8px; font-size:9px; font-weight:bold; cursor:pointer; border-radius:3px;">JOUER</button>
+                       <button onclick="GamesView.newGame('${g.id}', false, 'adaptive')" style="background:none; color:${g.color}; border:1px solid ${g.color}; padding:3px 8px; font-size:9px; cursor:pointer; border-radius:3px;">2e</button>
                    </div>`
                 }
             </div>`;
@@ -115,12 +120,12 @@ const GamesView = {
         el.innerHTML = html;
     },
 
-    async newGame(gameType, prometheeStarts) {
+    async newGame(gameType, prometheeStarts, difficulty = 'adaptive') {
         try {
             const res = await fetch('/api/games/new', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({game: gameType, opponent: 'human', promethee_starts: !prometheeStarts})
+                body: JSON.stringify({game: gameType, opponent: 'human', promethee_starts: !prometheeStarts, difficulty: difficulty})
             });
             const data = await res.json();
             if (data.error) {
