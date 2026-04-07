@@ -1594,15 +1594,24 @@ class ChatEngine:
                            "c-score", "conscience", "ethique", "benchmark",
                            "mathematique", "topologie", "theoreme", "godel",
                            "hilbert", "fractale", "catastrophe",
-                           "feedback", "session", "bilan", "note :", "/10"]
+                           "feedback", "session", "bilan", "note :", "/10",
+                           "jouer", "jeu", "partie", "alfred", "morpion", "puissance",
+                           "echecs", "thomas", "divorce", "ami", "cafe"]
         if sum(1 for ex in tech_exclusions if ex in msg_lower) >= 1:
             return False
 
         # Mots-cles visuels — utiliser des frontieres de mot pour eviter
         # les faux positifs (ex: "observables" ne doit pas matcher "observe")
         import re
-        visual_keywords = ["photo", "image", "regarde", "observe", "voir", "vois",
-                           "montre", "dropzone", "vision", "visuel"]
+        # Exclure "voir" et "vois" si utilises au sens figure
+        figurative_voir = ["voir les chose", "voir sous", "voir un", "voir le monde",
+                           "voir comment", "voir si", "voir ce que", "vois pas",
+                           "voir les jeux", "voir les partie", "vois ce que"]
+        is_figurative = any(fv in msg_lower for fv in figurative_voir)
+
+        visual_keywords = ["photo", "image", "regarde", "observe", "dropzone", "visuel"]
+        if not is_figurative:
+            visual_keywords.extend(["voir", "vois", "montre", "vision"])
         photo_keywords = ["famille", "picture", "selfie", "cliche", "cliché"]
         action_keywords = ["essayer", "essaie", "tente", "teste", "montre-moi",
                            "fais-le", "vas-y", "go"]
@@ -2562,6 +2571,25 @@ class ChatEngine:
         if not full_response:
             logger.warning("CHAT: Reponse vide apres nettoyage <think>")
             return None
+
+        # Anti-boucle : detecter les repetitions dans la reponse
+        # Le LLM 9B repete parfois des blocs entiers — couper au premier doublon
+        sentences = [s.strip() for s in full_response.split("\n") if len(s.strip()) > 20]
+        if len(sentences) > 3:
+            seen = set()
+            cut_index = -1
+            for i, s in enumerate(sentences):
+                key = s[:50].lower()
+                if key in seen:
+                    cut_index = i
+                    break
+                seen.add(key)
+            if cut_index > 0:
+                # Couper a la premiere repetition
+                clean_sentences = sentences[:cut_index]
+                remaining = [s for s in full_response.split("\n") if s.strip()]
+                full_response = "\n".join(remaining[:cut_index])
+                logger.warning(f"CHAT: Boucle detectee — reponse coupee a la ligne {cut_index}")
 
         # 4b. Filtre post-generation : detecter les fabrications visuelles
         if visual_request_detected and not visual_context:
