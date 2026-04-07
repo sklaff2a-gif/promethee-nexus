@@ -1174,6 +1174,26 @@ async def mailbox_all():
 
 # ─── JEUX ────────────────────────────────────────────────────────────────
 
+@app.post("/api/games/tournament/start")
+async def games_tournament_start(request: Request):
+    """Lance un tournoi round-robin. Body: {game?}"""
+    from core.games.game_hub import game_hub
+    body = await request.json()
+    game_type = body.get("game", "morpion")
+    return game_hub.start_tournament(game_type)
+
+@app.get("/api/games/tournament/status")
+async def games_tournament_status():
+    """Retourne l'etat du tournoi en cours."""
+    from core.games.game_hub import game_hub
+    return {"tournament": game_hub.get_tournament_status()}
+
+@app.post("/api/games/tournament/next")
+async def games_tournament_next():
+    """Lance le prochain match du tournoi."""
+    from core.games.game_hub import game_hub
+    return game_hub._start_next_tournament_match()
+
 @app.post("/api/games/forfeit")
 async def games_forfeit():
     """Abandonne la partie en cours."""

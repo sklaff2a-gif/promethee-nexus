@@ -87,6 +87,18 @@ const GamesView = {
         }
         html += '</div>';
 
+        // Bouton TOURNOI
+        html += `<div style="text-align:center; margin-bottom:20px;">
+            <button onclick="GamesView.startTournament('morpion')" style="background:linear-gradient(135deg,#00e5c8,#ffb860); color:#000; border:none; padding:8px 24px; font-size:12px; font-weight:bold; cursor:pointer; border-radius:6px; letter-spacing:0.1em; margin-right:8px;">🏆 TOURNOI MORPION</button>
+            <button onclick="GamesView.startTournament('puissance4')" style="background:linear-gradient(135deg,#ffb860,#ff5050); color:#000; border:none; padding:8px 24px; font-size:12px; font-weight:bold; cursor:pointer; border-radius:6px; letter-spacing:0.1em;">🏆 TOURNOI PUISSANCE 4</button>
+        </div>`;
+
+        // Tournoi en cours ?
+        const tournament = data.tournament;
+        if (tournament && tournament.status === 'finished') {
+            html += this.renderTournamentResult(tournament);
+        }
+
         // Competences pour les echecs
         html += '<div style="border:1px solid rgba(160,160,255,0.2); border-radius:8px; padding:12px; background:rgba(0,0,0,0.2);">';
         html += '<div style="color:#a0a0ff; font-size:10px; font-weight:bold; margin-bottom:8px; letter-spacing:0.1em;">PROGRESSION ECHECS</div>';
@@ -180,7 +192,7 @@ const GamesView = {
         // Boutons
         html += '<div style="margin-top:12px; display:flex; gap:8px; justify-content:center;">';
         if (gameOver) {
-            html += `<button onclick="GamesView.loadStatus()" style="background:#00e5c8; color:#000; border:none; padding:6px 16px; font-size:11px; font-weight:bold; cursor:pointer; border-radius:4px;">NOUVELLE PARTIE</button>`;
+            html += `<button onclick="GamesView.afterMatchEnd()" style="background:#00e5c8; color:#000; border:none; padding:6px 16px; font-size:11px; font-weight:bold; cursor:pointer; border-radius:4px;">CONTINUER</button>`;
         } else {
             html += `<button onclick="GamesView.forfeit()" style="background:none; color:#ff5050; border:1px solid #ff5050; padding:4px 12px; font-size:9px; cursor:pointer; border-radius:3px;">ABANDONNER</button>`;
         }
@@ -192,6 +204,19 @@ const GamesView = {
 
         html += '</div>';
         el.innerHTML = html;
+    },
+
+    async afterMatchEnd() {
+        // Si tournoi en cours → match suivant, sinon → hub
+        try {
+            const res = await fetch('/api/games/tournament/status');
+            const data = await res.json();
+            if (data.tournament && data.tournament.status === 'in_progress') {
+                this.nextTournamentMatch();
+                return;
+            }
+        } catch (e) {}
+        this.loadStatus();
     },
 
     async playMorpion(row, col) {
@@ -262,7 +287,7 @@ const GamesView = {
 
         html += '<div style="margin-top:12px; display:flex; gap:8px; justify-content:center;">';
         if (gameOver) {
-            html += `<button onclick="GamesView.loadStatus()" style="background:#ffb860; color:#000; border:none; padding:6px 16px; font-size:11px; font-weight:bold; cursor:pointer; border-radius:4px;">NOUVELLE PARTIE</button>`;
+            html += `<button onclick="GamesView.afterMatchEnd()" style="background:#ffb860; color:#000; border:none; padding:6px 16px; font-size:11px; font-weight:bold; cursor:pointer; border-radius:4px;">CONTINUER</button>`;
         } else {
             html += `<button onclick="GamesView.forfeit()" style="background:none; color:#ff5050; border:1px solid #ff5050; padding:4px 12px; font-size:9px; cursor:pointer; border-radius:3px;">ABANDONNER</button>`;
         }
@@ -361,6 +386,102 @@ const GamesView = {
                 this.gameChatMessages.push({player: 'promethee', message: data.promethee_comment});
             }
         }
+    },
+
+    async startTournament(gameType) {
+        try {
+            const res = await fetch('/api/games/tournament/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({game: gameType})
+            });
+            const data = await res.json();
+            if (data.error) { alert(data.error); return; }
+            if (data.tournament) {
+                this.renderTournamentProgress(data.tournament, data.game, data.current_match);
+            }
+        } catch (e) { alert('Erreur: ' + e.message); }
+    },
+
+    renderTournamentProgress(tournament, gameData, currentMatch) {
+        const el = document.getElementById('games-content');
+        let html = '<div style="max-width:500px; margin:0 auto; padding:20px; text-align:center;">';
+        html += '<div style="color:#ffd700; font-size:16px; font-weight:bold; letter-spacing:0.15em; margin-bottom:16px;">🏆 TOURNOI</div>';
+
+        // Matchs
+        for (const m of tournament.matches) {
+            const icon = m.status === 'done' ? (m.winner === 'draw' ? '🤝' : '✅') : m.status === 'playing' ? '▶️' : '⏳';
+            const result = m.status === 'done' ? (m.winner === 'draw' ? 'Nul' : `${m.winner} gagne (${m.moves} coups)`) : m.status === 'playing' ? 'EN COURS' : 'A venir';
+            const color = m.status === 'playing' ? '#ffd700' : m.status === 'done' ? '#4dff88' : '#666';
+            html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid rgba(100,100,100,0.2);">
+                <span style="color:${color}; font-size:11px;">${icon} ${m.label}</span>
+                <span style="color:#888; font-size:10px;">${result}</span>
+            </div>`;
+        }
+
+        // Scores
+        html += '<div style="margin-top:16px; display:flex; justify-content:center; gap:16px;">';
+        for (const [player, pts] of Object.entries(tournament.scores)) {
+            const label = player === 'human' ? 'Jean-Michel' : player === 'promethee' ? 'Promethee' : 'Alfred';
+            html += `<div style="text-align:center; padding:8px 16px; border:1px solid rgba(255,215,0,0.3); border-radius:6px;">
+                <div style="color:#ffd700; font-size:14px; font-weight:bold;">${pts}</div>
+                <div style="color:#888; font-size:9px;">${label}</div>
+            </div>`;
+        }
+        html += '</div>';
+
+        // Match en cours → afficher la grille
+        if (currentMatch && gameData && gameData.state) {
+            html += '<div style="margin-top:16px; border-top:1px solid rgba(255,215,0,0.2); padding-top:16px;">';
+            html += `<div style="color:#ffd700; font-size:11px; margin-bottom:8px;">▶️ ${currentMatch}</div>`;
+            html += '</div></div>';
+            // Re-render la grille du jeu actif
+            el.innerHTML = html;
+            if (gameData.state.game === 'morpion') {
+                this.renderMorpion(gameData.state, gameData.render);
+            } else {
+                this.renderPuissance4(gameData.state, gameData.render);
+            }
+            return;
+        }
+
+        html += '</div>';
+        el.innerHTML = html;
+    },
+
+    renderTournamentResult(tournament) {
+        let html = '<div style="border:1px solid rgba(255,215,0,0.3); border-radius:8px; padding:12px; background:rgba(255,215,0,0.05); margin-bottom:16px;">';
+        html += '<div style="color:#ffd700; font-size:11px; font-weight:bold; margin-bottom:8px; letter-spacing:0.1em;">🏆 DERNIER TOURNOI</div>';
+        if (tournament.ranking) {
+            const medals = ['🥇', '🥈', '🥉'];
+            for (let i = 0; i < tournament.ranking.length; i++) {
+                const r = tournament.ranking[i];
+                html += `<div style="display:flex; justify-content:space-between; padding:3px 0; font-size:10px;">
+                    <span style="color:${i===0 ? '#ffd700' : '#888'};">${medals[i] || ''} ${r.label}</span>
+                    <span style="color:#ffd700; font-weight:bold;">${r.points} pts</span>
+                </div>`;
+            }
+        }
+        // Détails des matchs
+        for (const m of tournament.matches) {
+            const result = m.winner === 'draw' ? 'Nul' : `${m.winner} gagne`;
+            html += `<div style="font-size:9px; color:#666; padding:1px 0;">${m.label}: ${result} (${m.moves} coups)</div>`;
+        }
+        html += '</div>';
+        return html;
+    },
+
+    async nextTournamentMatch() {
+        try {
+            const res = await fetch('/api/games/tournament/next', {method: 'POST'});
+            const data = await res.json();
+            if (data.error) { alert(data.error); return; }
+            if (data.tournament) {
+                this.renderTournamentProgress(data.tournament, data.game, data.current_match);
+            } else {
+                this.loadStatus();
+            }
+        } catch (e) { alert('Erreur: ' + e.message); }
     },
 
     backToHub() {

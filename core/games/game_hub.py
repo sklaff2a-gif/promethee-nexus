@@ -110,6 +110,9 @@ class GameHub:
             "alfred": 40.0,  # Alfred joue en medium
         }
 
+        # Tournoi
+        self._tournament: Optional[Dict[str, Any]] = None
+
         self._load()
 
     @classmethod
@@ -125,10 +128,14 @@ class GameHub:
 
         Args:
             game_type: "morpion" ou "puissance4"
-            opponent: "human" ou "alfred"
-            promethee_starts: True si Promethee joue en premier
-            difficulty: "easy", "medium", "hard" (IA de Promethee)
+            opponent: "human", "alfred", ou "alfred_vs_human" (humain joue contre Alfred)
+            promethee_starts: True si Promethee/Alfred joue en premier
+            difficulty: "easy", "medium", "hard", "adaptive" (IA)
         """
+        # Mode alfred_vs_human : l'humain joue contre Alfred (medium)
+        if opponent == "alfred_vs_human":
+            opponent = "human"
+            difficulty = "medium"
         if game_type not in ("morpion", "puissance4"):
             return {"error": f"Jeu inconnu: {game_type}. Disponibles: morpion, puissance4"}
 
@@ -430,6 +437,10 @@ class GameHub:
         logger.info(f"GAME_HUB: Fin {gt} — {'Promethee gagne' if promethee_won else 'defaite/nul'} "
                     f"({game.moves_count} coups)")
 
+        # Tournoi : enregistrer le resultat du match
+        if self._tournament and self._tournament.get("status") == "in_progress":
+            self.record_tournament_match_end()
+
     def _react_emotionally(self, won: bool, lost: bool, draw: bool, forfeit: bool):
         """Reaction dopaminergique et cardiaque au resultat du jeu."""
         try:
@@ -460,6 +471,232 @@ class GameHub:
                 desires.on_event("GAME_LOST")
         except Exception:
             pass
+
+    # --- Mode Tournoi (round-robin 3 joueurs) ---
+
+    def start_tournament(self, game_type: str = "morpion") -> Dict[str, Any]:
+        """Lance un tournoi round-robin : Jean-Michel vs Promethee vs Alfred.
+
+        3 matchs :
+          1. Jean-Michel vs Promethee (humain joue dans le frontend)
+          2. Promethee vs Alfred (auto, 0 LLM)
+          3. Jean-Michel vs Alfred (humain joue, Alfred = IA medium)
+
+        Points : victoire=3, nul=1, defaite=0.
+        """
+        if self._active_session:
+            return {"error": "Partie en cours. Terminez-la d'abord."}
+        if self._tournament and self._tournament.get("status") == "in_progress":
+            return {"error": "Tournoi deja en cours."}
+
+        self._tournament = {
+            "game_type": game_type,
+            "status": "in_progress",
+            "current_match": 0,
+            "matches": [
+                {"player1": "human", "player2": "promethee", "label": "Jean-Michel vs Promethee",
+                 "status": "pending", "winner": None, "moves": 0},
+                {"player1": "promethee", "player2": "alfred", "label": "Promethee vs Alfred",
+                 "status": "pending", "winner": None, "moves": 0},
+                {"player1": "human", "player2": "alfred", "label": "Jean-Michel vs Alfred",
+                 "status": "pending", "winner": None, "moves": 0},
+            ],
+            "scores": {"human": 0, "promethee": 0, "alfred": 0},
+            "started_at": time.time(),
+        }
+
+        logger.info(f"GAME_HUB: Tournoi {game_type} lance — 3 matchs")
+
+        # Lancer le premier match (humain vs promethee)
+        return self._start_next_tournament_match()
+
+    def _start_next_tournament_match(self) -> Dict[str, Any]:
+        """Lance le prochain match du tournoi."""
+        t = self._tournament
+        if not t or t["status"] != "in_progress":
+            return {"error": "Pas de tournoi en cours."}
+
+        idx = t["current_match"]
+        if idx >= len(t["matches"]):
+            return self._finish_tournament()
+
+        match = t["matches"][idx]
+
+        # Match auto (Promethee vs Alfred) — jouer immediatement
+        if match["player1"] == "promethee" and match["player2"] == "alfred":
+            result = self._play_auto_tournament_match(match)
+            t["current_match"] += 1
+            # Enchainer sur le match suivant
+            return self._start_next_tournament_match()
+
+        # Match avec humain — creer la partie
+        if match["player1"] == "human" and match["player2"] == "promethee":
+            game_result = self.new_game(t["game_type"], opponent="human",
+                                        promethee_starts=False, difficulty="adaptive")
+        elif match["player1"] == "human" and match["player2"] == "alfred":
+            game_result = self.new_game(t["game_type"], opponent="alfred_vs_human",
+                                        promethee_starts=False, difficulty="medium")
+        else:
+            return {"error": f"Configuration match inconnue: {match}"}
+
+        match["status"] = "playing"
+
+        return {
+            "tournament": self.get_tournament_status(),
+            "game": game_result,
+            "current_match": match["label"],
+        }
+
+    def _play_auto_tournament_match(self, match: Dict):
+        """Joue un match Promethee vs Alfred automatiquement."""
+        t = self._tournament
+        gt = t["game_type"]
+
+        result = self.new_game(gt, opponent="alfred", promethee_starts=True)
+        if "error" in result:
+            match["status"] = "error"
+            return
+
+        # Boucle auto
+        promethee_symbol = result.get("promethee_symbol", "")
+        for _ in range(25):
+            if not self._active_session:
+                break
+            game = self._get_active_game()
+            if game.game_over:
+                break
+            if game.current_player != promethee_symbol:
+                break
+            if gt == "morpion":
+                move = morpion_ai(game, "hard")
+                if move:
+                    self.play_move(list(move), player="promethee")
+                else:
+                    break
+            else:
+                col = puissance4_ai(game, "hard")
+                if col is not None:
+                    self.play_move(col, player="promethee")
+                else:
+                    break
+
+        # Nettoyer si bloque
+        if self._active_session:
+            game = self._get_active_game()
+            if not game.game_over:
+                self.forfeit()
+
+        # Enregistrer le resultat
+        game = self._active_morpion or self._active_puissance4
+        last_history = self.game_history[-1] if self.game_history else {}
+        won_promethee = last_history.get("promethee_won", False)
+        is_draw = last_history.get("winner") is None and not last_history.get("forfeit")
+        moves = last_history.get("moves", 0)
+
+        match["moves"] = moves
+        if won_promethee:
+            match["winner"] = "promethee"
+            t["scores"]["promethee"] += 3
+        elif is_draw:
+            match["winner"] = "draw"
+            t["scores"]["promethee"] += 1
+            t["scores"]["alfred"] += 1
+        else:
+            match["winner"] = "alfred"
+            t["scores"]["alfred"] += 3
+        match["status"] = "done"
+
+        logger.info(f"TOURNAMENT: {match['label']} → {match['winner']} ({moves} coups)")
+
+    def record_tournament_match_end(self):
+        """Appele quand un match humain du tournoi se termine."""
+        t = self._tournament
+        if not t or t["status"] != "in_progress":
+            return
+
+        idx = t["current_match"]
+        if idx >= len(t["matches"]):
+            return
+
+        match = t["matches"][idx]
+        if match["status"] != "playing":
+            return
+
+        # Recuperer le resultat depuis le dernier historique
+        last = self.game_history[-1] if self.game_history else {}
+        moves = last.get("moves", 0)
+        match["moves"] = moves
+
+        p1 = match["player1"]
+        p2 = match["player2"]
+
+        if p2 == "promethee":
+            if last.get("promethee_won"):
+                match["winner"] = "promethee"
+                t["scores"]["promethee"] += 3
+            elif last.get("winner") is None:
+                match["winner"] = "draw"
+                t["scores"]["human"] += 1
+                t["scores"]["promethee"] += 1
+            else:
+                match["winner"] = "human"
+                t["scores"]["human"] += 3
+        elif p2 == "alfred":
+            # Humain vs Alfred : promethee_won=False signifie Alfred a gagne OU humain a gagne
+            # Dans ce mode, "promethee" = "alfred" coté game_hub
+            if last.get("promethee_won"):
+                # promethee_won = True → c'est Alfred qui a gagne (il jouait le role de promethee)
+                match["winner"] = "alfred"
+                t["scores"]["alfred"] += 3
+            elif last.get("winner") is None:
+                match["winner"] = "draw"
+                t["scores"]["human"] += 1
+                t["scores"]["alfred"] += 1
+            else:
+                match["winner"] = "human"
+                t["scores"]["human"] += 3
+
+        match["status"] = "done"
+        t["current_match"] += 1
+
+        logger.info(f"TOURNAMENT: {match['label']} → {match['winner']} ({moves} coups)")
+
+        # Verifier si le tournoi est termine
+        if t["current_match"] >= len(t["matches"]):
+            self._finish_tournament()
+
+    def _finish_tournament(self) -> Dict[str, Any]:
+        """Termine le tournoi et etablit le classement."""
+        t = self._tournament
+        t["status"] = "finished"
+        t["finished_at"] = time.time()
+
+        # Classement
+        ranking = sorted(t["scores"].items(), key=lambda x: -x[1])
+        t["ranking"] = [
+            {"player": p, "points": pts,
+             "label": "Jean-Michel" if p == "human" else "Promethee" if p == "promethee" else "Alfred"}
+            for p, pts in ranking
+        ]
+
+        winner = t["ranking"][0]
+        logger.info(f"TOURNAMENT: TERMINE — Vainqueur: {winner['label']} ({winner['points']}pts)")
+        print(f"   🏆 TOURNOI: Vainqueur = {winner['label']} ({winner['points']}pts)")
+
+        # Reactions emotionnelles
+        if winner["player"] == "promethee":
+            self._react_emotionally(True, False, False, False)
+        elif winner["player"] == "human" or winner["player"] == "alfred":
+            self._react_emotionally(False, True, False, False)
+
+        self._save()
+        return {"tournament": self.get_tournament_status()}
+
+    def get_tournament_status(self) -> Optional[Dict[str, Any]]:
+        """Retourne l'etat du tournoi en cours ou le dernier termine."""
+        if not self._tournament:
+            return None
+        return dict(self._tournament)
 
     def _compute_adaptive_difficulty(self, opponent: str) -> str:
         """Calcule la difficulte de Promethee en fonction du score de l'adversaire.
@@ -554,6 +791,7 @@ class GameHub:
             "chess_unlocked": self.stats.get("chess_unlocked", False),
             "games_available": self._list_available_games(),
             "opponent_scores": dict(self.opponent_scores),
+            "tournament": self.get_tournament_status(),
             "recent_history": self.game_history[-10:],
         }
 
