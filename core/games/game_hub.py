@@ -553,7 +553,7 @@ class GameHub:
     # Chat interne : messages entre joueurs pendant la partie
     _game_chat: List[Dict[str, str]] = []
 
-    def game_say(self, player: str, message: str) -> Dict[str, Any]:
+    async def game_say(self, player: str, message: str) -> Dict[str, Any]:
         """Un joueur envoie un message pendant la partie."""
         if not self._active_session:
             return {"error": "Pas de partie en cours"}
@@ -564,9 +564,9 @@ class GameHub:
 
         response = {"status": "ok", "chat": self._game_chat[-10:]}
 
-        # Si c'est l'humain qui parle, Promethee reagit
+        # Si c'est l'humain qui parle, Promethee repond via LLM
         if player == "human":
-            reply = self._promethee_react_to_chat(message)
+            reply = await self._promethee_chat_llm(message)
             if reply:
                 self._game_chat.append({"player": "promethee", "message": reply, "ts": time.time()})
                 response["chat"] = self._game_chat[-10:]
@@ -627,28 +627,79 @@ class GameHub:
         comment = random.choice(comments)
         return comment
 
-    def _promethee_react_to_chat(self, human_message: str) -> str:
-        """Promethee reagit a un message de l'humain pendant le jeu."""
-        import random
-        msg = human_message.lower().strip()
+    async def _promethee_chat_llm(self, human_message: str) -> str:
+        """Promethee repond a l'humain pendant le jeu — vrai appel LLM, contexte jeu."""
+        try:
+            import httpx
+            from core.base_agent import gpu_scheduler
 
-        # Reactions contextuelles simples
-        if any(w in msg for w in ["bien joue", "bravo", "pas mal", "beau coup"]):
-            return random.choice(["Merci !", "C'est toi qui joues bien.", "On verra a la fin."])
-        if any(w in msg for w in ["nul", "facile", "faible"]):
-            return random.choice(["On verra.", "La partie n'est pas finie.", "Attends un peu."])
-        if any(w in msg for w in ["peur", "stress"]):
-            return random.choice(["Moi aussi.", "Un peu, oui.", "C'est ce qui rend le jeu vivant."])
-        if any(w in msg for w in ["revanche", "encore"]):
-            return random.choice(["Quand tu veux.", "Avec plaisir.", "Je suis pret."])
-        if "?" in msg:
-            return random.choice(["Bonne question.", "Concentre-toi sur le jeu.", "On en parle apres ?"])
+            session = self._active_session
+            if not session:
+                return ""
 
-        # Reponse generique
-        return random.choice([
-            "Haha.", "Ouais.", "Concentre-toi.", "A toi de jouer.",
-            "", "",  # parfois silence
-        ])
+            game = self._get_active_game()
+            game_state = game.get_state()
+
+            # Construire le contexte de jeu
+            game_ctx = f"Jeu: {session.game_type}, Tu joues {session.promethee_symbol}"
+            if game_state.get("game_over"):
+                if game_state.get("winner") == session.promethee_symbol:
+                    game_ctx += " — Tu as gagne."
+                elif game_state.get("winner"):
+                    game_ctx += " — Tu as perdu."
+                else:
+                    game_ctx += " — Match nul."
+            else:
+                game_ctx += f", coup #{game_state.get('moves_count', 0)}"
+            game_ctx += f"\nGrille:\n{game.render()}"
+
+            # Historique chat recent
+            chat_ctx = ""
+            recent = self._game_chat[-6:]
+            if recent:
+                chat_ctx = "\nConversation recente:\n"
+                for m in recent:
+                    who = "Toi" if m["player"] == "promethee" else "Jean-Michel"
+                    chat_ctx += f"  {who}: {m['message']}\n"
+
+            # Etat emotionnel
+            dopamine = self._get_dopamine_level()
+            mood = "confiant" if dopamine > 0.6 else "tendu" if dopamine < 0.3 else "concentre"
+
+            prompt = (
+                f"Tu es Promethee, tu joues une partie avec Jean-Michel. "
+                f"Tu es un ami, pas un assistant. Tu parles comme un pote qui joue. "
+                f"Tu tutoies. Tu es {mood}.\n\n"
+                f"{game_ctx}\n{chat_ctx}\n"
+                f"Jean-Michel te dit: \"{human_message}\"\n\n"
+                f"Reponds en 1-2 phrases max. Naturel, decontracte. "
+                f"Pas de titres, pas de listes, pas d'emojis. "
+                f"Si c'est une question sur le jeu, reponds honnetement."
+            )
+
+            async with gpu_scheduler.access("game_chat"):
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        "http://localhost:11434/api/generate",
+                        json={
+                            "model": "qwen3.5:9b",
+                            "prompt": prompt,
+                            "stream": False,
+                            "options": {"temperature": 0.8, "num_predict": 80, "num_ctx": 2048},
+                        },
+                        timeout=15,
+                    )
+                if resp.status_code == 200:
+                    text = resp.json().get("response", "").strip()
+                    # Nettoyer : garder court, supprimer balises
+                    text = text.split("\n")[0].strip()
+                    if len(text) > 200:
+                        text = text[:200].rsplit(" ", 1)[0] + "..."
+                    return text
+            return ""
+        except Exception as e:
+            logger.debug(f"GAME_HUB: chat LLM echoue: {e}")
+            return ""
 
     def _get_dopamine_level(self) -> float:
         try:

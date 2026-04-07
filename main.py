@@ -1133,7 +1133,7 @@ async def games_say(request: Request):
     from core.games.game_hub import game_hub
     body = await request.json()
     message = body.get("message", "")
-    return game_hub.game_say("human", message)
+    return await game_hub.game_say("human", message)
 
 @app.post("/api/games/forfeit")
 async def games_forfeit():
