@@ -167,6 +167,7 @@ class AlfredEngine:
                 return {"status": "error", "result": "Prométhée silencieux."}
             messages.append({"role": "user", "content": promethee_reply})
             exchanges = 1
+            _seen_replies = {promethee_reply.strip()[:50]}  # Detection boucle
 
             # Dialogue libre
             for turn in range(MAX_EXCHANGES - 1):
@@ -182,6 +183,12 @@ class AlfredEngine:
                     prom_reply = await self._promethee_responds(messages, text_source)
                     if not prom_reply:
                         break
+                    # Detection boucle : si Promethee repete, couper le cafe
+                    reply_key = prom_reply.strip()[:50]
+                    if reply_key in _seen_replies:
+                        logger.warning(f"ALFRED: Boucle detectee — Promethee repete \"{reply_key[:30]}...\"")
+                        break
+                    _seen_replies.add(reply_key)
                     messages.append({"role": "user", "content": prom_reply})
 
             # Post-café
@@ -292,6 +299,35 @@ class AlfredEngine:
         except Exception:
             pass
 
+        # Pensées récentes (THOUGHT_STREAM)
+        try:
+            from core.self_awareness import awareness
+            ts = awareness.get_thought_summary()
+            recent_thoughts = ts.get("recent_thoughts", [])
+            if recent_thoughts and len(recent_thoughts[-1]) > 20:
+                candidates.append({
+                    "type": "pensée récente",
+                    "subject": "ce qui te traverse l'esprit",
+                    "content": " | ".join(recent_thoughts[-3:])[:500],
+                })
+        except Exception:
+            pass
+
+        # Soliloque récent
+        try:
+            from core.soliloque import soliloque as _sol
+            if _sol.history:
+                last_sol = _sol.history[-1]
+                insight = last_sol.get("insight", "")
+                if insight and len(insight) > 20:
+                    candidates.append({
+                        "type": "soliloque",
+                        "subject": f"ton dialogue intérieur sur {last_sol.get('theme', '?')}",
+                        "content": insight[:500],
+                    })
+        except Exception:
+            pass
+
         # Dernière consolidation mémoire
         try:
             from core.vector_store import ChromaMemoryManager
@@ -316,7 +352,14 @@ class AlfredEngine:
         if not candidates:
             return None
 
-        return random.choice(candidates)
+        # Eviter de reproposer le meme sujet que le dernier cafe
+        last_subject = getattr(self, '_last_cafe_subject', '')
+        if last_subject and len(candidates) > 1:
+            candidates = [c for c in candidates if c.get("subject") != last_subject] or candidates
+
+        choice = random.choice(candidates)
+        self._last_cafe_subject = choice.get("subject", "")
+        return choice
 
     # ─── CONSTRUCTION DE L'ACCROCHE ─────────────────────────────────────
 
