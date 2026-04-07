@@ -155,6 +155,7 @@ class GameHub:
             self._active_puissance4 = game
 
         self._active_session = session
+        self._game_chat = []  # Reset chat pour la nouvelle partie
         logger.info(f"GAME_HUB: Nouvelle partie {game_type} vs {opponent} "
                     f"(Promethee={session.promethee_symbol}, diff={session.difficulty})")
 
@@ -260,6 +261,13 @@ class GameHub:
         if auto_play:
             response["state"] = game.get_state()
             response["render"] = game.render()
+            # Commentaire de Promethee apres son coup
+            comment = self._generate_move_comment(
+                game.get_state(), is_promethee_move=True,
+                move_result=auto_play.get("result", {}))
+            if comment:
+                response["promethee_comment"] = comment
+                self._game_chat.append({"player": "promethee", "message": comment, "ts": time.time()})
             if game.game_over:
                 self._record_game_end(game, session)
                 response["game_over"] = True
@@ -269,6 +277,7 @@ class GameHub:
                 self._active_puissance4 = None
                 self._publish_game_event("GAME_ENDED", session, auto_play.get("result", {}))
 
+        response["chat"] = self._game_chat[-10:]
         return response
 
     def _promethee_play(self, difficulty: str = "hard") -> Optional[Dict[str, Any]]:
@@ -538,6 +547,115 @@ class GameHub:
             games.append({"id": "echecs", "name": "Echecs", "type": "vs humain ou Alfred",
                           "status": "verrouille"})
         return games
+
+    # --- Commentaires de jeu (conversation pendant la partie) ---
+
+    # Chat interne : messages entre joueurs pendant la partie
+    _game_chat: List[Dict[str, str]] = []
+
+    def game_say(self, player: str, message: str) -> Dict[str, Any]:
+        """Un joueur envoie un message pendant la partie."""
+        if not self._active_session:
+            return {"error": "Pas de partie en cours"}
+        entry = {"player": player, "message": message, "ts": time.time()}
+        self._game_chat.append(entry)
+        if len(self._game_chat) > 30:
+            self._game_chat = self._game_chat[-30:]
+
+        response = {"status": "ok", "chat": self._game_chat[-10:]}
+
+        # Si c'est l'humain qui parle, Promethee reagit
+        if player == "human":
+            reply = self._promethee_react_to_chat(message)
+            if reply:
+                self._game_chat.append({"player": "promethee", "message": reply, "ts": time.time()})
+                response["chat"] = self._game_chat[-10:]
+
+        return response
+
+    def _generate_move_comment(self, game_state: dict, is_promethee_move: bool,
+                                move_result: dict) -> str:
+        """Genere un commentaire apres un coup — comme un ami qui joue."""
+        import random
+
+        status = move_result.get("status", "")
+        winner = move_result.get("winner", "")
+
+        # Fin de partie
+        if status == "win":
+            if is_promethee_move:
+                return random.choice([
+                    "Et voila.", "Je crois que c'est mat.", "Bien joue a toi aussi.",
+                    "J'ai eu de la chance sur ce coup.", "Revanche ?",
+                ])
+            else:
+                return random.choice([
+                    "Bien joue. Tu m'as eu.", "Aie. Je n'ai pas vu celui-la.",
+                    "Tu merites cette victoire.", "Je ferai mieux la prochaine fois.",
+                    "OK, revanche immediate.", "Pas mal du tout.",
+                ])
+        if status == "draw":
+            return random.choice([
+                "Match nul. On se vaut.", "Equilibre parfait.",
+                "Ni toi ni moi. C'est beau.", "Personne ne lache.",
+            ])
+
+        # Pendant la partie — reagir selon l'etat emotionnel
+        dopamine = self._get_dopamine_level()
+        if dopamine > 0.7:
+            # Confiant
+            comments = [
+                "Hmm, interessant.", "Je vois ou tu veux en venir.",
+                "Tu es sur de toi ?", "Bon coup.", "Continue comme ca.",
+                "J'aime cette partie.", "Tu me fais reflechir.",
+            ]
+        elif dopamine < 0.3:
+            # Frustre
+            comments = [
+                "...", "Laisse-moi reflechir.", "C'est complique.",
+                "Tu joues bien.", "Je suis en difficulte la.",
+                "Pas facile.", "Tu me mets la pression.",
+            ]
+        else:
+            # Neutre
+            comments = [
+                "A toi.", "Voyons...", "Hmm.", "OK.",
+                "Ton tour.", "Pas mal.", "Je reflechis...",
+                "", "", "",  # parfois ne rien dire
+            ]
+
+        comment = random.choice(comments)
+        return comment
+
+    def _promethee_react_to_chat(self, human_message: str) -> str:
+        """Promethee reagit a un message de l'humain pendant le jeu."""
+        import random
+        msg = human_message.lower().strip()
+
+        # Reactions contextuelles simples
+        if any(w in msg for w in ["bien joue", "bravo", "pas mal", "beau coup"]):
+            return random.choice(["Merci !", "C'est toi qui joues bien.", "On verra a la fin."])
+        if any(w in msg for w in ["nul", "facile", "faible"]):
+            return random.choice(["On verra.", "La partie n'est pas finie.", "Attends un peu."])
+        if any(w in msg for w in ["peur", "stress"]):
+            return random.choice(["Moi aussi.", "Un peu, oui.", "C'est ce qui rend le jeu vivant."])
+        if any(w in msg for w in ["revanche", "encore"]):
+            return random.choice(["Quand tu veux.", "Avec plaisir.", "Je suis pret."])
+        if "?" in msg:
+            return random.choice(["Bonne question.", "Concentre-toi sur le jeu.", "On en parle apres ?"])
+
+        # Reponse generique
+        return random.choice([
+            "Haha.", "Ouais.", "Concentre-toi.", "A toi de jouer.",
+            "", "",  # parfois silence
+        ])
+
+    def _get_dopamine_level(self) -> float:
+        try:
+            from core.dopamine_system import dopamine
+            return dopamine.dopamine_level
+        except Exception:
+            return 0.5
 
     # --- Bus events ---
 

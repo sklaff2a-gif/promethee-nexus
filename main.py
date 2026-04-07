@@ -1127,6 +1127,14 @@ async def games_move(request: Request):
     player = body.get("player", "promethee")
     return game_hub.play_move(move, player)
 
+@app.post("/api/games/say")
+async def games_say(request: Request):
+    """Envoyer un message pendant une partie. Body: {message}"""
+    from core.games.game_hub import game_hub
+    body = await request.json()
+    message = body.get("message", "")
+    return game_hub.game_say("human", message)
+
 @app.post("/api/games/forfeit")
 async def games_forfeit():
     """Abandonne la partie en cours."""

@@ -187,6 +187,9 @@ const GamesView = {
         html += `<button onclick="GamesView.backToHub()" style="background:none; color:#888; border:1px solid #555; padding:4px 12px; font-size:9px; cursor:pointer; border-radius:3px;">RETOUR HUB</button>`;
         html += '</div>';
 
+        // Zone de chat en jeu
+        html += this.renderGameChat();
+
         html += '</div>';
         el.innerHTML = html;
     },
@@ -204,6 +207,7 @@ const GamesView = {
                 alert(data.move_result ? data.move_result.reason : 'Coup invalide');
                 return;
             }
+            this.updateChatFromResponse(data);
             this.renderMorpion(data.state, data.render);
         } catch (e) { alert('Erreur: ' + e.message); }
     },
@@ -265,6 +269,9 @@ const GamesView = {
         html += `<button onclick="GamesView.backToHub()" style="background:none; color:#888; border:1px solid #555; padding:4px 12px; font-size:9px; cursor:pointer; border-radius:3px;">RETOUR HUB</button>`;
         html += '</div>';
 
+        // Zone de chat en jeu
+        html += this.renderGameChat();
+
         html += '</div>';
         el.innerHTML = html;
     },
@@ -282,8 +289,78 @@ const GamesView = {
                 alert(data.move_result ? data.move_result.reason : 'Coup invalide');
                 return;
             }
+            this.updateChatFromResponse(data);
             this.renderPuissance4(data.state, data.render);
         } catch (e) { alert('Erreur: ' + e.message); }
+    },
+
+    gameChatMessages: [],
+
+    renderGameChat() {
+        let html = '<div style="margin-top:16px; border:1px solid rgba(0,229,200,0.15); border-radius:8px; padding:8px; background:rgba(0,0,0,0.3); max-width:400px; margin-left:auto; margin-right:auto;">';
+        html += '<div id="game-chat-messages" style="max-height:120px; overflow-y:auto; margin-bottom:8px; font-size:10px;">';
+        for (const msg of this.gameChatMessages.slice(-8)) {
+            const isP = msg.player === 'promethee';
+            const color = isP ? '#00e5c8' : '#ffb860';
+            const name = isP ? 'Promethee' : 'Toi';
+            if (msg.message) {
+                html += `<div style="margin:2px 0;"><span style="color:${color}; font-weight:bold;">${name}:</span> <span style="color:#aaa;">${msg.message}</span></div>`;
+            }
+        }
+        html += '</div>';
+        html += `<div style="display:flex; gap:4px;">
+            <input type="text" id="game-chat-input" placeholder="Dis quelque chose..."
+                style="flex:1; background:rgba(0,0,0,0.5); border:1px solid rgba(0,229,200,0.2); color:#ccc; padding:4px 8px; font-size:10px; border-radius:3px; font-family:'Courier New',monospace;"
+                onkeydown="if(event.key==='Enter') GamesView.sendGameMessage()">
+            <button onclick="GamesView.sendGameMessage()"
+                style="background:rgba(0,229,200,0.2); color:#00e5c8; border:1px solid rgba(0,229,200,0.3); padding:4px 8px; font-size:9px; cursor:pointer; border-radius:3px;">ENVOYER</button>
+        </div>`;
+        html += '</div>';
+        return html;
+    },
+
+    async sendGameMessage() {
+        const input = document.getElementById('game-chat-input');
+        if (!input) return;
+        const msg = input.value.trim();
+        if (!msg) return;
+        input.value = '';
+        try {
+            const res = await fetch('/api/games/say', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({message: msg})
+            });
+            const data = await res.json();
+            if (data.chat) {
+                this.gameChatMessages = data.chat;
+                const chatEl = document.getElementById('game-chat-messages');
+                if (chatEl) {
+                    let html = '';
+                    for (const m of this.gameChatMessages.slice(-8)) {
+                        const isP = m.player === 'promethee';
+                        const color = isP ? '#00e5c8' : '#ffb860';
+                        const name = isP ? 'Promethee' : 'Toi';
+                        if (m.message) {
+                            html += `<div style="margin:2px 0;"><span style="color:${color}; font-weight:bold;">${name}:</span> <span style="color:#aaa;">${m.message}</span></div>`;
+                        }
+                    }
+                    chatEl.innerHTML = html;
+                    chatEl.scrollTop = chatEl.scrollHeight;
+                }
+            }
+        } catch (e) { /* silencieux */ }
+    },
+
+    updateChatFromResponse(data) {
+        if (data.chat) this.gameChatMessages = data.chat;
+        if (data.promethee_comment) {
+            // Ajouter le commentaire s'il n'est pas deja dans la liste
+            const last = this.gameChatMessages[this.gameChatMessages.length - 1];
+            if (!last || last.message !== data.promethee_comment) {
+                this.gameChatMessages.push({player: 'promethee', message: data.promethee_comment});
+            }
+        }
     },
 
     backToHub() {
