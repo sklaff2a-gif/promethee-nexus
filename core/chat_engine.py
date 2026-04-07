@@ -1833,6 +1833,36 @@ class ChatEngine:
 
         return sources
 
+    def _search_chat_history(self, query: str, max_results: int = 3) -> List[str]:
+        """Cherche dans l'historique du chat des messages lies a la requete."""
+        if not query or len(query) < 3:
+            return []
+
+        # Extraire les mots significatifs (4+ lettres)
+        _stop = {"dans", "pour", "avec", "plus", "mais", "donc", "tout", "cette",
+                 "sont", "etre", "avoir", "fait", "peut", "nous", "vous", "comme",
+                 "aussi", "encore", "quel", "quoi", "comment", "pourquoi", "penses",
+                 "souviens", "parlons", "autre", "chose"}
+        keywords = [w.lower().strip(".,!?") for w in query.split()
+                    if len(w) >= 4 and w.lower().strip(".,!?") not in _stop]
+        if not keywords:
+            return []
+
+        results = []
+        for msg in self.messages:
+            content = msg.get("content", "").lower()
+            role = msg.get("role", "")
+            # Chercher dans les messages user ET assistant
+            matches = sum(1 for kw in keywords if kw in content)
+            if matches >= 1 and len(content) > 20:
+                preview = msg["content"][:150].replace("\n", " ")
+                who = "Jean-Michel" if role == "user" else "Toi (Promethee)"
+                results.append((matches, f"- {who} a dit : \"{preview}\""))
+
+        # Trier par pertinence, garder les meilleurs
+        results.sort(key=lambda x: -x[0])
+        return [r[1] for r in results[:max_results]]
+
     def _build_lived_experience(self) -> List[str]:
         """Construit le vecu recent de Promethee — dream journal, jeux, soliloque, pensees."""
         parts = []
@@ -2252,6 +2282,19 @@ class ChatEngine:
         # --- VECU RECENT (memoire vivante — pas juste des organes) ---
         parts.append("\n[VECU RECENT — ce que tu as vecu ces derniers jours]")
         parts.extend(self._build_lived_experience())
+
+        # --- SOUVENIRS DU CHAT (recherche dans l'historique) ---
+        # Extraire les mots-cles du dernier message pour retrouver des souvenirs
+        last_user_msg = ""
+        for msg in reversed(self.messages[-10:]):
+            if msg.get("role") == "user":
+                last_user_msg = msg.get("content", "")
+                break
+        if last_user_msg:
+            chat_memories = self._search_chat_history(last_user_msg)
+            if chat_memories:
+                parts.append("\n[SOUVENIRS DE NOS CONVERSATIONS]")
+                parts.extend(chat_memories)
 
         # --- BLOC FINAL ---
         parts.append(
