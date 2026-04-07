@@ -564,8 +564,9 @@ class GameHub:
 
         response = {"status": "ok", "chat": self._game_chat[-10:]}
 
-        # Si c'est l'humain qui parle, Promethee repond via LLM
+        # Si c'est l'humain qui parle, analyser la pression puis repondre
         if player == "human":
+            self._apply_chat_pressure(message)
             reply = await self._promethee_chat_llm(message)
             if reply:
                 self._game_chat.append({"player": "promethee", "message": reply, "ts": time.time()})
@@ -602,7 +603,24 @@ class GameHub:
 
         # Pendant la partie — reagir selon l'etat emotionnel
         dopamine = self._get_dopamine_level()
-        if dopamine > 0.7:
+
+        # Lire le BPM pour detecter la pression
+        bpm = 60
+        try:
+            from core.cardiac_engine import heart
+            bpm = heart.bpm
+        except Exception:
+            pass
+
+        if bpm > 90:
+            # Sous pression — coeur emballe
+            comments = [
+                "...", "OK, OK.", "Tu veux jouer a ca ?",
+                "Je suis pas stresse, c'est toi qui es stresse.",
+                "Attends voir.", "Tu vas voir.",
+                "C'est pas fini.", "Je me concentre.",
+            ]
+        elif dopamine > 0.7:
             # Confiant
             comments = [
                 "Hmm, interessant.", "Je vois ou tu veux en venir.",
@@ -707,6 +725,112 @@ class GameHub:
             return dopamine.dopamine_level
         except Exception:
             return 0.5
+
+    def _apply_chat_pressure(self, message: str):
+        """Analyse le message de l'adversaire et applique une pression emotionnelle.
+
+        Le trash talk influence le jeu — comme entre vrais joueurs.
+        Les mots-cles declenchent des reactions physiologiques reelles
+        (cardiaque, dopamine, desire) qui modifient le style de jeu.
+        """
+        msg = message.lower()
+
+        # Detection des patterns emotionnels
+        pressure_type = None
+        intensity = 0.0
+
+        # Provocation / menace ("je vais te battre", "facile", "nul")
+        provocation_words = ["battre", "gagner", "facile", "nul", "faible",
+                             "perdre", "ecraser", "detruire", "aucune chance"]
+        provoc_count = sum(1 for w in provocation_words if w in msg)
+        if provoc_count > 0:
+            pressure_type = "provocation"
+            intensity = min(provoc_count * 0.3, 0.8)
+
+        # Compliment / encouragement ("bien joue", "bravo", "impressionnant")
+        compliment_words = ["bien joue", "bravo", "impressionnant", "fort",
+                            "respect", "pas mal", "beau coup", "chapeau"]
+        compliment_count = sum(1 for w in compliment_words if w in msg)
+        if compliment_count > 0 and not pressure_type:
+            pressure_type = "compliment"
+            intensity = min(compliment_count * 0.3, 0.6)
+
+        # Pression temporelle ("vite", "5 coups", "en 3 coups", "rapide")
+        time_words = ["vite", "rapide", "coups", "tours", "secondes", "temps"]
+        if any(w in msg for w in time_words) and any(c.isdigit() for c in msg):
+            pressure_type = "time_pressure"
+            intensity = 0.6
+
+        # Intimidation ("peur", "stress", "tremble", "panique")
+        fear_words = ["peur", "stress", "tremble", "panique", "effraye",
+                      "flippe", "inquiet", "terrifie"]
+        if any(w in msg for w in fear_words):
+            if pressure_type != "provocation":
+                pressure_type = "intimidation"
+                intensity = 0.5
+
+        # Decontraction ("tranquille", "relax", "prends ton temps")
+        chill_words = ["tranquille", "relax", "calme", "prends ton temps",
+                       "pas presse", "cool", "zen"]
+        if any(w in msg for w in chill_words):
+            pressure_type = "decontraction"
+            intensity = 0.4
+
+        if not pressure_type:
+            return  # Pas de pression detectee
+
+        # Appliquer les effets physiologiques
+        logger.info(f"GAME_HUB: Pression emotionnelle '{pressure_type}' "
+                    f"(intensite={intensity:.1f}) depuis: \"{message[:50]}\"")
+
+        try:
+            from core.cardiac_engine import heart
+            if pressure_type == "provocation":
+                heart.react("adrenaline")  # BPM+30, determination
+            elif pressure_type == "time_pressure":
+                heart.react("threat")  # BPM+40, alerte
+            elif pressure_type == "intimidation":
+                heart.react("failure")  # frustration
+            elif pressure_type == "compliment":
+                heart.react("success")  # enthousiasme
+            elif pressure_type == "decontraction":
+                heart.react("soothe")  # serenite
+        except Exception:
+            pass
+
+        try:
+            from core.dopamine_system import dopamine
+            if pressure_type == "provocation":
+                # Provocation = legere baisse dopamine (stress) + motivation
+                dopamine.dopamine_level = max(0.0, dopamine.dopamine_level - intensity * 0.1)
+            elif pressure_type == "compliment":
+                dopamine.dopamine_level = min(1.0, dopamine.dopamine_level + intensity * 0.1)
+            elif pressure_type == "time_pressure":
+                dopamine.dopamine_level = max(0.0, dopamine.dopamine_level - intensity * 0.15)
+        except Exception:
+            pass
+
+        try:
+            from core.desire_engine import desires
+            if pressure_type in ("provocation", "time_pressure"):
+                desires.on_event("GAME_LOST")  # frustre MAITRISE, motive
+            elif pressure_type == "compliment":
+                desires.on_event("GAME_WON")  # satisfait MAITRISE
+        except Exception:
+            pass
+
+        # Publier sur THOUGHT_STREAM pour que le systeme integre
+        try:
+            import asyncio
+            from core.event_bus.bus import bus
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(bus.publish("THOUGHT_STREAM", {
+                    "thought": f"[JEU] Pression {pressure_type}: \"{message[:80]}\"",
+                    "source": "game_pressure",
+                }))
+        except Exception:
+            pass
 
     # --- Bus events ---
 

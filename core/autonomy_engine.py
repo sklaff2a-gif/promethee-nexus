@@ -3261,16 +3261,30 @@ class AutonomyEngine:
                 return {"status": "error", "result": result["error"]}
 
             # Boucle simple : Promethee joue, Alfred repond auto via play_move
+            # Alfred parle pendant la partie — comme un pote
+            import random
+            _ALFRED_TAUNTS = [
+                "Tu es sur de ce coup ?", "Pas mal, mais j'ai mieux.",
+                "Hmm, interessant...", "Tu vas regretter ca.",
+                "Allez, montre-moi ce que tu sais faire.",
+                "C'est tout ? Je m'attendais a plus.",
+                "Bon coup, je l'avoue.", "Tu me surprends.",
+                "Je vais te battre, tu sais.", "Concentre-toi.",
+            ]
             promethee_symbol = result.get("promethee_symbol", "")
-            for _ in range(25):
+            for turn in range(25):
                 if not game_hub._active_session:
-                    break  # Partie terminee
+                    break
                 game = game_hub._get_active_game()
                 if game.game_over:
                     break
-                # Attendre le tour de Promethee
                 if game.current_player != promethee_symbol:
-                    break  # Ne devrait pas arriver (Alfred joue auto)
+                    break
+                # Alfred provoque de temps en temps (1 chance sur 3)
+                if turn > 0 and random.random() < 0.33:
+                    taunt = random.choice(_ALFRED_TAUNTS)
+                    game_hub._apply_chat_pressure(taunt)
+                    game_hub._game_chat.append({"player": "alfred", "message": taunt, "ts": time.time()})
                 # Promethee joue (hard) — Alfred repond automatiquement
                 if game_type == "morpion":
                     move = morpion_ai(game, "hard")
