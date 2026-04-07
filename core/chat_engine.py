@@ -1915,6 +1915,13 @@ class ChatEngine:
                     result = "victoire" if h.get("promethee_won") else "defaite" if h.get("winner") else "nul"
                     parts.append(f"  Derniere : {h.get('game','?')} vs {h.get('opponent','?')} "
                                  f"— {result} ({h.get('moves',0)} coups)")
+            # Dernier tournoi
+            tournament = game_hub.get_tournament_status()
+            if tournament and tournament.get("ranking"):
+                ranking = tournament["ranking"]
+                labels = [f"{r['label']}({r['points']}pts)" for r in ranking]
+                parts.append(f"- Dernier tournoi ({tournament.get('game_type','?')}) : "
+                             f"1er {labels[0]}, 2e {labels[1]}, 3e {labels[2]}")
         except Exception:
             pass
 
