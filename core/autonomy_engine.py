@@ -6846,10 +6846,24 @@ RAISON: <1 phrase courte>"""
         except Exception:
             print(f"   📚 ECOLE: Cours {slot} — Agent {agent_name}")
 
+        # Injecter la direction du mentor Claude (s'il a donne une direction)
+        mentor_ctx = ""
+        try:
+            from core.mentor import mentor as _mentor
+            direction = _mentor.get_pending_direction()
+            challenge = _mentor.get_pending_challenge()
+            if direction:
+                mentor_ctx = f"\nDIRECTION DU MENTOR CLAUDE : {direction}"
+                print(f"   🎓 MENTOR: Direction injectee — {direction[:80]}")
+            if challenge:
+                mentor_ctx += f"\nDEFI DU MENTOR CLAUDE : {challenge}"
+        except Exception:
+            pass
+
         # Dispatch au vrai agent
         response = await orchestrator.dispatch_task(agent_name, {
             "mission": prompt,
-            "context": f"PROTOCOLE_SCOLAIRE\n{schedule.get_schedule_context()}{salary_ctx}",
+            "context": f"PROTOCOLE_SCOLAIRE\n{schedule.get_schedule_context()}{salary_ctx}{mentor_ctx}",
             "force_local": True,
             "intent": intent,
         })

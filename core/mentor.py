@@ -48,6 +48,8 @@ class Mentor:
         self._calls_today: int = 0
         self._today: str = ""
         self._history: List[Dict] = []  # Derniers echanges (contexte)
+        self._pending_challenge: str = ""  # Defi pour le prochain cours
+        self._pending_direction: str = ""  # Direction pour le prochain cours
         self._load()
         self._load_api_key()
 
@@ -119,12 +121,21 @@ class Mentor:
             return None
 
         # Enregistrer dans l'historique
+        # Extraire defi et direction de la reponse
+        challenge, direction = self._extract_challenge_direction(response)
+        if challenge:
+            self._pending_challenge = challenge
+        if direction:
+            self._pending_direction = direction
+
         entry = {
             "date": datetime.now().isoformat(),
             "slot": slot,
             "subject": subject[:100],
             "local_grade": local_grade,
             "claude_feedback": response[:500],
+            "challenge": challenge,
+            "direction": direction,
         }
         self._history.append(entry)
         if len(self._history) > 20:
@@ -189,11 +200,13 @@ class Mentor:
             f"SUJET : {subject}\n"
             f"NOTE DU PROFESSEUR LOCAL : {local_grade}/10\n\n"
             f"LIVRABLE DE PROMETHEE :\n{deliverable[:2000]}\n\n"
-            "REPONDS en 3 parties :\n"
+            "REPONDS en 4 parties :\n"
             "1. EVALUATION (2-3 phrases) : ce qui est bien, ce qui manque\n"
             "2. QUESTION (1 phrase) : une question qui pousse plus loin\n"
-            "3. DEFI (1 phrase) : un defi pour la prochaine session\n\n"
-            "Maximum 200 mots. Pas de titres markdown. Pas d'emojis. Direct."
+            "3. DEFI (1 phrase) : un defi precis pour la prochaine session\n"
+            "4. DIRECTION (1 phrase) : le sujet ou l'angle que le prochain cours "
+            "devrait prendre, base sur ce que tu as vu dans ce livrable\n\n"
+            "Maximum 250 mots. Pas de titres markdown. Pas d'emojis. Direct."
         )
 
     async def _call_claude(self, prompt: str) -> Optional[str]:
@@ -254,6 +267,39 @@ class Mentor:
             logger.warning(f"MENTOR: Appel API echoue: {e}")
             return None
 
+    def _extract_challenge_direction(self, response: str) -> tuple:
+        """Extrait le defi et la direction de la reponse de Claude."""
+        challenge = ""
+        direction = ""
+        lines = response.split("\n")
+        for line in lines:
+            line_lower = line.lower().strip()
+            if line_lower.startswith("3.") or line_lower.startswith("defi"):
+                challenge = line.split(":", 1)[-1].strip() if ":" in line else line[2:].strip()
+            elif line_lower.startswith("4.") or line_lower.startswith("direction"):
+                direction = line.split(":", 1)[-1].strip() if ":" in line else line[2:].strip()
+        # Fallback : derniere ligne non vide
+        if not challenge and not direction:
+            non_empty = [l.strip() for l in lines if l.strip()]
+            if non_empty:
+                direction = non_empty[-1]
+        return challenge, direction
+
+    def get_pending_challenge(self) -> str:
+        """Retourne le defi en attente pour le prochain cours."""
+        return self._pending_challenge
+
+    def get_pending_direction(self) -> str:
+        """Retourne la direction suggeree pour le prochain cours."""
+        return self._pending_direction
+
+    def consume_direction(self) -> str:
+        """Retourne et consomme la direction (usage unique)."""
+        d = self._pending_direction
+        self._pending_direction = ""
+        self._save()
+        return d
+
     def get_status(self) -> Dict[str, Any]:
         """Retourne l'etat du mentor."""
         self._check_daily_reset()
@@ -263,6 +309,8 @@ class Mentor:
             "calls_today": self._calls_today,
             "budget": NIGHTLY_BUDGET,
             "remaining": max(0, NIGHTLY_BUDGET - self._calls_today),
+            "pending_challenge": self._pending_challenge,
+            "pending_direction": self._pending_direction,
             "history_count": len(self._history),
             "last_session": self._history[-1] if self._history else None,
         }
@@ -274,6 +322,8 @@ class Mentor:
                 "calls_today": self._calls_today,
                 "today": self._today,
                 "history": self._history[-20:],
+                "pending_challenge": self._pending_challenge,
+                "pending_direction": self._pending_direction,
             }
             tmp = MENTOR_STATE_FILE + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -290,6 +340,8 @@ class Mentor:
                 self._calls_today = data.get("calls_today", 0)
                 self._today = data.get("today", "")
                 self._history = data.get("history", [])
+                self._pending_challenge = data.get("pending_challenge", "")
+                self._pending_direction = data.get("pending_direction", "")
         except Exception:
             pass
 
