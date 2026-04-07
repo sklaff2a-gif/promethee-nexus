@@ -6690,10 +6690,11 @@ RAISON: <1 phrase courte>"""
         }
 
     async def _execute_school_playground(self) -> dict:
-        """Session Physics Playground scolaire — 0 LLM, entrainement incarne."""
+        """Session Physics Playground scolaire — tissu neural ou fallback RuleBased."""
         try:
-            from core.physics_playground import PhysicsPlayground, Level, RuleBasedController, run_simulation
+            from core.physics_playground import Level
             from core.games.game_hub import game_hub
+            from core.games.tissue_controller import run_tissue_simulation
             import os
 
             levels_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)),
@@ -6706,21 +6707,27 @@ RAISON: <1 phrase courte>"""
                 if not os.path.exists(lvl_path):
                     continue
                 level = Level.from_json(lvl_path)
-                controller = RuleBasedController()
-                sim = run_simulation(level, controller, max_ticks=500)
+                sim = run_tissue_simulation(level, max_ticks=500)
                 won = sim.get("status") == "WIN"
                 results.append({
                     "level": lvl_num,
                     "status": sim.get("status"),
                     "ticks": sim.get("ticks", 0),
+                    "controller": sim.get("controller", "unknown"),
+                    "tissue_stats": sim.get("tissue_stats"),
                 })
                 if won:
                     best_level = lvl_num
                     game_hub.record_playground_clear(lvl_num)
 
-            summary = f"Physics Playground: {len(results)} niveaux testes, meilleur={best_level}"
+            ctrl_type = results[0].get("controller", "unknown") if results else "unknown"
+            summary = f"Physics Playground ({ctrl_type}): {len(results)} niveaux testes, meilleur={best_level}"
             for r in results:
-                summary += f"\n  Niveau {r['level']}: {r['status']} ({r['ticks']} ticks)"
+                tissue_info = ""
+                if r.get("tissue_stats"):
+                    ts = r["tissue_stats"]
+                    tissue_info = f" [reward={ts.get('total_reward', 0):.1f}, actions={ts.get('actions', {})}]"
+                summary += f"\n  Niveau {r['level']}: {r['status']} ({r['ticks']} ticks){tissue_info}"
 
             # Publier sur THOUGHT_STREAM
             try:
