@@ -6737,7 +6737,7 @@ RAISON: <1 phrase courte>"""
         info = schedule.get_current_slot_info()
 
         # Physics Playground — session de jeu solo (0 LLM, 0 GPU)
-        if info.get("subject", {}).get("is_playground"):
+        if info.get("is_playground"):
             return await self._execute_school_playground()
 
         agent_name = schedule.get_slot_agent(slot)

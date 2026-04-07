@@ -236,6 +236,7 @@ class SchoolSchedule:
                     "end_hour": end,
                     "subject": subject.get("topic", ""),
                     "target_file": subject.get("target_file", ""),
+                    "is_playground": subject.get("is_playground", False),
                     "agent": SLOT_TO_AGENT.get(slot_type, "strategist"),
                     "intent": SLOT_TO_INTENT.get(slot_type, ""),
                     "prompt": self.get_slot_prompt(slot_type),
