@@ -1124,6 +1124,7 @@ class GameHub:
                 "stats": self.stats,
                 "game_history": self.game_history[-50:],
                 "opponent_scores": self.opponent_scores,
+                "last_tournament": self._tournament,
             }
             tmp = STATE_FILE + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -1142,6 +1143,7 @@ class GameHub:
                 self.game_history = data.get("game_history", [])
                 loaded_scores = data.get("opponent_scores", {})
                 self.opponent_scores.update(loaded_scores)
+                self._tournament = data.get("last_tournament")
         except Exception as e:
             logger.warning(f"GAME_HUB: load failed: {e}")
 
