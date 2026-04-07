@@ -1938,27 +1938,76 @@ class SynapticNetwork:
     # --- Persistance ---
 
     def _load(self):
-        """Charge l'etat depuis le fichier JSON."""
-        try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self.nodes = data.get("nodes", {})
-            self.synapses = data.get("synapses", {})
-            self._last_dream_time = data.get("last_dream_time", time.time())
-            logger.info(
-                f"SYNAPSE: Charge {len(self.nodes)} noeuds, "
-                f"{len(self.synapses)} synapses."
-            )
-        except FileNotFoundError:
-            pass
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
-            logger.warning(f"SYNAPSE: Fichier corrompu, reset: {e}")
+        """Charge l'etat depuis le fichier JSON.
+
+        Protection : si le fichier principal est corrompu ou anormalement petit,
+        tente de charger le backup (.bak).
+        """
+        loaded = False
+        for path in [STATE_FILE, STATE_FILE + ".bak"]:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                nodes = data.get("nodes", {})
+                synapses = data.get("synapses", {})
+                if len(nodes) < 50 and os.path.exists(STATE_FILE + ".bak"):
+                    # Fichier suspect — essayer le backup
+                    logger.warning(
+                        f"SYNAPSE: Fichier {os.path.basename(path)} suspect "
+                        f"({len(nodes)} noeuds), tentative backup..."
+                    )
+                    if path == STATE_FILE:
+                        continue  # essayer le .bak
+                self.nodes = nodes
+                self.synapses = synapses
+                self._last_dream_time = data.get("last_dream_time", time.time())
+                self._loaded_node_count = len(self.nodes)
+                logger.info(
+                    f"SYNAPSE: Charge {len(self.nodes)} noeuds, "
+                    f"{len(self.synapses)} synapses"
+                    f"{' (depuis backup)' if path != STATE_FILE else ''}."
+                )
+                loaded = True
+                break
+            except FileNotFoundError:
+                continue
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                logger.warning(f"SYNAPSE: {os.path.basename(path)} corrompu: {e}")
+                continue
+        if not loaded:
             self.nodes = {}
             self.synapses = {}
+            self._loaded_node_count = 0
 
     def save(self):
-        """Sauvegarde atomique de l'etat."""
+        """Sauvegarde atomique de l'etat avec protection anti-perte.
+
+        3 garde-fous :
+        1. Ne sauve PAS si le reseau a perdu >80% de ses noeuds (corruption)
+        2. Backup rotatif : l'ancien fichier devient .bak AVANT ecrasement
+        3. Ecriture atomique via .tmp + os.replace
+        """
+        node_count = len(self.nodes)
+        loaded_count = getattr(self, '_loaded_node_count', 0)
+
+        # Protection 1 : refus de sauver un reseau vide/suspect
+        if loaded_count > 100 and node_count < loaded_count * 0.2:
+            logger.error(
+                f"SYNAPSE: REFUS DE SAUVEGARDER — reseau passe de "
+                f"{loaded_count} a {node_count} noeuds (perte >80%). "
+                f"Fichier preserve."
+            )
+            return
+
         os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+
+        # Protection 2 : backup rotatif avant ecrasement
+        if os.path.exists(STATE_FILE):
+            try:
+                os.replace(STATE_FILE, STATE_FILE + ".bak")
+            except Exception as e:
+                logger.warning(f"SYNAPSE: Backup rotation echouee: {e}")
+
         data = {
             "version": "1.0",
             "saved_at": time.time(),
@@ -1972,8 +2021,16 @@ class SynapticNetwork:
                 json.dump(data, f, indent=2, ensure_ascii=False)
             os.replace(tmp_path, STATE_FILE)
             self._mutations_since_save = 0
+            self._loaded_node_count = node_count  # mise a jour du compteur
         except Exception as e:
             logger.warning(f"SYNAPSE: Erreur sauvegarde: {e}")
+            # Restaurer le backup si l'ecriture a echoue
+            if os.path.exists(STATE_FILE + ".bak") and not os.path.exists(STATE_FILE):
+                try:
+                    os.replace(STATE_FILE + ".bak", STATE_FILE)
+                    logger.info("SYNAPSE: Backup restaure apres echec ecriture.")
+                except Exception:
+                    pass
 
     def _auto_save(self):
         """Sauvegarde automatique toutes les 10 mutations."""
