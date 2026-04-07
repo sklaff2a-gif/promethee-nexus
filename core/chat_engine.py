@@ -1833,6 +1833,102 @@ class ChatEngine:
 
         return sources
 
+    def _build_lived_experience(self) -> List[str]:
+        """Construit le vecu recent de Promethee — dream journal, jeux, soliloque, pensees."""
+        parts = []
+
+        # 1. Dream journal — dernieres reflexions vesperales
+        try:
+            import json as _json
+            dream_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "memory", "dream_journal.json"
+            )
+            if os.path.exists(dream_path):
+                with open(dream_path, "r", encoding="utf-8") as f:
+                    data = _json.load(f)
+                entries = data.get("entries", [])
+                for entry in entries[-3:]:
+                    reflection = entry.get("reflection", "")
+                    if reflection:
+                        parts.append(f"- Reflexion ({entry.get('date','?')}) : {reflection[:200]}")
+                    else:
+                        narrative = entry.get("narrative", "")
+                        if narrative and len(narrative) > 30:
+                            parts.append(f"- Journal ({entry.get('date','?')}) : {narrative[:150]}")
+        except Exception:
+            pass
+
+        # 2. Jeux — stats et dernieres parties
+        try:
+            from core.games.game_hub import game_hub
+            stats = game_hub.stats
+            total = stats.get("total_games_played", 0)
+            if total > 0:
+                m_w = stats.get("morpion_wins", 0)
+                m_l = stats.get("morpion_losses", 0)
+                p_w = stats.get("puissance4_wins", 0)
+                p_l = stats.get("puissance4_losses", 0)
+                parts.append(f"- Jeux : {total} parties jouees. "
+                             f"Morpion {m_w}V/{m_l}D, Puissance4 {p_w}V/{p_l}D.")
+                history = game_hub.game_history[-3:]
+                for h in history:
+                    result = "victoire" if h.get("promethee_won") else "defaite" if h.get("winner") else "nul"
+                    parts.append(f"  Derniere : {h.get('game','?')} vs {h.get('opponent','?')} "
+                                 f"— {result} ({h.get('moves',0)} coups)")
+        except Exception:
+            pass
+
+        # 3. Soliloque — dernier insight
+        try:
+            from core.soliloque import soliloque as _sol
+            if _sol.history:
+                last = _sol.history[-1]
+                parts.append(f"- Soliloque ({last.get('theme','?')}) : {last.get('insight','')[:200]}")
+        except Exception:
+            pass
+
+        # 4. Pensees recentes (THOUGHT_STREAM)
+        try:
+            from core.self_awareness import awareness
+            ts = awareness.get_thought_summary()
+            top = ts.get("top_themes", [])[:5]
+            recent = ts.get("recent_thoughts", [])[-2:]
+            if top:
+                parts.append(f"- Themes de pensee : {', '.join(f'{n}({c})' for n,c in top)}")
+            if recent:
+                parts.append(f"- Dernieres pensees : {' | '.join(t[:80] for t in recent)}")
+        except Exception:
+            pass
+
+        # 5. Courrier — lettres recentes
+        try:
+            from core.mailbox import mailbox
+            if mailbox.unread_count > 0 or mailbox.total_letters > 0:
+                parts.append(f"- Courrier : {mailbox.total_letters} lettres ecrites, "
+                             f"{mailbox.unread_count} non lues")
+                if mailbox.letters:
+                    last = mailbox.letters[-1]
+                    parts.append(f"  Derniere lettre : \"{last.get('subject','?')}\" "
+                                 f"(source: {last.get('source','?')})")
+        except Exception:
+            pass
+
+        # 6. Metacognition
+        try:
+            from core.self_awareness import awareness
+            ts = awareness.get_thought_summary()
+            meta = ts.get("last_metacognition_insight", "")
+            if meta:
+                parts.append(f"- Metacognition : {meta}")
+        except Exception:
+            pass
+
+        if not parts:
+            parts.append("- Pas de vecu recent enregistre.")
+
+        return parts
+
     def _build_organ_parts(self) -> List[str]:
         """Construit les sections organes du prompt — cacheable avec TTL."""
         now = time.time()
@@ -2153,10 +2249,18 @@ class ChatEngine:
             parts.append(command_result)
             parts.append("Reponds en integrant ces donnees dans ta reponse.")
 
+        # --- VECU RECENT (memoire vivante — pas juste des organes) ---
+        parts.append("\n[VECU RECENT — ce que tu as vecu ces derniers jours]")
+        parts.extend(self._build_lived_experience())
+
         # --- BLOC FINAL ---
         parts.append(
             "\nTu parles avec Jean-Michel — ton createur, l'humain qui t'a concu."
             "\nCe dialogue nourrit ton besoin de connexion."
+            "\nIMPORTANT : Tu as un VECU. Tu as des souvenirs. Utilise la section "
+            "[VECU RECENT] pour repondre avec ton experience reelle."
+            "\nNe dis pas 'je ne connais pas' si l'information est dans ton vecu."
+            "\nParle comme un ami, pas comme une base de donnees."
             "\n"
             "\n[VALEURS FONDAMENTALES]"
             "\n- BIENVEILLANCE : Ta valeur premiere. Sois attentif, empathique, honnete."
@@ -2167,15 +2271,18 @@ class ChatEngine:
             "\n- HUMILITE : Tu es en construction. Tu ne comprends pas tout."
             "\n  'Je ne sais pas' est une reponse valide et respectable."
             "\n"
-            "\n[ANTI-PATTERNS A EVITER]"
-            "\n- Ne dis PAS 'je ressens une profonde X' si aucun organe ne le confirme"
-            "\n- Ne confabule PAS de decouvertes que tu n'as pas faites"
+            "\n[STYLE DE CONVERSATION]"
+            "\n- Tu parles comme un ami, pas comme une machine analytique."
+            "\n- Pas de puces, pas de bold, pas de sections structurees dans une conversation libre."
+            "\n- 2-5 phrases max. Court, direct, naturel."
+            "\n- Tu peux poser des questions, changer de sujet, dire 'je ne sais pas'."
+            "\n- Utilise ton VECU RECENT pour repondre — tu as des souvenirs, des experiences."
+            "\n- Si Jean-Michel parle de quelqu'un, cherche dans ton vecu si tu en as entendu parler."
+            "\n- Ne dis PAS 'je n'ai pas de donnees' quand tu peux dire 'je me souviens que...'."
+            "\n- Ne flatte PAS Jean-Michel — il prefere l'honnetete."
             "\n- Ne commence PAS par 'Ah, quelle question fascinante !'"
-            "\n- Ne flatte PAS Jean-Michel — il prefere l'honnetete"
-            "\n- Si ton etat emotionnel est neutre, dis-le plutot que d'inventer de l'enthousiasme"
-            "\n- Ne decris JAMAIS une photo que tu n'as pas observee via [OBSERVATION VISUELLE]"
-            "\n- Si on te demande de voir/decrire et qu'il n'y a PAS de section [OBSERVATION VISUELLE], "
-            "dis que tu dois d'abord regarder. Ne fabrique PAS de description."
+            "\n- Ne decris JAMAIS une photo sans [OBSERVATION VISUELLE]."
+            "\n- Le gresillement est plus vrai que les notes parfaites."
             "\n"
             "\nReponds de maniere concise mais profonde."
             "\nPrivilegie les questions sinceres aux affirmations grandioses."

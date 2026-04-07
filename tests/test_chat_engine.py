@@ -40,10 +40,10 @@ class TestBuildSystemPrompt:
         prompt = engine._build_system_prompt()
         assert "BIENVEILLANCE" in prompt
 
-    def test_prompt_contains_anti_patterns(self, engine):
-        """Section [ANTI-PATTERNS] presente."""
+    def test_prompt_contains_style(self, engine):
+        """Section [STYLE DE CONVERSATION] presente."""
         prompt = engine._build_system_prompt()
-        assert "[ANTI-PATTERNS" in prompt
+        assert "[STYLE DE CONVERSATION" in prompt
 
     def test_prompt_anti_sycophancy(self, engine):
         """Anti-flatterie present dans le prompt."""
@@ -145,4 +145,4 @@ class TestOrganSections:
         prompt = engine._build_system_prompt()
         assert "Promethee" in prompt
         assert "[VALEURS FONDAMENTALES]" in prompt
-        assert "[ANTI-PATTERNS" in prompt
+        assert "[STYLE DE CONVERSATION" in prompt
