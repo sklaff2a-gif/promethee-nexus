@@ -22,14 +22,22 @@ class TestMentorBase:
         b = Mentor()
         assert a is b
 
-    def test_not_available_without_key(self, reset_mentor):
+    def test_not_available_offline(self, reset_mentor):
         m = reset_mentor
+        m._mode = "offline"
         assert not m.is_available()
 
-    def test_available_with_key_and_budget(self, reset_mentor):
+    def test_available_with_cli(self, reset_mentor):
         m = reset_mentor
-        m._api_key = "test-key"
+        m._mode = "cli"
         m._today = ""  # force daily reset
+        assert m.is_available()
+
+    def test_available_with_api_key(self, reset_mentor):
+        m = reset_mentor
+        m._mode = "api"
+        m._api_key = "test-key"
+        m._today = ""
         assert m.is_available()
 
     def test_budget_limit(self, reset_mentor):

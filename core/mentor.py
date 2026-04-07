@@ -43,6 +43,8 @@ class Mentor:
             return
         self._initialized = True
         self._api_key: str = ""
+        self._claude_cli: str = ""
+        self._mode: str = "offline"  # cli, api, offline
         self._calls_today: int = 0
         self._today: str = ""
         self._history: List[Dict] = []  # Derniers echanges (contexte)
@@ -54,20 +56,33 @@ class Mentor:
         cls._instance = None
 
     def _load_api_key(self):
+        """Detecte le mode de connexion : CLI claude (Max) ou API (cle)."""
+        # 1. Chercher le CLI claude (abonnement Max, gratuit)
+        import shutil
+        self._claude_cli = shutil.which("claude")
+        if self._claude_cli:
+            logger.info(f"MENTOR: CLI Claude detecte ({self._claude_cli}) — mode Max.")
+            self._mode = "cli"
+            return
+
+        # 2. Fallback : cle API
         try:
             from dotenv import load_dotenv
             load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
             self._api_key = os.getenv("ANTHROPIC_API_KEY", "")
             if self._api_key:
-                logger.info("MENTOR: Cle API Anthropic chargee.")
-            else:
-                logger.warning("MENTOR: Cle API Anthropic absente — mode hors ligne.")
+                logger.info("MENTOR: Cle API Anthropic chargee — mode API.")
+                self._mode = "api"
+                return
         except Exception:
-            self._api_key = ""
+            pass
+
+        self._mode = "offline"
+        logger.warning("MENTOR: Ni CLI ni cle API — mode hors ligne.")
 
     def is_available(self) -> bool:
-        """Verifie si le mentor est disponible (cle API + budget)."""
-        if not self._api_key:
+        """Verifie si le mentor est disponible (CLI ou API + budget)."""
+        if self._mode == "offline":
             return False
         self._check_daily_reset()
         return self._calls_today < NIGHTLY_BUDGET
@@ -182,7 +197,45 @@ class Mentor:
         )
 
     async def _call_claude(self, prompt: str) -> Optional[str]:
-        """Appel API Claude (Haiku pour le cout, Sonnet si besoin)."""
+        """Appel Claude via CLI (Max) ou API (cle)."""
+        if self._mode == "cli":
+            return await self._call_claude_cli(prompt)
+        elif self._mode == "api":
+            return await self._call_claude_api(prompt)
+        return None
+
+    async def _call_claude_cli(self, prompt: str) -> Optional[str]:
+        """Appel via le CLI claude (abonnement Max, gratuit)."""
+        try:
+            import asyncio
+            proc = await asyncio.create_subprocess_exec(
+                self._claude_cli, "-p", "--output-format", "text",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=prompt.encode("utf-8")),
+                timeout=120,
+            )
+            self._calls_today += 1
+            text = stdout.decode("utf-8", errors="replace").strip()
+            if text:
+                logger.info(f"MENTOR: Reponse CLI ({len(text)} chars, "
+                            f"appel #{self._calls_today}/{NIGHTLY_BUDGET})")
+                return text
+            if stderr:
+                logger.warning(f"MENTOR: CLI stderr: {stderr.decode('utf-8', errors='replace')[:200]}")
+            return None
+        except asyncio.TimeoutError:
+            logger.warning("MENTOR: CLI timeout (120s)")
+            return None
+        except Exception as e:
+            logger.warning(f"MENTOR: Appel CLI echoue: {e}")
+            return None
+
+    async def _call_claude_api(self, prompt: str) -> Optional[str]:
+        """Appel via l'API Anthropic (cle API, payant)."""
         try:
             import anthropic
 
@@ -198,7 +251,7 @@ class Mentor:
             return text.strip()
 
         except Exception as e:
-            logger.warning(f"MENTOR: Appel Claude echoue: {e}")
+            logger.warning(f"MENTOR: Appel API echoue: {e}")
             return None
 
     def get_status(self) -> Dict[str, Any]:
@@ -206,7 +259,7 @@ class Mentor:
         self._check_daily_reset()
         return {
             "available": self.is_available(),
-            "has_api_key": bool(self._api_key),
+            "mode": self._mode,
             "calls_today": self._calls_today,
             "budget": NIGHTLY_BUDGET,
             "remaining": max(0, NIGHTLY_BUDGET - self._calls_today),
