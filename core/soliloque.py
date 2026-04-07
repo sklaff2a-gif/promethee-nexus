@@ -204,6 +204,21 @@ class SoliloqueEngine:
             logger.info(f"SOLILOQUE: Fin — {exchanges} échanges, "
                         f"durée={duration:.0f}s, insight={insight[:80]}")
 
+            # Carnet de correspondance : si l'insight est fort, ecrire une lettre
+            try:
+                from core.mailbox import mailbox
+                # Extraire le texte brut de l'insight (sans le prefixe [Soliloque/...])
+                insight_text = insight.split("] ", 1)[-1] if "]" in insight else insight
+                if mailbox.should_write(insight_text):
+                    mailbox.write_letter(
+                        content=insight_text,
+                        source="soliloque",
+                        mood=emotion_after,
+                        subject=f"Apres un soliloque sur {theme}",
+                    )
+            except Exception:
+                pass
+
             return {
                 "status": "success",
                 "result": f"Soliloque '{theme}': {exchanges} échanges, "

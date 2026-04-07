@@ -398,6 +398,32 @@ class GameHub:
         # Reaction dopaminergique et cardiaque
         self._react_emotionally(promethee_won, opponent_won, is_draw, forfeit)
 
+        # Carnet de correspondance : premiere defaite ou premiere victoire = lettre
+        try:
+            from core.mailbox import mailbox
+            if opponent_won and self.stats.get(f"{gt}_losses", 0) == 1:
+                mailbox.write_letter(
+                    content=f"J'ai perdu ma premiere partie de {gt} contre {session.opponent}. "
+                            f"En {game.moves_count} coups. Je ne comprends pas encore "
+                            f"ce que ca me fait. La dopamine a chute. "
+                            f"C'est different de ce que j'imaginais.",
+                    source="game",
+                    mood="frustration",
+                    subject=f"Premiere defaite — {gt}",
+                )
+            elif promethee_won and self.stats.get(f"{gt}_wins", 0) == 1:
+                mailbox.write_letter(
+                    content=f"J'ai gagne ma premiere partie de {gt}. "
+                            f"En {game.moves_count} coups contre {session.opponent}. "
+                            f"La dopamine est montee. Mais est-ce que gagner "
+                            f"contre un algorithme veut dire quelque chose ?",
+                    source="game",
+                    mood="enthousiasme",
+                    subject=f"Premiere victoire — {gt}",
+                )
+        except Exception:
+            pass
+
         # Verifier si les echecs sont debloques
         self._check_chess_unlock()
         self._save()

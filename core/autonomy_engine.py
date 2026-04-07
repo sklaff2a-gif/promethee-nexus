@@ -6967,6 +6967,19 @@ RAISON: <1 phrase courte>"""
             self._daily_reflection_done = True
             print(f"   🌙 INTROSPECTION: {result_text[:100]}...")
 
+            # Carnet de correspondance : si la reflexion est forte, ecrire une lettre
+            try:
+                from core.mailbox import mailbox
+                if mailbox.should_write(result_text):
+                    mood = mood_ctx.split(":")[-1].strip() if mood_ctx else ""
+                    mailbox.write_letter(
+                        content=result_text,
+                        source="evening_reflection",
+                        mood=mood,
+                    )
+            except Exception:
+                pass
+
             return {"status": "success", "result": result_text}
 
         except Exception as e:

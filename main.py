@@ -589,6 +589,11 @@ async def lifespan(app: FastAPI):
         game_hub._save()
     except Exception:
         pass
+    try:
+        from core.mailbox import mailbox
+        mailbox._save()
+    except Exception:
+        pass
     print("🔌 Arrêt.")
     tracemalloc.stop()
 
@@ -1134,6 +1139,29 @@ async def games_say(request: Request):
     body = await request.json()
     message = body.get("message", "")
     return await game_hub.game_say("human", message)
+
+# ─── MAILBOX (Carnet de correspondance) ──────────────────────────────
+
+@app.get("/api/mailbox/status")
+async def mailbox_status():
+    """Retourne l'etat de la boite aux lettres (nombre non lues, recentes)."""
+    from core.mailbox import mailbox
+    return mailbox.get_status()
+
+@app.get("/api/mailbox/read")
+async def mailbox_read():
+    """Lit toutes les lettres non lues. Les marque comme lues."""
+    from core.mailbox import mailbox
+    letters = mailbox.read_letters(unread_only=True)
+    return {"letters": letters, "count": len(letters)}
+
+@app.get("/api/mailbox/all")
+async def mailbox_all():
+    """Lit toutes les lettres (lues et non lues)."""
+    from core.mailbox import mailbox
+    return {"letters": mailbox.read_letters(unread_only=False)}
+
+# ─── JEUX ────────────────────────────────────────────────────────────────
 
 @app.post("/api/games/forfeit")
 async def games_forfeit():
