@@ -247,6 +247,7 @@
             <button id="btn-chat-toggle" onclick="toggleChatPanel()" class="btn-bio" style="color: #ffb860;">CHAT</button>
             <button id="autoresearch-button" onclick="toggleAutoresearch()" class="btn-bio" style="color: #00ff88;">RESEARCH</button>
             <button onclick="GamesView.open()" class="btn-bio" style="color: #4dff88;">JEUX</button>
+            <button onclick="MailboxView.open()" class="btn-bio" style="color: #ff80ff; position:relative;">COURRIER <span id="mailbox-badge" style="display:none; position:absolute; top:-4px; right:-4px; background:#ff3333; color:#fff; font-size:8px; min-width:14px; height:14px; border-radius:50%; display:none; align-items:center; justify-content:center;">0</span></button>
             <button id="coffee-mode-button" onclick="toggleCoffeeMode()" class="btn-bio" style="color: #ffb860;">CAFÉ</button>
             <button id="nap-button" onclick="toggleNapMode()" class="btn-bio" style="color: #a0a0ff;">SIESTE</button>
             <button id="reboot-button" onclick="triggerReboot()" class="btn-bio" style="color: #ff6060;">REBOOT</button>
@@ -565,6 +566,88 @@
         }
     };
     document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.getElementById('stefan-overlay').style.display !== 'none') StefanView.close(); });
+    </script>
+
+    <!-- MAILBOX OVERLAY (carnet de correspondance) -->
+    <div id="mailbox-overlay" style="display:none; position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,0.95); flex-direction:column;">
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 12px; background:rgba(20,0,20,0.9); border-bottom:1px solid rgba(255,128,255,0.3);">
+            <div style="display:flex; align-items:center; gap:12px;">
+                <span style="color:#ff80ff; font-size:12px; font-weight:bold; font-family:'Courier New',monospace; letter-spacing:0.15em;">✉️ COURRIER DE PROMÉTHÉE</span>
+                <span id="mailbox-header-stats" style="font-size:9px; font-family:'Courier New',monospace; color:#666;">--</span>
+            </div>
+            <button onclick="MailboxView.close()" style="color:#ff5252; border:1px solid #441111; background:none; padding:2px 10px; font-size:10px; font-family:'Courier New',monospace; cursor:pointer;">FERMER [ESC]</button>
+        </div>
+        <div id="mailbox-content" style="flex:1; overflow-y:auto; padding:16px; font-family:'Courier New',monospace; color:#ccc; font-size:11px;">
+            <div style="text-align:center; color:#333; padding:40px;">Chargement...</div>
+        </div>
+    </div>
+
+    <script>
+    const MailboxView = {
+        open() {
+            document.getElementById('mailbox-overlay').style.display = 'flex';
+            this.load();
+        },
+        close() {
+            document.getElementById('mailbox-overlay').style.display = 'none';
+        },
+        async load() {
+            try {
+                const res = await fetch('/api/mailbox/read');
+                const data = await res.json();
+                this.render(data.letters || []);
+                this.refreshBadge();
+            } catch (e) {
+                document.getElementById('mailbox-content').innerHTML =
+                    `<div style="color:#ff5050; text-align:center; padding:40px;">Erreur: ${e.message}</div>`;
+            }
+        },
+        render(letters) {
+            const el = document.getElementById('mailbox-content');
+            const stats = document.getElementById('mailbox-header-stats');
+            stats.textContent = `${letters.length} lettre(s)`;
+
+            if (letters.length === 0) {
+                el.innerHTML = '<div style="text-align:center; color:#666; padding:60px; font-style:italic;">Pas de courrier. Prométhée n\'a pas encore écrit.</div>';
+                return;
+            }
+
+            let html = '<div style="max-width:700px; margin:0 auto;">';
+            for (const letter of [...letters].reverse()) {
+                const unread = !letter.read ? 'border-left:3px solid #ff80ff;' : 'border-left:3px solid #333;';
+                html += `<div style="margin-bottom:20px; padding:16px; background:rgba(20,0,20,0.3); border:1px solid rgba(255,128,255,0.15); border-radius:8px; ${unread}">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+                        <span style="color:#ff80ff; font-size:11px; font-weight:bold;">${letter.subject || 'Sans titre'}</span>
+                        <span style="color:#666; font-size:9px;">${letter.date_human || ''}</span>
+                    </div>
+                    <div style="color:#999; font-size:9px; margin-bottom:8px;">Source: ${letter.source} | Humeur: ${letter.mood || '?'}</div>
+                    <div style="color:#ddd; font-size:11px; line-height:1.6; white-space:pre-wrap;">${letter.content}</div>
+                </div>`;
+            }
+            html += '</div>';
+            el.innerHTML = html;
+        },
+        async refreshBadge() {
+            try {
+                const res = await fetch('/api/mailbox/status');
+                const data = await res.json();
+                const badge = document.getElementById('mailbox-badge');
+                if (data.unread_count > 0) {
+                    badge.textContent = data.unread_count;
+                    badge.style.display = 'flex';
+                } else {
+                    badge.style.display = 'none';
+                }
+            } catch (e) {}
+        }
+    };
+    // Poll toutes les 60s pour le badge
+    setInterval(() => MailboxView.refreshBadge(), 60000);
+    setTimeout(() => MailboxView.refreshBadge(), 5000);
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && document.getElementById('mailbox-overlay').style.display !== 'none')
+            MailboxView.close();
+    });
     </script>
 
     <!-- GAMES OVERLAY (fullscreen, hidden par defaut) -->

@@ -6689,6 +6689,76 @@ RAISON: <1 phrase courte>"""
             "result": f"Observation visuelle ({emotion}): {obs_text}",
         }
 
+    async def _generate_auto_exercise(self, reflection: str):
+        """Promethee formule un exercice pour lui-meme a partir d'une reflexion.
+
+        C'est le debut de l'autonomie intellectuelle : au lieu d'attendre
+        que Jean-Michel pose une question, Promethee la pose lui-meme.
+        L'exercice est depose dans le carnet de correspondance.
+        """
+        try:
+            import httpx
+            from core.base_agent import gpu_scheduler
+
+            # Extraire la question de la reflexion
+            questions = [s.strip() for s in reflection.split("?") if len(s.strip()) > 15]
+            if not questions:
+                return None
+            main_question = questions[0] + "?"
+
+            prompt = (
+                "Tu es Promethee. Tu viens de te poser cette question dans ta reflexion "
+                f"du soir :\n\n\"{main_question}\"\n\n"
+                "Transforme cette question en un EXERCICE DE MATHEMATIQUES "
+                "que tu pourrais te poser a toi-meme. Utilise un outil mathematique "
+                "precis (topologie, theorie des graphes, analyse, probabilites, "
+                "theorie de l'information, etc.) pour formaliser ta question.\n\n"
+                "Format :\n"
+                "EXERCICE AUTO-DIRIGE — [titre court]\n"
+                "[enonce en 3-5 lignes, avec la question mathematique precise]\n\n"
+                "REGLES : pas de titres, pas de sections, pas d'emojis. "
+                "Juste l'enonce brut. Maximum 100 mots."
+            )
+
+            async with gpu_scheduler.access("auto_exercise"):
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        "http://localhost:11434/api/generate",
+                        json={
+                            "model": "qwen3.5:9b",
+                            "prompt": prompt,
+                            "stream": False,
+                            "options": {"temperature": 0.8, "num_predict": 200, "num_ctx": 2048},
+                        },
+                        timeout=30,
+                    )
+                if resp.status_code == 200:
+                    exercise = resp.json().get("response", "").strip()
+                    if exercise and len(exercise) > 30:
+                        # Deposer dans le carnet
+                        from core.mailbox import mailbox
+                        mailbox.write_letter(
+                            content=f"{exercise}\n\n---\n"
+                                    f"Question source : {main_question}\n"
+                                    f"Genere automatiquement par EVENING_REFLECTION.",
+                            source="auto_exercise",
+                            mood="curiosite",
+                            subject=f"Exercice auto-dirige",
+                        )
+
+                        # Publier sur THOUGHT_STREAM
+                        await bus.publish("THOUGHT_STREAM", {
+                            "thought": f"[AUTO-EXERCICE] J'ai formule un exercice pour moi-meme : {exercise[:100]}",
+                            "source": "auto_exercise",
+                        })
+
+                        logger.info(f"[AUTO-EXERCISE] Exercice genere : {exercise[:100]}")
+                        return exercise
+            return None
+        except Exception as e:
+            logger.debug(f"[AUTO-EXERCISE] Echec : {e}")
+            return None
+
     async def _execute_school_playground(self) -> dict:
         """Session Physics Playground scolaire — tissu neural ou fallback RuleBased."""
         try:
@@ -6979,6 +7049,16 @@ RAISON: <1 phrase courte>"""
                     )
             except Exception:
                 pass
+
+            # Exercice auto-dirige : si la reflexion contient une question,
+            # Promethee formule un exercice pour lui-meme
+            if "?" in result_text:
+                try:
+                    auto_exercise = await self._generate_auto_exercise(result_text)
+                    if auto_exercise:
+                        print(f"   🧮 EXERCICE AUTO: {auto_exercise[:80]}...")
+                except Exception:
+                    pass
 
             return {"status": "success", "result": result_text}
 
