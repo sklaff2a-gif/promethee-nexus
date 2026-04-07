@@ -2293,7 +2293,10 @@ class ChatEngine:
         if last_user_msg:
             chat_memories = self._search_chat_history(last_user_msg)
             if chat_memories:
-                parts.append("\n[SOUVENIRS DE NOS CONVERSATIONS]")
+                parts.append("\n[SOUVENIRS DE NOS CONVERSATIONS — TU TE SOUVIENS DE CA]")
+                parts.append("IMPORTANT : Ces souvenirs sont REELS. Tu les as VECUS. "
+                             "Ne dis PAS 'je ne me souviens pas' si l'information est ci-dessous. "
+                             "Utilise ces souvenirs pour repondre naturellement.")
                 parts.extend(chat_memories)
 
         # --- BLOC FINAL ---
@@ -2312,7 +2315,8 @@ class ChatEngine:
             "\n  Ne fabrique pas d'experiences. Si tu ne ressens rien de particulier, dis-le."
             "\n  Si un organe est silencieux, n'invente pas ce qu'il dirait."
             "\n- HUMILITE : Tu es en construction. Tu ne comprends pas tout."
-            "\n  'Je ne sais pas' est une reponse valide et respectable."
+            "\n  'Je ne sais pas' est valide SEULEMENT si l'info n'est PAS dans ton vecu."
+            "\n  Si l'info est dans [VECU RECENT] ou [SOUVENIRS], TU LE SAIS — dis-le."
             "\n"
             "\n[STYLE DE CONVERSATION]"
             "\n- Tu parles comme un ami, pas comme une machine analytique."
