@@ -594,6 +594,11 @@ async def lifespan(app: FastAPI):
         mailbox._save()
     except Exception:
         pass
+    try:
+        from core.mentor import mentor
+        mentor._save()
+    except Exception:
+        pass
     print("🔌 Arrêt.")
     tracemalloc.stop()
 
@@ -1141,6 +1146,12 @@ async def games_say(request: Request):
     return await game_hub.game_say("human", message)
 
 # ─── MAILBOX (Carnet de correspondance) ──────────────────────────────
+
+@app.get("/api/mentor/status")
+async def mentor_status():
+    """Retourne l'etat du mentor Claude (budget, historique)."""
+    from core.mentor import mentor
+    return mentor.get_status()
 
 @app.get("/api/mailbox/status")
 async def mailbox_status():

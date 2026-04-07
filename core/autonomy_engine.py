@@ -6876,6 +6876,25 @@ RAISON: <1 phrase courte>"""
                     print(f"   📝 NOTE: {grade:.1f}/10 — {eval_result['feedback'][:80]}")
                     if eval_result.get("challenge"):
                         print(f"   🎯 DEFI: {eval_result['challenge'][:100]}")
+
+                    # Mentor Claude — evaluation approfondie (si disponible)
+                    try:
+                        from core.mentor import mentor
+                        if mentor.is_available():
+                            subject_str = info.get("subject", {})
+                            if isinstance(subject_str, dict):
+                                subject_str = subject_str.get("topic", str(subject_str))
+                            mentor_result = await mentor.evaluate_deliverable(
+                                deliverable=deliverable,
+                                slot=slot,
+                                subject=str(subject_str)[:200],
+                                local_grade=grade,
+                            )
+                            if mentor_result:
+                                print(f"   🎓 MENTOR CLAUDE: evaluation deposee dans le carnet")
+                    except Exception as e:
+                        logger.debug(f"[SCHOOL] Mentor echoue: {e}")
+
             except Exception as e:
                 logger.warning(f"[SCHOOL] Evaluation echouee: {e}")
 
