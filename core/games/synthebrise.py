@@ -88,15 +88,26 @@ class SynthebriseGame:
 async def judge_semantic_link(word1: str, word2: str) -> int:
     """Gemma 4 local juge la force du lien semantique entre deux mots (0-10)."""
     prompt = (
-        f"Tu es un juge de liens semantiques. Evalue la force du lien "
-        f"entre le mot \"{word1}\" et le mot \"{word2}\".\n"
-        f"Score de 0 a 10 :\n"
-        f"  0-2 : aucun lien evident\n"
-        f"  3-4 : lien faible ou tres indirect\n"
-        f"  5-6 : lien raisonnable (association, categorie commune)\n"
-        f"  7-8 : lien fort (synonyme, cause/effet, partie/tout)\n"
-        f"  9-10 : lien brillant (metaphore inattendue mais evidente)\n\n"
-        f"Reponds UNIQUEMENT par un nombre entre 0 et 10. Rien d'autre."
+        f"Tu es un juge de liens semantiques en francais.\n"
+        f"Mot A : \"{word1}\"\n"
+        f"Mot B : \"{word2}\"\n\n"
+        f"CRITERES DE SCORING :\n"
+        f"- Meme famille de mots (brule/brulure, eclat/eclatant) = 8 a 10\n"
+        f"- Cause/effet direct (feu/brule, pluie/mouille) = 7 a 9\n"
+        f"- Synonyme ou quasi-synonyme (lumiere/clarte) = 7 a 9\n"
+        f"- Partie/tout (roue/voiture, page/livre) = 6 a 8\n"
+        f"- Association forte (nuit/etoile, cafe/matin) = 5 a 7\n"
+        f"- Metaphore claire (coeur/amour, lion/courage) = 5 a 8\n"
+        f"- Association faible ou culturelle (chat/internet) = 3 a 5\n"
+        f"- Rime sans lien de sens (grillon/cendrillon) = 2 a 4\n"
+        f"- Aucun lien evident (table/courage) = 0 a 2\n\n"
+        f"EXEMPLES :\n"
+        f"  feu -> brule = 9\n"
+        f"  eclat -> eclatant = 9\n"
+        f"  miroir -> reflet = 8\n"
+        f"  nuit -> silence = 6\n"
+        f"  chat -> philosophie = 2\n\n"
+        f"Reponds UNIQUEMENT par un nombre entre 0 et 10."
     )
     try:
         import httpx
@@ -106,10 +117,11 @@ async def judge_semantic_link(word1: str, word2: str) -> int:
                 resp = await client.post(
                     "http://localhost:11434/api/generate",
                     json={
-                        "model": "gemma4:e4b",
+                        "model": "qwen3.5:9b",
                         "prompt": prompt,
                         "stream": False,
-                        "options": {"temperature": 0.3, "num_predict": 10},
+                        "think": False,
+                        "options": {"temperature": 0.3, "num_predict": 20},
                     },
                     timeout=15,
                 )
@@ -155,10 +167,11 @@ async def ai_play_word(game: SynthebriseGame, personality: str = "promethee") ->
                 resp = await client.post(
                     "http://localhost:11434/api/generate",
                     json={
-                        "model": "gemma4:e4b",
+                        "model": "qwen3.5:9b",
                         "prompt": prompt,
                         "stream": False,
-                        "options": {"temperature": 0.9, "num_predict": 15},
+                        "think": False,
+                        "options": {"temperature": 0.9, "num_predict": 30},
                     },
                     timeout=15,
                 )
