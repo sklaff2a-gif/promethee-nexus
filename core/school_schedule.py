@@ -260,9 +260,9 @@ class SchoolSchedule:
             topic = RESEARCH_TOPICS[h % len(RESEARCH_TOPICS)]
             return {"topic": topic, "target_file": ""}
         elif slot == SLOT_WORKSHOP:
-            # Mercredi (2) et Samedi (5) = session Physics Playground
+            # Un jour sur deux = session Physics Playground (jours pairs)
             weekday = today.weekday()
-            if weekday in (2, 5):
+            if weekday % 2 == 0:  # lundi(0), mercredi(2), vendredi(4), dimanche(6)
                 return {
                     "topic": "PLAYGROUND: Session Physics Playground — entrainement incarné",
                     "target_file": "",
