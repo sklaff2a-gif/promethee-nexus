@@ -41,6 +41,9 @@ const GamesView = {
             return;
         }
 
+        // Verifier si une partie Synthebrise est en cours
+        this.checkSynthebriseActive();
+
         // Hub principal
         let html = '<div style="max-width:600px; margin:0 auto; padding:20px;">';
 
@@ -490,6 +493,16 @@ const GamesView = {
     },
 
     // ─── SYNTHEBRISE ─────────────────────────────────────────
+
+    async checkSynthebriseActive() {
+        try {
+            const res = await fetch('/api/games/synthebrise/status');
+            const data = await res.json();
+            if (data.game && !data.game.game_over) {
+                this.renderSynthebrise({state: data.game, message: "Partie en cours — a toi !"});
+            }
+        } catch (e) {}
+    },
 
     async newSynthebrise() {
         try {
