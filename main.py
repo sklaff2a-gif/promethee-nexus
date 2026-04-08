@@ -1218,15 +1218,20 @@ async def synthebrise_play(request: Request):
     word = body.get("word", "")
     # Humain joue
     result = await engine.play_word(word, "human")
-    if result.get("error") or result.get("collapsed") or result.get("completed"):
-        return result
-    # Promethee repond
-    if engine.game and not engine.game.game_over:
-        ai_word = await ai_play_word(engine.game, personality=engine.game.player2)
-        ai_result = await engine.play_word(ai_word, engine.game.player2)
-        result["ai_response"] = ai_result
-        result["state"] = ai_result.get("state", result.get("state"))
-        result["render"] = ai_result.get("render", result.get("render"))
+    # Le frontend detectera que c'est le tour de l'IA et appellera /ai-play
+    return result
+
+@app.post("/api/games/synthebrise/ai-play")
+async def synthebrise_ai_play():
+    """Force le tour de l'IA."""
+    from core.games.synthebrise import ai_play_word
+    if not hasattr(app.state, 'synthebrise') or not app.state.synthebrise.game:
+        return {"error": "Pas de partie en cours"}
+    engine = app.state.synthebrise
+    if engine.game.game_over:
+        return {"error": "Partie terminee"}
+    ai_word = await ai_play_word(engine.game, personality=engine.game.player2)
+    result = await engine.play_word(ai_word, engine.game.player2)
     return result
 
 @app.get("/api/games/synthebrise/status")

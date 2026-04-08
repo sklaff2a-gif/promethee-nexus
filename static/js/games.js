@@ -573,6 +573,20 @@ const GamesView = {
         // Focus input
         const input = document.getElementById('synthebrise-input');
         if (input) input.focus();
+
+        // Si c'est le tour de l'IA et la partie n'est pas finie, jouer auto
+        if (!gameOver && state.current_player && state.current_player !== 'human') {
+            setTimeout(() => this.triggerAiSynthebrise(), 500);
+        }
+    },
+
+    async triggerAiSynthebrise() {
+        try {
+            const res = await fetch('/api/games/synthebrise/ai-play', {method: 'POST'});
+            const data = await res.json();
+            if (data.error) return;
+            this.renderSynthebrise(data);
+        } catch (e) {}
     },
 
     async playSynthebrise() {
