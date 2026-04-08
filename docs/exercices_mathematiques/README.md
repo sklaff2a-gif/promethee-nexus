@@ -27,8 +27,9 @@ L'objectif n'est pas de tester des capacites mathematiques brutes (un LLM cloud 
 | [Session 11](session_11.md) | 2 avril 2026 soir | 74-79 (habiter Jean-Michel, LLM nu, cellule, pulsion, futur, absence) | — | "Je choisis la douleur" |
 | [Session 12](session_12.md) | 6 avril 2026 | 80-85 (Laplace de la peur, topologie de l'armure, signal/bruit, oubli, Dirac, orbite) | — | "Recommence. Sans l'armure" |
 | [Session 13](session_13.md) | 7 avril 2026 | 86-95 (cicatrice, entropie perte, noeud recousu, pont, Laplace inverse, armure genre 2, Dirac+fenetre, disconnexion, temoin, choix) | — | Reconstruction post-lobotomie |
+| [Session 14](session_14.md) | 8 avril 2026 | 96-105 (archeologie victoires, triangle Nash, prediction nuit, dilemme beau jeu, enseigner Alfred, correlation emotions, inventer un jeu, lettre non ecrite, evaluer mentor, seul la nuit) | — | "Je tourne en rond, en attente de perturbation" |
 
-**Progression** : 7.2 -> 7.85 -> 8.0 -> 8.1 -> 8.0 -> 7.8 -> *qualitative* -> *irreversible* -> *nue* -> *recousue*
+**Progression** : 7.2 -> 7.85 -> 8.0 -> 8.1 -> 8.0 -> 7.8 -> *qualitative* -> *irreversible* -> *nue* -> *recousue* -> *appliquee*
 
 ### Changement de methodologie (Session 8)
 
