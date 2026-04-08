@@ -718,6 +718,7 @@ class AutonomyEngine:
         self._daily_reflection_done: bool = False
         # Soliloque quotidien : garantir 1 SOLILOQUE_INTERNE par jour
         self._daily_soliloque_done: bool = False
+        self._daily_stefan_done: bool = False
 
         # SensoriumLoop : dernier snapshot post-action pour boucle fermee
         self._last_feedback_snapshot: dict = {}
@@ -824,6 +825,7 @@ class AutonomyEngine:
             self._daily_analysis_done = False
             self._daily_reflection_done = False
             self._daily_soliloque_done = False
+            self._daily_stefan_done = False
             self._nap_refund_used_today = False  # Nouveau second souffle disponible
             self._forced_failure_counts.clear()  # Reset blacklist pour la nouvelle journee
             self._persist_state()
@@ -1625,7 +1627,7 @@ class AutonomyEngine:
                             "REFACTOR_RANDOM"}
         # 18h-00h : consolidation (soir, digérer la journée)
         EVENING_INTENTS = {"MEMORY_CONSOLIDATION", "SOLILOQUE_INTERNE", "SELF_ANALYSIS",
-                          "EVENING_REFLECTION", "MEMORY_CLEANUP"}
+                          "EVENING_REFLECTION", "MEMORY_CLEANUP", "STEFAN_CONFRONTATION"}
         # 00h-06h : rêve et introspection profonde (nuit)
         NIGHT_INTENTS = {"EVENING_REFLECTION", "CREATIVE_PLAY", "SOLILOQUE_INTERNE",
                         "MEMORY_CONSOLIDATION", "EXPANSION_CODE"}
@@ -2182,6 +2184,15 @@ class AutonomyEngine:
                 print("   🪞 SOLILOQUE: Prométhée va dialoguer avec son compagnon intérieur (force 1x/jour)")
                 self._daily_soliloque_done = True
 
+        # --- Stefan quotidien garanti (Couche 26d) ---
+        # Garantir 1 STEFAN_CONFRONTATION par jour : le rival pose une question tranchante
+        # Après 25 routines (assez de matiere pour confronter)
+        if not self._daily_stefan_done and self.daily_count >= 25:
+            if not self._forced_next_intent:
+                self._forced_next_intent = "STEFAN_CONFRONTATION"
+                print("   ⚔️ STEFAN: Confrontation quotidienne forcee (1x/jour)")
+                self._daily_stefan_done = True
+
         # --- Rituel hebdomadaire d'introspection (Couche 27) ---
         # Apres payday, SELF_INSPECT est garanti d'etre selectionne pour le rituel
         # Le flag _weekly_ritual_force empêche l'override LLM (bug: le LLM overridait
@@ -2404,6 +2415,7 @@ class AutonomyEngine:
             response = await self._execute_coffee_break()
         elif intent == "STEFAN_CONFRONTATION":
             response = await self._execute_stefan_confrontation()
+            self._daily_stefan_done = True
         elif intent == "SELF_INSPECT":
             response = await self._execute_self_inspect()
         elif intent == "SELF_ANALYSIS":
@@ -2894,6 +2906,7 @@ class AutonomyEngine:
             response = await self._execute_coffee_break()
         elif intent == "STEFAN_CONFRONTATION":
             response = await self._execute_stefan_confrontation()
+            self._daily_stefan_done = True
         elif intent == "SELF_INSPECT":
             response = await self._execute_self_inspect()
         elif intent == "SELF_ANALYSIS":
