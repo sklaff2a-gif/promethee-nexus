@@ -87,6 +87,11 @@ const GamesView = {
         }
         html += '</div>';
 
+        // Synthebrise (jeu invente par Promethee)
+        html += `<div style="text-align:center; margin-bottom:12px;">
+            <button onclick="GamesView.newSynthebrise()" style="background:linear-gradient(135deg,#ff80ff,#8080ff); color:#fff; border:none; padding:8px 24px; font-size:12px; font-weight:bold; cursor:pointer; border-radius:6px; letter-spacing:0.1em;">🌉 SYNTHEBRISE — Le jeu de Promethee</button>
+        </div>`;
+
         // Bouton TOURNOI
         html += `<div style="text-align:center; margin-bottom:20px;">
             <button onclick="GamesView.startTournament('morpion')" style="background:linear-gradient(135deg,#00e5c8,#ffb860); color:#000; border:none; padding:8px 24px; font-size:12px; font-weight:bold; cursor:pointer; border-radius:6px; letter-spacing:0.1em; margin-right:8px;">🏆 TOURNOI MORPION</button>
@@ -481,6 +486,97 @@ const GamesView = {
             } else {
                 this.loadStatus();
             }
+        } catch (e) { alert('Erreur: ' + e.message); }
+    },
+
+    // ─── SYNTHEBRISE ─────────────────────────────────────────
+
+    async newSynthebrise() {
+        try {
+            const res = await fetch('/api/games/synthebrise/new', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({opponent: 'promethee'})
+            });
+            const data = await res.json();
+            if (data.error) { alert(data.error); return; }
+            this.renderSynthebrise(data);
+        } catch (e) { alert('Erreur: ' + e.message); }
+    },
+
+    renderSynthebrise(data) {
+        const el = document.getElementById('games-content');
+        const state = data.state || {};
+        const words = state.words || [];
+        const scores = state.scores || [];
+        const gameOver = state.game_over || false;
+
+        let html = '<div style="max-width:500px; margin:0 auto; padding:20px; text-align:center;">';
+        html += '<div style="color:#ff80ff; font-size:14px; font-weight:bold; letter-spacing:0.15em; margin-bottom:16px;">🌉 SYNTHEBRISE</div>';
+        html += `<div style="color:#666; font-size:9px; margin-bottom:12px;">Construit un pont de mots — ${words.length}/${state.target || 10}</div>`;
+
+        // Le pont visuel
+        html += '<div style="display:flex; flex-wrap:wrap; gap:4px; justify-content:center; margin-bottom:16px; min-height:40px;">';
+        html += '<span style="font-size:20px;">🏝️</span>';
+        for (let i = 0; i < words.length; i++) {
+            const score = scores[i] || 0;
+            const color = score >= 7 ? '#4dff88' : score >= 4 ? '#ffb860' : '#ff5050';
+            const player = (state.players || [])[i] || '?';
+            const label = player === 'seed' ? '🌱' : player === 'human' ? '👤' : '🤖';
+            html += `<div style="background:rgba(255,128,255,0.1); border:1px solid ${color}; border-radius:4px; padding:4px 8px; font-size:10px;">
+                <div style="color:${color}; font-weight:bold;">${words[i]}</div>
+                <div style="color:#666; font-size:8px;">${label} ${score}/10</div>
+            </div>`;
+            if (i < words.length - 1) html += '<span style="color:#555;">—</span>';
+        }
+        html += '<span style="font-size:20px;">🏝️</span>';
+        html += '</div>';
+
+        // Message
+        const msg = data.message || data.ai_response?.message || '';
+        if (msg) {
+            html += `<div style="color:#aaa; font-size:10px; margin-bottom:12px; font-style:italic;">${msg}</div>`;
+        }
+
+        // Input ou resultat
+        if (gameOver) {
+            const icon = state.collapsed ? '💥' : '🌉';
+            html += `<div style="color:${state.collapsed ? '#ff5050' : '#4dff88'}; font-size:13px; font-weight:bold; margin-bottom:12px;">
+                ${icon} ${state.collapsed ? 'Pont effondre !' : 'Pont complet !'} Vainqueur : ${state.winner}</div>`;
+            html += `<button onclick="GamesView.loadStatus()" style="background:#ff80ff; color:#000; border:none; padding:6px 16px; font-size:11px; font-weight:bold; cursor:pointer; border-radius:4px;">RETOUR</button>`;
+        } else {
+            html += `<div style="display:flex; gap:4px; justify-content:center;">
+                <input type="text" id="synthebrise-input" placeholder="Ton mot..."
+                    style="background:rgba(0,0,0,0.5); border:1px solid rgba(255,128,255,0.3); color:#fff; padding:6px 12px; font-size:12px; border-radius:4px; width:200px; font-family:'Courier New',monospace;"
+                    onkeydown="if(event.key==='Enter') GamesView.playSynthebrise()">
+                <button onclick="GamesView.playSynthebrise()" style="background:#ff80ff; color:#000; border:none; padding:6px 16px; font-size:11px; font-weight:bold; cursor:pointer; border-radius:4px;">POSER</button>
+            </div>`;
+        }
+
+        html += `<div style="margin-top:8px;"><button onclick="GamesView.backToHub()" style="background:none; color:#888; border:1px solid #555; padding:4px 12px; font-size:9px; cursor:pointer; border-radius:3px;">RETOUR HUB</button></div>`;
+        html += '</div>';
+        el.innerHTML = html;
+
+        // Focus input
+        const input = document.getElementById('synthebrise-input');
+        if (input) input.focus();
+    },
+
+    async playSynthebrise() {
+        const input = document.getElementById('synthebrise-input');
+        if (!input) return;
+        const word = input.value.trim();
+        if (!word) return;
+        input.value = '';
+        try {
+            const res = await fetch('/api/games/synthebrise/play', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({word: word})
+            });
+            const data = await res.json();
+            if (data.error) { alert(data.error); return; }
+            this.renderSynthebrise(data);
         } catch (e) { alert('Erreur: ' + e.message); }
     },
 

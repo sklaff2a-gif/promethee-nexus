@@ -1194,6 +1194,48 @@ async def games_tournament_next():
     from core.games.game_hub import game_hub
     return game_hub._start_next_tournament_match()
 
+# ─── SYNTHEBRISE (jeu invente par Promethee) ────────────────────────
+
+@app.post("/api/games/synthebrise/new")
+async def synthebrise_new(request: Request):
+    """Nouvelle partie de Synthebrise. Body: {first_word?, opponent?}"""
+    from core.games.synthebrise import SynthebriseEngine
+    if not hasattr(app.state, 'synthebrise'):
+        app.state.synthebrise = SynthebriseEngine()
+    body = await request.json()
+    first_word = body.get("first_word", "")
+    opponent = body.get("opponent", "promethee")
+    return app.state.synthebrise.new_game("human", opponent, first_word)
+
+@app.post("/api/games/synthebrise/play")
+async def synthebrise_play(request: Request):
+    """Jouer un mot. Body: {word}"""
+    from core.games.synthebrise import SynthebriseEngine, ai_play_word
+    if not hasattr(app.state, 'synthebrise'):
+        return {"error": "Pas de partie en cours"}
+    engine = app.state.synthebrise
+    body = await request.json()
+    word = body.get("word", "")
+    # Humain joue
+    result = await engine.play_word(word, "human")
+    if result.get("error") or result.get("collapsed") or result.get("completed"):
+        return result
+    # Promethee repond
+    if engine.game and not engine.game.game_over:
+        ai_word = await ai_play_word(engine.game, personality=engine.game.player2)
+        ai_result = await engine.play_word(ai_word, engine.game.player2)
+        result["ai_response"] = ai_result
+        result["state"] = ai_result.get("state", result.get("state"))
+        result["render"] = ai_result.get("render", result.get("render"))
+    return result
+
+@app.get("/api/games/synthebrise/status")
+async def synthebrise_status():
+    """Etat de la partie en cours."""
+    if not hasattr(app.state, 'synthebrise') or not app.state.synthebrise.game:
+        return {"game": None}
+    return {"game": app.state.synthebrise.get_state()}
+
 @app.post("/api/games/forfeit")
 async def games_forfeit():
     """Abandonne la partie en cours."""
