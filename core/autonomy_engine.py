@@ -6850,13 +6850,15 @@ RAISON: <1 phrase courte>"""
         mentor_ctx = ""
         try:
             from core.mentor import mentor as _mentor
-            direction = _mentor.get_pending_direction()
+            direction = _mentor.consume_direction()
             challenge = _mentor.get_pending_challenge()
             if direction:
                 mentor_ctx = f"\nDIRECTION DU MENTOR CLAUDE : {direction}"
-                print(f"   🎓 MENTOR: Direction injectee — {direction[:80]}")
+                print(f"   🎓 MENTOR: Direction injectee et consommee — {direction[:80]}")
             if challenge:
                 mentor_ctx += f"\nDEFI DU MENTOR CLAUDE : {challenge}"
+                _mentor._pending_challenge = ""  # consommer aussi le defi
+                _mentor._save()
         except Exception:
             pass
 
