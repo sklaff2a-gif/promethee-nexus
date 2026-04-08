@@ -595,6 +595,11 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     try:
+        from core.curiosity_bank import curiosity_bank
+        curiosity_bank._save()
+    except Exception:
+        pass
+    try:
         from core.mentor import mentor
         mentor._save()
     except Exception:
@@ -1152,6 +1157,12 @@ async def mentor_status():
     """Retourne l'etat du mentor Claude (budget, historique)."""
     from core.mentor import mentor
     return mentor.get_status()
+
+@app.get("/api/curiosity/status")
+async def curiosity_status():
+    """Retourne les graines de curiosite."""
+    from core.curiosity_bank import curiosity_bank
+    return curiosity_bank.get_status()
 
 @app.get("/api/flaw-journal")
 async def flaw_journal():

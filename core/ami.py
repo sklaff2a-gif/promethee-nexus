@@ -213,6 +213,17 @@ class AlfredEngine:
             except Exception:
                 pass
 
+            # Capturer les graines de curiosite du cafe
+            try:
+                from core.curiosity_bank import curiosity_bank, extract_seeds_from_text
+                for msg in messages:
+                    if msg.get("role") in ("assistant", "user"):
+                        seeds = extract_seeds_from_text(msg["content"], source="cafe_alfred")
+                        for s in seeds:
+                            curiosity_bank.plant_seed(s["topic"], "cafe_alfred", s.get("context", ""))
+            except Exception:
+                pass
+
             # Injecter dans THOUGHT_STREAM
             try:
                 from core.event_bus.bus import bus

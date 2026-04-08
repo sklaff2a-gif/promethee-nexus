@@ -1960,7 +1960,17 @@ class ChatEngine:
         except Exception:
             pass
 
-        # 6. Metacognition
+        # 6. Graines de curiosite
+        try:
+            from core.curiosity_bank import curiosity_bank
+            unexplored = curiosity_bank.get_unexplored()
+            if unexplored:
+                topics = [s["topic"] for s in unexplored[-5:]]
+                parts.append(f"- Curiosites en attente : {', '.join(topics)}")
+        except Exception:
+            pass
+
+        # 7. Metacognition
         try:
             from core.self_awareness import awareness
             ts = awareness.get_thought_summary()
@@ -2788,6 +2798,9 @@ class ChatEngine:
         if agentic_loop > 0:
             logger.info(f"CHAT AGENTIC: {agentic_loop} iteration(s) de raisonnement en chaine")
 
+        # 5b. Capturer les graines de curiosite du message humain
+        self._plant_curiosity_seeds(user_message)
+
         # 6. Publier CHAT_RESPONSE
         connexion_before = self._get_connexion_deprivation()
         self._satisfy_connexion()
@@ -2810,6 +2823,16 @@ class ChatEngine:
         return full_response.strip()
 
     # --- SATISFACTION CONNEXION ---
+
+    def _plant_curiosity_seeds(self, user_message: str):
+        """Capture les graines de curiosite depuis le message humain."""
+        try:
+            from core.curiosity_bank import curiosity_bank, extract_seeds_from_text
+            seeds = extract_seeds_from_text(user_message, source="chat")
+            for s in seeds:
+                curiosity_bank.plant_seed(s["topic"], "chat", s.get("context", ""))
+        except Exception:
+            pass
 
     def _satisfy_connexion(self):
         """Reduit la deprivation CONNEXION via le DesireEngine."""
