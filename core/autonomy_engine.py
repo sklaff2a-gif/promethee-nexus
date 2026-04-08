@@ -7007,26 +7007,36 @@ RAISON: <1 phrase courte>"""
             )
 
             # --- Phase 3 : Appel LLM local (qwen3.5:9b, PAS le fine-tune strategist) ---
-            # Le fine-tune promethee-strategist produit des "recommandations actionnables"
-            # au lieu d'introspecter. On bypass en appelant Ollama directement.
+            # Priorite Gemini pour la reflexion profonde, fallback local
             print("   🌙 INTROSPECTION VESPERALE: Relecture du vecu...")
-            import httpx
-            from core.base_agent import gpu_scheduler
             result_text = ""
-            async with gpu_scheduler.access("evening_reflection"):
-                async with httpx.AsyncClient() as client:
-                    resp = await client.post(
-                        "http://localhost:11434/api/generate",
-                        json={
-                            "model": "gemma4:e4b",
-                            "prompt": reflection_prompt,
-                            "stream": False,
-                            "options": {"temperature": 0.7, "num_ctx": 8192, "num_predict": -1},
-                        },
-                        timeout=120,
-                    )
-                if resp.status_code == 200:
-                    result_text = resp.json().get("response", "").strip()
+            try:
+                from core.gemini_helper import gemini as _gemini
+                if _gemini.is_available():
+                    result_text = await _gemini.generate(reflection_prompt, max_tokens=500, temperature=0.7)
+                    if result_text:
+                        print("   🌙 INTROSPECTION: via Gemini Flash")
+            except Exception:
+                pass
+
+            # Fallback local si Gemini indisponible ou vide
+            if not result_text:
+                import httpx
+                from core.base_agent import gpu_scheduler
+                async with gpu_scheduler.access("evening_reflection"):
+                    async with httpx.AsyncClient() as client:
+                        resp = await client.post(
+                            "http://localhost:11434/api/generate",
+                            json={
+                                "model": "gemma4:e4b",
+                                "prompt": reflection_prompt,
+                                "stream": False,
+                                "options": {"temperature": 0.7, "num_ctx": 8192, "num_predict": -1},
+                            },
+                            timeout=120,
+                        )
+                    if resp.status_code == 200:
+                        result_text = resp.json().get("response", "").strip()
 
             if not result_text or len(result_text) < 30:
                 return {"status": "error", "result": "Reflexion trop courte ou vide."}

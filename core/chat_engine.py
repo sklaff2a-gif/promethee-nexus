@@ -2503,7 +2503,41 @@ class ChatEngine:
 
         stream_id = f"chat-{uuid.uuid4().hex[:8]}"
 
-        # 4. Streaming via httpx
+        # 3b. Gemini pour les questions profondes (philosophie, conscience, emotions)
+        #     Detecte les mots-cles qui indiquent une reflexion poussee
+        _deep_keywords = ["pourquoi", "conscience", "existe", "ressens", "douleur",
+                          "peur", "armure", "choisis", "comprends pas", "sens de",
+                          "nature", "ame", "libre", "mort", "reve", "verite"]
+        _deep_count = sum(1 for kw in _deep_keywords if kw in user_message.lower())
+        if _deep_count >= 2 and not visual_request_detected:
+            try:
+                from core.gemini_helper import gemini as _gemini
+                if _gemini.is_available():
+                    # Construire un prompt Gemini avec le system prompt + message
+                    gemini_prompt = system_prompt + "\n\nJean-Michel dit : " + user_message
+                    gemini_response = await _gemini.generate(gemini_prompt, max_tokens=800, temperature=0.7)
+                    if gemini_response and len(gemini_response) > 30:
+                        full_response = gemini_response
+                        logger.info(f"CHAT: Reponse Gemini Flash ({len(full_response)} chars)")
+                        print(f"   💎 CHAT: Reponse via Gemini (question profonde)")
+                        # Publier comme si c'etait un stream
+                        stream_id = f"chat-{uuid.uuid4().hex[:8]}"
+                        await bus.publish("CHAT_STREAM", {
+                            "stream_id": stream_id, "status": "start", "emergent_sources": ["gemini"],
+                        })
+                        await bus.publish("CHAT_STREAM", {"stream_id": stream_id, "chunk": full_response})
+                        await bus.publish("CHAT_STREAM", {"stream_id": stream_id, "done": True})
+                        # Sauvegarder
+                        self.messages.append({
+                            "role": "assistant", "content": full_response, "timestamp": time.time(),
+                        })
+                        self._trim_and_save()
+                        self._satisfy_connexion()
+                        return full_response.strip()
+            except Exception as e:
+                logger.debug(f"CHAT: Gemini fallback local: {e}")
+
+        # 4. Streaming via httpx (local, fallback)
         full_response = ""
         emergent_sources = []
         try:

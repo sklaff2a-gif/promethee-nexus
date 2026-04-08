@@ -157,34 +157,48 @@ class StefanEngine:
             # Construire le prompt
             prompt = self._build_prompt(promethee_text, source)
 
-            # Appel LLM
+            # Appel LLM — priorite Gemini pour des questions plus tranchantes
             logger.info(f"STEFAN: Confrontation — source={source}, texte={len(promethee_text)} chars")
             print(f"   ⚔️ STEFAN: Lecture et confrontation...")
 
-            import httpx
-            from core.base_agent import gpu_scheduler
-
             question = ""
-            async with gpu_scheduler.access("stefan_confront"):
-                async with httpx.AsyncClient() as client:
-                    resp = await client.post(
-                        OLLAMA_GENERATE_URL,
-                        json={
-                            "model": STEFAN_MODEL,
-                            "prompt": prompt,
-                            "stream": False,
-                            "think": True,
-                            "keep_alive": "30s",
-                            "options": {
-                                "temperature": 0.8,
-                                "num_ctx": 8192,
-                                "num_predict": 2048,
+
+            # Essayer Gemini d'abord (reflexion plus profonde)
+            try:
+                from core.gemini_helper import gemini as _gemini
+                if _gemini.is_available():
+                    question = await _gemini.generate(prompt, max_tokens=300, temperature=0.8)
+                    if question:
+                        question = self._extract_question(question)
+                        if question and len(question) > 10:
+                            print(f"   ⚔️ STEFAN: via Gemini Flash")
+            except Exception:
+                pass
+
+            # Fallback local si Gemini indisponible
+            if not question or len(question) < 10:
+                import httpx
+                from core.base_agent import gpu_scheduler
+                async with gpu_scheduler.access("stefan_confront"):
+                    async with httpx.AsyncClient() as client:
+                        resp = await client.post(
+                            OLLAMA_GENERATE_URL,
+                            json={
+                                "model": STEFAN_MODEL,
+                                "prompt": prompt,
+                                "stream": False,
+                                "think": True,
+                                "keep_alive": "30s",
+                                "options": {
+                                    "temperature": 0.8,
+                                    "num_ctx": 8192,
+                                    "num_predict": 2048,
+                                },
                             },
-                        },
-                        timeout=60,
-                    )
-                if resp.status_code == 200:
-                    question = resp.json().get("response", "").strip()
+                            timeout=60,
+                        )
+                    if resp.status_code == 200:
+                        question = resp.json().get("response", "").strip()
 
             if not question or len(question) < 10:
                 return {"status": "error", "result": "Stefan est resté silencieux."}
