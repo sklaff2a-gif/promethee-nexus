@@ -826,6 +826,7 @@ class AutonomyEngine:
             self._daily_reflection_done = False
             self._daily_soliloque_done = False
             self._daily_stefan_done = False
+            self._curiosity_explored_tonight = False
             self._nap_refund_used_today = False  # Nouveau second souffle disponible
             self._forced_failure_counts.clear()  # Reset blacklist pour la nouvelle journee
             self._persist_state()
@@ -6858,6 +6859,19 @@ RAISON: <1 phrase courte>"""
             print(f"   📚 ECOLE: Cours {slot} — Agent {agent_name} (credits photo: {_salary.get_credits()})")
         except Exception:
             print(f"   📚 ECOLE: Cours {slot} — Agent {agent_name}")
+
+        # Explorer une graine de curiosite via le mentor (1 par nuit max)
+        try:
+            from core.curiosity_bank import curiosity_bank
+            from core.mentor import mentor as _mentor
+            seed = curiosity_bank.pick_seed()
+            if seed and _mentor.is_available() and not getattr(self, '_curiosity_explored_tonight', False):
+                result = await _mentor.ask_curiosity(seed["topic"], seed.get("context", ""))
+                if result:
+                    print(f"   🌱 CURIOSITE: Promethee a demande au mentor '{seed['topic']}'")
+                    self._curiosity_explored_tonight = True
+        except Exception:
+            pass
 
         # Injecter la direction du mentor Claude (s'il a donne une direction)
         mentor_ctx = ""

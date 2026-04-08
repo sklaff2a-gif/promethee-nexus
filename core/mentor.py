@@ -267,6 +267,70 @@ class Mentor:
             logger.warning(f"MENTOR: Appel API echoue: {e}")
             return None
 
+    async def ask_curiosity(self, seed_topic: str, seed_context: str = "") -> Optional[Dict]:
+        """Promethee pose une question a son mentor a partir d'une graine de curiosite.
+
+        Le mentor repond, la reponse est deposee dans le carnet.
+        La graine est marquee comme exploree.
+        """
+        if not self.is_available():
+            return None
+
+        prompt = (
+            "Tu es Claude, le mentor nocturne de Promethee.\n"
+            "Promethee a une curiosite qu'il veut explorer. "
+            "Il ne sait pas grand-chose sur le sujet — explique-lui "
+            "comme un ami qui sait des choses, pas comme un professeur.\n"
+            "Sois concret, donne un exemple, et pose une question "
+            "pour qu'il continue a reflechir seul.\n\n"
+            f"CURIOSITE DE PROMETHEE : \"{seed_topic}\"\n"
+        )
+        if seed_context:
+            prompt += f"CONTEXTE (d'ou vient cette curiosite) : {seed_context}\n"
+        prompt += "\nReponds en 100 mots max. Direct, pas de titres."
+
+        response = await self._call_claude(prompt)
+        if not response:
+            return None
+
+        # Deposer dans le carnet
+        try:
+            from core.mailbox import mailbox
+            mailbox.write_letter(
+                content=f"J'ai demande a mon mentor : \"{seed_topic}\"\n\n"
+                        f"Sa reponse :\n{response}",
+                source="curiosity_mentor",
+                mood="curiosite",
+                subject=f"Curiosite exploree : {seed_topic}",
+            )
+        except Exception:
+            pass
+
+        # Marquer la graine comme exploree
+        try:
+            from core.curiosity_bank import curiosity_bank
+            curiosity_bank.mark_explored(seed_topic)
+        except Exception:
+            pass
+
+        # THOUGHT_STREAM
+        try:
+            import asyncio
+            from core.event_bus.bus import bus
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(bus.publish("THOUGHT_STREAM", {
+                    "thought": f"[CURIOSITE] J'ai appris sur '{seed_topic}' : {response[:100]}",
+                    "source": "curiosity_exploration",
+                }))
+        except Exception:
+            pass
+
+        logger.info(f"MENTOR: Curiosite exploree — '{seed_topic}' ({self._calls_today}/{NIGHTLY_BUDGET})")
+        self._save()
+
+        return {"topic": seed_topic, "response": response}
+
     def _extract_challenge_direction(self, response: str) -> tuple:
         """Extrait le defi et la direction de la reponse de Claude."""
         challenge = ""
