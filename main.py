@@ -1153,6 +1153,12 @@ async def mentor_status():
     from core.mentor import mentor
     return mentor.get_status()
 
+@app.get("/api/flaw-journal")
+async def flaw_journal():
+    """Genere et retourne le rapport des failles du jour."""
+    from core.flaw_journal import generate_flaw_report
+    return generate_flaw_report()
+
 @app.get("/api/mailbox/status")
 async def mailbox_status():
     """Retourne l'etat de la boite aux lettres (nombre non lues, recentes)."""

@@ -7108,6 +7108,14 @@ RAISON: <1 phrase courte>"""
             except Exception:
                 pass
 
+            # Journal des Failles — miroir quotidien
+            try:
+                from core.flaw_journal import publish_flaw_report
+                await publish_flaw_report()
+                print("   🪞 JOURNAL DES FAILLES: rapport publie")
+            except Exception:
+                pass
+
             # Exercice auto-dirige : si la reflexion contient une question,
             # Promethee formule un exercice pour lui-meme
             if "?" in result_text:
