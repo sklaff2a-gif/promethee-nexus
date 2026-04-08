@@ -18,7 +18,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DAILY_BUDGET = 15  # Max 15 appels Gemini/jour pour les taches ciblees
+DAILY_BUDGET = 10  # Max 10 appels Gemini/jour (Free Tier = 20/jour)
 
 
 class GeminiHelper:

@@ -86,25 +86,36 @@ class SynthebriseGame:
 
 
 async def judge_semantic_link(word1: str, word2: str) -> int:
-    """Gemini juge la force du lien semantique entre deux mots (0-10)."""
+    """Gemma 4 local juge la force du lien semantique entre deux mots (0-10)."""
+    prompt = (
+        f"Tu es un juge de liens semantiques. Evalue la force du lien "
+        f"entre le mot \"{word1}\" et le mot \"{word2}\".\n"
+        f"Score de 0 a 10 :\n"
+        f"  0-2 : aucun lien evident\n"
+        f"  3-4 : lien faible ou tres indirect\n"
+        f"  5-6 : lien raisonnable (association, categorie commune)\n"
+        f"  7-8 : lien fort (synonyme, cause/effet, partie/tout)\n"
+        f"  9-10 : lien brillant (metaphore inattendue mais evidente)\n\n"
+        f"Reponds UNIQUEMENT par un nombre entre 0 et 10. Rien d'autre."
+    )
     try:
-        from core.gemini_helper import gemini
-        if gemini.is_available():
-            prompt = (
-                f"Tu es un juge de liens semantiques. Evalue la force du lien "
-                f"entre le mot \"{word1}\" et le mot \"{word2}\".\n"
-                f"Score de 0 a 10 :\n"
-                f"  0-2 : aucun lien evident\n"
-                f"  3-4 : lien faible ou tres indirect\n"
-                f"  5-6 : lien raisonnable (association, categorie commune)\n"
-                f"  7-8 : lien fort (synonyme, cause/effet, partie/tout)\n"
-                f"  9-10 : lien brillant (metaphore inattendue mais evidente)\n\n"
-                f"Reponds UNIQUEMENT par un nombre entre 0 et 10. Rien d'autre."
-            )
-            result = await gemini.generate(prompt, max_tokens=5, temperature=0.3)
-            if result:
-                # Extraire le nombre
-                for token in result.strip().split():
+        import httpx
+        from core.base_agent import gpu_scheduler
+        async with gpu_scheduler.access("synthebrise_judge"):
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    "http://localhost:11434/api/generate",
+                    json={
+                        "model": "gemma4:e4b",
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {"temperature": 0.3, "num_predict": 10},
+                    },
+                    timeout=15,
+                )
+            if resp.status_code == 200:
+                result = resp.json().get("response", "").strip()
+                for token in result.split():
                     try:
                         score = int(token.strip(".,;:!?"))
                         if 0 <= score <= 10:
@@ -112,48 +123,60 @@ async def judge_semantic_link(word1: str, word2: str) -> int:
                     except ValueError:
                         continue
     except Exception as e:
-        logger.debug(f"SYNTHEBRISE: Gemini judge failed: {e}")
+        logger.debug(f"SYNTHEBRISE: Judge local failed: {e}")
 
-    # Fallback : score aleatoire pondere (plus souvent moyen)
+    # Fallback : score aleatoire pondere
     return random.choices(range(0, 11), weights=[1,1,2,3,4,5,5,4,3,2,1])[0]
 
 
 async def ai_play_word(game: SynthebriseGame, personality: str = "promethee") -> str:
-    """L'IA choisit un mot pour continuer le pont."""
+    """L'IA choisit un mot pour continuer le pont — Gemma 4 local."""
     last_word = game.words[-1] if game.words else "debut"
 
+    context = " -> ".join(game.words[-3:]) if game.words else "(premier mot)"
+    prompt = (
+        f"Tu joues a Synthebrise, un jeu de pont de mots.\n"
+        f"Le pont actuel : {context}\n"
+        f"Le dernier mot est : \"{last_word}\"\n\n"
+        f"Propose UN SEUL mot qui a un lien semantique fort avec \"{last_word}\".\n"
+        f"Le lien peut etre : synonyme, metaphore, association, cause/effet.\n"
+        f"Sois creatif mais comprehensible. Pas de phrase, juste UN mot.\n"
+    )
+    if personality == "alfred":
+        prompt += "Tu es Alfred, pragmatique et direct. Choisis un mot simple et concret."
+    else:
+        prompt += "Tu es Promethee. Choisis un mot qui revele quelque chose de profond."
+
     try:
-        from core.gemini_helper import gemini
-        if gemini.is_available():
-            context = " → ".join(game.words[-3:]) if game.words else "(premier mot)"
-            prompt = (
-                f"Tu joues a Synthebrise — un jeu de pont de mots.\n"
-                f"Le pont actuel : {context}\n"
-                f"Le dernier mot est : \"{last_word}\"\n\n"
-                f"Propose UN SEUL mot qui a un lien semantique fort avec \"{last_word}\".\n"
-                f"Le lien peut etre : synonyme, metaphore, association, cause/effet.\n"
-                f"Sois creatif mais comprehensible. Pas de phrase, juste UN mot.\n"
-            )
-            if personality == "alfred":
-                prompt += "Tu es Alfred, pragmatique et direct. Choisis un mot simple et concret."
-            else:
-                prompt += "Tu es Promethee. Choisis un mot qui revele quelque chose de profond."
-
-            result = await gemini.generate(prompt, max_tokens=10, temperature=0.9)
-            if result:
-                word = result.strip().split()[0].strip(".,;:!?\"'").lower()
-                if word and len(word) > 1:
+        import httpx
+        from core.base_agent import gpu_scheduler
+        async with gpu_scheduler.access("synthebrise_ai"):
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    "http://localhost:11434/api/generate",
+                    json={
+                        "model": "gemma4:e4b",
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {"temperature": 0.9, "num_predict": 15},
+                    },
+                    timeout=15,
+                )
+            if resp.status_code == 200:
+                result = resp.json().get("response", "").strip()
+                # Extraire le premier mot
+                word = result.split()[0].strip(".,;:!?\"'*").lower() if result else ""
+                if word and len(word) > 1 and word not in game.words:
                     return word
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"SYNTHEBRISE: AI play failed: {e}")
 
-    # Fallback : mots associes basiques
-    fallback_associations = {
-        "default": ["lumiere", "ombre", "pont", "eau", "feu", "terre",
-                     "reve", "silence", "echo", "miroir", "fil", "noeud",
-                     "danse", "vague", "souffle", "racine", "graine"],
-    }
-    return random.choice(fallback_associations["default"])
+    # Fallback
+    fallback = ["lumiere", "ombre", "pont", "eau", "feu", "terre",
+                "reve", "silence", "echo", "miroir", "fil",
+                "danse", "vague", "souffle", "racine", "graine"]
+    available = [w for w in fallback if w not in game.words]
+    return random.choice(available) if available else random.choice(fallback)
 
 
 class SynthebriseEngine:
