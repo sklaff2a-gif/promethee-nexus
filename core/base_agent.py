@@ -641,17 +641,9 @@ class BaseAgent:
         return {"status": "success", "result": response_text}
 
     # Marqueurs de missions internes → toujours local (économie Cloud)
-    _LOCAL_FORCE_MARKERS = (
-        "PROTOCOLE_AUTONOMIE",
-        "[MODE VEILLE]",
-        "YOUTUBE_VEILLE",
-        "DROPZONE_ANALYSIS",
-        "PROTOCOLE_AUTONOMIE_GRIMOIRE",
-        "CONSEIL multi-agents",
-        "EVOLUTION_PIPELINE",
-        "MEMORY_CLEANUP",
-        "COUNCIL_RESEARCH",
-    )
+    # Ancien systeme : forcait TOUT en local. Remplace par le routage intelligent
+    # dans _evaluate_complexity() qui decide par type de tache.
+    _LOCAL_FORCE_MARKERS = ()  # Vide — le routage intelligent decide
 
     @staticmethod
     def _extract_model_size(model_name: str) -> int:
@@ -663,14 +655,17 @@ class BaseAgent:
         return 0
 
     async def _evaluate_complexity(self, prompt: str) -> bool:
+        """Routage intelligent : decide si la tache merite Gemini Cloud.
+
+        Criteres deterministes (0 appel LLM pour juger) :
+        - Type de tache (intent dans le contexte)
+        - Historique d'echecs (reasoning_protocol)
+        - Mots-cles de complexite
+        - Budget Gemini restant
         """
-        Calibrage V2: "La Pince". On force le local pour tout ce qui est culture G.
-        """
-        # Court-circuit : missions internes → toujours local (économie Cloud)
-        for marker in self._LOCAL_FORCE_MARKERS:
-            if marker in prompt:
-                self.log_thought("🏠 Mission interne → local forcé (économie Cloud)", type="info")
-                return False
+        # Court-circuit : si force_local est set par l'orchestrateur
+        if self._force_local_next:
+            return False
 
         # Court-circuit : complexité compilée (Neural Compiler, 0 LLM)
         try:
@@ -683,11 +678,62 @@ class BaseAgent:
         except Exception:
             pass
 
+        # Verifier si Gemini est disponible
         try:
-            # On utilise le modèle local pour juger
+            from core.gemini_helper import gemini as _gemini
+            if not _gemini.is_available():
+                return False
+        except Exception:
+            return False
+
+        # Routage par type de tache (deterministe, 0 LLM)
+        prompt_lower = prompt[:500].lower()
+
+        # Taches qui MERITENT Gemini (reflexion profonde, analyse complexe)
+        cloud_triggers = [
+            "revue de code", "code_review", "audit",
+            "architecture", "securite", "faille",
+            "synthese", "research", "analyse approfondie",
+            "evening_reflection", "introspection",
+            "stefan", "confrontation",
+        ]
+        has_cloud_trigger = any(t in prompt_lower for t in cloud_triggers)
+
+        # Taches qui restent LOCAL (economie)
+        local_triggers = [
+            "formatage", "liste", "simple",
+            "memory_cleanup", "dropzone", "audit_structure",
+        ]
+        has_local_trigger = any(t in prompt_lower for t in local_triggers)
+
+        if has_local_trigger and not has_cloud_trigger:
+            return False
+
+        # Historique d'echecs : si le local a deja echoue sur ce type → Gemini
+        try:
+            from core.reasoning_protocol import get_failure_count
+            # Extraire l'intent du prompt si present
+            for intent_marker in ["SCHOOL_CODE_REVIEW", "SCHOOL_RESEARCH", "SCHOOL_WORKSHOP"]:
+                if intent_marker in prompt:
+                    fails = get_failure_count(intent_marker)
+                    if fails >= 1:
+                        self.log_thought(f"🔄 {fails} echec(s) local → escalade Gemini", type="info")
+                        return True
+        except Exception:
+            pass
+
+        # Par defaut : Cloud si trigger complexe detecte
+        if has_cloud_trigger:
+            self.log_thought(f"☁️ Tache complexe detectee → Gemini", type="info")
+            return True
+
+        return False
+
+        try:
+            # ANCIEN CODE : gardé en commentaire pour reference
+            # L'ancien systeme utilisait le LLM pour juger si c'etait complexe
+            # Ce qui est absurde — le LLM se jugeait lui-meme
             eval_model = getattr(Config, "DEFAULT_LOCAL_MODEL", "gemma3:12b")
-            
-            # PROMPT RENDU BEAUCOUP PLUS STRICT
             eval_prompt = (
                 f"Tu es un gestionnaire de budget strict. Analyse cette demande : \"{prompt[:300]}\"\n"
                 f"RÈGLES D'ÉVALUATION :\n"
@@ -977,6 +1023,7 @@ class BaseAgent:
         # Exécution Locale (avec streaming temps réel)
         result = await self._call_ollama_stream(full_prompt, local_model)
         final = self._sanitize_response(self._strip_cot(result), self.name)
+        final = self._quality_filter(final, prompt)
         self._record_for_compiler(prompt, final, was_cloud=False)
         self._save_training_pair(prompt, final, was_cloud=False)
         return final
@@ -1237,6 +1284,34 @@ class BaseAgent:
                 else:
                     sanitized.append(line)
             return '\n'.join(sanitized)
+        return text
+
+    def _quality_filter(self, text: str, prompt: str) -> str:
+        """Filtre de qualite post-production — Promethee controle ce que le LLM dit.
+
+        Detecte et corrige :
+        1. Boucles (phrases repetees)
+        2. Reponse vide ou trop courte
+        3. Hors-sujet flagrant (le prompt demande X, la reponse parle de Y)
+        """
+        if not text or len(text) < 10:
+            return text
+
+        # 1. Anti-boucle : couper les phrases repetees
+        lines = [l for l in text.split("\n") if l.strip()]
+        if len(lines) > 3:
+            seen = set()
+            clean = []
+            for line in lines:
+                key = line.strip()[:60].lower()
+                if key in seen and len(key) > 20:
+                    logger.debug(f"[{self.name}] QUALITY: boucle detectee, ligne supprimee")
+                    continue
+                seen.add(key)
+                clean.append(line)
+            if len(clean) < len(lines):
+                text = "\n".join(clean)
+
         return text
 
     @classmethod
