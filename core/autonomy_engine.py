@@ -6890,16 +6890,69 @@ RAISON: <1 phrase courte>"""
             pass
 
         # Dispatch au vrai agent
+        context_str = f"PROTOCOLE_SCOLAIRE\n{schedule.get_schedule_context()}{salary_ctx}{mentor_ctx}"
         response = await orchestrator.dispatch_task(agent_name, {
             "mission": prompt,
-            "context": f"PROTOCOLE_SCOLAIRE\n{schedule.get_schedule_context()}{salary_ctx}{mentor_ctx}",
+            "context": context_str,
             "force_local": True,
             "intent": intent,
         })
 
-        # Normaliser response en dict (dispatch_task peut retourner un str)
+        # Normaliser response en dict
         if not isinstance(response, dict):
             response = {"status": "success", "result": str(response)} if response else {"status": "error", "result": "Dispatch echoue."}
+
+        # === PROTOCOLE DE RAISONNEMENT : verifier avant d'accepter ===
+        if response and response.get("status") == "success":
+            deliverable = str(response.get("result", ""))
+            try:
+                from core.reasoning_protocol import (
+                    verify_code_review, verify_research, verify_workshop,
+                    build_retry_prompt, record_failure, get_failure_count
+                )
+                subject_dict = info.get("subject", {})
+                target_file = subject_dict.get("target_file", "") if isinstance(subject_dict, dict) else ""
+
+                # Verifier selon le type de cours
+                verified = True
+                failure_reason = ""
+                if slot == "CODE_REVIEW" and target_file:
+                    verified, failure_reason = verify_code_review(deliverable, target_file)
+                elif slot == "RESEARCH":
+                    topic = subject_dict.get("topic", "") if isinstance(subject_dict, dict) else str(subject_dict)
+                    verified, failure_reason = verify_research(deliverable, topic)
+                elif slot == "WORKSHOP":
+                    topic = subject_dict.get("topic", "") if isinstance(subject_dict, dict) else str(subject_dict)
+                    verified, failure_reason = verify_workshop(deliverable, topic)
+
+                if not verified:
+                    # REJET — enregistrer l'echec
+                    record_failure(f"SCHOOL_{slot}", target_file or str(subject_dict)[:50], failure_reason)
+                    print(f"   ❌ REJET: {failure_reason[:100]}")
+                    logger.warning(f"[REASONING] Rejet {slot}: {failure_reason}")
+
+                    # RETRY — 1 seule tentative avec feedback
+                    past_fails = get_failure_count(f"SCHOOL_{slot}")
+                    if past_fails <= 2:  # Max 2 retries par jour par type
+                        retry_prompt = build_retry_prompt(prompt, failure_reason)
+                        retry_response = await orchestrator.dispatch_task(agent_name, {
+                            "mission": retry_prompt,
+                            "context": context_str,
+                            "force_local": True,
+                            "intent": intent,
+                        })
+                        if retry_response:
+                            if not isinstance(retry_response, dict):
+                                retry_response = {"status": "success", "result": str(retry_response)}
+                            if retry_response.get("status") == "success":
+                                deliverable = str(retry_response.get("result", ""))
+                                response = retry_response
+                                print(f"   🔄 RETRY: deuxieme tentative acceptee")
+                    else:
+                        # Trop de retries → noter 0
+                        print(f"   ⛔ ABANDON: trop d'echecs ({past_fails}) pour {slot}")
+            except Exception as e:
+                logger.debug(f"[REASONING] Verification echouee: {e}")
 
         # Evaluation par le professeur
         if response and response.get("status") == "success":

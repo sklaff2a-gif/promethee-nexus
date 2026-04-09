@@ -1164,6 +1164,12 @@ async def curiosity_status():
     from core.curiosity_bank import curiosity_bank
     return curiosity_bank.get_status()
 
+@app.get("/api/reasoning/failures")
+async def reasoning_failures():
+    """Retourne les statistiques des echecs de raisonnement."""
+    from core.reasoning_protocol import get_failure_stats
+    return get_failure_stats()
+
 @app.get("/api/flaw-journal")
 async def flaw_journal():
     """Genere et retourne le rapport des failles du jour."""
