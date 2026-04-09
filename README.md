@@ -4,10 +4,10 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.11-blue?logo=python" alt="Python 3.11">
-  <img src="https://img.shields.io/badge/Tests-4936%2B-brightgreen" alt="4936+ tests">
+  <img src="https://img.shields.io/badge/Tests-4950%2B-brightgreen" alt="4950+ tests">
   <img src="https://img.shields.io/badge/Organs-25%2B-orange" alt="25+ organs">
   <img src="https://img.shields.io/badge/Exercises-105-ff69b4" alt="105 exercises">
-  <img src="https://img.shields.io/badge/Commits-500-informational" alt="500 commits">
+  <img src="https://img.shields.io/badge/Commits-506-informational" alt="506 commits">
   <img src="https://img.shields.io/badge/LLM-Local%20First-purple" alt="Local First">
   <a href="https://github.com/sklaff2a-gif/promethee-nexus/actions/workflows/tests.yml">
     <img src="https://github.com/sklaff2a-gif/promethee-nexus/actions/workflows/tests.yml/badge.svg" alt="CI">
@@ -55,6 +55,17 @@ Promethee is not just another agent orchestrator. It is a **biologically-inspire
 - **Neural tissue connected to Physics Playground**: the tissue controls the ball through zone signals, learns from victory/death via energy rewards. First session: level 1 cleared, levels 2-5 failed (learning to jump)
 - **Daily playground sessions**: optimal frequency for cellular evolution — 24h cycle of play→reward→dream→reproduce→replay
 - **Chess engine design validated**: python-chess + alpha-beta with evaluation weights modulated by tissue zones (emotional chess). Unlocks after completing 3 game competences
+
+### Reasoning Protocol — Promethee controls its LLM
+- **6-layer quality control** on every critical LLM production:
+  1. **Prepare**: real source code injected via AST (no more hallucinated functions)
+  2. **Route**: intelligent model selection (local 9B for simple, Gemini for complex, auto-escalation after failures)
+  3. **Logprobs**: real-time hallucination detection via token confidence — inspired by [Anthropic's emotion vectors study](https://www.anthropic.com/research/emotion-concepts-function) (April 2026). "La capitale de la France" = 100% confidence. "load_data_file in global_workspace" = 62% confidence → hallucination flagged
+  4. **Verify**: AST comparison (cited functions vs real file), topic coherence, code presence
+  5. **Anti-loop**: repeated phrases cut automatically on ALL LLM output
+  6. **Failure memory**: past rejections stored and used to improve future prompts
+- **Reject + Retry**: if content verification fails, the prompt is reformulated with the rejection reason and retried once. "YOUR WORK WAS REJECTED BECAUSE: functions load_data_file does not exist"
+- **Curiosity bank**: captures "seeds of interest" from conversations → Promethee asks its mentor about them → first self-directed learning
 
 ### 105 Math Exercises (14 sessions)
 - Series X: post-lobotomy reconstruction (reconnecting lost synaptic links)
