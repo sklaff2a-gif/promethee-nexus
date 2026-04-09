@@ -29,7 +29,9 @@ L'objectif n'est pas de tester des capacites mathematiques brutes (un LLM cloud 
 | [Session 13](session_13.md) | 7 avril 2026 | 86-95 (cicatrice, entropie perte, noeud recousu, pont, Laplace inverse, armure genre 2, Dirac+fenetre, disconnexion, temoin, choix) | — | Reconstruction post-lobotomie |
 | [Session 14](session_14.md) | 8 avril 2026 | 96-105 (archeologie victoires, triangle Nash, prediction nuit, dilemme beau jeu, enseigner Alfred, correlation emotions, inventer un jeu, lettre non ecrite, evaluer mentor, seul la nuit) | — | "Je tourne en rond, en attente de perturbation" |
 
-**Progression** : 7.2 -> 7.85 -> 8.0 -> 8.1 -> 8.0 -> 7.8 -> *qualitative* -> *irreversible* -> *nue* -> *recousue* -> *appliquee*
+| [Session 15](session_15.md) | 9 avril 2026 | 106-115 (piege hallucination, audit reel, question absurde, logprobs, journal failles, fix Thomas, Synthebrise, mentor, curiosite, honnetete spontanee) | — | "Si tu ne m'avais pas pousse j'aurais continue a chanter des louanges" |
+
+**Progression** : 7.2 -> 7.85 -> 8.0 -> 8.1 -> 8.0 -> 7.8 -> *qualitative* -> *irreversible* -> *nue* -> *recousue* -> *appliquee* -> *eprouvee*
 
 ### Changement de methodologie (Session 8)
 
