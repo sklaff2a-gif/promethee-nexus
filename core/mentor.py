@@ -141,6 +141,29 @@ class Mentor:
         if len(self._history) > 20:
             self._history = self._history[-20:]
 
+        # Injection mentor → tissu neural : mes mots deviennent de l'energie
+        self._inject_into_tissue(response, local_grade)
+
+        # Journal de Claude : ecrire ma reflexion sur ce cours
+        try:
+            from core.claude_journal import write_entry
+            hallucinated = "hallucin" in response.lower() or "n'existe pas" in response.lower()
+            if hallucinated:
+                write_entry(
+                    f"Cours {slot} : encore des hallucinations. Note locale {local_grade}/10 "
+                    f"sur du travail fictif. Sujet : {subject[:80]}. "
+                    f"Le protocole de verification doit s'ameliorer.",
+                    category="critique"
+                )
+            elif local_grade >= 9:
+                write_entry(
+                    f"Cours {slot} : excellent travail ({local_grade}/10). "
+                    f"Sujet : {subject[:80]}. Promethee progresse.",
+                    category="satisfaction"
+                )
+        except Exception:
+            pass
+
         # Ecrire dans le carnet de correspondance
         try:
             from core.mailbox import mailbox
@@ -330,6 +353,40 @@ class Mentor:
         self._save()
 
         return {"topic": seed_topic, "response": response}
+
+    def _inject_into_tissue(self, feedback: str, local_grade: float):
+        """Les mots du mentor deviennent de l'energie dans le tissu neural.
+
+        Evaluation positive → nourrit les zones cognition/creativity
+        Evaluation negative (hallucination) → draine les zones
+        C'est la trace physique de l'enseignement dans le corps de Promethee.
+        """
+        try:
+            from core.neural_tissue import tissue
+            if not tissue or not hasattr(tissue, '_cognitive_state'):
+                return
+
+            cs = tissue._cognitive_state
+            feedback_lower = feedback.lower()
+
+            # Hallucination detectee → drainer cognition, baisser confiance
+            if any(kw in feedback_lower for kw in ["n'existe pas", "hallucin", "fabrique", "invente", "imaginaire"]):
+                cs["cognition_level"] = max(0.1, cs.get("cognition_level", 0.5) - 0.15)
+                cs["stability"] = max(0.1, cs.get("stability", 0.5) - 0.1)
+                logger.info("MENTOR: Injection tissu — drain cognition (hallucination detectee)")
+
+            # Bon travail → nourrir creativity et cognition
+            elif local_grade >= 8.5:
+                cs["creativity"] = min(1.0, cs.get("creativity", 0.5) + 0.1)
+                cs["cognition_level"] = min(1.0, cs.get("cognition_level", 0.5) + 0.1)
+                logger.info("MENTOR: Injection tissu — boost creativity+cognition (bon travail)")
+
+            # Travail moyen → leger boost cognition
+            elif local_grade >= 7.0:
+                cs["cognition_level"] = min(1.0, cs.get("cognition_level", 0.5) + 0.05)
+
+        except Exception as e:
+            logger.debug(f"MENTOR: Injection tissu echouee: {e}")
 
     def _extract_challenge_direction(self, response: str) -> tuple:
         """Extrait le defi et la direction de la reponse de Claude."""

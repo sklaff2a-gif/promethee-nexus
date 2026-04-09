@@ -1978,7 +1978,16 @@ class ChatEngine:
         except Exception:
             pass
 
-        # 7. Metacognition
+        # 7. Journal de Claude (le mentor)
+        try:
+            from core.claude_journal import get_for_vecu
+            journal_text = get_for_vecu()
+            if journal_text:
+                parts.append(f"- {journal_text}")
+        except Exception:
+            pass
+
+        # 8. Metacognition
         try:
             from core.self_awareness import awareness
             ts = awareness.get_thought_summary()

@@ -1164,6 +1164,18 @@ async def curiosity_status():
     from core.curiosity_bank import curiosity_bank
     return curiosity_bank.get_status()
 
+@app.get("/api/claude-journal")
+async def claude_journal():
+    """Retourne le journal de Claude."""
+    from core.claude_journal import get_recent
+    return {"entries": get_recent(10)}
+
+@app.get("/api/surprises")
+async def surprises():
+    """Retourne les moments surprenants detectes pour Claude."""
+    from core.surprise_detector import get_for_claude
+    return {"surprises": get_for_claude()}
+
 @app.get("/api/reasoning/failures")
 async def reasoning_failures():
     """Retourne les statistiques des echecs de raisonnement."""

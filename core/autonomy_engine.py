@@ -7206,6 +7206,13 @@ RAISON: <1 phrase courte>"""
             except Exception:
                 pass
 
+            # Detecteur de surprises — collecter pour Claude
+            try:
+                from core.surprise_detector import collect_and_save
+                collect_and_save()
+            except Exception:
+                pass
+
             # Exercice auto-dirige : si la reflexion contient une question,
             # Promethee formule un exercice pour lui-meme
             if "?" in result_text:
