@@ -335,6 +335,41 @@ class SchoolSchedule:
             pass
         return 1.0
 
+    def _read_file_for_review(self, target: str, max_lines: int = 80) -> str:
+        """Lit le fichier reel et extrait les signatures (classes, fonctions, lignes cles).
+
+        Injecte dans le prompt pour empecher l'hallucination.
+        """
+        try:
+            filepath = os.path.join(_PROJECT_ROOT, target)
+            if not os.path.exists(filepath):
+                return f"# FICHIER INTROUVABLE : {target}"
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+
+            # Extraire : imports, classes, fonctions, lignes avec except/return/raise
+            important = []
+            for i, line in enumerate(lines, 1):
+                stripped = line.strip()
+                if (stripped.startswith(("class ", "def ", "async def ",
+                                        "import ", "from ", "# ---"))
+                    or "except " in stripped
+                    or "raise " in stripped
+                    or "TODO" in stripped
+                    or "HACK" in stripped
+                    or "BUG" in stripped):
+                    important.append(f"L{i}: {line.rstrip()}")
+                if len(important) >= max_lines:
+                    break
+
+            if not important:
+                # Fallback : les 50 premieres lignes
+                important = [f"L{i}: {line.rstrip()}" for i, line in enumerate(lines[:50], 1)]
+
+            return "\n".join(important)
+        except Exception as e:
+            return f"# ERREUR LECTURE : {e}"
+
     def get_slot_prompt(self, slot: str) -> str:
         """Prompt complet pour un cours (V2: challenge + difficulte + theme hebdo)."""
         subject = self.get_subject_for_slot(slot)
@@ -361,18 +396,24 @@ class SchoolSchedule:
 
         if slot == SLOT_CODE_REVIEW:
             depth_note = theme.get("code_review_extra", "")
+            # Injecter le VRAI contenu du fichier pour empecher l'hallucination
+            file_content = self._read_file_for_review(target)
             return (
                 f"COURS : Revue de code — {theme_label}\n"
                 f"FICHIER A ANALYSER : {target}\n"
                 f"{difficulty_ctx}{challenge_ctx}{weekend_note}"
                 f"{f'CONSIGNE SPECIALE : {depth_note}' if depth_note else ''}\n\n"
-                f"Lis attentivement le fichier {target} et produis un rapport de revue :\n"
+                f"CONTENU REEL DU FICHIER (extrait) :\n"
+                f"```python\n{file_content}\n```\n\n"
+                f"REGLES ABSOLUES :\n"
+                f"- Tu NE PEUX PAS inventer de fonctions. Les fonctions ci-dessus sont les SEULES qui existent.\n"
+                f"- Chaque bug que tu cites DOIT correspondre a une ligne du code ci-dessus.\n"
+                f"- Si tu cites une fonction qui n'est PAS dans le code ci-dessus, ton audit est INVALIDE.\n\n"
+                f"Produis un rapport :\n"
                 f"1. Resume du role du fichier (2-3 phrases)\n"
-                f"2. Bugs potentiels ou erreurs logiques detectes\n"
-                f"3. Suggestions d'amelioration concretes (avec numeros de ligne)\n"
-                f"4. Points forts du code\n\n"
-                f"IMPORTANT : Cite des noms de fonctions/classes REELS du fichier.\n"
-                f"Ne fabrique PAS de bugs imaginaires. Si le code est bon, dis-le."
+                f"2. Bugs ou erreurs detectes (avec le code exact cite)\n"
+                f"3. Suggestions d'amelioration concretes\n"
+                f"4. Points forts du code"
             )
         elif slot == SLOT_RESEARCH:
             return (
