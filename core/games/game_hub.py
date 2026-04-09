@@ -387,6 +387,9 @@ class GameHub:
         self._update_opponent_score(
             session.opponent, promethee_won, opponent_won, game.moves_count)
 
+        # Archiver le chat de jeu dans ChromaDB (conversations pendant la partie)
+        self._archive_game_chat(gt, session.opponent)
+
         # Souvenir narratif → ChromaDB (pour la memoire long terme)
         narrative = self._build_game_narrative(gt, session, game, promethee_won, opponent_won, forfeit)
         if narrative:
@@ -456,6 +459,34 @@ class GameHub:
         # Tournoi : enregistrer le resultat du match
         if self._tournament and self._tournament.get("status") == "in_progress":
             self.record_tournament_match_end()
+
+    def _archive_game_chat(self, game_type: str, opponent: str):
+        """Archive les conversations de jeu dans ChromaDB."""
+        if not self._game_chat:
+            return
+        try:
+            from core.vector_store import ChromaMemoryManager
+            mgr = ChromaMemoryManager.get_instance()
+            if not mgr:
+                return
+            # Construire un resume de la conversation
+            lines = []
+            for msg in self._game_chat:
+                who = msg.get("player", "?")
+                text = msg.get("message", "")
+                if text:
+                    lines.append(f"{who}: {text}")
+            if lines:
+                chat_text = "\n".join(lines[-10:])  # 10 derniers messages
+                mgr.add(
+                    collection="collective_wisdom",
+                    text=f"[CHAT JEU {game_type.upper()} vs {opponent}] {chat_text[:500]}",
+                    metadata={"source": "game_chat", "game": game_type,
+                              "opponent": opponent, "timestamp": str(time.time())},
+                )
+                logger.info(f"GAME_HUB: Chat de jeu archive ({len(lines)} messages)")
+        except Exception:
+            pass
 
     def _build_game_narrative(self, game_type: str, session, game,
                                promethee_won: bool, opponent_won: bool,

@@ -3040,10 +3040,52 @@ class ChatEngine:
     # --- PERSISTANCE ---
 
     def _trim_and_save(self):
-        """Tronque l'historique au max et sauvegarde."""
+        """Tronque l'historique au max, archive les anciens, sauvegarde."""
         if len(self.messages) > MAX_SAVED_MESSAGES:
+            # Archiver les messages qui vont etre supprimes
+            overflow = self.messages[:-MAX_SAVED_MESSAGES]
+            self._archive_messages(overflow)
             self.messages = self.messages[-MAX_SAVED_MESSAGES:]
         self._save()
+
+    def _archive_messages(self, messages: list):
+        """Archive les messages sortants dans ChromaDB comme souvenirs long terme.
+
+        Extrait les faits importants et les stocke pour retrouvabilite future.
+        Pas CHAQUE message — seuls les messages substantiels (>50 chars).
+        """
+        try:
+            from core.vector_store import ChromaMemoryManager
+            mgr = ChromaMemoryManager.get_instance()
+            if not mgr:
+                return
+
+            for msg in messages:
+                content = msg.get("content", "")
+                role = msg.get("role", "")
+                if len(content) < 50:
+                    continue
+
+                # Construire le souvenir
+                who = "Jean-Michel" if role == "user" else "Promethee"
+                preview = content[:300].replace("\n", " ")
+                memory_text = f"[CHAT ARCHIVE] {who} a dit : {preview}"
+
+                mgr.add(
+                    collection="collective_wisdom",
+                    text=memory_text,
+                    metadata={
+                        "source": "chat_archive",
+                        "role": role,
+                        "timestamp": str(msg.get("timestamp", "")),
+                    },
+                )
+
+            count = sum(1 for m in messages if len(m.get("content", "")) >= 50)
+            if count > 0:
+                logger.info(f"CHAT: {count} messages archives dans ChromaDB (memoire long terme)")
+        except Exception as e:
+            logger.debug(f"CHAT: Archivage echoue: {e}")
 
     def _save(self):
         """Sauvegarde l'historique sur disque (ecriture atomique)."""
