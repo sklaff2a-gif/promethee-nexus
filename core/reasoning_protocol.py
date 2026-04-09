@@ -84,6 +84,82 @@ def _extract_real_names(filepath: str) -> List[str]:
         return []
 
 
+# --- LOGPROBS : detecter l'hesitation du LLM en temps reel ---
+
+async def measure_confidence(prompt: str, model: str = "qwen3.5:9b",
+                              max_tokens: int = 100) -> Dict[str, Any]:
+    """Mesure la confiance du LLM via les logprobs.
+
+    Retourne :
+      - avg_confidence : confiance moyenne (0-100%)
+      - min_confidence : token le moins sur
+      - uncertain_tokens : nombre de tokens < 50%
+      - hallucination_risk : "low", "medium", "high"
+    """
+    import math
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "think": False,
+                    "logprobs": True,
+                    "top_logprobs": 3,
+                    "options": {"num_predict": max_tokens, "temperature": 0.3},
+                },
+                timeout=30,
+            )
+        if resp.status_code != 200:
+            return {"avg_confidence": 50, "hallucination_risk": "unknown"}
+
+        data = resp.json()
+        logprobs = data.get("logprobs", [])
+        response_text = data.get("response", "")
+
+        if not logprobs:
+            return {"avg_confidence": 50, "hallucination_risk": "unknown",
+                    "response": response_text}
+
+        confidences = []
+        uncertain_count = 0
+        min_conf = 100.0
+
+        for lp in logprobs:
+            prob = lp.get("logprob", 0)
+            confidence = math.exp(prob) * 100 if prob else 0
+            confidences.append(confidence)
+            if confidence < 50:
+                uncertain_count += 1
+            min_conf = min(min_conf, confidence)
+
+        avg = sum(confidences) / len(confidences) if confidences else 50
+
+        # Evaluer le risque d'hallucination
+        if avg < 50 or uncertain_count > len(confidences) * 0.4:
+            risk = "high"
+        elif avg < 70 or uncertain_count > len(confidences) * 0.2:
+            risk = "medium"
+        else:
+            risk = "low"
+
+        return {
+            "avg_confidence": round(avg, 1),
+            "min_confidence": round(min_conf, 1),
+            "uncertain_tokens": uncertain_count,
+            "total_tokens": len(confidences),
+            "hallucination_risk": risk,
+            "response": response_text,
+        }
+
+    except Exception as e:
+        logger.debug(f"REASONING: Mesure confiance echouee: {e}")
+        return {"avg_confidence": 50, "hallucination_risk": "unknown"}
+
+
 def _extract_cited_names(result: str) -> List[str]:
     """Extrait les noms de fonctions/classes cites dans un audit."""
     import re

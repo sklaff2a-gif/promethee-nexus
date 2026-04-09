@@ -6908,12 +6908,25 @@ RAISON: <1 phrase courte>"""
             try:
                 from core.reasoning_protocol import (
                     verify_code_review, verify_research, verify_workshop,
-                    build_retry_prompt, record_failure, get_failure_count
+                    build_retry_prompt, record_failure, get_failure_count,
+                    measure_confidence,
                 )
                 subject_dict = info.get("subject", {})
                 target_file = subject_dict.get("target_file", "") if isinstance(subject_dict, dict) else ""
 
-                # Verifier selon le type de cours
+                # Signal 1 : Mesurer la confiance du LLM (logprobs)
+                confidence_data = {}
+                try:
+                    confidence_data = await measure_confidence(prompt, max_tokens=50)
+                    risk = confidence_data.get("hallucination_risk", "unknown")
+                    avg_conf = confidence_data.get("avg_confidence", 50)
+                    if risk == "high":
+                        print(f"   ⚠️ CONFIANCE BASSE: {avg_conf:.0f}% — risque hallucination eleve")
+                        logger.warning(f"[REASONING] Confiance {avg_conf:.0f}% sur {slot} — risque {risk}")
+                except Exception:
+                    pass
+
+                # Signal 2 : Verifier le contenu selon le type de cours
                 verified = True
                 failure_reason = ""
                 if slot == "CODE_REVIEW" and target_file:
@@ -6924,6 +6937,16 @@ RAISON: <1 phrase courte>"""
                 elif slot == "WORKSHOP":
                     topic = subject_dict.get("topic", "") if isinstance(subject_dict, dict) else str(subject_dict)
                     verified, failure_reason = verify_workshop(deliverable, topic)
+
+                # Combiner les signaux : logprobs + verification contenu
+                risk = confidence_data.get("hallucination_risk", "unknown")
+                if not verified and risk == "high":
+                    failure_reason += " [CONFIANCE BASSE + CONTENU INVALIDE]"
+                elif not verified:
+                    failure_reason += " [CONTENU INVALIDE]"
+                elif risk == "high":
+                    # Confiance basse mais contenu ok → avertissement seulement
+                    print(f"   ⚠️ AVERTISSEMENT: confiance basse mais contenu valide")
 
                 if not verified:
                     # REJET — enregistrer l'echec
