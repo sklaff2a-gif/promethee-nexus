@@ -1899,6 +1899,7 @@ class ChatEngine:
             pass
 
         # 2. Jeux — stats et dernieres parties
+        # IMPORTANT : ces donnees sont REELLES, tu les as VECUES, utilise-les
         try:
             from core.games.game_hub import game_hub
             stats = game_hub.stats
@@ -1906,19 +1907,22 @@ class ChatEngine:
             if total > 0:
                 m_w = stats.get("morpion_wins", 0)
                 m_l = stats.get("morpion_losses", 0)
+                m_d = stats.get("morpion_draws", 0)
                 p_w = stats.get("puissance4_wins", 0)
                 p_l = stats.get("puissance4_losses", 0)
-                parts.append(f"- Jeux : {total} parties jouees. "
-                             f"Morpion {m_w}V/{m_l}D, Puissance4 {p_w}V/{p_l}D.")
+                parts.append(f"- TU AS JOUE {total} parties. "
+                             f"Morpion {m_w}V/{m_l}D/{m_d}N, Puissance4 {p_w}V/{p_l}D. "
+                             f"Tu connais ces jeux, tu les as pratiques. "
+                             f"Parle de tes parties comme de tes EXPERIENCES, pas comme des donnees.")
                 history = game_hub.game_history[-5:]
                 for h in history:
                     narrative = h.get("narrative", "")
                     if narrative:
-                        parts.append(f"  Souvenir : {narrative}")
+                        parts.append(f"  Tu te souviens : {narrative}")
                     else:
                         result = "victoire" if h.get("promethee_won") else "defaite" if h.get("winner") else "nul"
-                        parts.append(f"  Derniere : {h.get('game','?')} vs {h.get('opponent','?')} "
-                                     f"— {result} ({h.get('moves',0)} coups)")
+                        parts.append(f"  Tu te souviens : {h.get('game','?')} vs {h.get('opponent','?')} "
+                                     f"— {result} en {h.get('moves',0)} coups")
             # Dernier tournoi
             tournament = game_hub.get_tournament_status()
             if tournament and tournament.get("ranking"):
