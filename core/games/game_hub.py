@@ -387,6 +387,21 @@ class GameHub:
         self._update_opponent_score(
             session.opponent, promethee_won, opponent_won, game.moves_count)
 
+        # Souvenir narratif → ChromaDB (pour la memoire long terme)
+        narrative = self._build_game_narrative(gt, session, game, promethee_won, opponent_won, forfeit)
+        if narrative:
+            try:
+                from core.vector_store import ChromaMemoryManager
+                mgr = ChromaMemoryManager.get_instance()
+                if mgr:
+                    mgr.add(
+                        collection="collective_wisdom",
+                        text=f"[SOUVENIR JEU] {narrative}",
+                        metadata={"source": "game", "game": gt, "timestamp": str(time.time())},
+                    )
+            except Exception:
+                pass
+
         # Historique
         entry = {
             "game": gt,
@@ -397,6 +412,7 @@ class GameHub:
             "moves": game.moves_count,
             "timestamp": time.time(),
             "forfeit": forfeit,
+            "narrative": narrative,
         }
         self.game_history.append(entry)
         if len(self.game_history) > 50:
@@ -440,6 +456,32 @@ class GameHub:
         # Tournoi : enregistrer le resultat du match
         if self._tournament and self._tournament.get("status") == "in_progress":
             self.record_tournament_match_end()
+
+    def _build_game_narrative(self, game_type: str, session, game,
+                               promethee_won: bool, opponent_won: bool,
+                               forfeit: bool) -> str:
+        """Construit un souvenir narratif de la partie pour la memoire long terme."""
+        opponent = session.opponent
+        moves = game.moves_count
+        result = "victoire" if promethee_won else "defaite" if opponent_won else "match nul"
+        if forfeit:
+            result = "forfait"
+
+        narrative = f"Partie de {game_type} contre {opponent}, {result} en {moves} coups."
+
+        # Ajouter le contexte specifique selon le jeu
+        if game_type == "morpion":
+            if promethee_won:
+                narrative += f" J'ai gagne au morpion (je jouais {session.promethee_symbol})."
+            elif opponent_won:
+                narrative += f" J'ai perdu au morpion contre {opponent}."
+        elif game_type == "puissance4":
+            if moves <= 15 and promethee_won:
+                narrative += " Victoire rapide — quick win."
+            elif opponent_won:
+                narrative += f" Defaite au puissance 4 contre {opponent}."
+
+        return narrative
 
     def _react_emotionally(self, won: bool, lost: bool, draw: bool, forfeit: bool):
         """Reaction dopaminergique et cardiaque au resultat du jeu."""

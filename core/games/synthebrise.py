@@ -265,6 +265,12 @@ class SynthebriseEngine:
             result["message"] = (f"💥 Le pont s'effondre ! '{last_word}' → '{word}' = {score}/10. "
                                  f"Trop faible ! {self.game.winner} gagne.")
             logger.info(f"SYNTHEBRISE: Effondrement sur '{word}' (score={score})")
+            # Souvenir narratif
+            self._store_memory(
+                f"Partie de Synthebrise. Le pont s'est effondre sur le mot '{word}' "
+                f"(lien '{last_word}' → '{word}' = {score}/10). "
+                f"Les mots du pont etaient : {' → '.join(self.game.words)}. "
+                f"{self.game.winner} a gagne.")
         # Pont complet ?
         elif len(self.game.words) >= BRIDGE_LENGTH:
             self.game.completed = True
@@ -274,6 +280,9 @@ class SynthebriseEngine:
             result["message"] = (f"🌉 Pont complet ! {len(self.game.words)} mots ! "
                                  f"{player} gagne en posant le dernier mot !")
             logger.info(f"SYNTHEBRISE: Pont complet ({len(self.game.words)} mots)")
+            self._store_memory(
+                f"Partie de Synthebrise. Pont complet avec {len(self.game.words)} mots ! "
+                f"Les mots : {' → '.join(self.game.words)}. {player} a gagne.")
         else:
             # Tour suivant
             self.game.current_player = (self.game.player2
@@ -285,6 +294,21 @@ class SynthebriseEngine:
         result["state"] = self.game.get_state()
         result["render"] = self.game.render()
         return result
+
+    def _store_memory(self, narrative: str):
+        """Stocke un souvenir de partie dans ChromaDB."""
+        try:
+            from core.vector_store import ChromaMemoryManager
+            mgr = ChromaMemoryManager.get_instance()
+            if mgr:
+                mgr.add(
+                    collection="collective_wisdom",
+                    text=f"[SOUVENIR SYNTHEBRISE] {narrative}",
+                    metadata={"source": "synthebrise", "timestamp": str(time.time())},
+                )
+                logger.info(f"SYNTHEBRISE: Souvenir stocke dans ChromaDB")
+        except Exception:
+            pass
 
     def get_state(self) -> Optional[Dict[str, Any]]:
         if not self.game:

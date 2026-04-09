@@ -1910,11 +1910,15 @@ class ChatEngine:
                 p_l = stats.get("puissance4_losses", 0)
                 parts.append(f"- Jeux : {total} parties jouees. "
                              f"Morpion {m_w}V/{m_l}D, Puissance4 {p_w}V/{p_l}D.")
-                history = game_hub.game_history[-3:]
+                history = game_hub.game_history[-5:]
                 for h in history:
-                    result = "victoire" if h.get("promethee_won") else "defaite" if h.get("winner") else "nul"
-                    parts.append(f"  Derniere : {h.get('game','?')} vs {h.get('opponent','?')} "
-                                 f"— {result} ({h.get('moves',0)} coups)")
+                    narrative = h.get("narrative", "")
+                    if narrative:
+                        parts.append(f"  Souvenir : {narrative}")
+                    else:
+                        result = "victoire" if h.get("promethee_won") else "defaite" if h.get("winner") else "nul"
+                        parts.append(f"  Derniere : {h.get('game','?')} vs {h.get('opponent','?')} "
+                                     f"— {result} ({h.get('moves',0)} coups)")
             # Dernier tournoi
             tournament = game_hub.get_tournament_status()
             if tournament and tournament.get("ranking"):
