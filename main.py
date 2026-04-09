@@ -1164,6 +1164,12 @@ async def curiosity_status():
     from core.curiosity_bank import curiosity_bank
     return curiosity_bank.get_status()
 
+@app.get("/api/session/latest")
+async def session_latest():
+    """Retourne la derniere synthese de session."""
+    from core.session_synthesis import get_latest, list_sessions
+    return {"latest": get_latest(), "sessions": list_sessions()}
+
 @app.get("/api/claude-journal")
 async def claude_journal():
     """Retourne le journal de Claude."""
