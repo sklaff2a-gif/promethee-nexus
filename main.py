@@ -1037,6 +1037,19 @@ async def tissue_grid():
         "tick_ms": round(neural_tissue._last_tick_ms, 2),
     }
 
+@app.post("/api/tissue/sauna")
+async def tissue_sauna():
+    """Déclenche manuellement le mode Sauna — nettoyage du tissu neural."""
+    from core.sauna_mode import sauna
+    result = await sauna.start()
+    return result
+
+@app.get("/api/tissue/sauna/status")
+async def tissue_sauna_status():
+    """Retourne l'état du mode Sauna."""
+    from core.sauna_mode import sauna
+    return sauna.get_status()
+
 @app.get("/api/soliloque/status")
 async def soliloque_status():
     """Retourne l'état du moteur de soliloque."""

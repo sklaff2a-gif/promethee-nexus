@@ -5421,6 +5421,21 @@ class AutonomyEngine:
                     self._persist_state()
                     continue
 
+                # === SAUNA AUTO-TRIGGER : nettoyage si tissu surchargé ===
+                try:
+                    from core.sauna_mode import sauna
+                    if not sauna.active and sauna.should_auto_trigger():
+                        logger.info("[AUTONOMY] SAUNA auto-trigger — tissu surchargé, nettoyage...")
+                        self.is_processing = True
+                        sauna_result = await sauna.start()
+                        logger.info(f"[AUTONOMY] SAUNA terminé: dechets -{sauna_result.get('waste_cleaned', 0):.0f}")
+                        self.is_processing = False
+                        self._persist_state()
+                        await asyncio.sleep(30)
+                        continue
+                except Exception as e:
+                    logger.warning(f"[AUTONOMY] Erreur sauna auto-trigger: {e}")
+
                 self.is_processing = True  # ON VERROUILLE
                 try:
                     await self._execute_scored_routine(health, budget_status)
