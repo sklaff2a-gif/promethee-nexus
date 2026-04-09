@@ -260,9 +260,10 @@ class SchoolSchedule:
             topic = RESEARCH_TOPICS[h % len(RESEARCH_TOPICS)]
             return {"topic": topic, "target_file": ""}
         elif slot == SLOT_WORKSHOP:
-            # Tous les soirs = session Physics Playground (apprentissage optimal)
-            # Cycle quotidien : jouer → reward → reve → reproduction → rejouer
-            if True:  # chaque nuit
+            # 1 session Playground par nuit (le premier WORKSHOP)
+            # Les suivants font un vrai workshop
+            if not getattr(self, '_playground_done_tonight', False):
+                self._playground_done_tonight = True
                 return {
                     "topic": "PLAYGROUND: Session Physics Playground — entrainement incarné",
                     "target_file": "",
@@ -697,6 +698,7 @@ class SchoolSchedule:
                 self._total_school_days += 1
             self._last_date = today
             self._deliverables_today = []
+            self._playground_done_tonight = False  # Reset quotidien
             self.save()
 
     def _load(self):

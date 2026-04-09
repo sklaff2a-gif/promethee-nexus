@@ -55,7 +55,10 @@ class CuriosityBank:
             context: la phrase originale qui a declenche la curiosite
         """
         topic = topic.strip().lower()
-        if not topic or len(topic) < 3:
+        if not topic or len(topic) < 4:
+            return False
+        # Rejeter les mots de liaison captures par erreur
+        if topic in _IGNORE_WORDS:
             return False
 
         # Eviter les doublons
@@ -157,10 +160,18 @@ _CURIOSITY_TRIGGERS = [
     "nouvelle", "decouverte", "invention",
 ]
 
-# Mots a ignorer (trop generiques)
+# Mots a ignorer (trop generiques, mots de liaison, faux positifs)
 _IGNORE_WORDS = {"promethee", "jean-michel", "alfred", "stefan", "claude",
                  "exercice", "jeu", "partie", "morpion", "puissance",
-                 "bonjour", "salut", "merci", "oui", "non"}
+                 "bonjour", "salut", "merci", "oui", "non",
+                 "parce", "quand", "comment", "pourquoi", "combien",
+                 "aussi", "encore", "peut", "faire", "dire", "avoir",
+                 "etre", "tout", "cette", "dans", "pour", "avec",
+                 "plus", "mais", "donc", "comme", "alors", "voila",
+                 "vraiment", "toujours", "jamais", "quelque", "chose",
+                 "quelqu", "celui", "celle", "ceux", "cela",
+                 "veux", "peux", "dois", "faut", "suis", "sera",
+                 "bien", "tres", "trop", "assez", "mieux", "pire"}
 
 
 def extract_seeds_from_text(text: str, source: str) -> List[Dict[str, str]]:
