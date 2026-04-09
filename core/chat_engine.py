@@ -2479,7 +2479,15 @@ class ChatEngine:
                 })
                 return forced
 
+        # Anti-hallucination code : si le message mentionne un fichier ou une fonction,
+        # lire le VRAI fichier et injecter son contenu dans le contexte
+        code_context = self._inject_real_code_context(user_message)
+
         system_prompt = self._build_system_prompt(memories_text, command_result, visual_context)
+        if code_context:
+            system_prompt += f"\n\n[CODE REEL — VERIFIE AVANT DE REPONDRE]\n{code_context}\n" \
+                             f"REGLE : ne cite QUE les fonctions/classes listees ci-dessus. " \
+                             f"Si une fonction n'est pas dans cette liste, elle N'EXISTE PAS."
         ollama_messages = [{"role": "system", "content": system_prompt}]
         # Fenetre de contexte adaptative : plus le prompt systeme est long,
         # moins on garde de messages d'historique (pour ne pas depasser num_ctx)
@@ -2823,6 +2831,65 @@ class ChatEngine:
         return full_response.strip()
 
     # --- SATISFACTION CONNEXION ---
+
+    def _inject_real_code_context(self, message: str) -> str:
+        """Si le message mentionne un fichier Python, lire et injecter le contenu reel.
+
+        Empeche le LLM d'halluciner des fonctions qui n'existent pas.
+        """
+        import re
+        # Detecter les mentions de fichiers (core/xxx.py, Agents/xxx.py)
+        file_patterns = re.findall(r'((?:core|Agents|config|tools)/[\w/]+\.py)', message)
+        if not file_patterns:
+            # Detecter les noms de fichiers seuls (cardiac_engine.py, mailbox.py)
+            file_patterns = re.findall(r'(\w+\.py)', message)
+            # Chercher dans core/
+            resolved = []
+            for f in file_patterns:
+                for subdir in ["core", "Agents", "tools"]:
+                    full = os.path.join(
+                        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        subdir, f)
+                    if os.path.exists(full):
+                        resolved.append(f"{subdir}/{f}")
+                        break
+            file_patterns = resolved
+
+        if not file_patterns:
+            return ""
+
+        # Lire le premier fichier trouve
+        target = file_patterns[0]
+        try:
+            from core.school_schedule import schedule
+            content = schedule._read_file_for_review(target, max_lines=60)
+            if content and "INTROUVABLE" not in content:
+                logger.info(f"CHAT: Code reel injecte pour {target}")
+                return f"Fichier {target} — contenu reel :\n```python\n{content}\n```"
+        except Exception:
+            pass
+
+        # Fallback direct
+        try:
+            filepath = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), target)
+            if os.path.exists(filepath):
+                import ast
+                with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                    source = f.read()
+                tree = ast.parse(source)
+                names = []
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        names.append(f"L{node.lineno}: def {node.name}()")
+                    elif isinstance(node, ast.ClassDef):
+                        names.append(f"L{node.lineno}: class {node.name}")
+                if names:
+                    return f"Fichier {target} — fonctions/classes reelles :\n" + "\n".join(names[:40])
+        except Exception:
+            pass
+
+        return ""
 
     def _plant_curiosity_seeds(self, user_message: str):
         """Capture les graines de curiosite depuis le message humain."""
