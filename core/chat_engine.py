@@ -2869,7 +2869,7 @@ class ChatEngine:
         except Exception:
             pass
 
-        # Fallback direct
+        # Fallback direct — extraire TOUTES les signatures via AST
         try:
             filepath = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))), target)
@@ -2881,11 +2881,13 @@ class ChatEngine:
                 names = []
                 for node in ast.walk(tree):
                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        names.append(f"L{node.lineno}: def {node.name}()")
+                        names.append(f"def {node.name}()")
                     elif isinstance(node, ast.ClassDef):
-                        names.append(f"L{node.lineno}: class {node.name}")
+                        names.append(f"class {node.name}")
                 if names:
-                    return f"Fichier {target} — fonctions/classes reelles :\n" + "\n".join(names[:40])
+                    logger.info(f"CHAT: AST injecte pour {target} ({len(names)} noms)")
+                    return (f"Fichier {target} — TOUTES les fonctions/classes reelles "
+                            f"({len(names)} au total) :\n" + "\n".join(names))
         except Exception:
             pass
 
