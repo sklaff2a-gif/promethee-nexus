@@ -61,6 +61,10 @@ class EurekaEvent:
     hypothesis: str
     source_intent: str
     detected_at: float
+    # Suivi Mythos-inspired : l'eureka a-t-elle ete testee par une routine de suivi ?
+    tested: bool = False
+    test_result: str = ""
+    test_quality: float = 0.0
 
 
 class IncubationCognitive:

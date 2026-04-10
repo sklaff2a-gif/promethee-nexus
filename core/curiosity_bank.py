@@ -97,15 +97,22 @@ class CuriosityBank:
                 return seed
         return None
 
-    def mark_explored(self, topic: str):
-        """Marque une graine comme exploree."""
+    def mark_explored(self, topic: str, result: str = ""):
+        """Marque une graine comme exploree, avec optionnellement le resultat.
+
+        Le resultat permet la continuité inter-routines (inspiré Mythos) :
+        les futures explorations peuvent s'appuyer sur ce qui a été découvert.
+        """
         for seed in self.seeds:
             if seed["topic"] == topic and not seed.get("explored"):
                 seed["explored"] = True
                 seed["explored_at"] = time.time()
+                if result:
+                    seed["result"] = result[:200]
                 self.total_explored += 1
                 self._save()
-                logger.info(f"CURIOSITY: Graine exploree — '{topic}'")
+                logger.info(f"CURIOSITY: Graine exploree — '{topic}'"
+                            + (f" (résultat: {len(result)} chars)" if result else ""))
                 return
 
     def get_unexplored(self) -> List[Dict[str, Any]]:

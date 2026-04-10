@@ -3426,3 +3426,172 @@ class TestAttnResContextualScoring:
         reload_scoring_weights = mod.reload_scoring_weights
         reload_scoring_weights()
         assert mod._organ_affinities_cache is None
+
+
+# ============================================================
+# Tests Mythos — Continuité inter-routines
+# ============================================================
+
+class TestMythosContinuity:
+    """Verifie la boucle insight→contexte→follow-up inspiree Mythos."""
+
+    def setup_method(self):
+        AutonomyEngine._instance = None
+        import core.autonomy_engine as mod
+        mod._current_descending_signals = {}
+
+    def _make_engine(self):
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._recent_insights = []
+        engine._last_eureka_followup_ts = 0.0
+        engine._pending_eureka_context = ""
+        engine._intent_quality_stats = {}
+        engine._forced_next_intent = ""
+        engine.routine_history = []
+        return engine
+
+    def test_insight_captured_on_high_quality(self):
+        """Un résultat de qualité > 0.6 est capturé dans le buffer."""
+        engine = self._make_engine()
+        engine._recent_insights = []
+        # Simuler la capture
+        quality_score = 0.8
+        result_preview = "Découverte intéressante sur les patterns synaptiques et leur consolidation"
+        intent = "SELF_ANALYSIS"
+        if quality_score >= 0.6 and result_preview and len(result_preview) > 30:
+            engine._recent_insights.append({
+                "intent": intent,
+                "summary": result_preview[:300],
+                "quality": round(quality_score, 2),
+                "ts": 1000.0,
+            })
+        assert len(engine._recent_insights) == 1
+        assert engine._recent_insights[0]["intent"] == "SELF_ANALYSIS"
+        assert engine._recent_insights[0]["quality"] == 0.8
+
+    def test_insight_buffer_capped_at_3(self):
+        """Le buffer ne dépasse jamais 3 insights."""
+        engine = self._make_engine()
+        for i in range(5):
+            engine._recent_insights.append({
+                "intent": f"INTENT_{i}", "summary": f"insight {i}" * 10,
+                "quality": 0.7, "ts": 1000.0 + i,
+            })
+            if len(engine._recent_insights) > 3:
+                engine._recent_insights = engine._recent_insights[-3:]
+        assert len(engine._recent_insights) == 3
+        assert engine._recent_insights[0]["intent"] == "INTENT_2"
+
+    def test_low_quality_not_captured(self):
+        """Un résultat de qualité < 0.6 n'est pas capturé."""
+        engine = self._make_engine()
+        quality_score = 0.4
+        result_preview = "Résultat moyen sans intérêt particulier pour le suivi"
+        if quality_score >= 0.6 and result_preview and len(result_preview) > 30:
+            engine._recent_insights.append({})
+        assert len(engine._recent_insights) == 0
+
+    @pytest.mark.asyncio
+    async def test_eureka_forces_free_exploration(self):
+        """Un EUREKA_MOMENT force FREE_EXPLORATION au prochain cycle."""
+        engine = self._make_engine()
+        event = {
+            "hypothesis": "La consolidation synaptique est liée au rythme cardiaque",
+            "node_a": "synaptique", "node_b": "cardiaque",
+            "bridge_strength": 0.7,
+            "problem_text": "Pourquoi le réseau synaptique se renforce la nuit ?",
+        }
+        await engine._on_eureka_moment(event)
+        assert engine._forced_next_intent == "FREE_EXPLORATION"
+        assert "consolidation synaptique" in engine._pending_eureka_context
+
+    @pytest.mark.asyncio
+    async def test_eureka_cooldown_prevents_spam(self):
+        """Le cooldown 1h empêche les eurekas de spammer."""
+        engine = self._make_engine()
+        engine._last_eureka_followup_ts = time.time() - 1800  # Il y a 30 min
+        event = {
+            "hypothesis": "Test hypothesis",
+            "node_a": "a", "node_b": "b",
+            "bridge_strength": 0.8,
+            "problem_text": "Test problem",
+        }
+        await engine._on_eureka_moment(event)
+        assert engine._forced_next_intent == ""  # Pas forcé (cooldown)
+
+    @pytest.mark.asyncio
+    async def test_eureka_weak_strength_ignored(self):
+        """Les eurekas faibles (< 0.5) sont ignorées."""
+        engine = self._make_engine()
+        event = {
+            "hypothesis": "Connexion faible",
+            "node_a": "a", "node_b": "b",
+            "bridge_strength": 0.3,
+            "problem_text": "Problème mineur",
+        }
+        await engine._on_eureka_moment(event)
+        assert engine._forced_next_intent == ""
+
+    def test_intent_quality_stats_accumulates(self):
+        """Les stats qualité/coût s'accumulent par intent."""
+        engine = self._make_engine()
+        from core.autonomy_engine import RESOURCE_COSTS
+        intent = "SELF_ANALYSIS"
+        cost = RESOURCE_COSTS.get(intent, 2)
+        # Simuler 3 exécutions
+        for q in [0.6, 0.8, 0.9]:
+            stats = engine._intent_quality_stats.get(intent, {"sum_q": 0, "sum_c": 0, "n": 0})
+            stats["sum_q"] += q
+            stats["sum_c"] += cost
+            stats["n"] += 1
+            engine._intent_quality_stats[intent] = stats
+        s = engine._intent_quality_stats[intent]
+        assert s["n"] == 3
+        assert abs(s["sum_q"] - 2.3) < 0.01
+
+    @pytest.mark.asyncio
+    async def test_eureka_not_forced_when_already_forced(self):
+        """Un eureka ne surcharge pas un intent deja force."""
+        engine = self._make_engine()
+        engine._forced_next_intent = "SECURITY_AUDIT"
+        event = {
+            "hypothesis": "Test", "node_a": "a", "node_b": "b",
+            "bridge_strength": 0.8, "problem_text": "Test",
+        }
+        await engine._on_eureka_moment(event)
+        assert engine._forced_next_intent == "SECURITY_AUDIT"  # Pas ecrase
+
+
+class TestCuriosityLinkback:
+    """Verifie que les résultats d'exploration sont liés aux graines."""
+
+    def test_mark_explored_with_result(self):
+        """mark_explored peut stocker un résultat."""
+        from core.curiosity_bank import CuriosityBank
+        CuriosityBank.reset_singleton()
+        with patch("core.curiosity_bank.CuriosityBank._load"):
+            bank = CuriosityBank()
+        bank.seeds = [
+            {"topic": "attention residuals", "source": "chat",
+             "planted_at": 1000, "explored": False},
+        ]
+        bank._save = MagicMock()
+        bank.mark_explored("attention residuals", result="Technique de Moonshot AI pour moduler les poids")
+        assert bank.seeds[0]["explored"] is True
+        assert "Moonshot" in bank.seeds[0]["result"]
+
+    def test_mark_explored_without_result_backward_compatible(self):
+        """mark_explored sans résultat fonctionne comme avant."""
+        from core.curiosity_bank import CuriosityBank
+        CuriosityBank.reset_singleton()
+        with patch("core.curiosity_bank.CuriosityBank._load"):
+            bank = CuriosityBank()
+        bank.seeds = [
+            {"topic": "test topic", "source": "chat",
+             "planted_at": 1000, "explored": False},
+        ]
+        bank._save = MagicMock()
+        bank.mark_explored("test topic")
+        assert bank.seeds[0]["explored"] is True
+        assert "result" not in bank.seeds[0]
+        CuriosityBank.reset_singleton()

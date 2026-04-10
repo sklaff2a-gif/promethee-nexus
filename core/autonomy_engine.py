@@ -777,6 +777,17 @@ class AutonomyEngine:
         # SensoriumLoop : dernier snapshot post-action pour boucle fermee
         self._last_feedback_snapshot: dict = {}
 
+        # --- Continuité inter-routines (inspiré Mythos / Anthropic, avril 2026) ---
+        # Buffer des 3 derniers insights de haute qualité (quality > 0.6)
+        # Injectes dans le purpose_context de la routine suivante
+        self._recent_insights: list = []  # [{intent, summary, quality, ts}]
+        INSIGHT_BUFFER_SIZE = 3
+        # Eureka follow-up : cooldown 1h pour eviter boucle eureka→routine→eureka
+        self._last_eureka_followup_ts: float = 0.0
+        self._pending_eureka_context: str = ""  # Contexte de l'hypothese a tester
+        # Ratio qualité/coût par intent (rolling average sur 10 dernières exécutions)
+        self._intent_quality_stats: dict = persisted.get("intent_quality_stats", {})
+
         # LIF (Leaky Integrate-and-Fire) : potentiel par intent {intent: float}
         self._lif_potentials: dict = persisted.get("lif_potentials", {})
 
@@ -784,6 +795,7 @@ class AutonomyEngine:
         bus.subscribe("TISSUE_ZONE_DESERT", self._on_tissue_desert)
         bus.subscribe("SALARY_PAYDAY", self._on_salary_payday)
         bus.subscribe("REPTILIAN_DIRECTIVE", self._on_reptilian_directive)
+        bus.subscribe("EUREKA_MOMENT", self._on_eureka_moment)
 
         # Boosts temporaires appliques par le circuit reflexe reptilien
         # {intent: {"boost": float, "expires": float, "source": str}}
@@ -807,6 +819,42 @@ class AutonomyEngine:
         week = event.get("week_start", "?")
         net = event.get("net", 0)
         logger.info(f"[RITUAL] Payday semaine {week} (net={net}) → rituel introspection programmé")
+
+    async def _on_eureka_moment(self, event: dict):
+        """Recoit une hypothese Eureka de l'incubation cognitive.
+
+        Inspire Mythos (Anthropic, avril 2026) : quand une connexion inattendue
+        emerge, on force une routine de suivi pour la TESTER au lieu de
+        simplement la noter dans l'historique.
+        Cooldown 1h pour eviter les boucles eureka→routine→eureka.
+        """
+        hypothesis = event.get("hypothesis", "")
+        node_a = event.get("node_a", "")
+        node_b = event.get("node_b", "")
+        strength = event.get("bridge_strength", 0.0)
+        problem = event.get("problem_text", "")
+
+        if not hypothesis or strength < 0.5:
+            return
+
+        # Cooldown : max 1 follow-up eureka par heure
+        now = time.time()
+        if now - self._last_eureka_followup_ts < 3600:
+            logger.debug(f"[MYTHOS] Eureka ignoree (cooldown): {hypothesis[:50]}")
+            return
+
+        if self._forced_next_intent:
+            return  # Ne pas ecraser un intent deja force
+
+        self._forced_next_intent = "FREE_EXPLORATION"
+        self._pending_eureka_context = (
+            f"Hypothese: {hypothesis}\n"
+            f"Connexion: {node_a} <-> {node_b} (force={strength:.2f})\n"
+            f"Probleme original: {problem[:150]}"
+        )
+        self._last_eureka_followup_ts = now
+        print(f"   💡 EUREKA FOLLOW-UP: {hypothesis[:60]}... → FREE_EXPLORATION force")
+        logger.info(f"[MYTHOS] Eureka follow-up: {hypothesis[:80]} (force={strength:.2f})")
 
     async def _on_reptilian_directive(self, event: dict):
         """Recoit une directive du reptilien (circuit reflexe codelet→reptilien→autonomy).
@@ -993,6 +1041,7 @@ class AutonomyEngine:
             "_autoresearch_kept": getattr(self, "_autoresearch_kept", 0),
             "_autoresearch_baseline_metrics": getattr(self, "_autoresearch_baseline_metrics", {}),
             "lif_potentials": getattr(self, "_lif_potentials", {}),
+            "intent_quality_stats": getattr(self, "_intent_quality_stats", {}),
         }
         AutonomyStatePersistence.save(state)
 
@@ -2599,6 +2648,16 @@ class AutonomyEngine:
             journal_ctx = self.get_dream_journal_context()
             if journal_ctx:
                 purpose_ctx += f"\n{journal_ctx}"
+
+            # --- Continuité Mythos-inspired : insights récents + eureka en attente ---
+            if self._recent_insights:
+                insight_lines = []
+                for ins in self._recent_insights[-3:]:
+                    insight_lines.append(f"- [{ins['intent']}] (q={ins['quality']}) {ins['summary'][:150]}")
+                purpose_ctx += "\n[INSIGHTS RECENTS — ce que tu as decouvert, continue sur cette lancee]\n"
+                purpose_ctx += "\n".join(insight_lines)
+            if self._pending_eureka_context:
+                purpose_ctx += f"\n[HYPOTHESE A TESTER — une connexion inattendue a emerge]\n{self._pending_eureka_context}"
             # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)
             raw_mission = selected["mission"]
             # Retirer le préfixe [MODE VEILLE] déjà présent dans certaines missions
@@ -2721,6 +2780,58 @@ class AutonomyEngine:
                                      quality_score=quality_score, result_preview=result_preview,
                                      grimoire_slug=grimoire_slug)
                 self.error_streak = 0
+
+                # --- Capture insight (continuité Mythos-inspired) ---
+                if quality_score >= 0.6 and result_preview and len(result_preview) > 30:
+                    self._recent_insights.append({
+                        "intent": intent,
+                        "summary": result_preview[:300],
+                        "quality": round(quality_score, 2),
+                        "ts": time.time(),
+                    })
+                    if len(self._recent_insights) > 3:
+                        self._recent_insights = self._recent_insights[-3:]
+                    # Linkback curiosité : si FREE_EXPLORATION, écrire le résultat dans la graine
+                    if intent == "FREE_EXPLORATION":
+                        try:
+                            from core.curiosity_bank import CuriosityBank
+                            bank = CuriosityBank()
+                            # Chercher la graine la plus récemment explorée
+                            for seed in reversed(bank.seeds):
+                                if seed.get("explored") and not seed.get("result"):
+                                    seed["result"] = result_preview[:200]
+                                    bank._save()
+                                    break
+                        except Exception:
+                            pass
+                    # Eureka confirmation : si cette routine est un follow-up eureka
+                    if self._pending_eureka_context:
+                        try:
+                            from core.incubation_cognitive import incubation
+                            for eureka in reversed(incubation._eureka_history):
+                                if not eureka.tested:
+                                    eureka.tested = True
+                                    eureka.test_result = result_preview[:200]
+                                    eureka.test_quality = quality_score
+                                    incubation._save()
+                                    logger.info(f"[MYTHOS] Eureka '{eureka.hypothesis[:50]}' testee (q={quality_score:.2f})")
+                                    break
+                        except Exception:
+                            pass
+                        self._pending_eureka_context = ""
+
+                # --- Ratio qualité/coût par intent ---
+                cost = RESOURCE_COSTS.get(intent, 2)
+                stats = self._intent_quality_stats.get(intent, {"sum_q": 0, "sum_c": 0, "n": 0})
+                stats["sum_q"] = stats.get("sum_q", 0) + quality_score
+                stats["sum_c"] = stats.get("sum_c", 0) + cost
+                stats["n"] = stats.get("n", 0) + 1
+                # Rolling : garder les 10 dernières au max (approximation via moyenne pondérée)
+                if stats["n"] > 10:
+                    stats["sum_q"] *= 0.9
+                    stats["sum_c"] *= 0.9
+                    stats["n"] = 10
+                self._intent_quality_stats[intent] = stats
 
                 # --- Recovery production : sauvegarder les routines exceptionnelles ---
                 if score >= 9.0:
