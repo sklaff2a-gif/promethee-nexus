@@ -714,11 +714,11 @@ class TestGrimoireInvokeRoutine:
                 self.engine = AutonomyEngine(idle_threshold_seconds=300)
         yield
 
-    def test_grimoire_invoke_in_routines(self):
-        """La routine GRIMOIRE_INVOKE est présente dans _get_routines()."""
+    def test_grimoire_invoke_removed_from_routines(self):
+        """GRIMOIRE_INVOKE a été retirée des routines actives (nettoyage avril 2026)."""
         routines = self.engine._get_routines()
         intents = [r["intent"] for r in routines]
-        assert "GRIMOIRE_INVOKE" in intents
+        assert "GRIMOIRE_INVOKE" not in intents
 
     def test_grimoire_invoke_context_keywords(self):
         """GRIMOIRE_INVOKE a des CONTEXT_KEYWORDS."""
@@ -1201,18 +1201,18 @@ class TestNewRoutines:
         self.engine._state_persistence = MagicMock()
 
     def test_new_routines_in_list(self):
-        """Les 3 nouvelles routines existent dans _get_routines."""
+        """SECURITY_AUDIT et MEMORY_CLEANUP existent. REFACTOR_RANDOM retiré (nettoyage avril 2026)."""
         routines = self.engine._get_routines()
         intents = [r["intent"] for r in routines]
         assert "SECURITY_AUDIT" in intents
         assert "MEMORY_CLEANUP" in intents
-        assert "REFACTOR_RANDOM" in intents
+        assert "REFACTOR_RANDOM" not in intents
 
     def test_new_context_keywords(self):
-        """Les context keywords pour les nouvelles routines sont définis."""
+        """Les context keywords pour les routines actives sont définis."""
         assert "SECURITY_AUDIT" in CONTEXT_KEYWORDS
         assert "MEMORY_CLEANUP" in CONTEXT_KEYWORDS
-        assert "REFACTOR_RANDOM" in CONTEXT_KEYWORDS
+        # REFACTOR_RANDOM keywords gardés pour compatibilité mais routine retirée
 
     @pytest.mark.asyncio
     async def test_memory_cleanup_no_chromadb(self):

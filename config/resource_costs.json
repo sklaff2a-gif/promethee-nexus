@@ -11,9 +11,9 @@
     "description": "Pipeline Darwin catalog: sélection spec + génération code + AST + sandbox + Architect"
   },
   "COUNCIL_DEBATE": {
-    "cost": 12,
+    "cost": 8,
     "cost_degraded": 4,
-    "description": "Normal: 3-5 tours x 3 participants. Dégradé: 3 tours x 2 participants."
+    "description": "Normal: 3-4 tours x 3 participants. Réduit de 12→8 (avril 2026 — dopamine dip sur councils stériles)."
   },
   "REFACTOR_RANDOM": {
     "cost": 1,
@@ -136,8 +136,8 @@
     "description": "Introspection vesperale: relecture chat + 1 appel LLM local. Max 1x/8h. Le pont entre le jour et la nuit."
   },
   "COFFEE_BREAK": {
-    "cost": 3,
-    "description": "Cafe avec Alfred: 3-5 echanges non structures. Satisfait CONNEXION. Max 1x/8h."
+    "cost": 2,
+    "description": "Cafe avec Alfred: 3-5 echanges non structures. Satisfait CONNEXION. Max 1x/8h. Réduit 3→2."
   },
   "STEFAN_CONFRONTATION": {
     "cost": 2,
