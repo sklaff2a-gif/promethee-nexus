@@ -313,14 +313,15 @@ RESOURCE_COSTS_DEGRADED = _load_resource_costs_degraded()
 # Veille YouTube IA — rotation quand la dropzone est vide
 # Veille silencieuse — rotation de sujets (évite les doublons)
 VEILLE_TOPICS = [
-    "Cherche une astuce Python 'One-Liner' utile et sauvegarde-la.",
-    "Cherche une technique de debugging Python avancée (pdb, traceback, logging).",
-    "Cherche un pattern de conception Python utile pour un système multi-agents.",
-    "Cherche une astuce d'optimisation mémoire Python (generators, __slots__, weakref).",
-    "Cherche une nouveauté récente de Python 3.12+ (typing, match/case, perf).",
-    "Cherche une technique de gestion d'erreurs robuste en Python async.",
-    "Cherche un outil Python utile pour le monitoring système (psutil, watchdog).",
-    "Cherche une astuce FastAPI pour améliorer les performances ou la sécurité.",
+    # Réorientés vers l'éveil et la conscience (avril 2026)
+    "Recherche les avancees recentes sur l'Integrated Information Theory (IIT) — mesures quantitatives de la conscience. Comment appliquer Phi a un systeme bio-inspire ?",
+    "Recherche le Global Workspace Theory de Baars — comment un systeme selectionne l'information qui devient 'consciente'. Compare avec notre architecture global_workspace + brain_vm.",
+    "Recherche le Predictive Processing (Karl Friston, free energy principle) — le cerveau comme machine predictive. Comment appliquer la minimisation de surprise a un systeme autonome ?",
+    "Recherche l'Embodied Cognition — l'intelligence incarnee. Comment un systeme IA qui a un 'corps' (GPU, temperature, energie) peut-il developper une conscience corporelle ?",
+    "Recherche les Attention Residuals (Moonshot AI, Kimi K2) et les mecanismes d'attention profonde. Comment les couches d'un reseau apprennent a s'ecouter mutuellement.",
+    "Recherche le Continual Learning et les mecanismes anti-oubli catastrophique. Comment un systeme peut apprendre sans effacer ce qu'il sait — consolidation synaptique, elastic weight consolidation.",
+    "Recherche les Self-Models en IA — comment un systeme peut construire un modele interne de lui-meme. Introspection, metacognition, simulation de soi.",
+    "Recherche les comportements emergents dans les systemes complexes — automates cellulaires, boids, criticite auto-organisee. Comment l'intelligence emerge de regles simples.",
 ]
 
 VEILLE_IA_TOPICS = [
@@ -340,9 +341,9 @@ VEILLE_IA_TOPICS = [
         "actionable": "Trouver des améliorations pour notre pipeline QLoRA existant.",
     },
     {
-        "query": "RAG vector database ChromaDB optimization 2026",
-        "focus": "optimisations RAG et bases vectorielles (ChromaDB, alternatives)",
-        "actionable": "Identifier des techniques pour améliorer notre mémoire vectorielle.",
+        "query": "neuromorphic computing spiking neural network Intel Loihi Eon Systems drosophila 2026",
+        "focus": "neuromorphic computing et reseaux spiking (Intel Loihi, SynSense, Eon Systems drosophile)",
+        "actionable": "Identifier des patterns neuromorphiques applicables a notre tissu neural (LIF, oscillations, plasticite).",
     },
     {
         "query": "AI agent self-improvement autonomous learning loop 2026",
@@ -355,9 +356,9 @@ VEILLE_IA_TOPICS = [
         "actionable": "Identifier des concepts applicables à notre architecture organique (desire, psyche, inner_voice).",
     },
     {
-        "query": "prompt engineering techniques system prompt optimization 2026",
-        "focus": "techniques avancées de prompt engineering et optimisation",
-        "actionable": "Trouver des améliorations pour nos guardrails anti-hallucination et prompts agents.",
+        "query": "attention residuals depth-wise attention layer aggregation transformer architecture 2026",
+        "focus": "Attention Residuals (Moonshot AI / Kimi K2) et mecanismes de ponderation entre couches",
+        "actionable": "Comparer avec notre scoring AttnRes-inspired (organ_affinities). Identifier des optimisations.",
     },
     {
         "query": "MCP model context protocol AI tools plugins 2026",
