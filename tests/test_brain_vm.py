@@ -298,3 +298,112 @@ class TestPersistence:
         assert not b._alive
         b.start()
         assert b._alive
+
+
+# ============================================================
+# Tests AttnRes — Ratios contextuels (Piste 2)
+# ============================================================
+
+class TestAttnResContextualRatios:
+    """Verifie que les ratios coherence/phi/sync sont modules par les signaux descendants."""
+
+    def test_integrate_stable_favors_matrix(self, isolate_brain):
+        """En situation stable (signaux bas), la connectivity matrix pese plus."""
+        b = isolate_brain
+        # Simuler un tick precedent avec signaux stables
+        prev_state = BrainState()
+        prev_state.descending_signals = {"urgence": 0.0, "vigilance": 0.0}
+        b.current_state = prev_state
+
+        state = BrainState()
+        state.organ_states = {"corpus": {"cognitive_state": "standard", "global_coherence": 0.8}}
+
+        mock_matrix = MagicMock()
+        mock_matrix.get_matrix_summary.return_value = {"avg_weight": 0.6}
+        with patch.dict("sys.modules", {"core.connectivity_matrix": MagicMock(matrix=mock_matrix)}):
+            _, coherence = b._integrate(state)
+
+        # alpha=0.8, beta=0.2 → coherence = 0.8*0.8 + 0.6*0.2 = 0.76
+        assert abs(coherence - 0.76) < 0.01
+
+    def test_integrate_urgent_favors_corpus(self, isolate_brain):
+        """En situation urgente, le corpus callosum (top-down) domine."""
+        b = isolate_brain
+        prev_state = BrainState()
+        prev_state.descending_signals = {"urgence": 0.9, "vigilance": 0.1}
+        b.current_state = prev_state
+
+        state = BrainState()
+        state.organ_states = {"corpus": {"cognitive_state": "standard", "global_coherence": 0.8}}
+
+        mock_matrix = MagicMock()
+        mock_matrix.get_matrix_summary.return_value = {"avg_weight": 0.6}
+        with patch.dict("sys.modules", {"core.connectivity_matrix": MagicMock(matrix=mock_matrix)}):
+            _, coherence = b._integrate(state)
+
+        # alpha=0.5+0.3*(1-0.9)=0.53, beta=0.47 → coherence = 0.8*0.53 + 0.6*0.47 = 0.706
+        assert abs(coherence - 0.706) < 0.02
+
+    def test_integrate_no_previous_state_defaults(self, isolate_brain):
+        """Sans tick precedent, le ratio tombe sur le comportement par defaut."""
+        b = isolate_brain
+        b.current_state = None
+
+        state = BrainState()
+        state.organ_states = {"corpus": {"cognitive_state": "standard", "global_coherence": 0.8}}
+
+        mock_matrix = MagicMock()
+        mock_matrix.get_matrix_summary.return_value = {"avg_weight": 0.6}
+        with patch.dict("sys.modules", {"core.connectivity_matrix": MagicMock(matrix=mock_matrix)}):
+            _, coherence = b._integrate(state)
+
+        # instability=0 → alpha=0.8, beta=0.2 → meme que stable
+        assert abs(coherence - 0.76) < 0.01
+
+    def test_phi_creation_mode_boosts_phase(self, isolate_brain):
+        """En mode creation, la coherence de phase (Kuramoto) pese plus dans PHI."""
+        b = isolate_brain
+        state = BrainState()
+        state.descending_signals = {"creation": 0.8, "consolidation": 0.0}
+        state.organ_states = {}
+
+        # Simuler _compute_phi retournant 0.4 et phase_R = 0.9
+        with patch.object(b, "_compute_phi", return_value=0.4):
+            with patch.object(b, "_update_kuramoto", return_value=0.9):
+                with patch.object(b, "_compute_signals", return_value=state.descending_signals):
+                    with patch.object(b, "_capture_territory", return_value={}):
+                        with patch.object(b, "_capture_connectivity", return_value=[]):
+                            with patch.object(b, "_compute_synchronization", return_value=0):
+                                with patch.object(b, "_capture_all_organs", return_value={}):
+                                    with patch("core.event_bus.bus.bus.publish", new_callable=AsyncMock):
+                                        import asyncio
+                                        asyncio.get_event_loop().run_until_complete(
+                                            b._on_cardiac_beat({})
+                                        )
+
+        # phi_alpha=0.5+0.3*(1-0.8)=0.56, phi_beta=0.44
+        # phi = min(1.0, 0.4*0.56 + 0.9*0.44) = min(1.0, 0.224+0.396) = 0.62
+        assert abs(b.current_state.phi - 0.62) < 0.05
+
+    def test_sync_rate_boosted_in_consolidation(self, isolate_brain):
+        """En mode consolidation, le taux de renforcement Hebbien est double."""
+        b = isolate_brain
+        state = BrainState()
+        state.descending_signals = {"consolidation": 1.0}
+        state.organ_states = {}
+
+        # Preparer 2 ticks d'historique avec des metriques
+        b.state_history = [
+            {"tick": 1, "time": time.time() - 30, "organ_snapshot": {"cardiac": 0.5, "dopamine": 0.3}},
+            {"tick": 2, "time": time.time()},
+        ]
+        # Metriques courantes : meme direction que precedent
+        with patch.object(b, "_extract_metrics", return_value={"cardiac": 0.6, "dopamine": 0.4}):
+            mock_matrix = MagicMock()
+            with patch.dict("sys.modules", {"core.connectivity_matrix": MagicMock(matrix=mock_matrix)}):
+                b._compute_synchronization(state)
+
+        # Le taux devrait etre _SYNC_STRENGTHEN_RATE * 2.0 = 0.008
+        if mock_matrix.strengthen.called:
+            actual_rate = mock_matrix.strengthen.call_args[0][2]
+            assert abs(actual_rate - 0.008) < 0.001

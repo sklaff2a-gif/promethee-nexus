@@ -57,8 +57,10 @@ LIF_POTENTIAL_CAP = 12.0   # Plafond pour eviter accumulation infinie
 # Chaque bonus brut est normalisé dans [-1,+1] puis multiplié par un poids configurable.
 # Config : config/scoring_weights.json
 SCORING_WEIGHTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "scoring_weights.json")
+ORGAN_AFFINITIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "organ_affinities.json")
 
 _scoring_weights_cache = None
+_organ_affinities_cache = None
 
 def _load_scoring_weights() -> dict:
     """Charge les poids et plages de normalisation depuis config/scoring_weights.json."""
@@ -76,11 +78,61 @@ def _load_scoring_weights() -> dict:
         _scoring_weights_cache = {}
     return _scoring_weights_cache
 
+def _load_organ_affinities() -> dict:
+    """Charge la matrice d'affinité organe × signal descendant.
+
+    Inspire AttnRes (Moonshot AI, mars 2026) : chaque organe a un vecteur
+    d'affinité avec les 7 signaux descendants. Le produit scalaire
+    affinité·signaux donne un facteur de contexte qui module le poids
+    structurel de l'organe dans le scoring.
+    """
+    global _organ_affinities_cache
+    if _organ_affinities_cache is not None:
+        return _organ_affinities_cache
+    try:
+        with open(ORGAN_AFFINITIES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            _organ_affinities_cache = {k: v for k, v in data.items() if not k.startswith("_")}
+            logger.info(f"[SCORING] Affinités organes chargées ({len(_organ_affinities_cache)} organes)")
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning(f"[SCORING] organ_affinities.json introuvable ({e}), pas de modulation contextuelle")
+        _organ_affinities_cache = {}
+    return _organ_affinities_cache
+
+
+# Signaux descendants courants — mis a jour a chaque cycle de scoring
+_current_descending_signals: dict = {}
+
+
+def _compute_context_factor(layer_name: str) -> float:
+    """Calcule le facteur de contexte [0.5, 2.0] pour un organe.
+
+    Produit scalaire entre le vecteur d'affinité de l'organe et les
+    signaux descendants courants. Plus un organe est pertinent dans
+    le contexte actuel, plus son influence est amplifiée.
+    Retourne 1.0 si pas de signaux ou pas d'affinité configurée.
+    """
+    if not _current_descending_signals:
+        return 1.0
+    affinities = _load_organ_affinities()
+    affinity = affinities.get(layer_name)
+    if not affinity:
+        return 1.0
+    # Produit scalaire affinité · signaux
+    relevance = sum(
+        affinity.get(sig, 0.0) * val
+        for sig, val in _current_descending_signals.items()
+    )
+    # Mapper dans [0.5, 2.0] — plancher garanti, pas d'extinction
+    return 0.5 + 1.5 * min(1.0, relevance)
+
+
 def _normalize_bonus(raw: float, layer_name: str) -> float:
-    """Normalise un bonus brut dans [-1,+1] puis applique poids * précision.
-    Formule : clamp(raw / range_abs, -1, +1) * weight * precision
+    """Normalise un bonus brut dans [-1,+1] puis applique poids * précision * contexte.
+    Formule : clamp(raw / range_abs, -1, +1) * weight * precision * context_factor
     - weight : importance structurelle (config/scoring_weights.json)
     - precision : fiabilité empirique (memory/organ_precision.json)
+    - context_factor : modulation contextuelle AttnRes-inspired [0.5, 2.0]
     Si la couche n'est pas dans le JSON, fallback auto-range (|raw| comme range)."""
     if raw == 0.0:
         return 0.0
@@ -92,12 +144,14 @@ def _normalize_bonus(raw: float, layer_name: str) -> float:
         return 0.0
     normalized = max(-1.0, min(1.0, raw / range_abs))
     precision = _get_organ_precision(layer_name)
-    return round(normalized * weight * precision, 4)
+    context_factor = _compute_context_factor(layer_name)
+    return round(normalized * weight * precision * context_factor, 4)
 
 def reload_scoring_weights():
-    """Force le rechargement des poids (utile après modification du JSON en runtime)."""
-    global _scoring_weights_cache
+    """Force le rechargement des poids et affinités (utile après modification du JSON en runtime)."""
+    global _scoring_weights_cache, _organ_affinities_cache
     _scoring_weights_cache = None
+    _organ_affinities_cache = None
     return _load_scoring_weights()
 
 # --- Precision weighting (fiabilité des organes) ---
@@ -969,9 +1023,18 @@ class AutonomyEngine:
         return {"non_latin_ratio": non_latin_ratio, "is_repetition": is_repetition}
 
     def _score_result_quality(self, response: dict, intent: str) -> float:
-        """Score qualité du résultat d'une routine (0.0 = garbage, 1.0 = excellent)."""
+        """Score qualité du résultat d'une routine (0.0 = garbage, 1.0 = excellent).
+
+        Si le professeur a évalué le livrable (school_grade dans response),
+        on utilise sa note (0-10 → 0.0-1.0) au lieu du scoring mécanique.
+        """
         if not response or not isinstance(response, dict):
             return 0.0
+
+        # Si le professeur a noté, sa note prime (routines SCHOOL_*)
+        school_grade = response.get("school_grade")
+        if school_grade is not None:
+            return max(0.0, min(1.0, school_grade / 10.0))
 
         result_text = str(response.get("result", ""))
         score = 1.0
@@ -1775,6 +1838,15 @@ class AutonomyEngine:
             cloud_in_cooldown = time.time() < BaseAgent._cloud_cooldown_until
         except Exception:
             pass
+
+        # --- Injection signaux descendants pour scoring contextuel (AttnRes-inspired) ---
+        # Les signaux descendants modulent les poids des organes via _normalize_bonus.
+        # Calcules ICI pour etre disponibles pendant toutes les couches de scoring.
+        global _current_descending_signals
+        try:
+            _current_descending_signals = self._compute_descending_signals()
+        except Exception:
+            _current_descending_signals = {}
 
         scored = RoutineScorer.score_routines(
             routines=routines,
@@ -6471,7 +6543,7 @@ Réponds UNIQUEMENT avec le nouveau prompt complet."""
         except Exception:
             pass
 
-        # Créneau école actif
+        # Créneau école actif (avec feedback note récente)
         school_text = ""
         try:
             from core.school_schedule import schedule as school_schedule
@@ -6479,7 +6551,20 @@ Réponds UNIQUEMENT avec le nouveau prompt complet."""
             if slot != "SLEEP":
                 from core.school_schedule import SLOT_TO_INTENT
                 school_intent = SLOT_TO_INTENT.get(slot, "")
-                school_text = f"ÉCOLE ACTIVE: créneau {slot} → routine {school_intent} a un bonus +5.0. Propose-la en priorité."
+                # Récupérer la dernière note pour ce slot (feedback qualité)
+                last_grade_text = ""
+                try:
+                    all_deliverables = school_schedule.get_daily_deliverables()
+                    slot_deliverables = [d for d in all_deliverables if d.get("slot") == slot]
+                    if slot_deliverables:
+                        last_g = slot_deliverables[-1].get("grade")
+                        if last_g is not None:
+                            last_grade_text = f" Dernière note: {last_g:.1f}/10."
+                            if last_g < 4.0:
+                                last_grade_text += " ATTENTION: notes basses — envisage une autre routine si les productions sont hors sujet."
+                except Exception:
+                    pass
+                school_text = f"ÉCOLE ACTIVE: créneau {slot} → routine {school_intent}.{last_grade_text}"
         except Exception:
             pass
 
@@ -6508,7 +6593,7 @@ DERNIÈRES ROUTINES :
 {veto_text}
 
 RÈGLES :
-- Si un créneau école est actif, la routine SCHOOL_* correspondante est presque toujours le bon choix
+- Si un créneau école est actif ET que les notes récentes sont correctes (>=4/10), la routine SCHOOL_* correspondante est un bon choix. Si les notes sont basses (<4/10), préfère une autre routine productive
 - Si un veto préfrontal est actif, propose des routines alignées avec l'objectif en cours
 - Évite de répéter la même routine 2 fois de suite sauf raison forte
 - Choisis parmi les candidates avec le meilleur score, sauf si le contexte justifie un autre choix
@@ -6987,8 +7072,9 @@ RAISON: <1 phrase courte>"""
                                 response = retry_response
                                 print(f"   🔄 RETRY: deuxieme tentative acceptee")
                     else:
-                        # Trop de retries → noter 0
+                        # Trop de retries → marquer comme echec pour que quality_score reflète la réalité
                         print(f"   ⛔ ABANDON: trop d'echecs ({past_fails}) pour {slot}")
+                        response["school_grade"] = 0.0
             except Exception as e:
                 logger.debug(f"[REASONING] Verification echouee: {e}")
 
@@ -7007,6 +7093,8 @@ RAISON: <1 phrase courte>"""
                         "result_preview": deliverable[:200],
                     })
                     grade = eval_result["grade"]
+                    # Injecter la note dans la response pour que _score_result_quality la voie
+                    response["school_grade"] = grade
                     print(f"   📝 NOTE: {grade:.1f}/10 — {eval_result['feedback'][:80]}")
                     if eval_result.get("challenge"):
                         print(f"   🎯 DEFI: {eval_result['challenge'][:100]}")

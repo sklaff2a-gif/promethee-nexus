@@ -165,8 +165,15 @@ class BrainVM:
 
         # 3b. PHI (IIT) — mesure d'integration enrichie par la coherence de phase
         state.phi = self._compute_phi(state)
-        # Phi est module par la coherence de phase (binding enrichit l'integration)
-        state.phi = min(1.0, state.phi * 0.7 + phase_R * 0.3)
+        # Ratio contextuel inspire AttnRes : en mode consolidation/creation,
+        # la coherence de phase (Kuramoto) pese davantage dans le PHI
+        integration_mode = max(
+            state.descending_signals.get("consolidation", 0.0),
+            state.descending_signals.get("creation", 0.0),
+        ) if state.descending_signals else 0.0
+        phi_alpha = 0.5 + 0.3 * (1.0 - integration_mode)  # [0.5, 0.8]
+        phi_beta = 1.0 - phi_alpha
+        state.phi = min(1.0, state.phi * phi_alpha + phase_R * phi_beta)
 
         # 3c. CODELETS — deleguees au module attention_codelets.py
         #     (s'executent via BRAIN_TICK handler, apres publication)
@@ -549,7 +556,12 @@ class BrainVM:
                 # Seuil : les deux varient de plus de 1% dans le meme sens
                 if abs(da) > 0.01 and abs(db) > 0.01:
                     if (da > 0 and db > 0) or (da < 0 and db < 0):
-                        matrix.strengthen(a, b, _SYNC_STRENGTHEN_RATE)
+                        # Taux module : en consolidation (nuit), plasticite renforcee
+                        consolidation = 0.0
+                        if state.descending_signals:
+                            consolidation = state.descending_signals.get("consolidation", 0.0)
+                        modulated_rate = _SYNC_STRENGTHEN_RATE * (1.0 + consolidation)
+                        matrix.strengthen(a, b, modulated_rate)
                         sync_count += 1
 
         if sync_count > 0 and self.tick_count % 20 == 0:
@@ -583,7 +595,13 @@ class BrainVM:
     # ============================================================
 
     def _integrate(self, state: BrainState) -> tuple:
-        """Integre les etats des organes en un etat cognitif global."""
+        """Integre les etats des organes en un etat cognitif global.
+
+        Inspire AttnRes (Moonshot AI, mars 2026) : le ratio corpus/matrix
+        est module par les signaux descendants du tick precedent.
+        En situation stable → plus de poids a la connectivity (bottom-up).
+        En situation instable → plus de poids au corpus callosum (top-down).
+        """
         cognitive_state = "standard"
         coherence = 0.5
 
@@ -598,8 +616,18 @@ class BrainVM:
             from core.connectivity_matrix import matrix
             summary = matrix.get_matrix_summary()
             avg_weight = summary.get("avg_weight", 0.5)
-            # La coherence est influencee par la force moyenne des connexions
-            coherence = coherence * 0.7 + avg_weight * 0.3
+            # Ratio contextuel : signaux du tick precedent modulent le blend
+            prev_signals = {}
+            if self.current_state:
+                prev_signals = self.current_state.descending_signals or {}
+            instability = max(
+                prev_signals.get("urgence", 0.0),
+                prev_signals.get("vigilance", 0.0),
+            )
+            # alpha ∈ [0.5, 0.8] : instable → corpus domine, stable → matrix monte
+            alpha = 0.5 + 0.3 * (1.0 - instability)
+            beta = 1.0 - alpha
+            coherence = coherence * alpha + avg_weight * beta
         except Exception:
             pass
 

@@ -1912,3 +1912,102 @@ class TestAntiNoiseRoutine:
         from core.synaptic_network import _NODE_STOPLIST
         for word in ["partir", "groupes", "cette", "dans", "pour"]:
             assert word in _NODE_STOPLIST, f"'{word}' devrait etre dans la stoplist"
+
+
+# ============================================================
+# Tests AttnRes — Budget poids sortants (Piste 3)
+# ============================================================
+
+class TestOutgoingWeightBudget:
+    """Verifie la competition synaptique : renforcer A→B affaiblit A→C."""
+
+    def test_budget_not_triggered_under_limit(self, network):
+        """Si le total sortant est sous le budget, rien ne change."""
+        from core.synaptic_network import OUTGOING_WEIGHT_BUDGET, _make_node_id
+        net = network
+        net._activation_buffer = []
+        # Creer 2 noeuds et 1 synapse faible
+        src = net.ensure_node("source_budget_test", "test")
+        tgt = net.ensure_node("target_budget_test", "test")
+        net.nodes[src]["energy"] = 0.8
+        net.nodes[tgt]["energy"] = 0.8
+        with patch.object(net, "_auto_save"):
+            net.hebbian_strengthen(src, tgt, success=True)
+        # 1 seule synapse = poids < budget → pas de normalisation
+        outgoing = [s for s in net.synapses.values() if s["source"] == src]
+        assert len(outgoing) == 1
+        assert outgoing[0]["weight"] <= 1.0
+
+    def test_budget_normalizes_when_exceeded(self, network):
+        """Quand le budget est depasse, les poids sont reajustes."""
+        from core.synaptic_network import (
+            OUTGOING_WEIGHT_BUDGET, PRUNING_THRESHOLD,
+            _make_node_id, _synapse_key, _make_synapse,
+        )
+        net = network
+        net._activation_buffer = []
+        # Creer un hub avec beaucoup de sorties
+        hub = net.ensure_node("hub_budget_test", "test")
+        targets = []
+        for i in range(10):
+            tgt = net.ensure_node(f"spoke_budget_{i}", "test")
+            targets.append(tgt)
+            key = _synapse_key(hub, tgt)
+            net.synapses[key] = _make_synapse(hub, tgt, 0.8, "test", "test")
+
+        # Total sortant = 10 × 0.8 = 8.0 > budget (3.0)
+        total_before = sum(s["weight"] for s in net.synapses.values() if s["source"] == hub)
+        assert total_before > OUTGOING_WEIGHT_BUDGET
+
+        # Declencher la normalisation
+        net._normalize_outgoing_weights(hub)
+
+        total_after = sum(s["weight"] for s in net.synapses.values() if s["source"] == hub)
+        assert total_after <= OUTGOING_WEIGHT_BUDGET + 0.01
+        # Tous les poids restent au-dessus du seuil de pruning
+        for s in net.synapses.values():
+            if s["source"] == hub:
+                assert s["weight"] >= PRUNING_THRESHOLD
+
+    def test_hebbian_triggers_normalization(self, network):
+        """hebbian_strengthen appelle _normalize_outgoing_weights apres renforcement."""
+        from core.synaptic_network import _make_node_id, _synapse_key, _make_synapse, OUTGOING_WEIGHT_BUDGET
+        net = network
+        net._activation_buffer = []
+        # Hub avec sorties proches du budget
+        hub = net.ensure_node("hub_hebb_norm", "test")
+        for i in range(5):
+            tgt = net.ensure_node(f"tgt_hebb_norm_{i}", "test")
+            key = _synapse_key(hub, tgt)
+            net.synapses[key] = _make_synapse(hub, tgt, 0.55, "test", "")
+        # Total = 5×0.55 = 2.75 — juste sous le budget
+
+        # Renforcer une synapse pour depasser le budget
+        new_tgt = net.ensure_node("tgt_hebb_norm_new", "test")
+        net.nodes[hub]["energy"] = 0.9
+        net.nodes[new_tgt]["energy"] = 0.9
+        with patch.object(net, "_auto_save"):
+            net.hebbian_strengthen(hub, new_tgt, success=True)
+
+        total = sum(s["weight"] for s in net.synapses.values() if s["source"] == hub)
+        assert total <= OUTGOING_WEIGHT_BUDGET + 0.01
+
+    def test_stdp_triggers_normalization(self, network):
+        """spike_timing_strengthen appelle _normalize_outgoing_weights."""
+        from core.synaptic_network import _synapse_key, _make_synapse, OUTGOING_WEIGHT_BUDGET
+        net = network
+        net._activation_buffer = []
+        hub = net.ensure_node("hub_stdp_norm", "test")
+        for i in range(5):
+            tgt = net.ensure_node(f"tgt_stdp_{i}", "test")
+            key = _synapse_key(hub, tgt)
+            net.synapses[key] = _make_synapse(hub, tgt, 0.55, "test", "")
+
+        later = net.ensure_node("tgt_stdp_later", "test")
+        net.nodes[hub]["energy"] = 0.9
+        net.nodes[later]["energy"] = 0.9
+        with patch.object(net, "_auto_save"):
+            net.spike_timing_strengthen(hub, later, delta_t=10.0)
+
+        total = sum(s["weight"] for s in net.synapses.values() if s["source"] == hub)
+        assert total <= OUTGOING_WEIGHT_BUDGET + 0.01

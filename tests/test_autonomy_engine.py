@@ -2699,35 +2699,47 @@ class TestNormalizationV3:
 
     def test_normalize_zero_returns_zero(self):
         """Un bonus brut de 0 retourne toujours 0."""
+        import core.autonomy_engine as ae
+        ae._current_descending_signals = {}
         assert _normalize_bonus(0.0, "objectives") == 0.0
 
     def test_normalize_within_range(self):
         """Un bonus dans la plage est correctement normalisé."""
+        import core.autonomy_engine as ae
+        ae._current_descending_signals = {}
         # objectives: range_abs=5.0, weight=2.0
         result = _normalize_bonus(2.5, "objectives")
-        # 2.5 / 5.0 = 0.5, * 2.0 * 1.0(precision) = 1.0
+        # 2.5 / 5.0 = 0.5, * 2.0 * 1.0(precision) * 1.0(context) = 1.0
         assert result == pytest.approx(1.0, abs=0.01)
 
     def test_normalize_at_max(self):
         """Un bonus au max de la plage donne weight."""
+        import core.autonomy_engine as ae
+        ae._current_descending_signals = {}
         # desire: range_abs=3.0, weight=1.5
         result = _normalize_bonus(3.0, "desire")
         assert result == pytest.approx(1.5, abs=0.01)
 
     def test_normalize_beyond_range_clamps(self):
         """Un bonus au-delà de la plage est clampé à ±1."""
+        import core.autonomy_engine as ae
+        ae._current_descending_signals = {}
         result = _normalize_bonus(-15.0, "adaptive")
         # -15/10 clamped to -1.0, * 2.5 = -2.5
         assert result == pytest.approx(-2.5, abs=0.01)
 
     def test_normalize_negative(self):
         """Un bonus négatif est correctement normalisé."""
+        import core.autonomy_engine as ae
+        ae._current_descending_signals = {}
         result = _normalize_bonus(-1.5, "cardiac")
         # -1.5 / 3.0 = -0.5, * 1.5 = -0.75
         assert result == pytest.approx(-0.75, abs=0.01)
 
     def test_normalize_unknown_layer_fallback(self):
         """Une couche inconnue utilise le fallback auto-range."""
+        import core.autonomy_engine as ae
+        ae._current_descending_signals = {}
         result = _normalize_bonus(5.0, "couche_inconnue")
         # fallback: range_abs=5.0, weight=1.0 → 1.0
         assert result == pytest.approx(1.0, abs=0.01)
@@ -3293,3 +3305,124 @@ class TestCouncilLimits:
         assert MAX_DAILY_COUNCILS <= 5
         assert COUNCIL_COOLDOWN_MINUTES >= 60
         assert COUNCIL_COOLDOWN_MINUTES <= 180
+
+
+# ============================================================
+# Tests AttnRes — Scoring contextuel (Piste 1)
+# ============================================================
+
+class TestAttnResContextualScoring:
+    """Verifie que _normalize_bonus est module par les signaux descendants."""
+
+    def setup_method(self):
+        import core.autonomy_engine as mod
+        mod._scoring_weights_cache = None
+        mod._organ_affinities_cache = None
+        mod._current_descending_signals = {}
+        mod._organ_precision_cache = {}
+
+    def test_no_signals_factor_is_one(self):
+        """Sans signaux descendants, context_factor = 1.0 (comportement inchange)."""
+        import core.autonomy_engine as mod
+        mod._current_descending_signals = {}
+        factor = mod._compute_context_factor("amygdala")
+        assert factor == 1.0
+
+    def test_urgence_boosts_amygdala(self):
+        """L'amygdale est amplifiee en situation d'urgence."""
+        import core.autonomy_engine as mod
+        mod._current_descending_signals = {
+            "urgence": 0.9, "exploration": 0.0, "consolidation": 0.0,
+            "creation": 0.0, "repos": 0.0, "vigilance": 0.0, "social": 0.0,
+        }
+        factor = mod._compute_context_factor("amygdala")
+        # amygdala urgence=0.9 → relevance = 0.9*0.9 = 0.81 → factor = 0.5 + 1.5*0.81 = 1.715
+        assert factor > 1.5
+
+    def test_exploration_boosts_curiosity(self):
+        """La curiosite est amplifiee en mode exploration."""
+        import core.autonomy_engine as mod
+        mod._current_descending_signals = {
+            "urgence": 0.0, "exploration": 0.8, "consolidation": 0.0,
+            "creation": 0.0, "repos": 0.0, "vigilance": 0.0, "social": 0.0,
+        }
+        factor = mod._compute_context_factor("curiosity")
+        # curiosity exploration=0.9 → relevance = 0.8*0.9 = 0.72 → factor = 0.5+1.5*0.72 = 1.58
+        assert factor > 1.5
+
+    def test_creation_boosts_dmn(self):
+        """Le DMN est amplifie en mode creation."""
+        import core.autonomy_engine as mod
+        mod._current_descending_signals = {
+            "urgence": 0.0, "exploration": 0.0, "consolidation": 0.0,
+            "creation": 0.9, "repos": 0.0, "vigilance": 0.0, "social": 0.0,
+        }
+        factor = mod._compute_context_factor("dmn")
+        # dmn creation=0.8 → relevance = 0.9*0.8 = 0.72 → factor > 1.5
+        assert factor > 1.5
+
+    def test_calm_state_attenuates(self):
+        """En etat calme (tous signaux bas), les facteurs sont proches de 1.0."""
+        import core.autonomy_engine as mod
+        mod._current_descending_signals = {
+            "urgence": 0.1, "exploration": 0.1, "consolidation": 0.1,
+            "creation": 0.1, "repos": 0.1, "vigilance": 0.1, "social": 0.1,
+        }
+        factor = mod._compute_context_factor("amygdala")
+        # Tous signaux × affinités faibles → relevance faible → factor proche de 1.0
+        assert 0.5 <= factor <= 1.5
+
+    def test_factor_floor_at_half(self):
+        """Le facteur ne descend jamais sous 0.5 (aucun organe ne s'eteint)."""
+        import core.autonomy_engine as mod
+        mod._current_descending_signals = {
+            "urgence": 0.0, "exploration": 0.0, "consolidation": 0.0,
+            "creation": 0.0, "repos": 0.0, "vigilance": 0.0, "social": 0.0,
+        }
+        factor = mod._compute_context_factor("amygdala")
+        assert factor >= 0.5
+
+    def test_factor_ceiling_at_two(self):
+        """Le facteur ne depasse jamais 2.0."""
+        import core.autonomy_engine as mod
+        mod._current_descending_signals = {
+            "urgence": 1.0, "exploration": 1.0, "consolidation": 1.0,
+            "creation": 1.0, "repos": 1.0, "vigilance": 1.0, "social": 1.0,
+        }
+        factor = mod._compute_context_factor("amygdala")
+        assert factor <= 2.0
+
+    def test_normalize_bonus_uses_context(self):
+        """_normalize_bonus integre le context_factor dans le calcul."""
+        import core.autonomy_engine as mod
+        # Setup : poids connus, pas de precision custom
+        mod._scoring_weights_cache = {"amygdala": {"weight": 1.0, "range_abs": 2.0}}
+        mod._organ_precision_cache = {}
+
+        # Sans signaux : bonus standard
+        mod._current_descending_signals = {}
+        bonus_neutral = _normalize_bonus(1.0, "amygdala")
+
+        # Avec urgence : bonus amplifie
+        mod._current_descending_signals = {
+            "urgence": 0.9, "exploration": 0.0, "consolidation": 0.0,
+            "creation": 0.0, "repos": 0.0, "vigilance": 0.0, "social": 0.0,
+        }
+        bonus_urgent = _normalize_bonus(1.0, "amygdala")
+
+        assert bonus_urgent > bonus_neutral
+
+    def test_unknown_organ_factor_is_one(self):
+        """Un organe absent du JSON d'affinites a un facteur de 1.0."""
+        import core.autonomy_engine as mod
+        mod._current_descending_signals = {"urgence": 1.0}
+        factor = mod._compute_context_factor("organe_inconnu_xyz")
+        assert factor == 1.0
+
+    def test_reload_clears_affinities_cache(self):
+        """reload_scoring_weights vide aussi le cache des affinites."""
+        import core.autonomy_engine as mod
+        mod._organ_affinities_cache = {"test": {}}
+        reload_scoring_weights = mod.reload_scoring_weights
+        reload_scoring_weights()
+        assert mod._organ_affinities_cache is None

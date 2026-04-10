@@ -48,6 +48,12 @@ STRUCTURAL_GROWTH_MAX_PER_TICK = 3 # Max nouvelles synapses par tick
 STRUCTURAL_GROWTH_INITIAL_WEIGHT = 0.05  # Poids initial (faible, doit etre renforce par Hebbian)
 STRUCTURAL_GROWTH_FILL_LIMIT = 0.9  # Ne pas faire pousser si synapses > 90% de MAX
 
+# --- Budget poids sortants (inspire AttnRes, Moonshot AI mars 2026) ---
+# Chaque noeud a un budget total de poids sortants. Renforcer A→B
+# affaiblit proportionnellement les autres sorties de A (competition synaptique).
+# Biologiquement : ressources synaptiques limitees, renforcer = choisir.
+OUTGOING_WEIGHT_BUDGET = 3.0  # Budget total max des poids sortants par noeud
+
 # Noeuds système exclus du STDP — ces noeuds sont activés à chaque cycle
 # par les organes internes et créent du bruit auto-référentiel massif.
 _STDP_EXCLUDED_PREFIXES = frozenset({
@@ -538,6 +544,8 @@ class SynapticNetwork:
             syn["last_strengthened"] = time.time()
             if context and len(context) > len(syn["context"]):
                 syn["context"] = context[:200]
+            # Competition synaptique : normaliser les poids sortants (AttnRes-inspired)
+            self._normalize_outgoing_weights(src_id)
             change = "synapse_new" if is_new else "synapse_strengthen"
             self._publish_delta(change, {
                 "source": src_id, "target": tgt_id,
@@ -584,8 +592,30 @@ class SynapticNetwork:
         syn["weight"] = min(1.0, syn["weight"] + dw)
         syn["formation_count"] += 1
         syn["last_strengthened"] = time.time()
+        # Competition synaptique : normaliser les poids sortants (AttnRes-inspired)
+        self._normalize_outgoing_weights(earlier_id)
         self._mutations_since_save += 1
         self._auto_save()
+
+    def _normalize_outgoing_weights(self, node_id: str):
+        """Normalise les poids sortants d'un noeud pour respecter le budget.
+
+        Inspire AttnRes (Moonshot AI, mars 2026) : renforcer une synapse
+        affaiblit proportionnellement les autres — competition synaptique.
+        Biologiquement : les ressources synaptiques sont limitees.
+        """
+        outgoing = [
+            (k, s) for k, s in self.synapses.items()
+            if s["source"] == node_id
+        ]
+        if not outgoing:
+            return
+        total = sum(s["weight"] for _, s in outgoing)
+        if total <= OUTGOING_WEIGHT_BUDGET:
+            return
+        scale = OUTGOING_WEIGHT_BUDGET / total
+        for _, s in outgoing:
+            s["weight"] = max(PRUNING_THRESHOLD, s["weight"] * scale)
 
     def homeostatic_normalize(self):
         """Normalisation homeostatique — ramene l'energie moyenne vers HOMEOSTATIC_TARGET."""
