@@ -531,6 +531,9 @@ CONTEXT_KEYWORDS = {
     "GRIMOIRE_EVOLVE": ["grimoire", "prompt", "mutation", "amélioration", "formulation", "optimiser"],
     "VEILLE_IA": ["intelligence artificielle", "modèle", "LLM", "agent", "IA", "veille", "écosystème"],
     "VISUAL_OBSERVATION": ["photo", "image", "visuel", "observer", "regarder", "voir"],
+    "CURIOSITY_DEEP_DIVE": ["curiosité", "explorer", "graine", "approfondir", "question", "sujet"],
+    "CROSS_SYNTHESIS": ["synthèse", "pattern", "connexion", "insight", "croisement", "hypothèse"],
+    "BODY_AWARENESS": ["corps", "GPU", "température", "énergie", "cardiaque", "physique", "incarné"],
     "SCHOOL_CODE_REVIEW": ["revue", "review", "code", "audit", "qualité", "bugs"],
     "SCHOOL_RESEARCH": ["recherche", "étude", "synthèse", "apprendre", "sujet", "technique"],
     "SCHOOL_WORKSHOP": ["atelier", "workshop", "implémenter", "pratiquer", "exercice", "spec"],
@@ -1012,6 +1015,75 @@ class AutonomyEngine:
 
         return " ".join(parts) if parts else base_mission
 
+    def _build_curiosity_mission(self) -> str:
+        """Construit la mission pour CURIOSITY_DEEP_DIVE depuis la banque de graines."""
+        base = "Explore en profondeur un sujet qui t'intrigue."
+        try:
+            from core.curiosity_bank import CuriosityBank
+            bank = CuriosityBank()
+            unexplored = bank.get_unexplored()
+            if unexplored:
+                seed = unexplored[0]  # La plus ancienne non-exploree
+                topic = seed.get("topic", "")
+                context = seed.get("context", "")
+                source = seed.get("source", "")
+                base = (
+                    f"Explore en profondeur : '{topic}'. "
+                    f"Source de ta curiosite : {source}. "
+                )
+                if context:
+                    base += f"Contexte original : {context[:150]}. "
+                # Chercher des graines liees
+                related = [s for s in unexplored[1:5]
+                           if any(w in s.get("topic", "") for w in topic.split()[:2])]
+                if related:
+                    related_topics = ", ".join(s["topic"] for s in related[:2])
+                    base += f"Sujets lies a explorer aussi : {related_topics}. "
+                base += "Objectif : produire un insight testable, pas une synthese superficielle."
+        except Exception:
+            pass
+        return self._build_dynamic_mission("CURIOSITY_DEEP_DIVE", base)
+
+    def _build_cross_synthesis_mission(self) -> str:
+        """Construit la mission pour CROSS_SYNTHESIS depuis les insights recents."""
+        if len(self._recent_insights) < 2:
+            return "Pas assez d'insights recents pour une synthese croisee. Attends que d'autres routines produisent des decouvertes."
+        summaries = [ins["summary"][:120] for ins in self._recent_insights[-3:]]
+        numbered = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(summaries))
+        return (
+            f"Relis ces decouvertes recentes et identifie un pattern commun, "
+            f"une contradiction, ou une connexion inattendue :\n{numbered}\n"
+            f"Formule une hypothese testable a partir de cette synthese."
+        )
+
+    def _build_body_awareness_mission(self) -> str:
+        """Construit la mission pour BODY_AWARENESS depuis l'etat physique."""
+        parts = ["Observe ton corps et reflechis a ce qu'il te dit."]
+        try:
+            from core.sensorium import sensorium
+            hw = sensorium.get_hardware_snapshot()
+            if hw:
+                gpu_temp = hw.get("gpu_temp", "?")
+                gpu_load = hw.get("gpu_load", "?")
+                ram = hw.get("ram_percent", "?")
+                parts.append(f"GPU: {gpu_temp}C, charge {gpu_load}%. RAM: {ram}%.")
+        except Exception:
+            pass
+        try:
+            from core.cardiac_engine import heart
+            parts.append(f"Coeur: {heart.bpm} BPM, emotion '{heart.current_emotion}'.")
+        except Exception:
+            pass
+        try:
+            from core.neural_tissue import tissue
+            stats = tissue.get_global_stats()
+            if stats:
+                parts.append(f"Tissu: {stats.get('alive', '?')} cellules, energie {stats.get('avg_energy', '?'):.0f}.")
+        except Exception:
+            pass
+        parts.append("Qu'est-ce que ton etat physique t'apprend sur toi en ce moment ?")
+        return " ".join(parts)
+
     def _get_routines(self) -> list:
         # Topic utilisateur prioritaire pour la veille
         user_topic = None
@@ -1060,6 +1132,13 @@ class AutonomyEngine:
             {"agent": "researcher", "intent": "VEILLE_IA",
              "mission": self._build_dynamic_mission("VEILLE_IA",
                 f"[VEILLE IA] Recherche: {veille_ia_topic['focus']}. {veille_ia_topic['actionable']}")},
+            # --- Nouvelles routines eveil (avril 2026, plan restructuration) ---
+            {"agent": "researcher", "intent": "CURIOSITY_DEEP_DIVE",
+             "mission": self._build_curiosity_mission()},
+            {"agent": "strategist", "intent": "CROSS_SYNTHESIS",
+             "mission": self._build_cross_synthesis_mission()},
+            {"agent": "strategist", "intent": "BODY_AWARENESS",
+             "mission": self._build_body_awareness_mission()},
             # --- Emploi du temps scolaire ---
             {"agent": "_school_class", "intent": "SCHOOL_CODE_REVIEW", "mission": ""},
             {"agent": "_school_class", "intent": "SCHOOL_RESEARCH", "mission": ""},

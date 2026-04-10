@@ -142,5 +142,17 @@
   "STEFAN_CONFRONTATION": {
     "cost": 2,
     "description": "Confrontation avec Stefan: 1 question tranchante sur une affirmation de Promethee. Max 1x/6h."
+  },
+  "CURIOSITY_DEEP_DIVE": {
+    "cost": 2,
+    "description": "Exploration approfondie d'une graine de curiosite. 1 appel LLM + optionnel web search."
+  },
+  "CROSS_SYNTHESIS": {
+    "cost": 2,
+    "description": "Synthese croisee des insights recents. 1 appel LLM strategist. Declenche quand 2+ insights."
+  },
+  "BODY_AWARENESS": {
+    "cost": 2,
+    "description": "Conscience corporelle: reflexion sur l'etat physique (GPU, tissue, cardiaque). 1 appel LLM."
   }
 }

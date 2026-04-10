@@ -3697,3 +3697,95 @@ class TestDynamicMissions:
             if r["intent"] in dynamic_intents:
                 assert "Decouverte marqueur dynamique XYZ" in r["mission"], \
                     f"{r['intent']} n'a pas de mission dynamique"
+
+
+# ============================================================
+# Tests Étape 3 — Nouvelles routines eveil
+# ============================================================
+
+class TestNewEveilRoutines:
+    """Verifie CURIOSITY_DEEP_DIVE, CROSS_SYNTHESIS, BODY_AWARENESS."""
+
+    def _make_engine(self):
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._recent_insights = []
+        engine._pending_eureka_context = ""
+        engine._intent_quality_stats = {}
+        engine._forced_next_intent = ""
+        engine.routine_history = []
+        engine.total_routines_executed = 0
+        return engine
+
+    def setup_method(self):
+        import core.autonomy_engine as mod
+        mod._current_descending_signals = {}
+
+    def test_new_routines_present(self):
+        """Les 3 nouvelles routines sont dans _get_routines."""
+        engine = self._make_engine()
+        routines = engine._get_routines()
+        intents = [r["intent"] for r in routines]
+        assert "CURIOSITY_DEEP_DIVE" in intents
+        assert "CROSS_SYNTHESIS" in intents
+        assert "BODY_AWARENESS" in intents
+
+    def test_curiosity_mission_with_seeds(self):
+        """CURIOSITY_DEEP_DIVE pioche dans la banque de graines."""
+        engine = self._make_engine()
+        from core.curiosity_bank import CuriosityBank
+        CuriosityBank.reset_singleton()
+        with patch("core.curiosity_bank.CuriosityBank._load"):
+            bank = CuriosityBank()
+        bank.seeds = [
+            {"topic": "attention residuelle kimi", "source": "chat",
+             "planted_at": 1000, "explored": False, "context": "discussion sur AttnRes"},
+        ]
+        mission = engine._build_curiosity_mission()
+        assert "attention residuelle kimi" in mission
+        assert "insight testable" in mission
+        CuriosityBank.reset_singleton()
+
+    def test_curiosity_mission_fallback_without_seeds(self):
+        """Sans graines, la mission est generique."""
+        engine = self._make_engine()
+        from core.curiosity_bank import CuriosityBank
+        CuriosityBank.reset_singleton()
+        with patch("core.curiosity_bank.CuriosityBank._load"):
+            bank = CuriosityBank()
+        bank.seeds = []
+        mission = engine._build_curiosity_mission()
+        assert "Explore" in mission
+        CuriosityBank.reset_singleton()
+
+    def test_cross_synthesis_with_insights(self):
+        """CROSS_SYNTHESIS utilise les insights recents."""
+        engine = self._make_engine()
+        engine._recent_insights = [
+            {"intent": "VEILLE", "summary": "IIT mesure Phi via partitions", "quality": 0.9, "ts": 1000},
+            {"intent": "SOLILOQUE", "summary": "Le prefrontal filtre 79% des routines", "quality": 0.8, "ts": 1001},
+        ]
+        mission = engine._build_cross_synthesis_mission()
+        assert "IIT" in mission
+        assert "prefrontal" in mission
+        assert "pattern" in mission or "contradiction" in mission
+
+    def test_cross_synthesis_without_insights(self):
+        """Sans assez d'insights, la mission le signale."""
+        engine = self._make_engine()
+        engine._recent_insights = [
+            {"intent": "X", "summary": "seul insight", "quality": 0.5, "ts": 1000},
+        ]
+        mission = engine._build_cross_synthesis_mission()
+        assert "Pas assez" in mission
+
+    def test_body_awareness_mission(self):
+        """BODY_AWARENESS mentionne le corps."""
+        engine = self._make_engine()
+        mission = engine._build_body_awareness_mission()
+        assert "corps" in mission
+
+    def test_context_keywords_defined(self):
+        """Les CONTEXT_KEYWORDS sont definis pour les 3 routines."""
+        assert "CURIOSITY_DEEP_DIVE" in CONTEXT_KEYWORDS
+        assert "CROSS_SYNTHESIS" in CONTEXT_KEYWORDS
+        assert "BODY_AWARENESS" in CONTEXT_KEYWORDS
