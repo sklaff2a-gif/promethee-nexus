@@ -154,5 +154,9 @@
   "BODY_AWARENESS": {
     "cost": 2,
     "description": "Conscience corporelle: reflexion sur l'etat physique (GPU, tissue, cardiaque). 1 appel LLM."
+  },
+  "OPEN_INTENT": {
+    "cost": 3,
+    "description": "Intention emergente: Promethee formule son propre objectif (1 LLM formulation + 1-2 LLM execution). Max 3/jour."
   }
 }

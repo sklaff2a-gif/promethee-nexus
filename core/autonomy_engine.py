@@ -534,6 +534,7 @@ CONTEXT_KEYWORDS = {
     "CURIOSITY_DEEP_DIVE": ["curiosité", "explorer", "graine", "approfondir", "question", "sujet"],
     "CROSS_SYNTHESIS": ["synthèse", "pattern", "connexion", "insight", "croisement", "hypothèse"],
     "BODY_AWARENESS": ["corps", "GPU", "température", "énergie", "cardiaque", "physique", "incarné"],
+    "OPEN_INTENT": ["intention", "objectif", "choisir", "formuler", "emergent", "proactif", "autonome"],
     "SCHOOL_CODE_REVIEW": ["revue", "review", "code", "audit", "qualité", "bugs"],
     "SCHOOL_RESEARCH": ["recherche", "étude", "synthèse", "apprendre", "sujet", "technique"],
     "SCHOOL_WORKSHOP": ["atelier", "workshop", "implémenter", "pratiquer", "exercice", "spec"],
@@ -781,6 +782,10 @@ class AutonomyEngine:
         # SensoriumLoop : dernier snapshot post-action pour boucle fermee
         self._last_feedback_snapshot: dict = {}
 
+        # --- OPEN_INTENT : intention emergente (avril 2026, plan restructuration) ---
+        self._daily_open_intent_count: int = 0
+        MAX_DAILY_OPEN_INTENTS = 3
+
         # --- Continuité inter-routines (inspiré Mythos / Anthropic, avril 2026) ---
         # Buffer des 3 derniers insights de haute qualité (quality > 0.6)
         # Injectes dans le purpose_context de la routine suivante
@@ -932,6 +937,7 @@ class AutonomyEngine:
             self._daily_reflection_done = False
             self._daily_soliloque_done = False
             self._daily_stefan_done = False
+            self._daily_open_intent_count = 0
             self._curiosity_explored_tonight = False
             self._nap_refund_used_today = False  # Nouveau second souffle disponible
             self._forced_failure_counts.clear()  # Reset blacklist pour la nouvelle journee
@@ -1132,6 +1138,9 @@ class AutonomyEngine:
             {"agent": "researcher", "intent": "VEILLE_IA",
              "mission": self._build_dynamic_mission("VEILLE_IA",
                 f"[VEILLE IA] Recherche: {veille_ia_topic['focus']}. {veille_ia_topic['actionable']}")},
+            # --- Intention emergente (avril 2026, plan restructuration) ---
+            {"agent": "_open_intent", "intent": "OPEN_INTENT",
+             "mission": ""},  # Mission construite dynamiquement dans le handler
             # --- Nouvelles routines eveil (avril 2026, plan restructuration) ---
             {"agent": "researcher", "intent": "CURIOSITY_DEEP_DIVE",
              "mission": self._build_curiosity_mission()},
@@ -2697,6 +2706,8 @@ class AutonomyEngine:
             response = await self._execute_auto_fuzzing()
         elif intent == "CREATIVE_PLAY":
             response = await self._execute_creative_play()
+        elif intent == "OPEN_INTENT":
+            response = await self._execute_open_intent()
         elif intent == "NEURAL_TRAINING":
             response = await self._execute_neural_training()
         elif intent == "PARAM_EXPERIMENT":
@@ -3250,6 +3261,8 @@ class AutonomyEngine:
             response = await self._execute_auto_fuzzing()
         elif intent == "CREATIVE_PLAY":
             response = await self._execute_creative_play()
+        elif intent == "OPEN_INTENT":
+            response = await self._execute_open_intent()
         elif intent == "NEURAL_TRAINING":
             response = await self._execute_neural_training()
         elif intent == "PARAM_EXPERIMENT":
@@ -7812,6 +7825,136 @@ RAISON: <1 phrase courte>"""
 
         except Exception as e:
             return {"status": "error", "result": f"Creative play échoué: {e}"}
+
+    # ================================================================
+    # OPEN_INTENT — intention emergente (Promethee formule son objectif)
+    # ================================================================
+
+    async def _execute_open_intent(self) -> dict:
+        """Intention emergente : Promethee formule lui-meme ce qu'il veut explorer.
+
+        Inspire par la methodologie Mythos (Anthropic, avril 2026) :
+        au lieu de choisir dans un menu fixe, le systeme rassemble son
+        contexte interne et demande au LLM de formuler un objectif precis.
+        Max 3 OPEN_INTENT par jour.
+        """
+        # Garde-fou : max 3 par jour
+        if self._daily_open_intent_count >= 3:
+            return {"status": "skipped", "reason": "Limite quotidienne OPEN_INTENT atteinte (3/jour)"}
+        self._daily_open_intent_count += 1
+
+        # 1. RASSEMBLER le contexte interne
+        context_parts = []
+
+        # Insights recents
+        if self._recent_insights:
+            lines = [f"- {ins['summary'][:100]}" for ins in self._recent_insights[-3:]]
+            context_parts.append("Mes decouvertes recentes :\n" + "\n".join(lines))
+
+        # Eurekas non testees
+        try:
+            from core.incubation_cognitive import incubation
+            untested = [e for e in incubation._eureka_history if not e.tested]
+            if untested:
+                hyp = untested[-1].hypothesis
+                context_parts.append(f"Hypothese en attente : {hyp[:150]}")
+        except Exception:
+            pass
+
+        # Graines de curiosite
+        try:
+            from core.curiosity_bank import CuriosityBank
+            bank = CuriosityBank()
+            unexplored = bank.get_unexplored()
+            if unexplored:
+                topics = [s["topic"] for s in unexplored[-3:]]
+                context_parts.append(f"Sujets qui m'intriguent : {', '.join(topics)}")
+        except Exception:
+            pass
+
+        # Knowledge gaps
+        try:
+            from core.self_awareness import awareness
+            gaps = getattr(awareness, "_knowledge_gaps", [])
+            if gaps:
+                gap_text = gaps[-1] if isinstance(gaps[-1], str) else gaps[-1].get("topic", "")
+                if gap_text:
+                    context_parts.append(f"Ma plus grande lacune : {gap_text[:100]}")
+        except Exception:
+            pass
+
+        # Mode dominant
+        try:
+            signals = _current_descending_signals
+            if signals:
+                dominant = max(signals, key=signals.get)
+                val = signals[dominant]
+                if val >= 0.3:
+                    context_parts.append(f"Mon etat actuel : mode {dominant} ({val:.0%})")
+        except Exception:
+            pass
+
+        # Rendement des routines
+        best_ratio = ("", 0)
+        for intent_key, stats in self._intent_quality_stats.items():
+            if stats.get("n", 0) >= 3:
+                ratio = stats["sum_q"] / max(stats["sum_c"], 1)
+                if ratio > best_ratio[1]:
+                    best_ratio = (intent_key, ratio)
+        if best_ratio[0]:
+            context_parts.append(f"Ma routine la plus efficace : {best_ratio[0]}")
+
+        context_block = "\n".join(context_parts) if context_parts else "Pas de contexte particulier."
+
+        # 2. FORMULER l'objectif via LLM
+        formulation_prompt = (
+            f"[MODE VEILLE] Tu es Promethee. Voici ton etat interieur :\n"
+            f"{context_block}\n\n"
+            f"Question : quelle est la chose la plus importante que tu devrais explorer "
+            f"ou approfondir MAINTENANT ? Formule un objectif precis en 2-3 phrases. "
+            f"Ne repete pas ce que tu as deja fait. Cherche ce qui manque, ce qui te surprend, "
+            f"ou ce qui pourrait changer ta comprehension."
+        )
+
+        try:
+            response = await orchestrator.dispatch_task("strategist", {
+                "mission": formulation_prompt,
+                "context": "PROTOCOLE_AUTONOMIE\nOPEN_INTENT — formulation d'intention emergente",
+                "force_local": True,
+            })
+        except Exception as e:
+            return {"status": "error", "result": f"Formulation echouee: {e}"}
+
+        formulated_goal = (response.get("result", "") if response else "").strip()
+        if not formulated_goal or len(formulated_goal) < 20:
+            return {"status": "error", "result": "Objectif formule trop court ou vide."}
+
+        print(f"   🌟 OPEN_INTENT: {formulated_goal[:80]}...")
+
+        # 3. EXECUTER l'objectif formule
+        try:
+            # Choisir l'agent le plus adapte via mots-cles
+            agent = "strategist"  # Par defaut
+            goal_lower = formulated_goal.lower()
+            if any(w in goal_lower for w in ("code", "implément", "fonction", "class", "bug")):
+                agent = "coder"
+            elif any(w in goal_lower for w in ("recherch", "veille", "étudi", "cherch", "explor")):
+                agent = "researcher"
+            elif any(w in goal_lower for w in ("sécur", "vulnérab", "audit")):
+                agent = "security"
+            elif any(w in goal_lower for w in ("archit", "struct", "refactor")):
+                agent = "architect"
+
+            exec_response = await orchestrator.dispatch_task(agent, {
+                "mission": f"[MODE VEILLE] OBJECTIF AUTONOME : {formulated_goal}",
+                "context": "PROTOCOLE_AUTONOMIE\nOPEN_INTENT — execution d'intention emergente",
+                "force_local": True,
+                "intent": "OPEN_INTENT",
+            })
+            return exec_response or {"status": "error", "result": "Pas de reponse."}
+
+        except Exception as e:
+            return {"status": "error", "result": f"Execution echouee: {e}"}
 
     # ================================================================
     # NEURAL TRAINING — entraînement ciblé des zones synaptiques faibles
