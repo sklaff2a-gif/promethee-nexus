@@ -960,6 +960,58 @@ class AutonomyEngine:
             self.recent_context.append(mission[:50])
             if len(self.recent_context) > 5: self.recent_context.pop(0)
 
+    def _build_dynamic_mission(self, intent: str, base_mission: str = "") -> str:
+        """Construit une mission enrichie par l'etat cerebral courant.
+
+        Inspire par la methodologie Mythos (Anthropic, avril 2026) :
+        au lieu de missions statiques, le contexte vivant est injecte
+        dans le prompt pour que chaque routine sache ou elle s'inscrit.
+        """
+        parts = []
+        if base_mission:
+            parts.append(base_mission)
+
+        # Insights recents — continuité Mythos
+        if self._recent_insights:
+            recent = self._recent_insights[-2:]  # Les 2 plus recents
+            lines = [f"  - {ins['summary'][:100]}" for ins in recent]
+            parts.append("Tu as recemment decouvert :\n" + "\n".join(lines))
+
+        # Hypothese eureka en attente
+        if self._pending_eureka_context and intent in ("FREE_EXPLORATION", "CURIOSITY_DEEP_DIVE", "CREATIVE_PLAY"):
+            parts.append(f"Hypothese a tester : {self._pending_eureka_context[:200]}")
+
+        # Knowledge gaps — lacunes identifiees
+        try:
+            from core.self_awareness import awareness
+            gaps = getattr(awareness, "_knowledge_gaps", [])
+            if gaps and intent in ("VEILLE_SILENCIEUSE", "VEILLE_IA", "SCHOOL_RESEARCH", "SELF_ANALYSIS"):
+                top_gap = gaps[-1] if isinstance(gaps[-1], str) else gaps[-1].get("topic", "")
+                if top_gap:
+                    parts.append(f"Lacune identifiee : {top_gap[:100]}")
+        except Exception:
+            pass
+
+        # Mode dominant — coloration cerebrale
+        try:
+            signals = _current_descending_signals
+            if signals:
+                dominant = max(signals, key=signals.get)
+                val = signals[dominant]
+                if val >= 0.5:
+                    parts.append(f"Ton etat actuel : mode {dominant.upper()} ({val:.0%}).")
+        except Exception:
+            pass
+
+        # Rendement — si cette routine a un mauvais ratio, le signaler
+        stats = self._intent_quality_stats.get(intent)
+        if stats and stats.get("n", 0) >= 5:
+            avg_q = stats["sum_q"] / max(stats["n"], 1)
+            if avg_q < 0.4:
+                parts.append("Attention : cette routine a un rendement faible recemment. Sois plus exigeant dans ta reponse.")
+
+        return " ".join(parts) if parts else base_mission
+
     def _get_routines(self) -> list:
         # Topic utilisateur prioritaire pour la veille
         user_topic = None
@@ -980,23 +1032,34 @@ class AutonomyEngine:
         veille_ia_topic = VEILLE_IA_TOPICS[veille_ia_index]
 
         return [
-            {"agent": "evolution", "intent": "EXPANSION_CODE", "mission": "[MODE VEILLE] Croise les connaissances internes. Decouvre des patterns et connexions entre domaines."},
+            {"agent": "evolution", "intent": "EXPANSION_CODE",
+             "mission": self._build_dynamic_mission("EXPANSION_CODE",
+                "[MODE VEILLE] Croise les connaissances internes. Decouvre des patterns et connexions entre domaines.")},
             {"agent": "evolution", "intent": "EXPANSION_CATALOG", "mission": "[MODE VEILLE] [CATALOG] Selectionne une spec du catalogue et tente de l'implementer."},
             {"agent": "architect", "intent": "AUDIT_STRUCTURE", "mission": "Vérifie qu'aucun fichier temporaire (.tmp, .log) ne traîne à la racine."},
-            {"agent": "researcher", "intent": "VEILLE_SILENCIEUSE", "mission": veille_mission},
+            {"agent": "researcher", "intent": "VEILLE_SILENCIEUSE",
+             "mission": self._build_dynamic_mission("VEILLE_SILENCIEUSE", veille_mission)},
             {"agent": "researcher", "intent": "DROPZONE_SCAN", "mission": "dropzone: Scanne la dropzone pour de nouveaux fichiers."},
             {"agent": "_council", "intent": "COUNCIL_DEBATE", "mission": "Débat autonome entre agents."},
             {"agent": "security", "intent": "SECURITY_AUDIT", "mission": "Audite un module aléatoire du projet pour des vulnérabilités (injection, eval, subprocess, fichiers non sanitisés)."},
             {"agent": "_memory_cleanup", "intent": "MEMORY_CLEANUP", "mission": "Nettoie la mémoire RAG ancienne et les doublons."},
             {"agent": "_memory_consolidation", "intent": "MEMORY_CONSOLIDATION", "mission": "Consolide les mémoires récentes en synthèses thématiques."},
-            {"agent": "_soliloque", "intent": "SOLILOQUE_INTERNE", "mission": "Engage un dialogue introspectif avec le compagnon intérieur."},
+            {"agent": "_soliloque", "intent": "SOLILOQUE_INTERNE",
+             "mission": self._build_dynamic_mission("SOLILOQUE_INTERNE",
+                "Engage un dialogue introspectif avec le compagnon intérieur.")},
             {"agent": "vision", "intent": "ROADMAP_RESEARCH", "mission": "Recherche et analyse des sujets pour le prochain module de la roadmap."},
             {"agent": "vision", "intent": "ROADMAP_SPEC", "mission": "Genere des specifications structurees pour un module en cours de recherche."},
             {"agent": "_self_inspect", "intent": "SELF_INSPECT", "mission": "Explore ton propre code source sur GitHub pour mieux te comprendre."},
-            {"agent": "_self_analysis", "intent": "SELF_ANALYSIS", "mission": "Auto-analyse : diagnostique tes routines, organes et contenus recents. Detecte les problemes et propose des solutions."},
+            {"agent": "_self_analysis", "intent": "SELF_ANALYSIS",
+             "mission": self._build_dynamic_mission("SELF_ANALYSIS",
+                "Auto-analyse : diagnostique tes routines, organes et contenus recents. Detecte les problemes et propose des solutions.")},
             {"agent": "_auto_fuzzing", "intent": "AUTO_FUZZING", "mission": "Fuzz-test une fonction aléatoire du projet pour trouver des bugs cachés."},
-            {"agent": "_creative_play", "intent": "CREATIVE_PLAY", "mission": "Association libre : croise deux concepts éloignés pour découvrir des connexions inattendues."},
-            {"agent": "researcher", "intent": "VEILLE_IA", "mission": f"[VEILLE IA] Recherche: {veille_ia_topic['focus']}. {veille_ia_topic['actionable']}"},
+            {"agent": "_creative_play", "intent": "CREATIVE_PLAY",
+             "mission": self._build_dynamic_mission("CREATIVE_PLAY",
+                "Croise deux concepts eloignes pour decouvrir des connexions inattendues.")},
+            {"agent": "researcher", "intent": "VEILLE_IA",
+             "mission": self._build_dynamic_mission("VEILLE_IA",
+                f"[VEILLE IA] Recherche: {veille_ia_topic['focus']}. {veille_ia_topic['actionable']}")},
             # --- Emploi du temps scolaire ---
             {"agent": "_school_class", "intent": "SCHOOL_CODE_REVIEW", "mission": ""},
             {"agent": "_school_class", "intent": "SCHOOL_RESEARCH", "mission": ""},
@@ -1006,7 +1069,9 @@ class AutonomyEngine:
             {"agent": "_school_class", "intent": "SCHOOL_FREE_TIME", "mission": ""},
             {"agent": "strategist", "intent": "NEURAL_TRAINING", "mission": "Entraînement neuronal ciblé"},
             {"agent": "_param_experiment", "intent": "PARAM_EXPERIMENT", "mission": "Expérimentation autonome: varier un paramètre, observer, comparer, garder ou rollback."},
-            {"agent": "_evening_reflection", "intent": "EVENING_REFLECTION", "mission": "Introspection vesperale : relire les moments forts de la journee et identifier les questions ouvertes."},
+            {"agent": "_evening_reflection", "intent": "EVENING_REFLECTION",
+             "mission": self._build_dynamic_mission("EVENING_REFLECTION",
+                "Introspection vesperale : relire les moments forts de la journee et identifier les questions ouvertes.")},
             {"agent": "_coffee_break", "intent": "COFFEE_BREAK", "mission": "Pause café avec Alfred — conversation amicale et décontractée."},
             {"agent": "_stefan_confrontation", "intent": "STEFAN_CONFRONTATION", "mission": "Confrontation avec Stefan — une question que Prométhée a évitée."},
         ]

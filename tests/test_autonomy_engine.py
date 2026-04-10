@@ -1199,6 +1199,10 @@ class TestNewRoutines:
         self.engine.kill_switch = False
         self.engine.last_routine_time = 0
         self.engine._state_persistence = MagicMock()
+        # Attributs Mythos/dynamiques requis par _get_routines → _build_dynamic_mission
+        self.engine._recent_insights = []
+        self.engine._pending_eureka_context = ""
+        self.engine._intent_quality_stats = {}
 
     def test_new_routines_in_list(self):
         """SECURITY_AUDIT et MEMORY_CLEANUP existent. REFACTOR_RANDOM retiré (nettoyage avril 2026)."""
@@ -3043,6 +3047,10 @@ class TestVeilleIA:
         engine.recent_context = []
         engine.last_health_check = 0
         engine.error_streak = 0
+        # Attributs Mythos/dynamiques
+        engine._recent_insights = []
+        engine._pending_eureka_context = ""
+        engine._intent_quality_stats = {}
         return engine
 
     def test_veille_ia_in_routines(self):
@@ -3595,3 +3603,97 @@ class TestCuriosityLinkback:
         assert bank.seeds[0]["explored"] is True
         assert "result" not in bank.seeds[0]
         CuriosityBank.reset_singleton()
+
+
+# ============================================================
+# Tests Étape 2 — Missions dynamiques
+# ============================================================
+
+class TestDynamicMissions:
+    """Verifie que _build_dynamic_mission enrichit les missions avec le contexte vivant."""
+
+    def _make_engine(self):
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine._recent_insights = []
+        engine._pending_eureka_context = ""
+        engine._intent_quality_stats = {}
+        engine._forced_next_intent = ""
+        engine.routine_history = []
+        engine.total_routines_executed = 0
+        return engine
+
+    def setup_method(self):
+        import core.autonomy_engine as mod
+        mod._current_descending_signals = {}
+
+    def test_base_mission_preserved(self):
+        """Sans contexte, la mission de base est retournée intacte."""
+        engine = self._make_engine()
+        result = engine._build_dynamic_mission("SELF_ANALYSIS", "Diagnostique tes routines.")
+        assert "Diagnostique tes routines." in result
+
+    def test_insights_injected(self):
+        """Les insights récents sont injectés dans la mission."""
+        engine = self._make_engine()
+        engine._recent_insights = [
+            {"intent": "VEILLE", "summary": "IIT mesure la conscience via Phi", "quality": 0.9, "ts": 1000},
+        ]
+        result = engine._build_dynamic_mission("SELF_ANALYSIS", "Diagnostique.")
+        assert "recemment decouvert" in result
+        assert "IIT" in result
+
+    def test_eureka_injected_for_exploration(self):
+        """L'hypothèse eureka est injectée pour FREE_EXPLORATION."""
+        engine = self._make_engine()
+        engine._pending_eureka_context = "Le rythme cardiaque module la plasticite synaptique"
+        result = engine._build_dynamic_mission("FREE_EXPLORATION", "Explore.")
+        assert "Hypothese a tester" in result
+        assert "cardiaque" in result
+
+    def test_eureka_not_injected_for_audit(self):
+        """L'hypothèse eureka n'est PAS injectée pour AUDIT_STRUCTURE."""
+        engine = self._make_engine()
+        engine._pending_eureka_context = "Hypothese test"
+        result = engine._build_dynamic_mission("AUDIT_STRUCTURE", "Verifie les fichiers.")
+        assert "Hypothese" not in result
+
+    def test_dominant_mode_injected(self):
+        """Le mode dominant est injecté quand un signal est fort."""
+        import core.autonomy_engine as mod
+        mod._current_descending_signals = {"creation": 0.9, "urgence": 0.1}
+        engine = self._make_engine()
+        result = engine._build_dynamic_mission("SOLILOQUE_INTERNE", "Dialogue interieur.")
+        assert "CREATION" in result
+
+    def test_low_quality_warning(self):
+        """Un avertissement est injecté si le rendement est faible."""
+        engine = self._make_engine()
+        engine._intent_quality_stats = {
+            "VEILLE_SILENCIEUSE": {"sum_q": 1.5, "sum_c": 10, "n": 5},  # avg 0.3
+        }
+        result = engine._build_dynamic_mission("VEILLE_SILENCIEUSE", "Recherche.")
+        assert "rendement faible" in result
+
+    def test_no_warning_for_good_quality(self):
+        """Pas d'avertissement si le rendement est bon."""
+        engine = self._make_engine()
+        engine._intent_quality_stats = {
+            "SELF_ANALYSIS": {"sum_q": 4.0, "sum_c": 15, "n": 5},  # avg 0.8
+        }
+        result = engine._build_dynamic_mission("SELF_ANALYSIS", "Diagnostique.")
+        assert "rendement" not in result
+
+    def test_routines_use_dynamic_missions(self):
+        """Les routines clés utilisent _build_dynamic_mission."""
+        engine = self._make_engine()
+        engine._recent_insights = [
+            {"intent": "TEST", "summary": "Decouverte marqueur dynamique XYZ", "quality": 0.8, "ts": 1000},
+        ]
+        routines = engine._get_routines()
+        # Vérifier que les routines dynamiques contiennent le marqueur
+        dynamic_intents = {"EXPANSION_CODE", "VEILLE_SILENCIEUSE", "SOLILOQUE_INTERNE",
+                          "SELF_ANALYSIS", "CREATIVE_PLAY", "VEILLE_IA", "EVENING_REFLECTION"}
+        for r in routines:
+            if r["intent"] in dynamic_intents:
+                assert "Decouverte marqueur dynamique XYZ" in r["mission"], \
+                    f"{r['intent']} n'a pas de mission dynamique"
