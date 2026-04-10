@@ -666,6 +666,56 @@ function updateCoffeeModeButton() {
     }
 }
 
+// --- Mode Sauna (nettoyage neural) ---
+let saunaModeActive = false;
+
+function toggleSaunaMode() {
+    if (saunaModeActive) {
+        addLog('SYSTEM', 'Sauna deja en cours — patience', 'sys');
+        return;
+    }
+    const btn = document.getElementById('sauna-button');
+    if (btn) btn.textContent = 'EN COURS...';
+    fetch('/api/tissue/sauna', {
+        method: 'POST',
+        headers: authHeaders(),
+    }).then(r => r.json()).then(data => {
+        if (data.status === 'already_active') {
+            addLog('SYSTEM', 'Sauna deja actif', 'sys');
+            return;
+        }
+        const waste = data.waste_cleaned || 0;
+        const energy = data.energy_change || 0;
+        const dur = (data.duration_s || 0).toFixed(1);
+        addLog('SYSTEM', `SAUNA TERMINE — ${waste} dechets, energie ${energy >= 0 ? '+' : ''}${energy.toFixed(0)}, ${dur}s`, 'success');
+        updateSaunaButton(false);
+    }).catch(err => {
+        addLog('API', 'Erreur sauna: ' + err, 'err');
+        updateSaunaButton(false);
+    });
+    saunaModeActive = true;
+    updateSaunaButton(true);
+}
+
+function updateSaunaButton(active) {
+    saunaModeActive = !!active;
+    const btn = document.getElementById('sauna-button');
+    const banner = document.getElementById('sauna-banner');
+    if (!btn) return;
+    if (saunaModeActive) {
+        btn.textContent = 'SAUNA...';
+        btn.className = 'border border-orange-400 text-white px-3 py-0 text-[10px] font-bold transition h-6 shadow-[0_0_8px_rgba(255,136,68,0.6)]';
+        btn.style.background = '#6b3000';
+        if (banner) banner.classList.remove('hidden');
+    } else {
+        btn.textContent = 'SAUNA';
+        btn.className = 'btn-bio';
+        btn.style.color = '#ff8844';
+        btn.style.background = '';
+        if (banner) banner.classList.add('hidden');
+    }
+}
+
 // Chart Init (Psyché - Radar) — 6 dimensions dynamiques
 const psycheLabels = ['Curiosite', 'Creativite', 'Audace', 'Savoir', 'Survie', 'Respect'];
 const ctx = document.getElementById('psycheChart').getContext('2d');
@@ -913,6 +963,9 @@ function syncAutonomyStatus(data) {
     if (data && typeof data.is_autoresearch === 'boolean') {
         autoresearchActive = data.is_autoresearch;
         updateAutoresearchButton(data.autoresearch_info);
+    }
+    if (data && typeof data.is_sauna_active === 'boolean') {
+        updateSaunaButton(data.is_sauna_active);
     }
 }
 fetch('/api/autonomy/status').then(r => r.json()).then(syncAutonomyStatus).catch(() => {});

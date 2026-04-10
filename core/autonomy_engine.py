@@ -1732,6 +1732,14 @@ class AutonomyEngine:
 
         return breakdown
 
+    def _get_sauna_active(self) -> bool:
+        """Verifie si le mode sauna est actif."""
+        try:
+            from core.sauna_mode import sauna
+            return sauna.active
+        except Exception:
+            return False
+
     def get_status(self) -> dict:
         # Signaux descendants pour le status API
         try:
@@ -1745,6 +1753,7 @@ class AutonomyEngine:
             "is_napping": self.is_napping,
             "is_coffee_mode": getattr(self, "is_coffee_mode", False),
             "_coffee_started_at": getattr(self, "_coffee_started_at", 0.0),
+            "is_sauna_active": self._get_sauna_active(),
             "is_autoresearch": getattr(self, "is_autoresearch", False),
             "autoresearch_info": {
                 "experiments": getattr(self, "_autoresearch_experiments", 0),
