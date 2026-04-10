@@ -133,11 +133,16 @@ class TestSubjectRotation:
 
     def test_research_returns_topic(self, isolate_schedule):
         subject = isolate_schedule.get_subject_for_slot(SLOT_RESEARCH)
-        assert subject["topic"] in RESEARCH_TOPICS
+        # Le topic peut etre un sujet RESEARCH_TOPICS (fallback) ou une lacune adaptative
+        is_classic = subject["topic"] in RESEARCH_TOPICS
+        is_adaptive = subject["topic"].startswith("Recherche approfondie (lacune")
+        assert is_classic or is_adaptive
 
     def test_creation_returns_prompt(self, isolate_schedule):
         subject = isolate_schedule.get_subject_for_slot(SLOT_CREATION)
-        assert subject["topic"] in CREATION_PROMPTS
+        # Le topic peut etre enrichi avec des themes THOUGHT_STREAM
+        base_prompt = subject["topic"].split(" Inspire-toi")[0]
+        assert base_prompt in CREATION_PROMPTS
 
     def test_different_days_different_subjects(self, isolate_schedule):
         with patch("core.school_schedule.date") as mock_date:

@@ -1012,6 +1012,24 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # Bilan rendement dans EVENING_REFLECTION
+        if intent == "EVENING_REFLECTION" and self._intent_quality_stats:
+            sorted_stats = sorted(
+                [(k, v["sum_q"] / max(v["n"], 1), v["n"])
+                 for k, v in self._intent_quality_stats.items() if v.get("n", 0) >= 3],
+                key=lambda x: x[1], reverse=True,
+            )
+            if len(sorted_stats) >= 2:
+                best3 = sorted_stats[:3]
+                worst3 = sorted_stats[-3:]
+                best_lines = [f"  + {k} (q={q:.2f}, n={n})" for k, q, n in best3]
+                worst_lines = [f"  - {k} (q={q:.2f}, n={n})" for k, q, n in worst3]
+                parts.append(
+                    "Bilan rendement des routines :\n"
+                    + "Meilleures :\n" + "\n".join(best_lines) + "\n"
+                    + "Moins performantes :\n" + "\n".join(worst_lines)
+                )
+
         # Rendement — si cette routine a un mauvais ratio, le signaler
         stats = self._intent_quality_stats.get(intent)
         if stats and stats.get("n", 0) >= 5:
@@ -2427,6 +2445,26 @@ class AutonomyEngine:
                 logger.info(f"[SCHOOL] Creneau actif: {current_slot}, bonus brut applique")
         except Exception:
             pass
+
+        # --- Feedback rendement (Couche 26bis, avril 2026) ---
+        # Auto-penalite pour les routines a faible rendement (ratio q/cout < 0.05)
+        # Auto-bonus pour les routines a haut rendement (ratio > 0.15)
+        # Necessite 10+ executions pour eviter les faux signaux.
+        if self._intent_quality_stats:
+            yield_effects = []
+            for i, (routine, s) in enumerate(scored):
+                intent_key = routine["intent"]
+                stats = self._intent_quality_stats.get(intent_key)
+                if stats and stats.get("n", 0) >= 10:
+                    ratio = stats["sum_q"] / max(stats["sum_c"], 1)
+                    if ratio < 0.05:
+                        scored[i] = (routine, s - 2.0)
+                        yield_effects.append(f"{intent_key}(-2.0, ratio={ratio:.3f})")
+                    elif ratio > 0.15:
+                        scored[i] = (routine, s + 1.0)
+                        yield_effects.append(f"{intent_key}(+1.0, ratio={ratio:.3f})")
+            if yield_effects:
+                print(f"   📊 RENDEMENT: {', '.join(yield_effects[:5])}")
 
         # --- Auto-analyse quotidienne (Couche 26b) ---
         # Garantir 1 SELF_ANALYSIS par jour : forcer via _forced_next_intent

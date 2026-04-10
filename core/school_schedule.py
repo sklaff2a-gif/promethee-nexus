@@ -257,7 +257,20 @@ class SchoolSchedule:
                 "target_file": target,
             }
         elif slot == SLOT_RESEARCH:
-            topic = RESEARCH_TOPICS[h % len(RESEARCH_TOPICS)]
+            # Adaptatif : consulter les lacunes identifiees par self_awareness
+            topic = None
+            try:
+                from core.self_awareness import awareness
+                gaps = getattr(awareness, "_knowledge_gaps", [])
+                if gaps:
+                    gap = gaps[-1]
+                    gap_text = gap if isinstance(gap, str) else gap.get("topic", "")
+                    if gap_text:
+                        topic = f"Recherche approfondie (lacune identifiee) : {gap_text}"
+            except Exception:
+                pass
+            if not topic:
+                topic = RESEARCH_TOPICS[h % len(RESEARCH_TOPICS)]
             return {"topic": topic, "target_file": ""}
         elif slot == SLOT_WORKSHOP:
             # 1 session Playground par nuit (le premier WORKSHOP)
@@ -292,9 +305,37 @@ class SchoolSchedule:
             }
         elif slot == SLOT_CREATION:
             prompt = CREATION_PROMPTS[h % len(CREATION_PROMPTS)]
+            # Enrichir avec les themes recents du THOUGHT_STREAM
+            try:
+                from core.inner_voice import voice
+                themes = getattr(voice, "_recent_themes", [])
+                if themes:
+                    theme_text = ", ".join(themes[-3:])
+                    prompt += f" Inspire-toi de tes reflexions recentes sur : {theme_text}."
+            except Exception:
+                pass
             return {"topic": prompt, "target_file": ""}
         elif slot == SLOT_BULLETIN:
-            return {"topic": "Bulletin du jour : bilan et auto-evaluation", "target_file": ""}
+            # Bulletin enrichi avec bilan qualite/cout
+            bulletin_topic = "Bulletin du jour : bilan et auto-evaluation."
+            try:
+                from core.autonomy_engine import autonomy
+                stats = getattr(autonomy, "_intent_quality_stats", {})
+                if stats:
+                    sorted_stats = sorted(
+                        [(k, v["sum_q"] / max(v["n"], 1)) for k, v in stats.items() if v.get("n", 0) >= 3],
+                        key=lambda x: x[1], reverse=True,
+                    )
+                    if sorted_stats:
+                        best = sorted_stats[0]
+                        worst = sorted_stats[-1]
+                        bulletin_topic += (
+                            f" Meilleure routine : {best[0]} (q={best[1]:.2f})."
+                            f" Moins performante : {worst[0]} (q={worst[1]:.2f})."
+                        )
+            except Exception:
+                pass
+            return {"topic": bulletin_topic, "target_file": ""}
         elif slot == SLOT_FREE_TIME:
             return {"topic": "Temps libre : choisis ce que tu veux faire", "target_file": ""}
 

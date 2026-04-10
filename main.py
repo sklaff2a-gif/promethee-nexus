@@ -1050,6 +1050,20 @@ async def tissue_sauna_status():
     from core.sauna_mode import sauna
     return sauna.get_status()
 
+@app.get("/api/routine-stats")
+async def routine_stats():
+    """Retourne le ratio qualite/cout par intent (feedback loop)."""
+    stats = getattr(autonomy, "_intent_quality_stats", {})
+    result = {}
+    for intent, s in stats.items():
+        n = s.get("n", 0)
+        if n > 0:
+            avg_q = round(s["sum_q"] / n, 3)
+            avg_c = round(s["sum_c"] / n, 1)
+            ratio = round(avg_q / max(avg_c, 1), 3)
+            result[intent] = {"avg_quality": avg_q, "avg_cost": avg_c, "ratio": ratio, "n": n}
+    return {"stats": result, "total_intents": len(result)}
+
 @app.get("/api/soliloque/status")
 async def soliloque_status():
     """Retourne l'état du moteur de soliloque."""
