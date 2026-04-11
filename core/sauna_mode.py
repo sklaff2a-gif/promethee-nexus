@@ -26,6 +26,7 @@ SAUNA_DURATION = 600  # 10 minutes
 WASTE_THRESHOLD = 200  # Declenchement auto si dechets > 200
 ENERGY_LOW_THRESHOLD = 80  # Declenchement auto si energie moyenne < 80
 SIGNAL_EQUILIBRIUM = 0.5  # Cible pour les signaux cognitifs
+SAUNA_AUTO_COOLDOWN = 1800  # 30 min entre deux auto-triggers (evite boucle infinie)
 
 
 class SaunaMode:
@@ -34,6 +35,7 @@ class SaunaMode:
     def __init__(self):
         self.active = False
         self.started_at = 0.0
+        self.last_auto_trigger = 0.0
         self.stats = {}
 
     async def start(self) -> Dict[str, Any]:
@@ -44,6 +46,7 @@ class SaunaMode:
 
         self.active = True
         self.started_at = time.time()
+        self.last_auto_trigger = time.time()
 
         # Capturer l'etat avant
         before = self._capture_state()
@@ -181,6 +184,8 @@ class SaunaMode:
 
     def should_auto_trigger(self) -> bool:
         """Verifie si le sauna devrait se declencher automatiquement."""
+        if time.time() - self.last_auto_trigger < SAUNA_AUTO_COOLDOWN:
+            return False
         state = self._capture_state()
         if not state:
             return False
