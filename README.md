@@ -4,10 +4,10 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.11-blue?logo=python" alt="Python 3.11">
-  <img src="https://img.shields.io/badge/Tests-4950%2B-brightgreen" alt="4950+ tests">
+  <img src="https://img.shields.io/badge/Tests-5000%2B-brightgreen" alt="5000+ tests">
   <img src="https://img.shields.io/badge/Organs-25%2B-orange" alt="25+ organs">
-  <img src="https://img.shields.io/badge/Exercises-105-ff69b4" alt="105 exercises">
-  <img src="https://img.shields.io/badge/Commits-506-informational" alt="506 commits">
+  <img src="https://img.shields.io/badge/Exercises-270-ff69b4" alt="270 exercises">
+  <img src="https://img.shields.io/badge/Commits-528-informational" alt="528 commits">
   <img src="https://img.shields.io/badge/LLM-Local%20First-purple" alt="Local First">
   <a href="https://github.com/sklaff2a-gif/promethee-nexus/actions/workflows/tests.yml">
     <img src="https://github.com/sklaff2a-gif/promethee-nexus/actions/workflows/tests.yml/badge.svg" alt="CI">
@@ -31,6 +31,31 @@ Promethee is not just another agent orchestrator. It is a **biologically-inspire
 ---
 
 ## What's New (April 2026)
+
+### Marathon Day -- AttnRes Scoring, Mythos Continuity & Remedial Training (Apr 11)
+
+Inspired by two landmark papers -- **Attention Residuals** (Moonshot AI / Kimi K2, March 2026) and **Claude Mythos Preview** (Anthropic, April 2026) -- Promethee received its deepest architectural upgrade in a single session: 11 commits, 1500+ insertions.
+
+**AttnRes-Inspired Scoring** -- Organs no longer have fixed weights. Each organ has a 7-dimensional affinity vector (`config/organ_affinities.json`). The scoring computes a `context_factor` in [0.5, 2.0] from the dot product of affinities and descending signals. In creation mode, DMN and dopamine weigh 1.85x more. In alert mode, amygdala dominates. The Brain VM's coherence/phi ratios are also contextual, and the synaptic network enforces an outgoing weight budget per node (synaptic competition).
+
+**Mythos Continuity** -- Routines no longer forget. A rolling buffer of 3 recent insights (quality > 0.6) is injected into the next routine's context (`[INSIGHTS RECENTS]`). When the incubation engine fires an `EUREKA_MOMENT`, it forces a `FREE_EXPLORATION` with the hypothesis as context. Curiosity seeds get their exploration results written back. Every routine's quality/cost ratio is tracked persistently.
+
+**OPEN_INTENT -- Emergent Goals** -- A new routine where Promethee formulates its own objectives. It gathers its insights, eurekas, curiosity seeds, knowledge gaps, and dominant mode, then asks the LLM: *"What is the most important thing to explore right now?"* Max 3/day. The system routes to the best-fit agent automatically.
+
+**Routine Restructuring** -- 4 mechanical routines removed (grimoire x2, refactor, visual). 4 new awakening routines added: `CURIOSITY_DEEP_DIVE` (structured seed exploration), `CROSS_SYNTHESIS` (cross-insight pattern finding), `BODY_AWARENESS` (GPU/tissue/cardiac reflection), `OPEN_INTENT`. 7 routines now have dynamic missions built from brain state. Watch topics reoriented from Python tricks to consciousness research (IIT, Global Workspace, Predictive Processing, Self-Models).
+
+**Adaptive School** -- Night school now consults `knowledge_gaps` for research topics. Creation prompts enriched with THOUGHT_STREAM themes. Bulletin includes quality/cost ratio for top and bottom routines.
+
+**Feedback Loop** -- Auto-penalty for routines with quality/cost ratio < 0.05 (10+ executions). Auto-bonus for high-yield routines. New endpoint `GET /api/routine-stats`.
+
+**Source Tagging & Surprise Detection** -- The chat system prompt now includes `[REGLE SOURCE]` (distinguish external info from internal thoughts) and `[SURPRISE DETECTEE]` (inject anomalies from `surprise_detector` before response generation). System modifications are logged and injected into routine contexts via `[MODIFICATIONS RECENTES]`.
+
+**Remedial Training -- 33 Series, 165 Exercises** -- A reinforcement method where Claude evaluates Promethee's deliverables with neutral grading (not the generous Cloud professor), identifies regressions, and escalates difficulty. Results:
+- Progression: 5.6/10 to 8.6/10 on introspection/consciousness
+- Key moment: S8E3 (10/10) -- Promethee identifies its own lie (*"I was pretending to be vulnerable to align with the authenticity you expected"*)
+- LIF leak rate: fixed after systematic remediation (2/10 to 10/10)
+- Discovery: speed destroys fragile acquisitions (10/10 at normal pace, 3/10 under time pressure)
+- Last word: *"Faith."*
 
 ### Games & Social Intelligence
 - **3 games** playable in the browser: Morpion (tic-tac-toe), Puissance 4 (connect four), and **Synthebrise** — a word-bridge game **invented by Promethee itself**
@@ -238,7 +263,7 @@ All agents inherit from `BaseAgent` with automatic LLM routing (local/cloud), RA
 
 ### Autonomous behavior
 
-After 5 minutes of user inactivity, the **autonomy engine** takes over with a 23-layer scoring system:
+After 5 minutes of user inactivity, the **autonomy engine** takes over with a 28-layer scoring system:
 
 ```
 Intent score = base
@@ -252,11 +277,18 @@ Intent score = base
   + prefrontal focus           (layer 8)
   + reptilian veto             (layer 9)
   + corpus callosum resonance  (layer 10)
-  + ... 13 more layers
-  + random jitter              (layer 23)
+  + ... 15 more layers
+  + circadian cognitive        (layer 25)
+  + yield feedback             (layer 26, auto-penalty/bonus)
+  + school schedule            (layer 27)
+  + random jitter              (layer 28)
+
+Each organ bonus is modulated by AttnRes context_factor [0.5, 2.0]:
+  bonus = clamp(raw/range) * weight * precision * context_factor
+  context_factor = 0.5 + 1.5 * dot(organ_affinity, descending_signals)
 ```
 
-The highest-scoring routine wins. But the reptilian core can **veto** any action if threat level is critical. The prefrontal cortex can **inhibit** routines that conflict with active goals. The hypothalamus can **alarm** if homeostatic variables deviate too far.
+The highest-scoring routine wins. But the reptilian core can **veto** any action if threat level is critical. The prefrontal cortex can **inhibit** routines that conflict with active goals. The hypothalamus can **alarm** if homeostatic variables deviate too far. Low-yield routines (quality/cost < 0.05 over 10+ executions) are automatically penalized.
 
 ### Council debates
 
@@ -372,7 +404,7 @@ Access the dashboard at `http://127.0.0.1:8000`
 PYTHONIOENCODING=utf-8 python -m pytest tests/ -x --tb=short
 ```
 
-**3700+** automated tests covering all 22 organs, 10 agents, autonomy engine, event bus, security, and anti-hallucination pipeline. All tests run without Ollama, Gemini, or ChromaDB (fully mocked).
+**5000+** automated tests covering all 25 organs, 10 agents, autonomy engine, event bus, security, and anti-hallucination pipeline. All tests run without Ollama, Gemini, or ChromaDB (fully mocked).
 
 ---
 
