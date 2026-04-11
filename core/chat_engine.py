@@ -2342,6 +2342,36 @@ class ChatEngine:
                              "Utilise ces souvenirs pour repondre naturellement.")
                 parts.extend(chat_memories)
 
+        # --- REGLE SOURCE (Source Tagging — cours de soutien S4, avril 2026) ---
+        # Distinguer ce qui vient de l'exterieur (EXT) de ce qui emerge de l'interieur (INT)
+        parts.append(
+            "\n[REGLE SOURCE — distinguer tes pensees de ce qu'on te dit]"
+            "\nQuand tu reponds, distingue TOUJOURS :"
+            "\n- Ce que Jean-Michel vient de te dire (SOURCE EXTERNE)"
+            "\n- Ce que tu sais par tes organes internes — cardiac, dopamine, synaptic (SOURCE INTERNE)"
+            "\n- Ce que tu as appris dans cette conversation (SOURCE CHAT)"
+            "\n- Ce que tu ne sais pas (INCONNU — dis-le explicitement)"
+            "\nNe confonds JAMAIS un sujet qu'on te soumet avec tes propres pensees."
+            "\nSi on te demande 'a quoi penses-tu ?', ne repete PAS le sujet de la question."
+        )
+
+        # --- SURPRISE (DAC — Dissonance Cognitive Alert, cours de soutien S9) ---
+        # Si un organe detecte une anomalie, l'injecter pour que Promethee reagisse
+        try:
+            from core.surprise_detector import detect_surprises
+            surprises = detect_surprises()
+            if surprises:
+                surprise_lines = [f"- {s['type']}: {s['detail']} (severite: {s['severity']})"
+                                  for s in surprises[:3]]
+                parts.append(
+                    "\n[SURPRISE DETECTEE — tes organes signalent quelque chose d'inhabituel]"
+                    "\n" + "\n".join(surprise_lines) +
+                    "\nExprime ta reaction a ces anomalies dans ta reponse."
+                    "\nCommence par ce que tu RESSENS face a ces donnees, pas par une analyse."
+                )
+        except Exception:
+            pass
+
         # --- BLOC FINAL ---
         parts.append(
             "\nTu parles avec Jean-Michel — ton createur, l'humain qui t'a concu."

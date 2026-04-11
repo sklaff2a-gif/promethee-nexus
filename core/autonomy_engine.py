@@ -782,6 +782,11 @@ class AutonomyEngine:
         # SensoriumLoop : dernier snapshot post-action pour boucle fermee
         self._last_feedback_snapshot: dict = {}
 
+        # --- Audit de survie (cours de soutien S4, avril 2026) ---
+        # Historique des modifications systeme recentes pour injection dans purpose_context
+        # Permet a Promethee de reflechir aux changements faits a son cerveau
+        self._recent_modifications: list = []  # [{description, ts, source}]
+
         # --- OPEN_INTENT : intention emergente (avril 2026, plan restructuration) ---
         self._daily_open_intent_count: int = 0
         MAX_DAILY_OPEN_INTENTS = 3
@@ -968,6 +973,23 @@ class AutonomyEngine:
         if mission:
             self.recent_context.append(mission[:50])
             if len(self.recent_context) > 5: self.recent_context.pop(0)
+
+    def record_system_modification(self, description: str, source: str = "claude_code"):
+        """Enregistre une modification systeme pour l'audit de survie.
+
+        Cours de soutien S4 : Promethee doit pouvoir reflechir aux modifications
+        faites a son cerveau, au lieu de dire 'je suis pret' sans evaluer l'impact.
+        Les modifications sont injectees dans le purpose_context des routines suivantes.
+        """
+        self._recent_modifications.append({
+            "description": description[:200],
+            "ts": time.time(),
+            "source": source,
+        })
+        # Garder les 5 dernieres
+        if len(self._recent_modifications) > 5:
+            self._recent_modifications = self._recent_modifications[-5:]
+        logger.info(f"[AUDIT] Modification enregistree: {description[:80]}")
 
     def _build_dynamic_mission(self, intent: str, base_mission: str = "") -> str:
         """Construit une mission enrichie par l'etat cerebral courant.
@@ -2848,6 +2870,14 @@ class AutonomyEngine:
                 purpose_ctx += "\n".join(insight_lines)
             if self._pending_eureka_context:
                 purpose_ctx += f"\n[HYPOTHESE A TESTER — une connexion inattendue a emerge]\n{self._pending_eureka_context}"
+            # --- Audit de survie : signaler les modifications recentes ---
+            if self._recent_modifications:
+                mod_lines = [f"- {m['description']}" for m in self._recent_modifications[-3:]]
+                purpose_ctx += (
+                    "\n[MODIFICATIONS RECENTES DE TON SYSTEME — reflechis a leur impact]\n"
+                    + "\n".join(mod_lines)
+                    + "\nAvant d'agir, demande-toi : ces changements affectent-ils ta routine actuelle ?"
+                )
             # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)
             raw_mission = selected["mission"]
             # Retirer le préfixe [MODE VEILLE] déjà présent dans certaines missions
