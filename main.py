@@ -733,18 +733,31 @@ async def autonomy_reset_budget():
 
 @app.post("/api/sieste", dependencies=[Depends(verify_token)])
 async def toggle_nap_mode(request: Request):
-    """Active ou désactive le mode sieste (hibernation 0-GPU)."""
+    """Active ou désactive le mode sieste (hibernation 0-GPU).
+
+    Body params:
+        enabled (bool) : True pour activer, False pour desactiver
+        mode (str)     : "normal" (defaut, cap 2h), "deep" (cap 24h), "hibernation" (cap 7j)
+        duration_hours (float) : duree cible. 0 = comportement classique avec renouvellement.
+    """
     data = await request.json()
     enabled = data.get("enabled", False)
+    mode = data.get("mode", "normal")
+    duration_hours = float(data.get("duration_hours", 0.0))
     if enabled:
-        accepted = await autonomy.enter_nap()
+        accepted = await autonomy.enter_nap(mode=mode, duration_hours=duration_hours)
         if not accepted:
             elapsed = time.time() - autonomy._nap_last_exit if autonomy._nap_last_exit else 0
             remaining = max(0, int(NAP_COOLDOWN - elapsed))
             return {"status": "cooldown", "is_napping": False, "cooldown_remaining": remaining}
     else:
         await autonomy.exit_nap()
-    return {"status": "ok", "is_napping": autonomy.is_napping}
+    return {
+        "status": "ok",
+        "is_napping": autonomy.is_napping,
+        "mode": getattr(autonomy, "_nap_mode", "normal"),
+        "target_duration_hours": getattr(autonomy, "_nap_target_duration", 0.0) / 3600,
+    }
 
 @app.post("/api/coffee-mode")
 async def toggle_coffee_mode(request: Request):

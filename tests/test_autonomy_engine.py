@@ -3963,3 +3963,116 @@ class TestSourceTaggingChat:
         source = inspect.getsource(ChatEngine._build_system_prompt)
         assert "SURPRISE DETECTEE" in source
         assert "detect_surprises" in source
+
+
+# ============================================================
+# Tests Sieste profonde — modes et durees configurables
+# ============================================================
+
+class TestDeepNap:
+    """Verifie les modes de sieste 'deep' et 'hibernation' avec duree configurable."""
+
+    def setup_method(self):
+        AutonomyEngine._instance = None
+
+    def _make_engine(self):
+        engine = AutonomyEngine.__new__(AutonomyEngine)
+        engine.is_napping = False
+        engine._nap_started_at = 0.0
+        engine._nap_tasks_done = []
+        engine._nap_renewals_used = 0
+        engine._nap_last_exit = 0.0
+        engine._nap_mode = "normal"
+        engine._nap_target_duration = 0.0
+        engine.is_coffee_mode = False
+        engine._coffee_started_at = 0.0
+        engine.routine_history = []
+        return engine
+
+    def test_nap_mode_constants(self):
+        """Les constantes de mode sont definies."""
+        from core.autonomy_engine import (
+            NAP_MODE_NORMAL, NAP_MODE_DEEP, NAP_MODE_HIBERNATION, NAP_MODE_CAPS,
+        )
+        assert NAP_MODE_NORMAL == "normal"
+        assert NAP_MODE_DEEP == "deep"
+        assert NAP_MODE_HIBERNATION == "hibernation"
+        assert NAP_MODE_CAPS[NAP_MODE_NORMAL] == 2 * 3600
+        assert NAP_MODE_CAPS[NAP_MODE_DEEP] == 24 * 3600
+        assert NAP_MODE_CAPS[NAP_MODE_HIBERNATION] == 7 * 24 * 3600
+
+    @pytest.mark.asyncio
+    async def test_enter_deep_nap_with_duration(self):
+        """enter_nap accepte mode='deep' et duration_hours=12."""
+        engine = self._make_engine()
+        with patch.object(engine, "_unload_ollama_models", AsyncMock()), \
+             patch.object(engine, "_persist_state"), \
+             patch("core.autonomy_engine.bus.publish", AsyncMock()):
+            accepted = await engine.enter_nap(mode="deep", duration_hours=12)
+        assert accepted is True
+        assert engine.is_napping is True
+        assert engine._nap_mode == "deep"
+        assert engine._nap_target_duration == 12 * 3600
+
+    @pytest.mark.asyncio
+    async def test_deep_nap_capped_at_24h(self):
+        """Une demande de 48h en mode deep est cappee a 24h."""
+        engine = self._make_engine()
+        with patch.object(engine, "_unload_ollama_models", AsyncMock()), \
+             patch.object(engine, "_persist_state"), \
+             patch("core.autonomy_engine.bus.publish", AsyncMock()):
+            await engine.enter_nap(mode="deep", duration_hours=48)
+        assert engine._nap_target_duration == 24 * 3600
+
+    @pytest.mark.asyncio
+    async def test_hibernation_capped_at_7_days(self):
+        """Une demande de 30 jours en hibernation est cappee a 7 jours."""
+        engine = self._make_engine()
+        with patch.object(engine, "_unload_ollama_models", AsyncMock()), \
+             patch.object(engine, "_persist_state"), \
+             patch("core.autonomy_engine.bus.publish", AsyncMock()):
+            await engine.enter_nap(mode="hibernation", duration_hours=24*30)
+        assert engine._nap_target_duration == 7 * 24 * 3600
+
+    @pytest.mark.asyncio
+    async def test_normal_nap_without_duration_default(self):
+        """enter_nap() sans args garde le comportement classique."""
+        engine = self._make_engine()
+        with patch.object(engine, "_unload_ollama_models", AsyncMock()), \
+             patch.object(engine, "_persist_state"), \
+             patch("core.autonomy_engine.bus.publish", AsyncMock()):
+            await engine.enter_nap()
+        assert engine._nap_mode == "normal"
+        assert engine._nap_target_duration == 0.0  # 0 = renouvellement classique
+
+    @pytest.mark.asyncio
+    async def test_invalid_mode_falls_back_to_normal(self):
+        """Un mode inconnu est traite comme 'normal'."""
+        engine = self._make_engine()
+        with patch.object(engine, "_unload_ollama_models", AsyncMock()), \
+             patch.object(engine, "_persist_state"), \
+             patch("core.autonomy_engine.bus.publish", AsyncMock()):
+            await engine.enter_nap(mode="bizarre", duration_hours=1)
+        assert engine._nap_mode == "normal"
+
+    @pytest.mark.asyncio
+    async def test_deep_nap_bypasses_cooldown(self):
+        """Le mode deep bypass le cooldown post-sieste."""
+        engine = self._make_engine()
+        engine._nap_last_exit = time.time() - 60  # 60s — encore en cooldown (300s)
+        with patch.object(engine, "_unload_ollama_models", AsyncMock()), \
+             patch.object(engine, "_persist_state"), \
+             patch("core.autonomy_engine.bus.publish", AsyncMock()):
+            accepted = await engine.enter_nap(mode="deep", duration_hours=1)
+        assert accepted is True
+
+    @pytest.mark.asyncio
+    async def test_normal_nap_respects_cooldown(self):
+        """Le mode normal respecte le cooldown."""
+        engine = self._make_engine()
+        engine._nap_last_exit = time.time() - 60  # encore en cooldown
+        with patch.object(engine, "_unload_ollama_models", AsyncMock()), \
+             patch.object(engine, "_persist_state"), \
+             patch("core.autonomy_engine.bus.publish", AsyncMock()):
+            accepted = await engine.enter_nap(mode="normal")
+        assert accepted is False

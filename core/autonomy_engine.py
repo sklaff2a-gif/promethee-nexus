@@ -265,6 +265,17 @@ NAP_PERIOD_DURATION = 3600    # 60 min par période
 NAP_MAX_RENEWALS = 1          # 1 renouvellement max (= 2h total)
 NAP_COOLDOWN = 300            # 5 min avant de pouvoir re-siester
 
+# Sieste profonde (ajout 2026-04-12) — mode + durée configurable
+# Permet de dedier le hardware a un autre processus (ex: cerveau-mouche)
+NAP_MODE_NORMAL = "normal"          # comportement classique, cap 2h
+NAP_MODE_DEEP = "deep"              # sieste profonde, cap 24h
+NAP_MODE_HIBERNATION = "hibernation"  # coma volontaire, cap 7 jours
+NAP_MODE_CAPS = {
+    NAP_MODE_NORMAL: 2 * 3600,           # 2h
+    NAP_MODE_DEEP: 24 * 3600,            # 24h
+    NAP_MODE_HIBERNATION: 7 * 24 * 3600, # 7 jours
+}
+
 # Mode café : socialisation libre avec Alfred (et Stefan si matériel)
 COFFEE_MODE_DURATION = 20 * 60     # 20 min par session
 COFFEE_MODE_INTERVAL = 5 * 60     # 5 min entre chaque café (laisser les pensées s'accumuler)
@@ -753,6 +764,10 @@ class AutonomyEngine:
         self._nap_tasks_done: list = []
         self._nap_renewals_used: int = persisted.get("_nap_renewals_used", 0)
         self._nap_last_exit: float = persisted.get("_nap_last_exit", 0.0)
+        # Sieste profonde — mode + duree libre (ajout 2026-04-12)
+        # Modes : "normal" (cap 2h), "deep" (cap 24h), "hibernation" (cap 7j)
+        self._nap_mode: str = persisted.get("_nap_mode", "normal")
+        self._nap_target_duration: float = persisted.get("_nap_target_duration", 0.0)  # secondes
 
         # Mode café : socialisation libre avec Alfred
         self.is_coffee_mode: bool = persisted.get("is_coffee_mode", False)
@@ -1222,6 +1237,8 @@ class AutonomyEngine:
             "_nap_started_at": self._nap_started_at,
             "_nap_renewals_used": self._nap_renewals_used,
             "_nap_last_exit": self._nap_last_exit,
+            "_nap_mode": getattr(self, "_nap_mode", "normal"),
+            "_nap_target_duration": getattr(self, "_nap_target_duration", 0.0),
             "is_coffee_mode": getattr(self, "is_coffee_mode", False),
             "_coffee_started_at": getattr(self, "_coffee_started_at", 0.0),
             "_coffee_last_exit": getattr(self, "_coffee_last_exit", 0.0),
@@ -4541,14 +4558,24 @@ class AutonomyEngine:
 
     # ── Mode Sieste (hibernation réparatrice 0-GPU) ──────────────────
 
-    async def enter_nap(self) -> bool:
+    async def enter_nap(self, mode: str = NAP_MODE_NORMAL, duration_hours: float = 0.0) -> bool:
         """Active le mode sieste : décharge Ollama, calme le reptilien, maintenance 0-LLM.
+
+        Args:
+            mode: "normal" (cap 2h), "deep" (cap 24h), "hibernation" (cap 7 jours)
+            duration_hours: duree cible en heures. Si 0, comportement classique (renouvellement auto).
 
         Returns:
             True si la sieste est acceptée, False si le cooldown bloque l'entrée.
         """
-        # Vérifier cooldown
-        if self._nap_last_exit > 0:
+        # Valider le mode
+        if mode not in NAP_MODE_CAPS:
+            mode = NAP_MODE_NORMAL
+        cap_seconds = NAP_MODE_CAPS[mode]
+
+        # Vérifier cooldown — sauf pour deep/hibernation qui bypass le cooldown
+        # (un projet externe peut avoir besoin de redemarrer la sieste rapidement)
+        if mode == NAP_MODE_NORMAL and self._nap_last_exit > 0:
             elapsed = time.time() - self._nap_last_exit
             if elapsed < NAP_COOLDOWN:
                 remaining = int(NAP_COOLDOWN - elapsed)
@@ -4557,10 +4584,20 @@ class AutonomyEngine:
         if getattr(self, "is_coffee_mode", False):
             logger.info("[AUTONOMY] Sieste refusée — mode café actif.")
             return False
+
+        # Calculer la duree cible (cappee selon le mode)
+        if duration_hours > 0:
+            target_duration = min(duration_hours * 3600, cap_seconds)
+        else:
+            target_duration = 0.0  # 0 = comportement classique avec renouvellement
+
         self.is_napping = True
         self._nap_started_at = time.time()
         self._nap_tasks_done = []
         self._nap_renewals_used = 0
+        self._nap_mode = mode
+        self._nap_target_duration = target_duration
+
         # Calmer le reptilien — reset menace et adrénaline
         try:
             from core.reptilian_core import reptile
@@ -4573,13 +4610,22 @@ class AutonomyEngine:
         # Décharger tous les modèles Ollama pour libérer la VRAM
         await self._unload_ollama_models()
         self._persist_state()
-        await bus.publish("NAP_MODE", {"active": True})
+
+        # Message different selon le mode
+        if mode == NAP_MODE_NORMAL:
+            msg = "Mode sieste activé — GPU libéré, reptilien apaisé. Maintenance 0-LLM uniquement."
+        elif mode == NAP_MODE_DEEP:
+            hours = target_duration / 3600
+            msg = f"SIESTE PROFONDE activée — {hours:.1f}h. GPU dédié à un autre processus."
+        elif mode == NAP_MODE_HIBERNATION:
+            days = target_duration / 86400
+            msg = f"HIBERNATION activée — {days:.1f} jours. Tous systemes en pause prolongee."
+
+        await bus.publish("NAP_MODE", {"active": True, "mode": mode, "target_duration": target_duration})
         await bus.publish("THOUGHT_STREAM", {
-            "agent": "SYSTEM",
-            "content": "Mode sieste activé — GPU libéré, reptilien apaisé. Maintenance 0-LLM uniquement.",
-            "type": "info"
+            "agent": "SYSTEM", "content": msg, "type": "info"
         })
-        logger.info("[AUTONOMY] Mode sieste activé. VRAM libérée.")
+        logger.info(f"[AUTONOMY] {msg}")
         return True
 
     _NAP_BUDGET_REFUND = 20  # Second souffle post-sieste (points)
@@ -5615,17 +5661,28 @@ class AutonomyEngine:
 
             # Mode sieste : maintenance 0-LLM uniquement, sleep rallongé
             if self.is_napping:
-                # Auto-réveil avec renouvellement
                 nap_elapsed = time.time() - self._nap_started_at if self._nap_started_at else 0
-                if nap_elapsed >= NAP_PERIOD_DURATION:
-                    if self._nap_renewals_used < NAP_MAX_RENEWALS:
-                        self._nap_renewals_used += 1
-                        self._nap_started_at = time.time()
-                        logger.info(f"[AUTONOMY] Renouvellement sieste ({self._nap_renewals_used}/{NAP_MAX_RENEWALS})")
-                    else:
-                        logger.info(f"[AUTONOMY] Auto-réveil — {NAP_MAX_RENEWALS + 1} périodes écoulées.")
+
+                # Sieste profonde / hibernation : respecter _nap_target_duration si > 0
+                target = getattr(self, "_nap_target_duration", 0.0)
+                if target > 0:
+                    if nap_elapsed >= target:
+                        mode = getattr(self, "_nap_mode", NAP_MODE_NORMAL)
+                        logger.info(f"[AUTONOMY] Auto-reveil sieste {mode} — {nap_elapsed/3600:.1f}h ecoulees (cible {target/3600:.1f}h).")
                         await self.exit_nap()
                         continue
+                    # Sinon, on reste en sieste, pas de renouvellement
+                else:
+                    # Comportement classique (sans duree cible) : renouvellement automatique
+                    if nap_elapsed >= NAP_PERIOD_DURATION:
+                        if self._nap_renewals_used < NAP_MAX_RENEWALS:
+                            self._nap_renewals_used += 1
+                            self._nap_started_at = time.time()
+                            logger.info(f"[AUTONOMY] Renouvellement sieste ({self._nap_renewals_used}/{NAP_MAX_RENEWALS})")
+                        else:
+                            logger.info(f"[AUTONOMY] Auto-réveil — {NAP_MAX_RENEWALS + 1} périodes écoulées.")
+                            await self.exit_nap()
+                            continue
                 self.is_processing = True
                 try:
                     await self._execute_nap_routine()
