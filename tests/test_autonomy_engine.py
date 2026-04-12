@@ -6,7 +6,7 @@ import asyncio
 import tempfile
 import pytest
 from datetime import date, datetime
-from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
+from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock, mock_open
 from collections import namedtuple
 
 from core.autonomy_engine import (
@@ -3721,13 +3721,53 @@ class TestNewEveilRoutines:
         mod._current_descending_signals = {}
 
     def test_new_routines_present(self):
-        """Les 3 nouvelles routines sont dans _get_routines."""
+        """Les nouvelles routines sont dans _get_routines."""
         engine = self._make_engine()
         routines = engine._get_routines()
         intents = [r["intent"] for r in routines]
         assert "CURIOSITY_DEEP_DIVE" in intents
         assert "CROSS_SYNTHESIS" in intents
         assert "BODY_AWARENESS" in intents
+        assert "FLY_OBSERVATION" in intents
+
+    def test_fly_observation_no_data(self):
+        """FLY_OBSERVATION retourne un message clair si fly_lab/data n'existe pas."""
+        engine = self._make_engine()
+        # On force le chemin a un dossier inexistant via un mock
+        import core.autonomy_engine as mod
+        with patch("os.path.exists", return_value=False):
+            mission = engine._build_fly_observation_mission()
+        assert "n'est pas en cours d'execution" in mission or "imagine" in mission.lower() or "reflechis" in mission.lower()
+
+    def test_fly_observation_with_data(self):
+        """FLY_OBSERVATION construit une mission depuis latest_state.json valide."""
+        import json
+        import os
+        from datetime import datetime
+        engine = self._make_engine()
+
+        fake_state = {
+            "timestamp": datetime.now().isoformat(),
+            "sim_time_s": 12.5,
+            "total_spikes": 50000,
+            "active_neurons": 800,
+            "firing_rate_global_hz": 0.5,
+            "recent_spikes_per_window": [320, 310, 315, 305, 318, 325],
+            "top_active_neurons": [
+                {"rank": 1, "index": 33909, "spike_count": 4500, "firing_rate_hz": 360.0},
+                {"rank": 2, "index": 100978, "spike_count": 4200, "firing_rate_hz": 336.0},
+            ],
+            "experiment": "sugar_grns",
+        }
+
+        # Mock os.path.exists et open
+        m_open = mock_open(read_data=json.dumps(fake_state))
+        with patch("os.path.exists", return_value=True), \
+             patch("builtins.open", m_open):
+            mission = engine._build_fly_observation_mission()
+        assert "138K" in mission or "138" in mission  # mention du connectome
+        assert "12.5" in mission or "12" in mission   # sim_time
+        assert "33909" in mission                     # top neuron index
 
     def test_curiosity_mission_with_seeds(self):
         """CURIOSITY_DEEP_DIVE pioche dans la banque de graines."""
@@ -3785,11 +3825,12 @@ class TestNewEveilRoutines:
         assert "corps" in mission
 
     def test_context_keywords_defined(self):
-        """Les CONTEXT_KEYWORDS sont definis pour les 3+1 routines."""
+        """Les CONTEXT_KEYWORDS sont definis pour toutes les routines eveil."""
         assert "CURIOSITY_DEEP_DIVE" in CONTEXT_KEYWORDS
         assert "CROSS_SYNTHESIS" in CONTEXT_KEYWORDS
         assert "BODY_AWARENESS" in CONTEXT_KEYWORDS
         assert "OPEN_INTENT" in CONTEXT_KEYWORDS
+        assert "FLY_OBSERVATION" in CONTEXT_KEYWORDS
 
 
 # ============================================================

@@ -158,5 +158,9 @@
   "OPEN_INTENT": {
     "cost": 3,
     "description": "Intention emergente: Promethee formule son propre objectif (1 LLM formulation + 1-2 LLM execution). Max 3/jour."
+  },
+  "FLY_OBSERVATION": {
+    "cost": 2,
+    "description": "Observation du cerveau-mouche Eon (138K LIF) qui tourne en parallele. Lit fly_lab/data/, formule un commentaire bio. 1 appel LLM."
   }
 }

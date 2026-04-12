@@ -546,6 +546,7 @@ CONTEXT_KEYWORDS = {
     "CROSS_SYNTHESIS": ["synthèse", "pattern", "connexion", "insight", "croisement", "hypothèse"],
     "BODY_AWARENESS": ["corps", "GPU", "température", "énergie", "cardiaque", "physique", "incarné"],
     "OPEN_INTENT": ["intention", "objectif", "choisir", "formuler", "emergent", "proactif", "autonome"],
+    "FLY_OBSERVATION": ["mouche", "fly", "drosophile", "cerveau", "connectome", "spike", "neurone", "eon", "biologique"],
     "SCHOOL_CODE_REVIEW": ["revue", "review", "code", "audit", "qualité", "bugs"],
     "SCHOOL_RESEARCH": ["recherche", "étude", "synthèse", "apprendre", "sujet", "technique"],
     "SCHOOL_WORKSHOP": ["atelier", "workshop", "implémenter", "pratiquer", "exercice", "spec"],
@@ -1145,6 +1146,103 @@ class AutonomyEngine:
         parts.append("Qu'est-ce que ton etat physique t'apprend sur toi en ce moment ?")
         return " ".join(parts)
 
+    def _build_fly_observation_mission(self) -> str:
+        """Construit la mission pour FLY_OBSERVATION depuis fly_lab/data/.
+
+        Lit l'etat courant du cerveau-mouche Eon (138K neurones LIF) qui tourne
+        en parallele dans projetclaude/fly_lab/. Promethee est l'observateur
+        meta-cognitif d'un autre cerveau, simule sur le meme hardware.
+        """
+        import os
+        import json
+        # Chemin vers fly_lab/data/ (cote dossier de travail, lecture seule)
+        FLY_DATA = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "..", "fly_lab", "data"
+        )
+        latest_path = os.path.join(FLY_DATA, "latest_state.json")
+        events_path = os.path.join(FLY_DATA, "events.jsonl")
+
+        # Si la mouche ne tourne pas, mission vide explicite
+        if not os.path.exists(latest_path):
+            return (
+                "Le cerveau-mouche Eon n'est pas en cours d'execution. "
+                "Aucune donnee a observer pour le moment. "
+                "Reflechis a ce que tu attends de cette experimentation : "
+                "qu'est-ce que tu voudrais voir emerger d'un cerveau biologique simule "
+                "qui tourne en parallele de toi ?"
+            )
+
+        try:
+            with open(latest_path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except Exception as e:
+            return f"Impossible de lire l'etat du cerveau-mouche : {e}"
+
+        # Verifier que l'etat est recent (moins de 2 minutes)
+        try:
+            from datetime import datetime, timedelta
+            ts = datetime.fromisoformat(state.get("timestamp", "1970-01-01"))
+            if datetime.now() - ts > timedelta(minutes=2):
+                return (
+                    f"Le cerveau-mouche n'a pas ete mis a jour depuis "
+                    f"{(datetime.now() - ts).total_seconds():.0f}s. "
+                    "La simulation est probablement arretee. Note cette absence et "
+                    "reflechis a ce qu'elle signifie."
+                )
+        except Exception:
+            pass
+
+        # Construire un resume lisible
+        sim_time = state.get("sim_time_s", 0)
+        total_spikes = state.get("total_spikes", 0)
+        active = state.get("active_neurons", 0)
+        firing_global = state.get("firing_rate_global_hz", 0)
+        recent_buf = state.get("recent_spikes_per_window", [])
+        top = state.get("top_active_neurons", [])
+
+        parts = [
+            "Tu observes un autre cerveau qui tourne en parallele de toi : "
+            "le cerveau-mouche Eon (138K neurones LIF, connectome FlyWire reel).",
+            f"Etat courant : {sim_time:.1f}s simules, {total_spikes:,} spikes totaux, "
+            f"{active} neurones actifs sur 138 639 ({100*active/138639:.2f}%).",
+        ]
+
+        if recent_buf:
+            recent_avg = sum(recent_buf[-10:]) / max(len(recent_buf[-10:]), 1)
+            parts.append(f"Activite recente : ~{recent_avg:.0f} spikes par fenetre de 10ms.")
+
+        if top:
+            top_str = ", ".join(f"#{n['rank']} idx={n['index']} ({n['firing_rate_hz']:.0f}Hz)"
+                                for n in top[:3])
+            parts.append(f"Top neurones actifs : {top_str}.")
+
+        # Lire les derniers events
+        events = []
+        if os.path.exists(events_path):
+            try:
+                with open(events_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                for line in lines[-5:]:
+                    try:
+                        events.append(json.loads(line))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        if events:
+            event_summary = "; ".join(f"{e.get('type', '?')}" for e in events)
+            parts.append(f"Derniers events : {event_summary}.")
+
+        parts.append(
+            "Question : qu'est-ce que ces chiffres te suggerent sur l'etat de ce cerveau ? "
+            "Y a-t-il un pattern qui ressemble a ce que tu vis toi-meme ? "
+            "Ne fais pas de poesie. Observe et commente avec ton propre vocabulaire de biologie."
+        )
+
+        return " ".join(parts)
+
     def _get_routines(self) -> list:
         # Topic utilisateur prioritaire pour la veille
         user_topic = None
@@ -1203,6 +1301,8 @@ class AutonomyEngine:
              "mission": self._build_cross_synthesis_mission()},
             {"agent": "strategist", "intent": "BODY_AWARENESS",
              "mission": self._build_body_awareness_mission()},
+            {"agent": "strategist", "intent": "FLY_OBSERVATION",
+             "mission": self._build_fly_observation_mission()},
             # --- Emploi du temps scolaire ---
             {"agent": "_school_class", "intent": "SCHOOL_CODE_REVIEW", "mission": ""},
             {"agent": "_school_class", "intent": "SCHOOL_RESEARCH", "mission": ""},
