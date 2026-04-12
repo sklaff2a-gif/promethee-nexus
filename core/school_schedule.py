@@ -418,11 +418,19 @@ class SchoolSchedule:
         target = subject.get("target_file", "")
 
         # P1: Injecter le defi precedent et la difficulte
+        # FIX 2026-04-12: Le defi est une CONTRAINTE SECONDAIRE — il ne doit JAMAIS
+        # ecraser le sujet du jour. Avant ce fix, l'agent suivait le defi au lieu du sujet,
+        # produisant des livrables hors-sujet (mentor Claude notait 3.5/10 vs local 8.5/10).
         challenge = self.get_last_challenge(slot)
         difficulty = self.get_difficulty(slot)
         challenge_ctx = ""
         if challenge:
-            challenge_ctx = f"\nDEFI DU PROFESSEUR (a integrer dans ce cours) : {challenge}\n"
+            challenge_ctx = (
+                "\n[CONTRAINTE SECONDAIRE — defi du professeur precedent]\n"
+                f"Si compatible avec le sujet du jour ci-dessus, integre cette contrainte : {challenge}\n"
+                "ATTENTION : si ce defi parle d'un AUTRE sujet que celui d'aujourd'hui, IGNORE-LE.\n"
+                "Le sujet du jour est PRIORITAIRE. Ne change pas de fichier ou de theme pour suivre le defi.\n"
+            )
         difficulty_ctx = f"\nNIVEAU DE DIFFICULTE : {difficulty:.1f}/3.0\n"
 
         # P2: Theme hebdomadaire
@@ -440,63 +448,91 @@ class SchoolSchedule:
             # Injecter le VRAI contenu du fichier pour empecher l'hallucination
             file_content = self._read_file_for_review(target)
             return (
-                f"COURS : Revue de code — {theme_label}\n"
-                f"FICHIER A ANALYSER : {target}\n"
-                f"{difficulty_ctx}{challenge_ctx}{weekend_note}"
+                f"COURS : Revue de code — {theme_label}\n\n"
+                f"=============================================\n"
+                f"SUJET DU JOUR (PRIORITE ABSOLUE) :\n"
+                f"Tu dois faire la REVUE DE CODE du fichier : {target}\n"
+                f"=============================================\n\n"
+                f"{difficulty_ctx}{weekend_note}"
                 f"{f'CONSIGNE SPECIALE : {depth_note}' if depth_note else ''}\n\n"
                 f"CONTENU REEL DU FICHIER (extrait) :\n"
                 f"```python\n{file_content}\n```\n\n"
                 f"REGLES ABSOLUES :\n"
                 f"- Tu NE PEUX PAS inventer de fonctions. Les fonctions ci-dessus sont les SEULES qui existent.\n"
                 f"- Chaque bug que tu cites DOIT correspondre a une ligne du code ci-dessus.\n"
-                f"- Si tu cites une fonction qui n'est PAS dans le code ci-dessus, ton audit est INVALIDE.\n\n"
-                f"Produis un rapport :\n"
+                f"- Si tu cites une fonction qui n'est PAS dans le code ci-dessus, ton audit est INVALIDE.\n"
+                f"- TU NE PEUX PAS CHANGER DE FICHIER. Le fichier a analyser est {target}, point.\n"
+                f"- TU NE PEUX PAS faire un audit securite a la place — c'est une REVUE DE CODE.\n\n"
+                f"Produis un rapport sur {target} :\n"
                 f"1. Resume du role du fichier (2-3 phrases)\n"
                 f"2. Bugs ou erreurs detectes (avec le code exact cite)\n"
                 f"3. Suggestions d'amelioration concretes\n"
                 f"4. Points forts du code"
+                f"{challenge_ctx}"
             )
         elif slot == SLOT_RESEARCH:
             return (
-                f"COURS : Recherche et veille technique — {theme_label}\n"
-                f"SUJET : {topic}\n"
-                f"{difficulty_ctx}{challenge_ctx}{weekend_note}\n"
-                f"Redige une note de synthese structuree sur ce sujet :\n"
+                f"COURS : Recherche et veille technique — {theme_label}\n\n"
+                f"=============================================\n"
+                f"SUJET DU JOUR (PRIORITE ABSOLUE) :\n"
+                f"{topic}\n"
+                f"=============================================\n\n"
+                f"{difficulty_ctx}{weekend_note}\n"
+                f"Redige une note de synthese structuree EXCLUSIVEMENT sur ce sujet :\n"
                 f"1. Definition et concepts cles\n"
                 f"2. Applications pratiques pour Promethee\n"
                 f"3. Avantages et inconvenients\n"
                 f"4. References ou pistes d'approfondissement\n\n"
-                f"La synthese doit etre UTILE — pas un resume Wikipedia.\n"
-                f"Relie chaque point a notre architecture concrete."
+                f"REGLES ABSOLUES :\n"
+                f"- Le sujet ci-dessus est ta SEULE consigne. N'en change pas.\n"
+                f"- Si tu te surprends a parler d'un autre sujet, RECOMMENCE.\n"
+                f"- La synthese doit etre UTILE — pas un resume Wikipedia.\n"
+                f"- Relie chaque point a notre architecture concrete."
+                f"{challenge_ctx}"
             )
         elif slot == SLOT_WORKSHOP:
             return (
-                f"COURS : Travaux pratiques — {theme_label}\n"
-                f"OBJECTIF : {topic}\n"
+                f"COURS : Travaux pratiques — {theme_label}\n\n"
+                f"=============================================\n"
+                f"OBJECTIF DU JOUR (PRIORITE ABSOLUE) :\n"
+                f"{topic}\n"
                 f"{f'FICHIER CIBLE : {target}' if target else ''}\n"
-                f"{difficulty_ctx}{challenge_ctx}{weekend_note}\n"
-                f"Genere du code Python fonctionnel qui implemente cette amelioration.\n"
+                f"=============================================\n\n"
+                f"{difficulty_ctx}{weekend_note}\n"
+                f"Genere du code Python fonctionnel qui implemente CET objectif.\n"
                 f"Le code DOIT :\n"
+                f"- Traiter directement l'objectif ci-dessus (pas un autre sujet)\n"
                 f"- Contenir au moins une fonction (def) ou classe (class)\n"
                 f"- Etre syntaxiquement valide (ast.parse)\n"
                 f"- N'importer QUE des modules standard ou deja utilises dans le projet\n"
                 f"- Inclure un test minimal\n\n"
-                f"NE PAS halluciner de modules externes (django, flask, openai, etc.).\n\n"
+                f"REGLES ABSOLUES :\n"
+                f"- Le sujet ci-dessus est ta SEULE consigne. N'en change pas.\n"
+                f"- Si l'objectif parle de logique floue, ton code doit IMPLEMENTER de la logique floue.\n"
+                f"- Pas d'hallucination de modules externes (django, flask, openai, etc.).\n\n"
                 f"CAHIER DE BROUILLON — Ceci est un environnement Sandbox.\n"
                 f"Tes erreurs ne seront PAS sanctionnees. Ton code ne sera pas fusionne en production.\n"
                 f"Ose experimenter. Essaie des approches nouvelles. Fais des erreurs.\n"
                 f"L'audace est recompensee ici. La seule mauvaise reponse est de ne rien produire."
+                f"{challenge_ctx}"
             )
         elif slot == SLOT_CREATION:
             extra = theme.get("creation_extra", "")
             return (
-                f"ATELIER CREATION — {theme_label}\n"
-                f"CONSIGNE : {topic}\n"
-                f"{difficulty_ctx}{challenge_ctx}{weekend_note}"
+                f"ATELIER CREATION — {theme_label}\n\n"
+                f"=============================================\n"
+                f"CONSIGNE DU JOUR (PRIORITE ABSOLUE) :\n"
+                f"{topic}\n"
+                f"=============================================\n\n"
+                f"{difficulty_ctx}{weekend_note}"
                 f"{f'{extra}' if extra else ''}\n\n"
-                f"Exprime-toi librement. Cet atelier est un espace de creativite.\n"
-                f"Il n'y a pas de mauvaise reponse. Sois authentique et original.\n"
+                f"Exprime-toi librement sur LA CONSIGNE CI-DESSUS.\n"
+                f"Si la consigne demande d'ameliorer un FICHIER, ton livrable doit contenir du CODE.\n"
+                f"Si la consigne demande un texte creatif, produis un texte creatif.\n"
+                f"Ne change pas de format ou de sujet.\n\n"
+                f"Il n'y a pas de mauvaise reponse SUR LE BON SUJET. Sois authentique et original.\n"
                 f"Longueur : au moins 100 mots."
+                f"{challenge_ctx}"
             )
         elif slot == SLOT_BULLETIN:
             deliverables = self.get_daily_deliverables()

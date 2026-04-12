@@ -429,7 +429,10 @@ class TestClosedLoop:
         }]
         prompt = isolate_schedule.get_slot_prompt(SLOT_CODE_REVIEW)
         assert "Concentre-toi sur les imports" in prompt
-        assert "DEFI DU PROFESSEUR" in prompt
+        # FIX 2026-04-12: le defi est maintenant injecte comme CONTRAINTE SECONDAIRE
+        # pour eviter qu'il n'ecrase le sujet du jour
+        assert "CONTRAINTE SECONDAIRE" in prompt
+        assert "PRIORITE ABSOLUE" in prompt
 
     def test_difficulty_in_prompt(self, isolate_schedule, tmp_path, monkeypatch):
         # Creer un curriculum avec difficulte elevee
