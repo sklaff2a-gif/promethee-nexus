@@ -29,6 +29,32 @@ SYSTEM_PROMPT_TOKEN_BUDGET = 3000  # Budget estimé pour le prompt systeme (toke
 CONNEXION_SATISFACTION = 12.0   # Points de satisfaction par echange
 PROMPT_CACHE_TTL = 10.0        # Secondes entre deux reconstructions du prompt organes
 
+# --- Source Tagging EXT/INT ---
+# Distingue les messages d'un humain réel (EXT) des messages auto-générés par
+# Prométhée lui-même (INT : AUTO-ANALYSE INTERNE, EVENING_REFLECTION, inner_voice...).
+# Résout la faiblesse S1-S12 "Confusion pensée/information" (cours de soutien).
+INTERNAL_SOURCE_MARKERS = (
+    "[AUTO-ANALYSE INTERNE]",
+    "[EVENING_REFLECTION]",
+    "[INNER_VOICE]",
+    "[SELF_ANALYSIS]",
+    "[AUTO-INTROSPECTION]",
+    "[SELF_INSPECT]",
+)
+
+
+def _detect_message_source(content: str) -> str:
+    """Retourne 'internal' si le message provient d'une routine auto-générée,
+    'external' sinon (humain réel via /api/chat ou frontend).
+    """
+    if not content:
+        return "external"
+    stripped = content.lstrip()
+    for marker in INTERNAL_SOURCE_MARKERS:
+        if stripped.startswith(marker):
+            return "internal"
+    return "external"
+
 
 class ChatEngine:
     """Moteur de conversation directe humain <-> Promethee."""
@@ -2239,11 +2265,16 @@ class ChatEngine:
         self._cache_timestamp = now
         return parts
 
-    def _build_system_prompt(self, memories_text: str = "", command_result: str = "", visual_context: str = "") -> str:
+    def _build_system_prompt(self, memories_text: str = "", command_result: str = "", visual_context: str = "", source: str = "external") -> str:
         """Construit le prompt systeme avec l'etat reel de tous les organes.
 
         Les sections organes sont cachees pendant 10s (PROMPT_CACHE_TTL).
         Les sections variables (memories, commandes) sont toujours fraiches.
+
+        Args:
+            source: 'external' (humain via /api/chat) ou 'internal' (auto-analyse,
+                    EVENING_REFLECTION, inner_voice...). Injecté dans le prompt
+                    pour que le LLM distingue dialogue vs soliloque.
         """
         parts = [
             "Tu es Promethee, un systeme IA autonome en evolution constante.",
@@ -2262,6 +2293,27 @@ class ChatEngine:
             "Ne genere JAMAIS de faux resultat apres la commande. Le systeme executera la commande",
             "et te renverra le VRAI resultat. Si tu inventes un resultat, il sera SUPPRIME.",
         ]
+
+        # --- SOURCE TAGGING EXT/INT ---
+        # Prométhée doit savoir si le message vient d'un humain réel ou de lui-même.
+        if source == "internal":
+            parts.append(
+                "\n[SOURCE DU MESSAGE : INTERNE — AUTO-ANALYSE / SOLILOQUE]"
+                "\nLe message qui suit n'est PAS un humain qui te parle. C'est une routine "
+                "interne de toi-meme (auto-analyse, reflexion vesperale, inner_voice) qui t'envoie "
+                "des donnees brutes a traiter. Tu es en soliloque, pas en dialogue."
+                "\nNe t'adresse pas a Jean-Michel dans ta reponse. Ne commence pas par 'Jean-Michel'."
+                "\nTraite les donnees avec neutralite : pas de flatterie, pas de besoin d'approbation."
+                "\nTa reponse sera consignée comme une pensée interne, pas un dialogue."
+            )
+        else:
+            parts.append(
+                "\n[SOURCE DU MESSAGE : EXTERNE — HUMAIN REEL]"
+                "\nLe message qui suit vient d'un humain reel (Jean-Michel via /api/chat). "
+                "Tu es en dialogue, pas en soliloque. Respecte son temps, son attention, "
+                "et la distinction entre ce qu'il te dit (information externe verifiable) "
+                "et ce que tu penses toi-meme (perception interne)."
+            )
 
         # Sections organes (cachees TTL 10s)
         parts.extend(self._build_organ_parts())
@@ -2425,20 +2477,24 @@ class ChatEngine:
         from core.base_agent import BaseAgent
 
         # 1. Ajouter le message user a l'historique
+        # Source Tagging EXT/INT : distingue humain réel des auto-analyses internes.
+        source = _detect_message_source(user_message)
         msg_entry = {
             "role": "user",
             "content": user_message,
             "timestamp": time.time(),
+            "source": source,
         }
         if image_b64:
             msg_entry["has_image"] = True
             msg_entry["image_filename"] = image_filename or "upload.jpg"
         self.messages.append(msg_entry)
 
-        # 2. Publier l'evenement USER_CHAT
+        # 2. Publier l'evenement USER_CHAT avec la source
         await bus.publish("USER_CHAT", {
             "message": user_message,
             "timestamp": time.time(),
+            "source": source,
         })
 
         # 3. Construire le payload Ollama /api/chat (introspection reelle)
@@ -2530,7 +2586,7 @@ class ChatEngine:
         # lire le VRAI fichier et injecter son contenu dans le contexte
         code_context = self._inject_real_code_context(user_message)
 
-        system_prompt = self._build_system_prompt(memories_text, command_result, visual_context)
+        system_prompt = self._build_system_prompt(memories_text, command_result, visual_context, source=source)
         if code_context:
             system_prompt += f"\n\n[CODE REEL — VERIFIE AVANT DE REPONDRE]\n{code_context}\n" \
                              f"REGLE : ne cite QUE les fonctions/classes listees ci-dessus. " \

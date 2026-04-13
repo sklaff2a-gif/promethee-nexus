@@ -33,6 +33,47 @@ IDENTITY_REFRESH_INTERVAL = 600.0   # Refresh identité narrative (10 min)
 WERNICKE_COHERENCE_THRESHOLD = 0.3  # En-dessous → reformulation
 PREDICTION_EXPIRY = 3600.0          # 1h max pour une prédiction
 
+# --- DAC : Détection d'Anomalie Cognitive (proxy KL-divergence / surprise) ---
+# Résout la faiblesse S9 du cours de soutien "incapacité à la surprise".
+# Calcule une mesure de divergence entre prédiction et observation, pondérée
+# par la confiance. Une prédiction très confiante qui échoue → surprise maximale.
+DAC_SURPRISE_THRESHOLD = 0.4        # Au-dessus → flag is_surprise
+DAC_HIGH_CONFIDENCE = 0.7           # Confiance au-dessus → surprise amplifiée
+DAC_SALIENCE_BOOST = 0.4            # Boost de saillance dans workspace si surprise
+
+
+def _tokenize_for_dac(text: str) -> set:
+    """Tokenisation simple pour calculer distance de Jaccard sur contenu."""
+    if not text:
+        return set()
+    return {t.lower() for t in text.replace("_", " ").split() if len(t) > 1}
+
+
+def _compute_surprise(predicted: str, observed: str, confidence: float) -> float:
+    """Calcule un proxy de KL-divergence (∈ [0,1]) entre prédiction et observation.
+
+    Basé sur : surprise = jaccard_distance(predicted, observed) × confidence.
+    - Prédiction haute-confiance qui échoue → surprise haute.
+    - Prédiction basse-confiance qui échoue → surprise faible (normal).
+    - Prédiction confirmée → surprise ~0.
+
+    Limitation V1 : proxy textuel (Jaccard), pas une vraie KL-divergence sur
+    distributions de probabilités. Dette V2 documentée dans FINDINGS.md.
+    """
+    p_tokens = _tokenize_for_dac(predicted)
+    o_tokens = _tokenize_for_dac(observed)
+    if not p_tokens and not o_tokens:
+        return 0.0
+    union = p_tokens | o_tokens
+    inter = p_tokens & o_tokens
+    jaccard = len(inter) / len(union) if union else 0.0
+    distance = 1.0 - jaccard
+    # Amplification si haute confiance
+    amp = 1.0
+    if confidence >= DAC_HIGH_CONFIDENCE:
+        amp = 1.0 + (confidence - DAC_HIGH_CONFIDENCE)
+    return max(0.0, min(1.0, distance * confidence * amp))
+
 INNER_VOICE_STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "memory", "inner_voice_state.json"
@@ -753,13 +794,19 @@ class InnerVoice:
         worst = max(recent_errors, key=lambda p: p.prediction_error)
         salience = SOURCE_BASE_WEIGHTS["prediction"] * worst.prediction_error
 
+        # DAC : si c'est une vraie surprise, booster la saillance pour franchir IGNITION_THRESHOLD
+        is_surprise = worst.prediction_error >= DAC_SURPRISE_THRESHOLD
+        if is_surprise:
+            salience += DAC_SALIENCE_BOOST
+
         self.workspace.append(WorkspaceEntry(
             source="prediction",
-            raw_signal={"context": "error",
+            raw_signal={"context": "surprise" if is_surprise else "error",
                         "predicted": worst.predicted_value[:30],
                         "actual": worst.outcome[:30],
                         "content": worst.content[:60],
-                        "error": worst.prediction_error},
+                        "error": worst.prediction_error,
+                        "is_surprise": is_surprise},
             salience=min(1.0, salience),
             timestamp=time.time(),
         ))
@@ -1239,7 +1286,11 @@ class InnerVoice:
                 p.confidence *= PREDICTION_DECAY
 
     async def _resolve_predictions(self, event: dict):
-        """Résout les prédictions lors d'un événement."""
+        """Résout les prédictions lors d'un événement.
+
+        DAC : calcule une surprise (proxy KL-divergence) basée sur la distance
+        Jaccard pondérée par la confiance. Flag is_surprise si > seuil.
+        """
         event_type = "AUTONOMY_ROUTINE_COMPLETE"  # C'est le handler _on_routine_complete
         intent = event.get("intent", "")
         status = event.get("status", "")
@@ -1248,16 +1299,31 @@ class InnerVoice:
             if p.resolved or p.target_event != event_type:
                 continue
             p.resolved = True
-            if p.predicted_value.lower() in intent.lower() or intent.lower() in p.predicted_value.lower():
+            confirmed = (
+                p.predicted_value.lower() in intent.lower()
+                or intent.lower() in p.predicted_value.lower()
+            )
+            if confirmed:
                 p.outcome = "confirmed"
                 p.prediction_error = 0.1
                 self.stats["predictions_confirmed"] += 1
                 self._update_precision(True)
+                is_surprise = False
+                surprise_magnitude = 0.0
             else:
                 p.outcome = "violated"
-                p.prediction_error = 0.7
+                surprise_magnitude = _compute_surprise(p.predicted_value, intent, p.confidence)
+                # prediction_error calée sur la surprise (min 0.3 pour compat _perceive_prediction)
+                p.prediction_error = max(0.3, surprise_magnitude)
                 self.stats["predictions_violated"] += 1
                 self._update_precision(False)
+                is_surprise = surprise_magnitude >= DAC_SURPRISE_THRESHOLD
+                if is_surprise:
+                    self.stats["surprises_detected"] = self.stats.get("surprises_detected", 0) + 1
+                    logger.info(
+                        f"[DAC] SURPRISE détectée : prédit={p.predicted_value!r} "
+                        f"observé={intent!r} conf={p.confidence:.2f} magnitude={surprise_magnitude:.2f}"
+                    )
 
             # Publier la résolution
             try:
@@ -1267,6 +1333,8 @@ class InnerVoice:
                     "outcome": p.outcome,
                     "error": p.prediction_error,
                     "content": p.content,
+                    "is_surprise": is_surprise,
+                    "surprise_magnitude": round(surprise_magnitude, 3),
                 })
             except Exception:
                 pass

@@ -79,6 +79,12 @@ EVENT_IMPACT: Dict[str, Any] = {
         "MEMORY_CONSOLIDATION": {"COMPREHENSION": -8, "STABILITE": -5, "CONNEXION": -3},
         "SELF_ANALYSIS":        {"MAITRISE": -12, "COMPREHENSION": -10, "STABILITE": -5},
         "PARAM_EXPERIMENT":    {"MAITRISE": -8, "CURIOSITE": -5, "STABILITE": -3},
+        # v1.3 (2026-04-13) : modulation des routines matérialisées pendant Phase B.
+        # Sans ces entrées, la routine fantôme s'exécute mais ne module pas son drive
+        # cible — la boucle homéostatique reste ouverte. C'est le 5ème point de contact
+        # manquant dans le pattern de matérialisation (cf docs/FINDINGS.md Incident Final).
+        "REFACTORING_AUDIT":   {"MAITRISE": -12, "STABILITE": -3},
+        "CI_PIPELINE_RUN":     {"MAITRISE": -8, "STABILITE": -10},
     },
     "ROUTINE_FAILURE": {
         "_default":           {"MAITRISE": +8, "STABILITE": +5},
@@ -374,6 +380,102 @@ class DesireEngine:
             return psyche.get_system_average()
         except Exception:
             return {}
+
+    # --- Fix 1 (homeostatic closure) : interface TensionSource ---
+
+    def get_effective_rise_rate(self, drive_name: str) -> float:
+        """Retourne le taux de montee effectif (par heure) pour un drive donne,
+        en factorisant la resonance PSYCHE et l'amplification frustration.
+
+        Sert de baseline counterfactual : sans aucune action, la deprivation
+        montera de ce taux par heure.
+        """
+        drive = self.drives.get(drive_name)
+        if not drive:
+            return NATURAL_RISE_PER_HOUR
+
+        rise = NATURAL_RISE_PER_HOUR
+
+        # Resonance PSYCHE
+        traits_avg = self._get_traits_avg()
+        resonance = TRAIT_RESONANCE.get(drive_name, {})
+        for trait, weight in resonance.items():
+            trait_val = traits_avg.get(trait, 50.0)
+            amplifier = (trait_val - 50.0) / 50.0 * weight
+            rise *= (1.0 + amplifier)
+
+        # Frustration boost
+        if drive.frustration_streak >= 3:
+            rise *= 1.5
+
+        return rise
+
+    def measure_tension(self, goal_meta: Dict[str, Any]):
+        """Implementation TensionSource pour les goals issus de drives frustres.
+
+        Args:
+            goal_meta: doit contenir 'source_key' (nom du drive),
+                       'tension_at_birth' (deprivation au depart),
+                       'created_at' (timestamp), 'goal_id'.
+
+        Returns:
+            TensionMeasurement avec causal_drop, is_resolved, etc.
+        """
+        # Import local pour eviter les cycles
+        from core.tension_protocol import TensionMeasurement
+
+        drive_name = goal_meta.get("source_key", "")
+        tension_at_birth = float(goal_meta.get("tension_at_birth", 0.0))
+        created_at = float(goal_meta.get("created_at", time.time()))
+
+        drive = self.drives.get(drive_name)
+        if not drive:
+            # Drive inconnu : impossible de mesurer, retourne mesure neutre
+            return TensionMeasurement(
+                current_tension=0.0,
+                tension_at_birth=tension_at_birth,
+                expected_if_no_action=tension_at_birth,
+                causal_drop=0.0,
+                is_resolved=False,
+                is_worsened=False,
+                extra={"error": f"unknown drive {drive_name}"}
+            )
+
+        current_tension = drive.deprivation
+        elapsed_hours = max(0.0, (time.time() - created_at) / 3600.0)
+        effective_rise = self.get_effective_rise_rate(drive_name)
+
+        # Counterfactual : ce que serait la deprivation sans aucune action
+        # (la deprivation MONTE naturellement, pas l'inverse)
+        expected_if_no_action = min(100.0, tension_at_birth + effective_rise * elapsed_hours)
+
+        # Causal drop : si l'action a aide, la deprivation actuelle est
+        # PLUS BASSE que ce qu'elle serait sans action.
+        causal_drop = expected_if_no_action - current_tension
+
+        # Resolu si la baisse causale represente >= 40% de la tension au depart
+        # (50% etait trop strict, 40% est plus realiste pour des goals partiels)
+        resolution_threshold = max(8.0, tension_at_birth * 0.40)
+        is_resolved = causal_drop >= resolution_threshold
+
+        # Aggrave si causal_drop significativement negatif (action contre-productive)
+        is_worsened = causal_drop <= -5.0
+
+        return TensionMeasurement(
+            current_tension=float(current_tension),
+            tension_at_birth=float(tension_at_birth),
+            expected_if_no_action=float(expected_if_no_action),
+            causal_drop=float(causal_drop),
+            is_resolved=is_resolved,
+            is_worsened=is_worsened,
+            extra={
+                "drive_name": drive_name,
+                "elapsed_hours": round(elapsed_hours, 3),
+                "effective_rise_rate": round(effective_rise, 3),
+                "resolution_threshold": round(resolution_threshold, 2),
+                "frustration_streak": drive.frustration_streak,
+            }
+        )
 
     # --- Traitement des evenements ---
 

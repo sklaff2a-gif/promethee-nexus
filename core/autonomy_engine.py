@@ -23,7 +23,39 @@ DAILY_BUDGET_POINTS = 200
 BUDGET_RESERVE_POINTS = 20
 
 # Routines 0-LLM qui continuent même quand le budget est épuisé
-POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE", "SELF_INSPECT", "PARAM_EXPERIMENT", "EVENING_REFLECTION"}
+POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE", "SELF_INSPECT", "PARAM_EXPERIMENT", "EVENING_REFLECTION", "AUDIT_SURVIE", "REFACTORING_AUDIT", "CI_PIPELINE_RUN"}
+
+# --- AUDIT_SURVIE (cours S1-S12 : absence résistance au changement) ---
+# Routine 0-LLM qui vérifie périodiquement les constantes vitales du système :
+# dopamine effondrée, drives critiques (>90), error_streak élevé, fruitless cycles.
+# Émet AUTONOMY_SURVIVAL_ALERT sur le bus si 2+ seuils dépassés.
+AUDIT_SURVIE_COOLDOWN_S = 300.0           # Min 5 min entre deux exécutions (dispatch scoring)
+AUDIT_SURVIE_TICK_INTERVAL_S = 600.0      # Heartbeat du tronc cérébral : 10 min, indépendant du scoring
+AUDIT_SURVIE_DOPAMINE_FLOOR = 0.25        # Seuil dopamine critique
+AUDIT_SURVIE_DRIVE_CRITICAL = 80.0        # Seuil drive critique (v1.2 Crash Test : aligné sur "urgent" desire_engine)
+AUDIT_SURVIE_ERROR_STREAK = 3             # Seuil error_streak alarmant
+AUDIT_SURVIE_FRUITLESS_WINDOW = 10        # Fenêtre historique pour fruitless detection
+AUDIT_SURVIE_FRUITLESS_COUNT = 3          # N occurrences même intent faible qualité
+
+# --- Bouton panique : court-circuit limbique (tronc cérébral) ---
+# Quand AUDIT_SURVIE détecte une crise, _on_survival_alert force l'exécution du
+# step en souffrance du goal préfrontal lié au drive en crise. Escalade 3 cycles.
+#
+# Philosophie cycle_count (v1.1, 2026-04-13) :
+# Le compteur d'escalade est incrémenté au MOMENT DE L'APPLICATION du forçage,
+# INDÉPENDAMMENT de savoir si la routine cible a été effectivement dispatchée.
+# Rationale : un soft boost qui expire sans avoir été consommé par le scoring
+# est considéré comme un ÉCHEC DU SYSTÈME DE SCORING, pas comme une absence
+# d'événement. Le tronc cérébral ne réémet pas un signal doux inefficace ;
+# il escalade au hard force. C'est l'équivalent du principe "ignorer une
+# décharge d'adrénaline = escalade médullaire".
+SURVIVAL_MAX_FORCES_PER_DAY = 3           # Quota quotidien strict (canari SRE)
+SURVIVAL_COOLDOWN_PER_DRIVE_S = 3600.0    # 1 forçage max/heure/drive
+SURVIVAL_REFRACTORY_THRESHOLD = 80.0      # Drive doit redescendre sous ce seuil avant re-forçage
+SURVIVAL_SOFT_BOOST = 3.0                 # Cycle 1 : boost scoring (laisse une chance au scoring)
+SURVIVAL_BOOST_TTL_S = 1800.0             # Boost valide 30 min (v1.1: aligné sur max sleep cardiaque 1200s + marge)
+SURVIVAL_HARD_FORCE_CYCLE = 1             # v1.2 Crash Test : bypass direct dès le 1er déclenchement (soft boost prouvé insuffisant face à écart 8-9pts avec gagnants à 9.7)
+SURVIVAL_HUMAN_ESCALATION_CYCLE = 3       # Cycle 3+ : escalade humaine
 
 # Clamping final du score total (après toutes les couches de scoring)
 FINAL_SCORE_CLAMP_MIN = -5.0
@@ -523,6 +555,9 @@ CONTEXT_KEYWORDS = {
     "EXPANSION_CODE": ["code", "optimiser", "refactor", "bug", "python", "fonction"],
     "EXPANSION_CATALOG": ["catalog", "spec", "implementer", "pipeline", "darwin", "evolution"],
     "AUDIT_STRUCTURE": ["fichier", "structure", "nettoyer", "organiser", "tmp", "log"],
+    "AUDIT_SURVIE": ["vital", "critique", "alerte", "survie", "menace", "dopamine", "drive", "paralysie"],
+    "REFACTORING_AUDIT": ["refactor", "refactoring", "simplifier", "longueur", "complexité", "dette", "maîtrise"],
+    "CI_PIPELINE_RUN": ["ci", "pipeline", "pytest", "test", "régression", "stabilité", "vérifier"],
     "VEILLE_SILENCIEUSE": ["recherche", "apprendre", "astuce", "documentation", "veille"],
     "DROPZONE_SCAN": ["dropzone", "fichier", "import", "ingestion", "upload"],
     "GRIMOIRE_INVOKE": ["grimoire", "éphémère", "recette", "spécialiste", "debug", "analyse"],
@@ -826,6 +861,20 @@ class AutonomyEngine:
         bus.subscribe("SALARY_PAYDAY", self._on_salary_payday)
         bus.subscribe("REPTILIAN_DIRECTIVE", self._on_reptilian_directive)
         bus.subscribe("EUREKA_MOMENT", self._on_eureka_moment)
+        # Bouton panique : le tronc cérébral écoute ses propres alarmes
+        bus.subscribe("AUTONOMY_SURVIVAL_ALERT", self._on_survival_alert)
+
+        # État de survie (bouton panique, Étage 3 : garde-fous)
+        # Persistance : compteur quota quotidien, cooldown par drive, escalade
+        self._survival_state: dict = persisted.get("survival_state", {
+            "forces_date": "",
+            "forces_today": 0,
+            "last_force_per_drive": {},       # drive → timestamp
+            "cycle_count_per_drive": {},      # drive → escalade count (soft/hard/human)
+            "last_drive_value_at_force": {},  # drive → deprivation au moment du forçage
+        })
+        # Task heartbeat de survie (démarré dans start_loop)
+        self._survival_tick_task = None
 
         # Boosts temporaires appliques par le circuit reflexe reptilien
         # {intent: {"boost": float, "expires": float, "source": str}}
@@ -885,6 +934,252 @@ class AutonomyEngine:
         self._last_eureka_followup_ts = now
         print(f"   💡 EUREKA FOLLOW-UP: {hypothesis[:60]}... → FREE_EXPLORATION force")
         logger.info(f"[MYTHOS] Eureka follow-up: {hypothesis[:80]} (force={strength:.2f})")
+
+    # ─── BOUTON PANIQUE : tronc cérébral indépendant ──────────────────
+
+    async def _survival_heartbeat_loop(self):
+        """Heartbeat autonome du bouton panique (Étage 2A : tronc cérébral).
+
+        Tourne en parallèle de start_loop, indépendant du scoring. Exécute
+        AUDIT_SURVIE toutes les AUDIT_SURVIE_TICK_INTERVAL_S secondes.
+        Ne demande jamais la permission au cortex — c'est le principe du
+        système nerveux autonome. Court-circuite cooldown, coffee, sieste.
+        """
+        logger.info(
+            f"[SURVIVAL] Heartbeat tronc cerebral demarre "
+            f"(tick {AUDIT_SURVIE_TICK_INTERVAL_S:.0f}s)"
+        )
+        # Laisser le temps au système de finir son boot avant le premier tick
+        await asyncio.sleep(60)
+        while getattr(self, "is_running", True):
+            try:
+                # Force le skip du cooldown interne : ce tick-ci doit s'exécuter
+                # indépendamment du dernier passage scoring-driven.
+                self._last_audit_survie_ts = 0.0
+                response = await self._execute_audit_survie()
+                status = response.get("status", "?")
+                logger.info(f"[SURVIVAL] Heartbeat tick : status={status}")
+            except asyncio.CancelledError:
+                logger.info("[SURVIVAL] Heartbeat annule")
+                raise
+            except Exception as e:
+                logger.warning(f"[SURVIVAL] Heartbeat erreur : {e}")
+            try:
+                await asyncio.sleep(AUDIT_SURVIE_TICK_INTERVAL_S)
+            except asyncio.CancelledError:
+                raise
+
+    async def _on_survival_alert(self, event: dict):
+        """Handler adrénergique : l'alarme crie au feu, on mobilise le bras armé.
+
+        Étage 2B : lit les goals actifs du préfrontal pour trouver le step en
+        souffrance lié au drive en crise, et force son exécution. Pas de table
+        d'affinité propre — on réutilise la volonté déjà exprimée par le cortex
+        préfrontal (goals.steps). Prépare le terrain pour la Phase C (SSOT).
+
+        Garde-fous : quota quotidien, cooldown par drive, refractoire,
+        escalade graduelle soft → hard → human.
+        """
+        triggering_drive = event.get("triggering_drive", "")
+        if not triggering_drive:
+            logger.debug("[SURVIVAL_ALERT] Aucun triggering_drive dans le payload, ignore.")
+            return
+
+        now = time.time()
+        today = date.today().isoformat()
+
+        # Reset quota si nouveau jour
+        if self._survival_state.get("forces_date") != today:
+            self._survival_state["forces_date"] = today
+            self._survival_state["forces_today"] = 0
+            self._survival_state["cycle_count_per_drive"] = {}
+
+        # ─── Garde-fou A : quota quotidien strict (canari SRE) ───
+        if int(self._survival_state.get("forces_today", 0)) >= SURVIVAL_MAX_FORCES_PER_DAY:
+            logger.critical(
+                f"[SURVIVAL_FORCE_QUOTA_EXCEEDED] "
+                f"{self._survival_state['forces_today']}/{SURVIVAL_MAX_FORCES_PER_DAY} "
+                f"forcages aujourd'hui — le scoring structurel reste casse. "
+                f"Phase C (unification SSOT) devient urgente."
+            )
+            try:
+                await bus.publish("SURVIVAL_FORCE_QUOTA_EXCEEDED", {
+                    "forces_today": self._survival_state["forces_today"],
+                    "date": today,
+                    "timestamp": now,
+                })
+            except Exception:
+                pass
+            return
+
+        # ─── Garde-fou B : cooldown par drive (1 forcage/h) ───
+        last_ts = float(self._survival_state["last_force_per_drive"].get(triggering_drive, 0.0))
+        if now - last_ts < SURVIVAL_COOLDOWN_PER_DRIVE_S:
+            remaining = SURVIVAL_COOLDOWN_PER_DRIVE_S - (now - last_ts)
+            logger.info(
+                f"[SURVIVAL_ALERT] Cooldown drive {triggering_drive} "
+                f"({remaining:.0f}s restants), skip."
+            )
+            return
+
+        # ─── Garde-fou C : periode refractaire ───
+        current_drive_value = 0.0
+        try:
+            from core.desire_engine import desires
+            drive = desires.drives.get(triggering_drive)
+            if drive is not None:
+                current_drive_value = float(getattr(drive, "deprivation", 0.0))
+        except Exception:
+            pass
+
+        last_value_at_force = float(
+            self._survival_state["last_drive_value_at_force"].get(triggering_drive, 0.0)
+        )
+        if last_value_at_force > 0 and current_drive_value > SURVIVAL_REFRACTORY_THRESHOLD:
+            logger.critical(
+                f"[SURVIVAL_MAPPING_INEFFECTIVE] {triggering_drive} "
+                f"last_force={last_value_at_force:.0f} current={current_drive_value:.0f} "
+                f"— le forcage precedent n'a rien resolu. Escalade humaine."
+            )
+            try:
+                await bus.publish("SURVIVAL_MAPPING_INEFFECTIVE", {
+                    "drive": triggering_drive,
+                    "last_value_at_force": last_value_at_force,
+                    "current_value": current_drive_value,
+                    "timestamp": now,
+                })
+            except Exception:
+                pass
+            return
+
+        # ─── Lire les goals prefrontaux : trouver step en souffrance ───
+        target_intent = ""
+        target_goal_id = ""
+        target_goal_title = ""
+        target_step_idx = -1
+        try:
+            from core.prefrontal import prefrontal
+            for goal in prefrontal.goals:
+                if getattr(goal, "status", "") != "active":
+                    continue
+                # Matcher par drive_alignment OU metadata source_key
+                alignment = 0.0
+                try:
+                    alignment = float(goal.drive_alignment.get(triggering_drive, 0.0))
+                except Exception:
+                    pass
+                src_key = str((goal.metadata or {}).get("source_key", "")) if goal.metadata else ""
+                if alignment <= 0 and triggering_drive not in src_key.upper():
+                    continue
+                # Goal en souffrance : fruitless_cycles > 0
+                fruitless = 0
+                try:
+                    fruitless = int((goal.metadata or {}).get("fruitless_cycles", 0))
+                except Exception:
+                    pass
+                if fruitless <= 0:
+                    continue
+                # Trouver le premier step pending/in_progress
+                for idx, step in enumerate(goal.steps or []):
+                    step_status = getattr(step, "status", "")
+                    step_intent = getattr(step, "intent", "")
+                    if step_status in ("pending", "in_progress") and step_intent:
+                        target_intent = step_intent
+                        target_goal_id = getattr(goal, "id", "")
+                        target_goal_title = getattr(goal, "title", "")[:60]
+                        target_step_idx = idx
+                        break
+                if target_intent:
+                    break
+        except Exception as e:
+            logger.warning(f"[SURVIVAL_ALERT] Lecture prefrontal echec : {e}")
+            return
+
+        if not target_intent:
+            logger.info(
+                f"[SURVIVAL_ALERT] Aucun goal en souffrance trouve pour drive "
+                f"{triggering_drive} (current={current_drive_value:.0f})"
+            )
+            return
+
+        # ─── Garde-fou D : escalade graduelle ───
+        cycle_count = int(self._survival_state["cycle_count_per_drive"].get(triggering_drive, 0)) + 1
+        self._survival_state["cycle_count_per_drive"][triggering_drive] = cycle_count
+
+        reason = (
+            f"survival_alert drive={triggering_drive} "
+            f"goal={target_goal_id}({target_goal_title}) "
+            f"step={target_step_idx} cycle={cycle_count}"
+        )
+
+        mode = ""
+        if cycle_count < SURVIVAL_HARD_FORCE_CYCLE:
+            # Cycle 1 : soft boost — on laisse une chance au scoring normal
+            self._reptilian_boosts[target_intent] = {
+                "boost": SURVIVAL_SOFT_BOOST,
+                "expires": now + SURVIVAL_BOOST_TTL_S,
+                "source": "survival_soft",
+            }
+            mode = "soft_boost"
+            logger.warning(
+                f"[SURVIVAL_SOFT_BOOST] cycle 1 : +{SURVIVAL_SOFT_BOOST} "
+                f"sur {target_intent} pour {SURVIVAL_BOOST_TTL_S:.0f}s — {reason}"
+            )
+        elif cycle_count < SURVIVAL_HUMAN_ESCALATION_CYCLE:
+            # Cycle 2 : hard force — bypass scoring via _forced_next_intent
+            if self._forced_next_intent:
+                logger.warning(
+                    f"[SURVIVAL_HARD_FORCE] cycle 2 BLOQUE : "
+                    f"_forced_next_intent deja={self._forced_next_intent} — {reason}"
+                )
+                return
+            self._forced_next_intent = target_intent
+            mode = "hard_force"
+            logger.warning(
+                f"[SURVIVAL_HARD_FORCE] cycle 2 : forced_next_intent={target_intent} — {reason}"
+            )
+        else:
+            # Cycle 3+ : escalade humaine
+            mode = "human_escalation"
+            logger.critical(
+                f"[SURVIVAL_HUMAN_ESCALATION] cycle {cycle_count} sur {triggering_drive} "
+                f"— 2 forcages n'ont pas resolu la crise. Intervention Jean-Michel requise. {reason}"
+            )
+            try:
+                await bus.publish("AUTONOMY_SURVIVAL_HUMAN_ESCALATION", {
+                    "drive": triggering_drive,
+                    "target_intent": target_intent,
+                    "goal_id": target_goal_id,
+                    "goal_title": target_goal_title,
+                    "cycle_count": cycle_count,
+                    "timestamp": now,
+                })
+            except Exception:
+                pass
+            return
+
+        # Comptabilite (apres application reussie)
+        self._survival_state["forces_today"] = int(self._survival_state["forces_today"]) + 1
+        self._survival_state["last_force_per_drive"][triggering_drive] = now
+        self._survival_state["last_drive_value_at_force"][triggering_drive] = current_drive_value
+
+        # Publier l'override : inner_voice genere une surprise auto-reflexive,
+        # chat_engine injecte "[SURVIVAL_OVERRIDE] tu as ete force a X parce que Y"
+        try:
+            await bus.publish("AUTONOMY_SURVIVAL_OVERRIDE", {
+                "drive": triggering_drive,
+                "target_intent": target_intent,
+                "goal_id": target_goal_id,
+                "goal_title": target_goal_title,
+                "step_idx": target_step_idx,
+                "cycle": cycle_count,
+                "mode": mode,
+                "current_drive_value": current_drive_value,
+                "reason": reason,
+                "timestamp": now,
+            })
+        except Exception:
+            pass
 
     async def _on_reptilian_directive(self, event: dict):
         """Recoit une directive du reptilien (circuit reflexe codelet→reptilien→autonomy).
@@ -1268,6 +1563,9 @@ class AutonomyEngine:
                 "[MODE VEILLE] Croise les connaissances internes. Decouvre des patterns et connexions entre domaines.")},
             {"agent": "evolution", "intent": "EXPANSION_CATALOG", "mission": "[MODE VEILLE] [CATALOG] Selectionne une spec du catalogue et tente de l'implementer."},
             {"agent": "architect", "intent": "AUDIT_STRUCTURE", "mission": "Vérifie qu'aucun fichier temporaire (.tmp, .log) ne traîne à la racine."},
+            {"agent": "architect", "intent": "AUDIT_SURVIE", "mission": "Vérifie les constantes vitales : dopamine, drives critiques, error_streak, fruitless cycles. Alerte si seuils dépassés."},
+            {"agent": "architect", "intent": "REFACTORING_AUDIT", "mission": "Scanne core/*.py via AST, détecte fichiers volumineux et fonctions longues, produit docs/refactoring_targets.md (lecture seule, 0 LLM)."},
+            {"agent": "architect", "intent": "CI_PIPELINE_RUN", "mission": "Lance pytest sur la suite de tests et rapporte le statut passed/failed/errors (subprocess, 0 LLM)."},
             {"agent": "researcher", "intent": "VEILLE_SILENCIEUSE",
              "mission": self._build_dynamic_mission("VEILLE_SILENCIEUSE", veille_mission)},
             {"agent": "researcher", "intent": "DROPZONE_SCAN", "mission": "dropzone: Scanne la dropzone pour de nouveaux fichiers."},
@@ -1349,6 +1647,7 @@ class AutonomyEngine:
             "_autoresearch_baseline_metrics": getattr(self, "_autoresearch_baseline_metrics", {}),
             "lif_potentials": getattr(self, "_lif_potentials", {}),
             "intent_quality_stats": getattr(self, "_intent_quality_stats", {}),
+            "survival_state": getattr(self, "_survival_state", {}),
         }
         AutonomyStatePersistence.save(state)
 
@@ -2858,6 +3157,12 @@ class AutonomyEngine:
             response = await self._execute_security_audit()
         elif intent == "AUDIT_STRUCTURE":
             response = await self._execute_audit_structure()
+        elif intent == "AUDIT_SURVIE":
+            response = await self._execute_audit_survie()
+        elif intent == "REFACTORING_AUDIT":
+            response = await self._execute_refactoring_audit()
+        elif intent == "CI_PIPELINE_RUN":
+            response = await self._execute_ci_pipeline_run()
         elif intent == "REFACTOR_RANDOM":
             response = await self._execute_refactor_random()
         elif intent == "MEMORY_CONSOLIDATION":
@@ -3421,6 +3726,12 @@ class AutonomyEngine:
             response = await self._execute_security_audit()
         elif intent == "AUDIT_STRUCTURE":
             response = await self._execute_audit_structure()
+        elif intent == "AUDIT_SURVIE":
+            response = await self._execute_audit_survie()
+        elif intent == "REFACTORING_AUDIT":
+            response = await self._execute_refactoring_audit()
+        elif intent == "CI_PIPELINE_RUN":
+            response = await self._execute_ci_pipeline_run()
         elif intent == "REFACTOR_RANDOM":
             response = await self._execute_refactor_random()
         elif intent == "MEMORY_CONSOLIDATION":
@@ -4638,6 +4949,12 @@ class AutonomyEngine:
             response = None
             if intent == "AUDIT_STRUCTURE":
                 response = await self._execute_audit_structure()
+            elif intent == "AUDIT_SURVIE":
+                response = await self._execute_audit_survie()
+            elif intent == "REFACTORING_AUDIT":
+                response = await self._execute_refactoring_audit()
+            elif intent == "CI_PIPELINE_RUN":
+                response = await self._execute_ci_pipeline_run()
             elif intent == "MEMORY_CLEANUP":
                 response = await self._execute_memory_cleanup()
             elif intent == "NEURAL_COMPILE":
@@ -5517,6 +5834,245 @@ class AutonomyEngine:
             logger.warning(f"[AUDIT_STRUCTURE] Erreur scan: {e}")
             return {"status": "error", "result": f"Erreur lors du scan structure : {e}"}
 
+    async def _execute_audit_survie(self) -> dict:
+        """Audit de survie 3-cycles : vérifie dopamine, drives, error_streak, fruitless cycles.
+
+        Feature issue du cours de soutien S1-S12 (faiblesse "absence résistance au changement").
+        Cooldown 300s. Publie AUTONOMY_SURVIVAL_ALERT si ≥2 seuils dépassés.
+        """
+        now = time.time()
+        last_ts = getattr(self, "_last_audit_survie_ts", 0.0)
+        if now - last_ts < AUDIT_SURVIE_COOLDOWN_S:
+            remaining = AUDIT_SURVIE_COOLDOWN_S - (now - last_ts)
+            logger.info(f"[AUDIT_SURVIE] Cooldown actif ({remaining:.0f}s restants), skip.")
+            return {"status": "skipped", "result": f"Cooldown {remaining:.0f}s."}
+        self._last_audit_survie_ts = now
+
+        alerts: list[str] = []
+        checks_failed = 0
+        critical_drives: list[tuple] = []  # [(name, deprivation)] pour triggering_drive
+
+        # CYCLE 1 : Dopamine effondrée
+        try:
+            from core.dopamine_system import dopamine
+            level = float(getattr(dopamine, "dopamine_level", 1.0))
+            if level < AUDIT_SURVIE_DOPAMINE_FLOOR:
+                alerts.append(f"[CRITIQUE] Dopamine effondrée : {level:.2f} (seuil {AUDIT_SURVIE_DOPAMINE_FLOOR})")
+                checks_failed += 1
+        except Exception as e:
+            logger.debug(f"[AUDIT_SURVIE] Lecture dopamine indisponible : {e}")
+
+        # CYCLE 2 : Drives critiques (MAITRISE, STABILITE > 90)
+        try:
+            from core.desire_engine import desires
+            for drive in desires.drives.values():
+                name = getattr(drive, "name", "?")
+                dep = float(getattr(drive, "deprivation", 0.0))
+                if name in ("MAITRISE", "STABILITE", "COMPREHENSION") and dep > AUDIT_SURVIE_DRIVE_CRITICAL:
+                    alerts.append(f"[CRITIQUE] Drive {name} critique : {dep:.0f}/100")
+                    critical_drives.append((name, dep))
+                    checks_failed += 1
+        except Exception as e:
+            logger.debug(f"[AUDIT_SURVIE] Lecture drives indisponible : {e}")
+
+        # CYCLE 3 : Error streak élevé
+        if self.error_streak >= AUDIT_SURVIE_ERROR_STREAK:
+            alerts.append(f"[ALERTE] Error streak élevé : {self.error_streak} échecs consécutifs")
+            checks_failed += 1
+
+        # CYCLE 4 : Fruitless cycles — même intent ≥3 fois faible qualité dans les 10 derniers
+        recent = self.routine_history[-AUDIT_SURVIE_FRUITLESS_WINDOW:]
+        intent_stats: dict = {}
+        for h in recent:
+            intent = h.get("intent")
+            if not intent:
+                continue
+            q = float(h.get("quality_score", h.get("quality", 1.0)) or 0.0)
+            stat = intent_stats.setdefault(intent, {"count": 0, "q_sum": 0.0})
+            stat["count"] += 1
+            stat["q_sum"] += q
+        for intent, stat in intent_stats.items():
+            if stat["count"] >= AUDIT_SURVIE_FRUITLESS_COUNT:
+                avg_q = stat["q_sum"] / stat["count"]
+                if avg_q < 0.4:
+                    alerts.append(f"[ALERTE] Routine improductive : {intent} ×{stat['count']}, qualité moyenne {avg_q:.2f}")
+                    checks_failed += 1
+
+        # Escalade si ≥2 seuils dépassés (ou dès qu'un drive est critique : prioritaire)
+        should_escalate = checks_failed >= 2 or bool(critical_drives)
+        if should_escalate:
+            # Drive déclencheur : celui avec la plus forte déprivation (si plusieurs)
+            triggering_drive = ""
+            if critical_drives:
+                critical_drives.sort(key=lambda x: -x[1])
+                triggering_drive = critical_drives[0][0]
+            logger.warning(
+                f"[AUDIT_SURVIE] {checks_failed} alertes de survie — escalade bus "
+                f"(triggering_drive={triggering_drive or 'none'})."
+            )
+            try:
+                await bus.publish("AUTONOMY_SURVIVAL_ALERT", {
+                    "checks_failed": checks_failed,
+                    "alerts": alerts,
+                    "triggering_drive": triggering_drive,
+                    "critical_drives": [{"name": n, "deprivation": d} for n, d in critical_drives],
+                    "timestamp": now,
+                })
+            except Exception as e:
+                logger.debug(f"[AUDIT_SURVIE] Publish échec : {e}")
+
+        if alerts:
+            report = f"AUDIT SURVIE — {len(alerts)} alerte(s) :\n" + "\n".join(f"- {a}" for a in alerts)
+            if checks_failed >= 2:
+                report += "\n\nEscalade émise sur le bus (AUTONOMY_SURVIVAL_ALERT)."
+        else:
+            report = "AUDIT SURVIE — Constantes vitales nominales. Aucune alerte."
+
+        logger.info(f"[AUDIT_SURVIE] Terminé : {checks_failed} check(s) en alerte.")
+        return {"status": "success", "result": report}
+
+    async def _execute_refactoring_audit(self) -> dict:
+        """Matérialisation de la routine canonique REFACTORING_AUDIT (Étage 1 du bouton panique).
+
+        Lecture seule : scanne core/*.py via AST, détecte fichiers volumineux
+        et fonctions longues, produit docs/refactoring_targets.md. Zero LLM.
+        Bras armé du drive MAITRISE via _DRIVE_ROUTINE_MAP du préfrontal.
+        """
+        import ast
+        try:
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            core_dir = os.path.join(project_root, "core")
+            if not os.path.isdir(core_dir):
+                return {"status": "error", "result": f"Dossier core/ introuvable : {core_dir}"}
+
+            targets: list = []
+            files_scanned = 0
+            total_lines = 0
+
+            for entry in os.scandir(core_dir):
+                if not entry.is_file() or not entry.name.endswith(".py"):
+                    continue
+                files_scanned += 1
+                try:
+                    with open(entry.path, "r", encoding="utf-8") as fh:
+                        src = fh.read()
+                    lines = src.count("\n") + 1
+                    total_lines += lines
+
+                    # Critère 1 : fichier > 1500 lignes
+                    if lines > 1500:
+                        targets.append({
+                            "file": entry.name,
+                            "kind": "large_file",
+                            "metric": f"{lines} lignes",
+                            "severity": 3 if lines > 3000 else 2,
+                        })
+
+                    # Critère 2 : fonctions > 80 lignes via AST
+                    try:
+                        tree = ast.parse(src)
+                        for node in ast.walk(tree):
+                            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                                start = node.lineno
+                                end = node.end_lineno or start
+                                func_lines = end - start + 1
+                                if func_lines > 80:
+                                    targets.append({
+                                        "file": entry.name,
+                                        "kind": "long_function",
+                                        "metric": f"{node.name} L{start}-{end} ({func_lines} lignes)",
+                                        "severity": 3 if func_lines > 200 else 2 if func_lines > 120 else 1,
+                                    })
+                    except SyntaxError as se:
+                        targets.append({
+                            "file": entry.name,
+                            "kind": "syntax_error",
+                            "metric": str(se)[:80],
+                            "severity": 3,
+                        })
+                except Exception:
+                    continue
+
+            # Trier par sévérité puis par métrique
+            targets.sort(key=lambda t: (-t["severity"], t["file"]))
+
+            # Écrire le rapport
+            report_path = os.path.join(project_root, "docs", "refactoring_targets.md")
+            os.makedirs(os.path.dirname(report_path), exist_ok=True)
+            with open(report_path, "w", encoding="utf-8") as fh:
+                fh.write(f"# Refactoring Targets — {date.today().isoformat()}\n\n")
+                fh.write(f"Auto-généré par `REFACTORING_AUDIT` (bras armé du drive MAITRISE).\n\n")
+                fh.write(f"- Fichiers scannés : **{files_scanned}**\n")
+                fh.write(f"- Lignes totales : **{total_lines}**\n")
+                fh.write(f"- Cibles détectées : **{len(targets)}**\n\n")
+                if targets:
+                    fh.write("## Top cibles (par sévérité)\n\n")
+                    for t in targets[:40]:
+                        sev_mark = "🔴" if t["severity"] >= 3 else "🟡" if t["severity"] >= 2 else "🟢"
+                        fh.write(f"- {sev_mark} **{t['file']}** — `{t['kind']}` — {t['metric']}\n")
+                else:
+                    fh.write("Aucune cible détectée. Le noyau est propre.\n")
+
+            summary = (
+                f"REFACTORING AUDIT — {files_scanned} fichiers scannés, "
+                f"{len(targets)} cibles (rapport: docs/refactoring_targets.md)"
+            )
+            logger.info(f"[REFACTORING_AUDIT] {summary}")
+            return {"status": "success", "result": summary}
+        except Exception as e:
+            logger.warning(f"[REFACTORING_AUDIT] Erreur : {e}")
+            return {"status": "error", "result": f"REFACTORING_AUDIT erreur : {e}"}
+
+    async def _execute_ci_pipeline_run(self) -> dict:
+        """Matérialisation de la routine canonique CI_PIPELINE_RUN (Étage 1 du bouton panique).
+
+        Lance pytest sur la suite de tests en mode rapide (timeout 120s) et
+        rapporte passed/failed/errors. Zero LLM, 0 coût LLM (mais utilise CPU).
+        Bras armé du drive STABILITE via _DRIVE_ROUTINE_MAP du préfrontal.
+        """
+        import subprocess
+        try:
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+
+            proc = await asyncio.create_subprocess_exec(
+                "python", "-m", "pytest", "tests/", "--tb=no", "-q",
+                cwd=project_root, env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                logger.warning("[CI_PIPELINE_RUN] Timeout 120s")
+                return {"status": "error", "result": "CI pipeline timeout après 120s"}
+
+            out = stdout.decode("utf-8", errors="replace")
+            import re
+            m_passed = re.search(r"(\d+) passed", out)
+            m_failed = re.search(r"(\d+) failed", out)
+            m_error = re.search(r"(\d+) error", out)
+            passed = int(m_passed.group(1)) if m_passed else 0
+            failed = int(m_failed.group(1)) if m_failed else 0
+            errors = int(m_error.group(1)) if m_error else 0
+            total = passed + failed + errors
+
+            summary = f"CI PIPELINE — {passed}/{total} passés (failed={failed}, errors={errors})"
+            logger.info(f"[CI_PIPELINE_RUN] {summary}")
+            if failed > 0 or errors > 0:
+                return {"status": "error", "result": summary}
+            return {"status": "success", "result": summary}
+        except FileNotFoundError:
+            return {"status": "error", "result": "CI pipeline : python introuvable dans PATH"}
+        except Exception as e:
+            logger.warning(f"[CI_PIPELINE_RUN] Erreur : {e}")
+            return {"status": "error", "result": f"CI pipeline erreur : {e}"}
+
     async def _execute_refactor_random(self) -> dict:
         """Propose un refactoring pour un fichier aléatoire."""
         try:
@@ -5713,6 +6269,11 @@ class AutonomyEngine:
         self._loop_last_tick = time.time()
         self._load_overrides()  # Restaurer les découvertes autoresearch
         print(f"   🧠 AUTONOMY: Moteur V24 (Health-Aware Sentinel) activé. Limite: {MAX_DAILY_ROUTINES} routines/jour.")
+
+        # Démarrer le heartbeat de survie (tronc cérébral indépendant)
+        if self._survival_tick_task is None or self._survival_tick_task.done():
+            self._survival_tick_task = asyncio.create_task(self._survival_heartbeat_loop())
+            print(f"   🫀 SURVIVAL: Heartbeat tronc cérébral démarré (tick {AUDIT_SURVIE_TICK_INTERVAL_S:.0f}s).")
 
         while self.is_running:
           try:
