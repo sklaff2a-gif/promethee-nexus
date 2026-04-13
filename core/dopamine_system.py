@@ -229,6 +229,9 @@ class DopamineSystem:
             bus.subscribe("TISSUE_PATTERN_EMERGED", self._on_tissue_pattern)
             bus.subscribe("TISSUE_DIVERSITY_DROP", self._on_tissue_diversity_drop)
             bus.subscribe("BASAL_GANGLIA_HABIT_FORMED", self._on_habit_formed)
+            # Fix 1 (homeostatic closure) : RPE base sur causal_drop
+            bus.subscribe("PREFRONTAL_GOAL_COMPLETE", self._on_goal_complete_homeostatic)
+            bus.subscribe("PREFRONTAL_GOAL_ABANDONED", self._on_goal_abandoned_fruitless)
         except Exception as e:
             logger.warning(f"DOPAMINE: Echec souscription bus: {e}")
 
@@ -519,6 +522,114 @@ class DopamineSystem:
         if self._obs_since_save >= AUTOSAVE_INTERVAL:
             self._save()
             self._obs_since_save = 0
+
+    # ================================================================
+    # FIX 1 — RPE base sur causal_drop (homeostatic closure)
+    # ================================================================
+
+    async def _on_goal_complete_homeostatic(self, event: dict):
+        """Goal ferme homeostatiquement : la tension upstream a vraiment baisse.
+        On distribue un RPE positif aux intents qui ont participe.
+
+        Fix 1 transforme la dopamine d'un signal de "ticket ferme" en signal de
+        "tension reellement resolue", evitant la Loi de Goodhart.
+        """
+        if event.get("completion_mode") != "homeostatic":
+            return  # Ignorer les fermetures bureaucratiques
+
+        causal_drop = float(event.get("causal_drop") or 0.0)
+        tension_at_birth = float(event.get("tension_at_birth") or 50.0)
+        step_intents = event.get("step_intents") or []
+
+        if not step_intents or tension_at_birth <= 0:
+            return
+
+        # Quality dans [0, 1] = ratio de la tension qui a baisse causalement
+        quality = max(0.0, min(1.0, causal_drop / tension_at_birth))
+
+        # Apprentissage per-intent (chaque step partage le credit egalement)
+        # Note Gemini : credit assignment per-intent via memoire dopaminergique
+        # individuelle. Les intents non participants ne sont pas affectes.
+        n_steps = len(step_intents)
+        share = quality  # Chaque intent recoit la full quality (pas de division)
+                         # car ils ont tous "contribue" a la sequence reussie.
+        avg_rpe = 0.0
+        for intent in step_intents:
+            rpe = self.compute_rpe(intent, share)
+            self._update_value(intent, share, rpe)
+            avg_rpe += rpe
+            self._recent_intents.append(intent)
+        avg_rpe /= max(n_steps, 1)
+
+        # Dopamine level : un seul update par goal (pas N updates)
+        # Habituation appliquee sur le RPE moyen
+        memory = self.memories.get(step_intents[0]) if step_intents else None
+        habituation = self._compute_habituation_factor(memory) if memory else 1.0
+        self._update_dopamine_level(avg_rpe * habituation)
+
+        if avg_rpe > RPE_SURGE_THRESHOLD:
+            try:
+                await bus.publish("DOPAMINE_SURGE", {
+                    "source": "homeostatic_resolution",
+                    "goal_id": event.get("goal_id"),
+                    "rpe": round(avg_rpe, 3),
+                    "level": round(self.dopamine_level, 3),
+                    "causal_drop": round(causal_drop, 2),
+                })
+            except Exception:
+                pass
+            logger.info(
+                f"DOPAMINE: SURGE homeostatic goal={event.get('goal_id')} "
+                f"RPE=+{avg_rpe:.3f} causal_drop={causal_drop:.1f} niveau={self.dopamine_level:.2f}"
+            )
+
+    async def _on_goal_abandoned_fruitless(self, event: dict):
+        """Goal abandonne fruitless : routines ont tourne mais tension n'a pas baisse.
+        On distribue un DIP aux intents coupables. C'est l'extinction du conditionnement
+        operant : le systeme apprend a ne plus utiliser ces sequences.
+        """
+        completion_mode = event.get("completion_mode")
+        if completion_mode != "abandoned_fruitless":
+            return  # Autres types d'abandon (cout excessif, etc.) ne sont pas Fix 1
+
+        step_intents = event.get("step_intents") or []
+        if not step_intents:
+            return
+
+        # Quality tres basse (~0.05) : la routine a fait acte de presence sans rien resoudre.
+        # C'est en dessous de BASELINE_DOPAMINE (typ. 0.5), donc va creer un RPE negatif
+        # qui penalise les V(intent) des steps coupables.
+        quality = 0.05
+
+        avg_rpe = 0.0
+        for intent in step_intents:
+            rpe = self.compute_rpe(intent, quality)
+            self._update_value(intent, quality, rpe)
+            avg_rpe += rpe
+            self._recent_intents.append(intent)
+        avg_rpe /= max(len(step_intents), 1)
+
+        # DIP global modere (pas N updates pour eviter de plomber le mood)
+        memory = self.memories.get(step_intents[0]) if step_intents else None
+        habituation = self._compute_habituation_factor(memory) if memory else 1.0
+        self._update_dopamine_level(avg_rpe * habituation)
+
+        if avg_rpe < RPE_DIP_THRESHOLD:
+            try:
+                await bus.publish("DOPAMINE_DIP", {
+                    "source": "fruitless_abandonment",
+                    "goal_id": event.get("goal_id"),
+                    "rpe": round(avg_rpe, 3),
+                    "level": round(self.dopamine_level, 3),
+                    "fruitless_cycles": event.get("fruitless_cycles"),
+                })
+            except Exception:
+                pass
+            logger.info(
+                f"DOPAMINE: DIP fruitless goal={event.get('goal_id')} "
+                f"RPE={avg_rpe:.3f} cycles={event.get('fruitless_cycles')} "
+                f"niveau={self.dopamine_level:.2f}"
+            )
 
     async def _on_cardiac_beat(self, event: dict):
         """Tick cardiaque → decay dopamine + broadcast periodique."""

@@ -1141,6 +1141,146 @@ class SelfAwarenessEngine:
         """Retourne les lacunes non comblées."""
         return [g for g in self._knowledge_gaps if not g["learned"]]
 
+    # --- Fix 1 Phase C : TensionSource pour les KNOWLEDGE_GAP ---
+
+    def _get_semantic_evaluator(self):
+        """Lazy load du semantic evaluator (singleton).
+
+        L'evaluator utilise un cache LRU 15 min pour amortir le cout des
+        appels LLM multiples (2 samples × ~3s = 6s par evaluation fraiche).
+        En pratique, au sein d'un cycle `_check_goal_completion`, le second
+        appel tape le cache et retourne en < 1ms.
+
+        Implementation : appel Ollama direct en SYNC via requests + timeout
+        5s strict par call. Pas de llm_manager (n'existe pas), pas de
+        gpu_scheduler (pas accessible depuis un contexte sync). V2 devrait
+        passer en async avec asyncio.to_thread pour ne pas bloquer le
+        main loop durant l'evaluation fresh (ici amorti par cache 15min).
+        """
+        if not hasattr(self, '_semantic_evaluator') or self._semantic_evaluator is None:
+            from core.semantic_evaluator import SemanticEvaluator
+            import requests
+
+            OLLAMA_URL = "http://localhost:11434/api/generate"
+            # Modele local leger par defaut
+            MODEL = "qwen2.5:7b"
+
+            def llm_generate(prompt: str, temperature: float) -> str:
+                """Appel Ollama sync avec timeout strict pour ne pas bloquer."""
+                try:
+                    payload = {
+                        "model": MODEL,
+                        "prompt": prompt,
+                        "stream": False,
+                        "think": False,
+                        "options": {
+                            "temperature": temperature,
+                            "num_predict": 250,
+                            "num_ctx": 2048,
+                        },
+                    }
+                    resp = requests.post(OLLAMA_URL, json=payload, timeout=8)
+                    if resp.status_code == 200:
+                        return resp.json().get("response", "")
+                    logger.warning(
+                        f"AWARENESS: semantic_evaluator Ollama returned {resp.status_code}"
+                    )
+                    return ""
+                except requests.exceptions.Timeout:
+                    logger.warning("AWARENESS: semantic_evaluator Ollama timeout 8s")
+                    return ""
+                except Exception as e:
+                    logger.warning(f"AWARENESS: semantic_evaluator LLM call failed: {e}")
+                    return ""
+
+            self._semantic_evaluator = SemanticEvaluator(llm_generate=llm_generate)
+        return self._semantic_evaluator
+
+    def compute_epistemic_surprise(self, topic: str) -> float:
+        """Retourne la tension initiale d'une lacune sur un topic donne.
+
+        La "surprise epistemique" = inverse de la consistance du savoir actuel.
+        Un topic deja maitrise -> surprise basse (tension 20-40).
+        Un topic totalement inconnu -> surprise haute (tension 80-95).
+
+        Utilisee par le prefrontal au moment de creer un goal KNOWLEDGE_GAP
+        pour remplir le champ metadata.tension_at_birth.
+        """
+        try:
+            evaluator = self._get_semantic_evaluator()
+            result = evaluator.evaluate_knowledge(topic)
+            # consistency haute -> tension basse
+            tension = 100.0 * (1.0 - result.score)
+            # Clamp dans [20, 95] pour eviter les extremes
+            return max(20.0, min(95.0, tension))
+        except Exception as e:
+            logger.warning(f"AWARENESS: compute_epistemic_surprise echec: {e}")
+            return 70.0  # defaut conservateur
+
+    def measure_tension(self, goal_meta: dict):
+        """Implementation TensionSource pour goals issus de KNOWLEDGE_GAP.
+
+        Calcule une TensionMeasurement avec causal_drop base sur la
+        difference entre la tension_at_birth (snapshot au moment de la
+        creation du goal) et la tension courante mesuree via self_consistency.
+
+        Counterfactual : la tension knowledge-gap est STATIONNAIRE (pas de
+        decay ni de rise naturel comme les drives). Toute baisse observee
+        est attribuable a l'action.
+        """
+        from core.tension_protocol import TensionMeasurement
+
+        topic = goal_meta.get("source_key", "")
+        tension_at_birth = float(goal_meta.get("tension_at_birth", 70.0))
+
+        try:
+            evaluator = self._get_semantic_evaluator()
+            result = evaluator.evaluate_knowledge(topic)
+            # Score eleve -> topic maitrise -> tension basse
+            current_tension = 100.0 * (1.0 - result.score)
+        except Exception as e:
+            logger.warning(f"AWARENESS: measure_tension echec: {e}")
+            return TensionMeasurement(
+                current_tension=tension_at_birth,
+                tension_at_birth=tension_at_birth,
+                expected_if_no_action=tension_at_birth,
+                causal_drop=0.0,
+                is_resolved=False,
+                is_worsened=False,
+                extra={"error": str(e)}
+            )
+
+        # Counterfactual stationnaire
+        expected_if_no_action = tension_at_birth
+
+        causal_drop = expected_if_no_action - current_tension
+
+        # Seuil de resolution : 40% de la tension au depart (meme que desire_engine)
+        # Note : avec le vrai sentence_transformers le score sera plus eleve
+        # que le mock bag-of-words, donc ce seuil sera plus facilement atteint.
+        resolution_threshold = max(8.0, tension_at_birth * 0.40)
+        is_resolved = causal_drop >= resolution_threshold
+
+        is_worsened = causal_drop <= -10.0
+
+        return TensionMeasurement(
+            current_tension=float(current_tension),
+            tension_at_birth=float(tension_at_birth),
+            expected_if_no_action=float(expected_if_no_action),
+            causal_drop=float(causal_drop),
+            is_resolved=is_resolved,
+            is_worsened=is_worsened,
+            extra={
+                "topic": topic,
+                "self_consistency": result.score,
+                "consistency_component": result.consistency,
+                "density_component": result.density,
+                "refusal_component": result.refusal_probability,
+                "from_cache": result.from_cache,
+                "resolution_threshold": round(resolution_threshold, 2),
+            }
+        )
+
     # --- Méta-réflexion ---
 
     def meta_reflect(self) -> dict:

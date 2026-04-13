@@ -106,6 +106,11 @@ class Goal:
     cost_estimated: int = 10
     drive_alignment: Dict[str, float] = field(default_factory=dict)
     last_advanced: float = field(default_factory=time.time)
+    # Fix 1 (homeostatic closure) : metadata pour tension tracking via TensionSource protocol
+    # Cle attendues : source_organ, source_key, tension_at_birth, created_at, goal_id,
+    #                 attempts_count, fruitless_cycles, max_fruitless, completion_mode
+    # Si metadata vide -> goal tombe dans fallback bureaucratique (Mur de la Honte)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -278,8 +283,26 @@ class PrefrontalCortex:
                 return
         if len([g for g in self.goals if g.status == "active"]) >= MAX_GOALS:
             return
+        goal_id = uuid.uuid4().hex[:8]
+        # Fix 1 Phase C : metadata pour fermeture homeostatique via
+        # self_awareness.measure_tension (semantic_evaluator)
+        from core.tension_protocol import make_goal_metadata
+        tension_at_birth = 70.0  # defaut conservateur
+        try:
+            from core.self_awareness import awareness
+            if hasattr(awareness, 'compute_epistemic_surprise'):
+                tension_at_birth = awareness.compute_epistemic_surprise(topic)
+        except Exception as e:
+            logger.warning(f"PREFRONTAL: compute_epistemic_surprise echec: {e}")
+        goal_meta = make_goal_metadata(
+            source_organ="self_awareness",
+            source_key=topic,
+            tension_at_birth=tension_at_birth,
+            goal_id=goal_id,
+            created_at=time.time(),
+        )
         goal = Goal(
-            id=uuid.uuid4().hex[:8],
+            id=goal_id,
             title=f"Combler lacune: {topic}",
             horizon="short",
             priority=5.0,
@@ -290,10 +313,11 @@ class PrefrontalCortex:
             ],
             cost_estimated=6,
             drive_alignment={"CURIOSITE": 0.8, "COMPREHENSION": 0.9},
+            metadata=goal_meta,
         )
         self.goals.append(goal)
         self.stats["goals_created"] += 1
-        self._narrate("goal", f"Nouvelle lacune détectée: {topic}. Goal créé.")
+        self._narrate("goal", f"Nouvelle lacune détectée: {topic} (tension={tension_at_birth:.0f}). Goal créé.")
         self._publish_goal_event("PREFRONTAL_GOAL_CREATED", goal)
 
     async def _on_eureka_bridge(self, data: dict):
@@ -383,7 +407,9 @@ class PrefrontalCortex:
             # L'inhibition s'occupera de bloquer les distractions
 
     async def _on_cardiac_beat(self, data: dict):
-        """Détecte l'état flow pour ajuster la stratégie."""
+        """Détecte l'état flow pour ajuster la stratégie.
+        Fix 1.6 : re-check periodique des goals orphelins toutes les 15 min.
+        """
         self._recent_events.append("CARDIAC_BEAT")
         emotion = data.get("emotion", "")
         coherence = data.get("coherence", 0.0)
@@ -393,6 +419,84 @@ class PrefrontalCortex:
             if active:
                 active.sort(key=lambda g: g.priority, reverse=True)
                 active[0].priority = min(10.0, active[0].priority + 0.2)
+
+        # Fix 1.6 : tick periodique pour les goals orphelins
+        # Sans ca, un goal dont aucune routine ne s'execute reste en stase
+        # eternelle (MAITRISE/STABILITE a 96 de tension observe en live).
+        now = time.time()
+        last = getattr(self, '_last_periodic_recheck', 0)
+        if now - last >= 900.0:  # 15 min
+            self._last_periodic_recheck = now
+            self._periodic_recheck_orphan_goals()
+
+    def _periodic_recheck_orphan_goals(self):
+        """Fix 1.6 : re-evalue les goals actifs avec metadata, independamment
+        de l'execution de routines. Permet aux goals orphelins (aucune routine
+        dispatchee dessus) d'accumuler des fruitless_cycles et d'etre
+        eventuellement abandonnes avec dopamine DIP.
+
+        Appelle `_tick_orphan_goal` pour chaque goal actif avec metadata,
+        qui est une variante de `_check_goal_completion` qui n'exige PAS que
+        les steps soient done avant d'incrementer fruitless. La logique :
+          - Si tension resolue -> fermeture homeostatic
+          - Si tension stable ou aggravee -> fruitless++ (meme si steps pending)
+          - Si fruitless >= max -> abandon fruitless + dopamine DIP
+        """
+        rechecked = 0
+        abandoned = 0
+        closed_homeostatic = 0
+        for g in list(self.goals):
+            if g.status != "active":
+                continue
+            if not (getattr(g, "metadata", None) and g.metadata.get("source_organ")):
+                continue
+            try:
+                outcome = self._tick_orphan_goal(g)
+                rechecked += 1
+                if outcome == "closed_homeostatic":
+                    closed_homeostatic += 1
+                elif outcome == "abandoned":
+                    abandoned += 1
+            except Exception as e:
+                logger.warning(f"PREFRONTAL: tick orphan {g.id} echec: {e}")
+        if rechecked:
+            logger.info(
+                f"PREFRONTAL: tick periodique recheck {rechecked} goals "
+                f"(Fix 1.6) closed={closed_homeostatic} abandoned={abandoned}"
+            )
+
+    def _tick_orphan_goal(self, goal: Goal) -> str:
+        """Variante de _check_goal_completion dediee au tick periodique.
+
+        Incremente fruitless_cycles meme si les steps ne sont pas done,
+        car le tick periodique traite le cas des goals orphelins qui ne
+        recoivent jamais de routines dispatchees.
+
+        Retourne 'closed_homeostatic' | 'abandoned' | 'ticked'.
+        """
+        meta = goal.metadata
+        source_organ_name = meta.get("source_organ", "")
+        if not source_organ_name:
+            return "skipped"
+
+        source = self._resolve_tension_source(source_organ_name)
+        if source is None:
+            return "skipped"
+
+        measurement = source.measure_tension(meta)
+
+        if measurement.is_resolved:
+            self._close_goal_homeostatic(goal, measurement)
+            return "closed_homeostatic"
+
+        # Non resolu : incrementer fruitless_cycles (le simple fait que le
+        # goal existe depuis un tick sans que la tension baisse est un cycle
+        # sterile, peu importe si les steps ont tourne ou pas).
+        meta["fruitless_cycles"] = meta.get("fruitless_cycles", 0) + 1
+        if meta["fruitless_cycles"] >= meta.get("max_fruitless", 5):
+            self._abandon_for_frustration(goal, measurement)
+            return "abandoned"
+        return "ticked"
 
     async def _on_hallucination(self, data: dict):
         """Crée un trigger prospectif pour auditer après hallucination."""
@@ -556,20 +660,156 @@ class PrefrontalCortex:
         goal.progress = round(done / len(goal.steps), 2)
 
     def _check_goal_completion(self, goal: Goal):
-        """Vérifie si un goal est terminé."""
+        """Verifie si un goal est termine.
+
+        Fix 1.5 (tension-first closure) : on regarde la tension upstream EN
+        PREMIER. Si elle a baisse assez, on ferme homeostatiquement meme si
+        les steps ne sont pas tous done. Les steps sont un moyen, la
+        resolution de la tension est la fin. Si la fin est atteinte par un
+        autre mecanisme (autre goal, consolidation, decay), on ferme.
+
+        Fallback bureaucratique seulement si aucune metadata ou si steps done
+        mais tension pas baissee.
+        """
+        # Guard : ne jamais re-evaluer un goal deja ferme
+        if goal.status != "active":
+            return
         if not goal.steps:
             return
+
+        # ─── Fix 1.5 : verification homeostatique PRIORITAIRE ───
+        # Si metadata Fix 1 presente, on consulte la tension upstream avant
+        # toute logique de steps. Un drive deja satisfait doit fermer son goal
+        # meme si les routines ne sont pas toutes executees.
+        if not hasattr(goal, "metadata") or goal.metadata is None:
+            goal.metadata = {}
+        meta = goal.metadata
+        source_organ_name = meta.get("source_organ", "")
+
+        if source_organ_name:
+            try:
+                source = self._resolve_tension_source(source_organ_name)
+                if source is not None:
+                    measurement = source.measure_tension(meta)
+                    if measurement.is_resolved:
+                        # Fermeture homeostatique immediate : tension resolue
+                        # (peu importe l'etat des steps)
+                        self._close_goal_homeostatic(goal, measurement)
+                        return
+            except Exception as e:
+                logger.warning(
+                    f"PREFRONTAL: tension-first check echec pour {source_organ_name}: {e}"
+                )
+                # Continue vers la logique steps
+
+        # ─── Logique classique basee sur les steps ───
         required_done = all(
             s.status in ("done", "skipped") for s in goal.steps if s.required
         )
         all_done = all(s.status in ("done", "skipped", "failed") for s in goal.steps)
-        if required_done or all_done:
-            goal.status = "completed"
-            self.stats["goals_completed"] += 1
-            self._narrate("goal", f"Goal accompli: {goal.title}")
-            self._publish_goal_event("PREFRONTAL_GOAL_COMPLETE", goal)
-            # Extraire stratégie
-            self._learn_strategy_from_goal(goal)
+
+        if not (required_done or all_done):
+            return  # Pas encore termine bureaucratiquement
+
+        # ─── Tentative de fermeture homeostatique (steps done path) ───
+        completion_mode = "bureaucratic"  # defaut
+        measurement = None
+        if source_organ_name:
+            try:
+                source = self._resolve_tension_source(source_organ_name)
+                if source is not None:
+                    measurement = source.measure_tension(meta)
+                    if measurement.is_resolved:
+                        completion_mode = "homeostatic"
+                    elif measurement.is_worsened:
+                        # L'action a fait pire que rien : on incremente fruitless
+                        # mais on n'abandonne pas immediatement (laissons une chance)
+                        meta["fruitless_cycles"] = meta.get("fruitless_cycles", 0) + 1
+                        if meta["fruitless_cycles"] >= meta.get("max_fruitless", 5):
+                            self._abandon_for_frustration(goal, measurement)
+                            return
+                        # Sinon on laisse les routines tourner encore
+                        return
+                    else:
+                        # Routines done mais tension pas baissee assez :
+                        # cycle sterile -> incrementer compteur
+                        meta["fruitless_cycles"] = meta.get("fruitless_cycles", 0) + 1
+                        if meta["fruitless_cycles"] >= meta.get("max_fruitless", 5):
+                            self._abandon_for_frustration(goal, measurement)
+                            return
+                        # Garde le goal actif pour permettre une nouvelle tentative
+                        return
+            except Exception as e:
+                logger.warning(f"PREFRONTAL: measure_tension echec pour {source_organ_name}: {e}")
+                # Tombe en fallback bureaucratique
+
+        # ─── Fermeture (homeostatique ou bureaucratique) ───
+        goal.status = "completed"
+        meta["completion_mode"] = completion_mode
+        self.stats["goals_completed"] += 1
+
+        # Compteurs Mur de la Honte
+        if completion_mode == "homeostatic":
+            self.stats.setdefault("homeostatic_completions", 0)
+            self.stats["homeostatic_completions"] += 1
+            cd = measurement.causal_drop if measurement else 0
+            self._narrate("goal", f"Goal accompli (homeostatique): {goal.title} | causal_drop={cd:.1f}")
+            # Hook dopamine RPE - sera lu par dopamine_system via PREFRONTAL_GOAL_COMPLETE
+            meta["causal_drop"] = cd
+        else:
+            self.stats.setdefault("bureaucratic_completions", 0)
+            self.stats["bureaucratic_completions"] += 1
+            self._narrate("goal", f"Goal accompli (bureaucratique): {goal.title}")
+
+        self._publish_goal_event("PREFRONTAL_GOAL_COMPLETE", goal)
+        self._learn_strategy_from_goal(goal)
+
+    def _resolve_tension_source(self, source_organ_name: str):
+        """Resout un nom d'organe en instance singleton qui implemente TensionSource."""
+        if source_organ_name == "desire_engine":
+            from core.desire_engine import desires
+            return desires
+        if source_organ_name == "self_awareness":
+            from core.self_awareness import awareness
+            return awareness
+        # Futur : synaptic_network, council
+        return None
+
+    def _close_goal_homeostatic(self, goal: Goal, measurement):
+        """Ferme un goal en mode homeostatique (tension resolue).
+        Utilise par Fix 1.5 tension-first et par le path classique.
+        """
+        meta = goal.metadata
+        goal.status = "completed"
+        meta["completion_mode"] = "homeostatic"
+        meta["causal_drop"] = measurement.causal_drop
+        self.stats["goals_completed"] += 1
+        self.stats.setdefault("homeostatic_completions", 0)
+        self.stats["homeostatic_completions"] += 1
+        self._narrate(
+            "goal",
+            f"Goal accompli (homeostatique): {goal.title} | causal_drop={measurement.causal_drop:.1f}"
+        )
+        self._publish_goal_event("PREFRONTAL_GOAL_COMPLETE", goal)
+        self._learn_strategy_from_goal(goal)
+
+    def _abandon_for_frustration(self, goal: Goal, measurement):
+        """Abandon avec dopamine DIP : la sequence n'a pas resolu la tension."""
+        goal.status = "abandoned"
+        meta = goal.metadata
+        meta["completion_mode"] = "abandoned_fruitless"
+        cd = measurement.causal_drop if measurement else 0
+        goal.abandon_reason = f"fruitless: {meta.get('fruitless_cycles')} cycles, causal_drop={cd:.1f}"
+        self.stats.setdefault("false_completions", 0)
+        self.stats["false_completions"] += 1
+        self.stats["goals_abandoned"] += 1
+        self._narrate("frustration",
+                      f"Goal abandonne (sterile): {goal.title} | {goal.abandon_reason}")
+        self._publish_goal_event("PREFRONTAL_GOAL_ABANDONED", goal)
+        # La decristallisation se fera via _record_strategy_failure si applicable
+        sequence = [s.intent for s in goal.steps if s.status == "done"]
+        if len(sequence) >= 2:
+            self._record_strategy_failure(sequence)
 
     def _check_goal_abandonment(self, goal: Goal) -> bool:
         """Vérifie si un goal doit être abandonné."""
@@ -1145,8 +1385,18 @@ class PrefrontalCortex:
                         GoalStep(intent=r, description=f"Satisfaire {name}")
                         for r in routines[:3]
                     ]
+                    goal_id = uuid.uuid4().hex[:8]
+                    # Fix 1 : metadata pour fermeture homeostatique
+                    from core.tension_protocol import make_goal_metadata
+                    goal_meta = make_goal_metadata(
+                        source_organ="desire_engine",
+                        source_key=name,
+                        tension_at_birth=drive.deprivation,
+                        goal_id=goal_id,
+                        created_at=now_gen,
+                    )
                     goal = Goal(
-                        id=uuid.uuid4().hex[:8],
+                        id=goal_id,
                         title=f"Satisfaire pulsion: {name}",
                         horizon="short",
                         priority=4.5,
@@ -1154,6 +1404,7 @@ class PrefrontalCortex:
                         steps=steps,
                         cost_estimated=len(steps) * 3,
                         drive_alignment={name: 1.0},
+                        metadata=goal_meta,
                     )
                     self.goals.append(goal)
                     self.stats["goals_created"] += 1
@@ -1428,6 +1679,25 @@ class PrefrontalCortex:
                     context=nd.get("context", {}),
                 ))
 
+            # Fix 1 : re-evaluer les goals actifs avec metadata au chargement.
+            # Sans ca, les goals charges avec metadata ne sont re-checkes que
+            # quand une routine tourne sur eux (ce qui peut prendre des heures).
+            # Ici on verifie TOUS les goals actifs immediatement pour
+            # declencher les fermetures homeostatiques/fruitless en attente.
+            rechecked = 0
+            for g in list(self.goals):
+                if g.status != "active":
+                    continue
+                if not (getattr(g, "metadata", None) and g.metadata.get("source_organ")):
+                    continue
+                try:
+                    self._check_goal_completion(g)
+                    rechecked += 1
+                except Exception as e:
+                    logger.warning(f"PREFRONTAL: recheck goal {g.id} echec: {e}")
+            if rechecked:
+                logger.info(f"PREFRONTAL: {rechecked} goals reverifies au chargement")
+
         except Exception as e:
             logger.warning(f"PREFRONTAL: Échec chargement: {e}")
 
@@ -1450,6 +1720,11 @@ class PrefrontalCortex:
             "drive_alignment": goal.drive_alignment,
             "last_advanced": goal.last_advanced,
             "steps": [asdict(s) for s in goal.steps],
+            # Fix 1 : serialiser le metadata pour que les goals conservent
+            # leur info de fermeture homeostatique a travers les restarts.
+            # Sans ca, le save silencieux efface la metadata et tous les
+            # goals retombent en bureaucratique au prochain chargement.
+            "metadata": getattr(goal, "metadata", {}) or {},
         }
         return d
 
@@ -1467,6 +1742,16 @@ class PrefrontalCortex:
             }
             if event_type == "PREFRONTAL_GOAL_ABANDONED":
                 payload["reason"] = goal.abandon_reason
+            # Fix 1 : enrichir le payload pour permettre au dopamine_system de
+            # calculer un RPE base sur causal_drop (per-intent attribution)
+            meta = getattr(goal, "metadata", None) or {}
+            payload["completion_mode"] = meta.get("completion_mode")
+            payload["causal_drop"] = meta.get("causal_drop")
+            payload["tension_at_birth"] = meta.get("tension_at_birth")
+            payload["fruitless_cycles"] = meta.get("fruitless_cycles", 0)
+            payload["step_intents"] = [
+                s.intent for s in goal.steps if s.status == "done"
+            ]
             loop.create_task(bus.publish(event_type, payload))
         except RuntimeError:
             pass
