@@ -143,7 +143,8 @@ def get_project_structure() -> str:
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     lines = ["FICHIERS RÉELS DU PROJET :"]
     for subdir in ["core", "Agents", "core/grimoire", "core/event_bus",
-                    "core/capabilities", "core/memory"]:
+                    "core/capabilities", "core/memory", "core/games",
+                    "core/plugins", "core/domains"]:
         dir_path = os.path.join(project_root, subdir.replace("/", os.sep))
         if os.path.isdir(dir_path):
             py_files = sorted(f for f in os.listdir(dir_path) if f.endswith(".py"))

@@ -91,7 +91,8 @@ def _get_real_files() -> set:
     result = set()
     # Mêmes répertoires que get_project_structure()
     for subdir in ["core", "Agents", "core/grimoire", "core/event_bus",
-                    "core/capabilities", "core/memory"]:
+                    "core/capabilities", "core/memory", "core/games",
+                    "core/plugins", "core/domains"]:
         dir_path = os.path.join(project_root, subdir.replace("/", os.sep))
         if os.path.isdir(dir_path):
             for f in os.listdir(dir_path):
@@ -833,8 +834,8 @@ class Council:
             f"{'='*60}\n"
             f"FICHIERS AUTORISÉS (SEULS fichiers que tu peux citer) :\n"
             f"{project_files}\n"
-            f"RÉPERTOIRES INEXISTANTS (ne JAMAIS citer) : core/grimoire/, core/event_bus/, core/capabilities/, core/memory/\n"
-            f"Tout fichier NON liste ci-dessus est une HALLUCINATION.\n"
+            f"⛔ Cite UNIQUEMENT des fichiers individuels de la liste ci-dessus (ex: core/grimoire/code_reviewer.py).\n"
+            f"Ne cite JAMAIS un répertoire seul (core/, Agents/, core/grimoire/). Tout fichier NON listé ci-dessus est une HALLUCINATION.\n"
             f"{_council_guardrail()}"
             f"{coder_guard}"
         )
