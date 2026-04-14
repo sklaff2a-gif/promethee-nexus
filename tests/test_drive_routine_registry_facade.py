@@ -19,11 +19,14 @@ from unittest.mock import MagicMock
 from core import drive_routine_registry as registry
 from core.drive_routine_registry import (
     DRIVE_GENOME,
+    FLOOR_OF_THE_FLOOR,
+    GENOME_GRACE_CYCLES,
     set_synaptic_provider,
     set_stability_provider,
     get_synaptic_provider,
     get_routines_for_drive_live,
     get_routines_for_drive,
+    get_affinity_for_drive_intent,
 )
 
 
@@ -273,6 +276,120 @@ class TestProviderAutoRegistrationAtBoot:
 # ═══════════════════════════════════════════════════════════════════════
 # Tests isolation : la facade ne doit pas polluer la fonction pure
 # ═══════════════════════════════════════════════════════════════════════
+
+
+class TestGetAffinityForDriveIntent:
+    """Tests de la fonction O(1) pour le hot path compute_desire_bonus.
+
+    Phase C Etape 4c-3a (2026-04-14) : cette fonction est appelee des
+    centaines de fois par cycle de scoring. Doit etre :
+    - O(1) au lookup
+    - Sans tri ni fusion contextuelle
+    - Coherente avec get_routines_for_drive_live (max(synaptic, floor))
+    """
+
+    def test_intent_not_in_genome_no_synaptic_returns_zero(self):
+        set_synaptic_provider(None)
+        result = get_affinity_for_drive_intent("MAITRISE", "UNKNOWN_INTENT")
+        assert result == 0.0
+
+    def test_intent_in_genome_returns_genome_floor(self):
+        """Sans provider, retourne le floor genomique."""
+        set_synaptic_provider(None)
+        result = get_affinity_for_drive_intent("MAITRISE", "REFACTORING_AUDIT")
+        # Floor genomique = 0.9 (valeur native du genome MAITRISE)
+        assert result == 0.9
+
+    def test_synaptic_higher_wins(self):
+        """Si le synaptic est plus haut que le floor, il gagne."""
+        set_synaptic_provider(lambda d: {"REFACTORING_AUDIT": 1.5})
+        result = get_affinity_for_drive_intent("MAITRISE", "REFACTORING_AUDIT")
+        assert result == 1.5  # max(1.5, 0.9)
+
+    def test_floor_higher_wins(self):
+        """Si le floor est plus haut que le synaptic, il gagne."""
+        set_synaptic_provider(lambda d: {"REFACTORING_AUDIT": 0.1})
+        result = get_affinity_for_drive_intent("MAITRISE", "REFACTORING_AUDIT")
+        assert result == 0.9  # max(0.1, 0.9)
+
+    def test_synaptic_only_intent_returns_synaptic(self):
+        """Un intent dans synaptic mais pas dans genome."""
+        set_synaptic_provider(lambda d: {"SUPER_REFACTORING_V2": 0.7})
+        result = get_affinity_for_drive_intent("MAITRISE", "SUPER_REFACTORING_V2")
+        assert result == 0.7
+
+    def test_unknown_drive_no_floor(self):
+        """Un drive inconnu et aucun synaptic -> 0.0."""
+        set_synaptic_provider(None)
+        result = get_affinity_for_drive_intent("NOPE_DRIVE", "REFACTORING_AUDIT")
+        assert result == 0.0
+
+    def test_provider_exception_returns_zero_or_floor(self):
+        """Exception du provider -> fallback genome."""
+        def broken(d):
+            raise RuntimeError("boom")
+        set_synaptic_provider(broken)
+        # L'exception est capturee, floor genomique utilise
+        result = get_affinity_for_drive_intent("MAITRISE", "REFACTORING_AUDIT")
+        assert result == 0.9
+
+    def test_does_not_call_get_routines_for_drive(self):
+        """Verification critique : la fonction O(1) ne DOIT PAS appeler
+        get_routines_for_drive (qui fait un tri O(n log n))."""
+        set_synaptic_provider(lambda d: {"REFACTORING_AUDIT": 0.5})
+
+        call_count = {"routines": 0}
+        original = registry.get_routines_for_drive
+
+        def spy(*args, **kwargs):
+            call_count["routines"] += 1
+            return original(*args, **kwargs)
+
+        registry.get_routines_for_drive = spy
+        try:
+            for _ in range(100):
+                get_affinity_for_drive_intent("MAITRISE", "REFACTORING_AUDIT")
+        finally:
+            registry.get_routines_for_drive = original
+
+        assert call_count["routines"] == 0
+
+    def test_consistency_with_get_routines_for_drive_live(self):
+        """Le poids retourne par get_affinity doit etre le meme que
+        celui retourne par get_routines_for_drive_live pour le meme
+        intent (verification coherence des 2 chemins)."""
+        def mock_provider(drive):
+            return {"REFACTORING_AUDIT": 0.75, "CI_PIPELINE_RUN": 0.5}
+
+        set_synaptic_provider(mock_provider)
+
+        # Chemin 1 : get_affinity_for_drive_intent (O(1))
+        affinity_direct = get_affinity_for_drive_intent(
+            "MAITRISE", "REFACTORING_AUDIT"
+        )
+
+        # Chemin 2 : get_routines_for_drive_live + lookup
+        routines = get_routines_for_drive_live("MAITRISE", top_k=20)
+        affinity_via_list = next(
+            (w for i, w in routines if i == "REFACTORING_AUDIT"), 0.0
+        )
+
+        # Les 2 doivent donner le meme resultat
+        # (pas de context_multipliers, pas de temperature)
+        assert affinity_direct == affinity_via_list
+
+    def test_performance_bulk_lookups(self):
+        """Garde-fou perf : 1000 lookups doivent etre < 50ms."""
+        import time
+        set_synaptic_provider(lambda d: {"REFACTORING_AUDIT": 0.5})
+        start = time.perf_counter()
+        for _ in range(1000):
+            get_affinity_for_drive_intent("MAITRISE", "REFACTORING_AUDIT")
+        elapsed = time.perf_counter() - start
+        # 1000 lookups avec provider + genome floor calcul < 50ms
+        assert elapsed < 0.05, (
+            f"1000 lookups took {elapsed*1000:.1f}ms (budget 50ms)"
+        )
 
 
 class TestFacadePurityGuarantees:

@@ -545,13 +545,49 @@ class DesireEngine:
     # --- Scoring bonus pour les routines ---
 
     def compute_desire_bonus(self, intent: str) -> float:
-        """Bonus [0, +3.0] base sur les pulsions les plus pressantes."""
+        """Bonus [0, +3.0] base sur les pulsions les plus pressantes.
+
+        Phase C Etape 4c-3b (2026-04-14) : migration Strangler Fig du
+        scoring drive-bonus vers drive_routine_registry.
+
+        Calibration du multiplicateur :
+        - V1 : affinity [0.0, 1.8] * 1.5 -> bonus max = 2.7 (quasi sature)
+        - V3 : affinity [0.0, 1.0] * 3.0 -> bonus max = 3.0 (sature)
+
+        La valeur 3.0 compense la reduction de l'amplitude max (1.8 -> 1.0)
+        pour preserver la pression des pulsions sur le scoring. Sans cette
+        calibration, Promethee deviendrait apathique (chute de ~50% de la
+        pression pulsion). Validation adversariale Gemini 2026-04-14.
+
+        Hot path : cette fonction est appelee une fois par intent candidat
+        dans la boucle de scoring (~30 appels/cycle). Elle utilise
+        get_affinity_for_drive_intent() qui est O(1), pas
+        get_routines_for_drive_live() qui ferait un tri inutile.
+        """
         bonus = 0.0
+        # Phase C Etape 4c-3b : import lazy pour eviter un couplage global
+        try:
+            from core.drive_routine_registry import get_affinity_for_drive_intent
+            use_v3 = True
+        except ImportError:
+            use_v3 = False
+
         for drive in self.drives.values():
-            affinity = DRIVE_ROUTINE_AFFINITY.get(drive.name, {}).get(intent, 0.0)
-            if affinity > 0 and drive.deprivation > 30:
+            if drive.deprivation <= 30:
+                continue  # pas assez frustre pour contribuer
+
+            if use_v3:
+                # V3 : lecture O(1) du registre (genome + graphe synaptique)
+                affinity = get_affinity_for_drive_intent(drive.name, intent)
+            else:
+                # Fallback Strangler Fig : table legacy si registre indisponible
+                affinity = DRIVE_ROUTINE_AFFINITY.get(drive.name, {}).get(intent, 0.0)
+
+            if affinity > 0:
                 urgency = (drive.deprivation - 30) / 70  # 0.0 a 1.0
-                bonus += urgency * affinity * 1.5
+                # Multiplicateur 3.0 calibre pour compenser l'amplitude
+                # max reduite du registre (0.9 au lieu de 1.8).
+                bonus += urgency * affinity * 3.0
         return min(3.0, round(bonus, 2))
 
     # --- Narratif interieur ---

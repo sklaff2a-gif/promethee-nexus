@@ -177,6 +177,31 @@ class TestOnEvent:
 
 
 class TestDesireBonus:
+    """Phase C Etape 4c-3b (2026-04-14) : compute_desire_bonus est
+    maintenant branche sur drive_routine_registry via la fonction O(1)
+    get_affinity_for_drive_intent. Les tests doivent reset le provider
+    synaptic pour garantir la reproductibilite (sinon les poids appris
+    en runtime polluent les resultats).
+
+    Calibration : multiplicateur passe de 1.5 a 3.0 pour compenser la
+    reduction d amplitude max (1.8 -> 1.0) apportee par le registre V3.
+    """
+
+    def setup_method(self):
+        """Reset le provider pour que seul le genome contribue."""
+        from core.drive_routine_registry import set_synaptic_provider
+        set_synaptic_provider(None)
+
+    def teardown_method(self):
+        """Restaure le provider cortex du runtime pour ne pas polluer
+        les tests qui dependent du branchement par defaut."""
+        try:
+            from core.drive_routine_registry import set_synaptic_provider
+            from core.synaptic_network import cortex
+            set_synaptic_provider(cortex.get_drive_intent_weights)
+        except Exception:
+            pass
+
     def test_no_bonus_when_serene(self, engine):
         """Pas de bonus quand deprivation < 30."""
         for drive in engine.drives.values():

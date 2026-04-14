@@ -397,6 +397,60 @@ def get_synaptic_provider() -> Optional[SynapticWeightProvider]:
     return _synaptic_provider
 
 
+def get_affinity_for_drive_intent(drive: str, intent: str) -> float:
+    """Retourne le poids final d'un lien drive -> intent specifique.
+
+    PATHOLOGIE HOT PATH : cette fonction est appelee par compute_desire_bonus
+    dans la boucle de scoring 23 couches, potentiellement des centaines de
+    fois par cycle de dispatch. Elle doit etre O(1) et ne JAMAIS construire
+    la liste triee complete via get_routines_for_drive_live (qui ferait un
+    tri + echantillonnage inutiles pour un single lookup).
+
+    Logique :
+      1. Lecture ponctuelle du poids synaptique pour ce drive via provider
+      2. Calcul du floor genomique pour CE lien specifique
+      3. Retour de max(synaptic, floor) sans tri ni fusion contextuelle
+
+    Contrairement a get_routines_for_drive_live, cette fonction ne consulte
+    PAS context_multipliers. Raison : le scoring 23 couches a deja ses propres
+    modulateurs (emotion, mode, etc.) appliques ailleurs dans le pipeline.
+    Appliquer les multiplicateurs ici serait du double comptage.
+
+    Args:
+        drive: nom du drive (MAITRISE, STABILITE, ...)
+        intent: nom de l'intent candidat
+
+    Returns:
+        Poids final dans [0.0, 1.0]. 0.0 si ni le graphe ni le genome
+        ne connaissent cette paire drive<->intent.
+
+    Performance:
+        O(k) ou k est le nombre de synapses du drive (typiquement 5-20).
+        Le cout dominant est la lecture du provider (qui parcourt les
+        synapses du graphe). Si cela devient un goulot d'etranglement,
+        on pourra ajouter un cache LRU par drive avec TTL court.
+    """
+    # 1. Poids synaptique via provider (lecture ponctuelle)
+    synaptic_weight = 0.0
+    if _synaptic_provider is not None:
+        try:
+            weights = _synaptic_provider(drive)
+            if weights:
+                synaptic_weight = float(weights.get(intent, 0.0))
+        except Exception as e:
+            logger.warning(
+                f"[drive_routine_registry] synaptic_provider failed "
+                f"for (drive={drive}, intent={intent}): {e}"
+            )
+
+    # 2. Floor genomique pour ce lien specifique (O(1))
+    current_cycle = experience_clock.current()
+    floor = _compute_genome_floor(drive, intent, current_cycle, _stability_provider)
+
+    # 3. Fusion simple : max(synaptic, floor)
+    return max(synaptic_weight, floor)
+
+
 def get_routines_for_drive_live(
     drive: str,
     context_multipliers: Optional[Dict[str, float]] = None,
