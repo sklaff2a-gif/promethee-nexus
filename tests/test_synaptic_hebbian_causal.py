@@ -426,6 +426,82 @@ class TestExtinction:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+class TestSynapticNetworkInitRegression:
+    """Regression v1.4.1 (2026-04-14) : bug silencieux critique.
+
+    L'attribut self.stats n'etait pas initialise dans __init__, causant
+    AttributeError dans les handlers V3, exception silencieusement capturee
+    par le try/except parent dans _on_goal_complete / _on_goal_abandoned.
+    Resultat : 2h30 en runtime sans aucun apprentissage V3 reel, alors que
+    les tests unitaires (avec fixture initialisant manuellement sn.stats={})
+    passaient a 100%.
+
+    Ces tests reproduisent le bug original et le verrouillent.
+    """
+
+    def test_fresh_instance_has_stats_attr(self):
+        """Une instance fraiche de SynapticNetwork doit avoir self.stats."""
+        from core.synaptic_network import SynapticNetwork
+        from unittest.mock import patch
+        with patch.object(SynapticNetwork, "_load", lambda self: None):
+            SynapticNetwork._instance = None
+            try:
+                sn = SynapticNetwork()
+                assert hasattr(sn, "stats")
+                assert isinstance(sn.stats, dict)
+                assert sn.stats == {}
+            finally:
+                SynapticNetwork._instance = None
+
+    @pytest.mark.asyncio
+    async def test_handler_does_not_crash_on_fresh_instance(self):
+        """Le handler V3 ne doit pas crasher sur une instance fraiche
+        sans intervention manuelle sur stats."""
+        from core.synaptic_network import SynapticNetwork, _make_node_id
+        from unittest.mock import patch
+        with patch.object(SynapticNetwork, "_load", lambda self: None), \
+             patch.object(SynapticNetwork, "_auto_save", lambda self: None), \
+             patch.object(SynapticNetwork, "_publish_delta",
+                          lambda self, *a, **kw: None), \
+             patch.object(SynapticNetwork, "_subscribe_events",
+                          lambda self: None):
+            SynapticNetwork._instance = None
+            try:
+                sn = SynapticNetwork()
+                # NE PAS faire sn.stats = {} manuellement — on teste le defaut
+                drive_nid = _make_node_id("pulsion:maitrise")
+                sn.nodes[drive_nid] = {
+                    "id": drive_nid, "concept": "pulsion:maitrise",
+                    "type": "drive", "energy": 0.5,
+                    "activation_count": 0, "affect": {},
+                    "tags": ["drive"], "created_at": 0,
+                }
+                intent_nid = _make_node_id("REFACTORING_AUDIT")
+                sn.nodes[intent_nid] = {
+                    "id": intent_nid, "concept": "REFACTORING_AUDIT",
+                    "type": "event", "energy": 0.6,
+                    "activation_count": 0, "affect": {},
+                    "tags": ["autonomy"], "created_at": 0,
+                }
+                # Cet appel doit NE PAS lever AttributeError
+                await sn._learn_from_homeostatic_closure({
+                    "completion_mode": "homeostatic",
+                    "source_drive": "MAITRISE",
+                    "causal_drop": 50,
+                    "step_intents": ["REFACTORING_AUDIT"],
+                })
+                assert sn.stats.get("hebbian_causal_reinforcements") == 1
+
+                await sn._learn_from_fruitless_goal({
+                    "completion_mode": "abandoned_fruitless",
+                    "source_drive": "MAITRISE",
+                    "step_intents": ["REFACTORING_AUDIT"],
+                })
+                # Pas d'exception = le handler tourne
+            finally:
+                SynapticNetwork._instance = None
+
+
 class TestHandlerIntegration:
     """Verifie que _on_goal_complete / _on_goal_abandoned routent
     correctement vers les handlers V3."""

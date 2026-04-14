@@ -208,6 +208,9 @@ class SynapticNetwork:
         self._last_routine_node: str = ""  # Dernier noeud routine (pour associations sensorium)
         self._suppress_deltas: bool = False  # Batch mode : supprime les deltas individuels
         self._pending_deltas: List[dict] = []  # Deltas accumules en mode batch
+        # v1.4.1 (2026-04-14) : Phase C Etape 3 utilise self.stats pour
+        # les compteurs Hebbian causal V3. Initialisation explicite au boot.
+        self.stats: Dict[str, Any] = {}
         self._load()
 
     # --- Init & Reset ---
@@ -230,6 +233,7 @@ class SynapticNetwork:
         self._subscribed = False
         self._last_dream_time = time.time()
         self._last_routine_node = ""
+        self.stats = {}
         self._initialized = False
 
     @classmethod
