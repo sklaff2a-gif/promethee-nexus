@@ -993,10 +993,18 @@ class TestOrganSeed:
         assert key in network.synapses
         assert network.synapses[key]["weight"] > weight_before
 
+    @pytest.mark.skip(reason=(
+        "Phase C Etape 3 (2026-04-14) : l'ancien Hebbian temporel dans "
+        "_on_routine_complete a ete desactive (commente) car il renforcait "
+        "drive<->intent sur status=success sans verifier la baisse de "
+        "tension upstream. Remplace par _learn_from_homeostatic_closure "
+        "qui n'ecoute que PREFRONTAL_GOAL_COMPLETE mode=homeostatic. "
+        "Nouveau test : tests/test_synaptic_hebbian_causal.py"
+    ))
     @pytest.mark.asyncio
     @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature")
     async def test_routine_complete_links_to_desires(self, mock_affect, network):
-        """Liens intent->pulsion crees via DRIVE_ROUTINE_AFFINITY sur succes."""
+        """DEPRECATED Phase C Etape 3 — ancien Hebbian temporel."""
         _fresh = lambda: {"mood": "neutre", "dominant_desire": "", "desire_intensity": 0.0,
                           "dominant_trait": "", "trait_value": 50.0, "valence": 0.0}
         mock_affect.side_effect = lambda: _fresh()
@@ -1010,7 +1018,6 @@ class TestOrganSeed:
         })
 
         intent_nid = _make_node_id("EXPANSION_CODE")
-        # MAITRISE a EXPANSION_CODE dans DRIVE_ROUTINE_AFFINITY
         drive_nid = _make_node_id("pulsion:maitrise")
         key = _synapse_key(intent_nid, drive_nid)
         assert key in network.synapses

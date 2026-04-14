@@ -1752,6 +1752,20 @@ class PrefrontalCortex:
             payload["step_intents"] = [
                 s.intent for s in goal.steps if s.status == "done"
             ]
+            # Phase C Etape 3 (2026-04-14) : exposer source_drive pour
+            # l'apprentissage Hebbian causal. Fallback via drive_alignment
+            # si aucun source_key primaire (goals non-drive : council, etc.).
+            # Gemini : compromis acceptable EN V3 avec log WARNING. Dette
+            # V3.1 : chaque organe doit signer source_drive indelebile.
+            source_drive = meta.get("source_key")
+            if not source_drive:
+                try:
+                    alignments = goal.drive_alignment or {}
+                    if alignments:
+                        source_drive = max(alignments.items(), key=lambda x: x[1])[0]
+                except Exception:
+                    source_drive = None
+            payload["source_drive"] = source_drive
             loop.create_task(bus.publish(event_type, payload))
         except RuntimeError:
             pass

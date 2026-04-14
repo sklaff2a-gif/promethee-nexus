@@ -872,6 +872,7 @@ class AutonomyEngine:
             "last_force_per_drive": {},       # drive → timestamp
             "cycle_count_per_drive": {},      # drive → escalade count (soft/hard/human)
             "last_drive_value_at_force": {},  # drive → deprivation au moment du forçage
+            "mapping_ineffective_last_emit": {},  # v1.4: drive → ts, throttle log spam
         })
         # Task heartbeat de survie (démarré dans start_loop)
         self._survival_tick_task = None
@@ -1036,20 +1037,38 @@ class AutonomyEngine:
             self._survival_state["last_drive_value_at_force"].get(triggering_drive, 0.0)
         )
         if last_value_at_force > 0 and current_drive_value > SURVIVAL_REFRACTORY_THRESHOLD:
-            logger.critical(
-                f"[SURVIVAL_MAPPING_INEFFECTIVE] {triggering_drive} "
-                f"last_force={last_value_at_force:.0f} current={current_drive_value:.0f} "
-                f"— le forcage precedent n'a rien resolu. Escalade humaine."
-            )
-            try:
-                await bus.publish("SURVIVAL_MAPPING_INEFFECTIVE", {
-                    "drive": triggering_drive,
-                    "last_value_at_force": last_value_at_force,
-                    "current_value": current_drive_value,
-                    "timestamp": now,
-                })
-            except Exception:
-                pass
+            # v1.4 (2026-04-14) : throttle l'emission pour eviter le spam.
+            # Observation du 2026-04-13/14 : sans throttle, cette alerte est emise
+            # a chaque tick heartbeat (toutes les 10 min) pendant plusieurs heures,
+            # polluant les logs avec des CRITICAL redondants. On limite a 1 emission
+            # par cooldown (1h) par drive — le refractoire reste actif, seul le log
+            # est museler. Backward compat : la cle est cree a la volee si absente.
+            emit_state = self._survival_state.setdefault("mapping_ineffective_last_emit", {})
+            last_emit = float(emit_state.get(triggering_drive, 0.0))
+            should_emit = (now - last_emit) >= SURVIVAL_COOLDOWN_PER_DRIVE_S
+            if should_emit:
+                logger.critical(
+                    f"[SURVIVAL_MAPPING_INEFFECTIVE] {triggering_drive} "
+                    f"last_force={last_value_at_force:.0f} current={current_drive_value:.0f} "
+                    f"— le forcage precedent n'a rien resolu. Escalade humaine."
+                )
+                try:
+                    await bus.publish("SURVIVAL_MAPPING_INEFFECTIVE", {
+                        "drive": triggering_drive,
+                        "last_value_at_force": last_value_at_force,
+                        "current_value": current_drive_value,
+                        "timestamp": now,
+                    })
+                except Exception:
+                    pass
+                emit_state[triggering_drive] = now
+            else:
+                # Tracabilite silencieuse : DEBUG au lieu de CRITICAL
+                remaining = SURVIVAL_COOLDOWN_PER_DRIVE_S - (now - last_emit)
+                logger.debug(
+                    f"[SURVIVAL_MAPPING_INEFFECTIVE:throttled] {triggering_drive} "
+                    f"current={current_drive_value:.0f}, next emit in {remaining:.0f}s"
+                )
             return
 
         # ─── Lire les goals prefrontaux : trouver step en souffrance ───

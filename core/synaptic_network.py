@@ -20,6 +20,20 @@ MAX_NODES = 5000
 MAX_SYNAPSES = 20000
 HEBBIAN_LEARNING_RATE = 0.08
 ANTI_HEBBIAN_RATE = 0.03
+
+# --- Hebbian causal V3 (Phase C Etape 3, 2026-04-14) ---
+# Constantes pour la regle V3 : apprentissage par pointeurs causaux
+# (PREFRONTAL_GOAL_COMPLETE mode=homeostatic + PREFRONTAL_GOAL_ABANDONED
+#  completion_mode=abandoned_fruitless). Voir docs/phase_c_etape_3_hebbian_causal.md
+# Design valide par Gemini 2026-04-14 : ces valeurs sont les verdicts du trio.
+HEBBIAN_CAUSAL_LEARNING_RATE = 0.10    # Cap max par event positif (Gemini Q4: "parfait")
+HEBBIAN_CAUSAL_EXTINCTION_DELTA = 0.03 # Penalite uniforme par intent (Gemini Q1: EGA)
+HEBBIAN_CAUSAL_EXTINCTION_FLOOR = 0.0  # Plancher strict (Gemini Q2: 0.0, pas 0.01)
+HEBBIAN_CAUSAL_DROP_CAP = 100.0        # Cap normalisation causal_drop
+HEBBIAN_CAUSAL_KNOWN_DRIVES = frozenset([
+    "CURIOSITE", "MAITRISE", "STABILITE", "CONNEXION",
+    "CROISSANCE", "CREATION", "COMPREHENSION",
+])
 SPIKE_TIMING_WINDOW = 300.0       # 5 min pour causalite temporelle
 HOMEOSTATIC_TARGET = 0.3
 SYNAPSE_DECAY_PER_DAY = 0.02
@@ -1176,36 +1190,271 @@ class SynapticNetwork:
             logger.warning(f"SYNAPSE: Erreur _on_goal_created: {e}")
 
     async def _on_goal_complete(self, event: dict):
-        """Goal accompli -> boost energie."""
+        """Goal accompli -> boost energie + apprentissage causal V3."""
         try:
             title = event.get("title", "")
-            if not title:
-                return
-            nid = _make_node_id(f"goal:{title}")
-            if nid in self.nodes:
-                self.nodes[nid]["energy"] = 0.95
-                self._publish_delta("node_activate", {
-                    "id": nid, "concept": self.nodes[nid]["concept"],
-                    "energy": 0.95, "activation": self.nodes[nid]["activation_count"],
-                })
+            if title:
+                nid = _make_node_id(f"goal:{title}")
+                if nid in self.nodes:
+                    self.nodes[nid]["energy"] = 0.95
+                    self._publish_delta("node_activate", {
+                        "id": nid, "concept": self.nodes[nid]["concept"],
+                        "energy": 0.95, "activation": self.nodes[nid]["activation_count"],
+                    })
+            # Phase C Etape 3 : apprentissage causal Hebbian V3
+            await self._learn_from_homeostatic_closure(event)
         except Exception as e:
             logger.warning(f"SYNAPSE: Erreur _on_goal_complete: {e}")
 
     async def _on_goal_abandoned(self, event: dict):
-        """Goal abandonne -> energy chute."""
+        """Goal abandonne -> energy chute + extinction causale V3."""
         try:
             title = event.get("title", "")
-            if not title:
-                return
-            nid = _make_node_id(f"goal:{title}")
-            if nid in self.nodes:
-                self.nodes[nid]["energy"] = 0.1
-                self._publish_delta("node_activate", {
-                    "id": nid, "concept": self.nodes[nid]["concept"],
-                    "energy": 0.1, "activation": self.nodes[nid]["activation_count"],
-                })
+            if title:
+                nid = _make_node_id(f"goal:{title}")
+                if nid in self.nodes:
+                    self.nodes[nid]["energy"] = 0.1
+                    self._publish_delta("node_activate", {
+                        "id": nid, "concept": self.nodes[nid]["concept"],
+                        "energy": 0.1, "activation": self.nodes[nid]["activation_count"],
+                    })
+            # Phase C Etape 3 : extinction causale Hebbian V3
+            await self._learn_from_fruitless_goal(event)
         except Exception as e:
             logger.warning(f"SYNAPSE: Erreur _on_goal_abandoned: {e}")
+
+    # ================================================================
+    # PHASE C ETAPE 3 - Hebbian causal V3 (2026-04-14)
+    # Design doc : docs/phase_c_etape_3_hebbian_causal.md
+    # Valide par trio adversarial (Claude + Gemini + Jean-Michel)
+    # ================================================================
+
+    @staticmethod
+    def _triangular_weight(idx: int, n: int) -> float:
+        """Poids triangulaire : (idx+1) / (n*(n+1)/2).
+
+        Proprietes (testees dans test_synaptic_hebbian_causal.py) :
+          - Conservation : sum(weights) == 1.0 pour tout n
+          - Monotonie : weight(k) < weight(k+1)
+          - Dernier step = 2/(n+1) : le coup de grace porte le plus gros credit
+        """
+        if n <= 0:
+            return 0.0
+        total = n * (n + 1) / 2
+        return (idx + 1) / total
+
+    async def _learn_from_homeostatic_closure(self, event: dict):
+        """Renforcement Hebbian causal sur fermeture homeostatique.
+
+        Ecoute UNIQUEMENT les events avec completion_mode=homeostatic
+        (Fix 1 Phase C). Distribue le credit causal_drop sur les step_intents
+        via une distribution triangulaire (le dernier step = coup de grace).
+
+        Filtres de securite (Gemini-validated) :
+          F1. completion_mode != homeostatic    -> skip (pas de superstition)
+          F2. causal_drop <= 0                   -> skip (rien a apprendre)
+          F3. step_intents vide                  -> skip (aucun intent credit)
+          F4. source_drive inconnu ou vide       -> fallback avec WARNING log
+
+        Ne touche JAMAIS aux poids synaptiques sans un event signe causalement.
+        """
+        # F1 : seule la fermeture homeostatique enseigne
+        completion_mode = event.get("completion_mode", "")
+        if completion_mode != "homeostatic":
+            self.stats["hebbian_causal_skipped_non_homeostatic"] = \
+                self.stats.get("hebbian_causal_skipped_non_homeostatic", 0) + 1
+            return
+
+        # F2 : pas de drop reel -> pas d'apprentissage
+        causal_drop = float(event.get("causal_drop") or 0.0)
+        if causal_drop <= 0:
+            self.stats["hebbian_causal_skipped_zero_drop"] = \
+                self.stats.get("hebbian_causal_skipped_zero_drop", 0) + 1
+            return
+
+        # F3 : aucun step fait -> pas de credit a distribuer
+        step_intents = event.get("step_intents") or []
+        if not step_intents:
+            self.stats["hebbian_causal_skipped_empty_steps"] = \
+                self.stats.get("hebbian_causal_skipped_empty_steps", 0) + 1
+            return
+
+        # F4 : verifier que source_drive est un drive connu
+        source_drive = (event.get("source_drive") or "").upper()
+        if source_drive not in HEBBIAN_CAUSAL_KNOWN_DRIVES:
+            # Gemini Q3 : fallback acceptable EN V3 avec log WARNING
+            logger.warning(
+                f"SYNAPSE_HEBB_V3: source_drive='{source_drive}' inconnu, "
+                f"goal={event.get('goal_id', '?')} — skip learning. "
+                f"Dette V3.1 : chaque organe doit signer source_drive indelebile."
+            )
+            self.stats["hebbian_causal_skipped_unknown_drive"] = \
+                self.stats.get("hebbian_causal_skipped_unknown_drive", 0) + 1
+            return
+
+        # ─── Calcul du renforcement ─────────────────────────────────
+        n = len(step_intents)
+        normalized_drop = min(1.0, causal_drop / HEBBIAN_CAUSAL_DROP_CAP)
+
+        drive_nid = _make_node_id(f"pulsion:{source_drive.lower()}")
+        if drive_nid not in self.nodes:
+            # Le noeud drive n'existe pas encore (boot recent) : skip gracieux
+            logger.debug(
+                f"SYNAPSE_HEBB_V3: drive node '{drive_nid}' not yet in graph, "
+                f"skip learning for goal={event.get('goal_id', '?')}"
+            )
+            return
+
+        total_delta = 0.0
+        for idx, intent in enumerate(step_intents):
+            if not intent:
+                continue
+            intent_nid = _make_node_id(intent)
+            if intent_nid not in self.nodes:
+                # Creation implicite : si l'intent n'a pas encore de noeud,
+                # on le cree avec l'energie par defaut (sera renforce)
+                intent_nid = self.ensure_node(
+                    intent, "event", 0.6, ["autonomy"]
+                )
+                if not intent_nid:
+                    continue
+
+            weight_triangular = self._triangular_weight(idx, n)
+            delta = normalized_drop * weight_triangular * HEBBIAN_CAUSAL_LEARNING_RATE
+
+            # Appliquer le renforcement directement sur la synapse drive<->intent
+            self._apply_causal_delta(intent_nid, drive_nid, delta, context=(
+                f"hebb_v3:{source_drive}<-{intent}[{idx+1}/{n}]"
+            ))
+            total_delta += delta
+
+        # Stats
+        self.stats["hebbian_causal_reinforcements"] = \
+            self.stats.get("hebbian_causal_reinforcements", 0) + 1
+        self.stats["hebbian_causal_total_delta_applied"] = \
+            round(self.stats.get("hebbian_causal_total_delta_applied", 0.0) + total_delta, 4)
+
+        logger.info(
+            f"SYNAPSE_HEBB_V3: +{total_delta:.4f} sur {source_drive} "
+            f"via {n} step(s) {step_intents} causal_drop={causal_drop:.1f} "
+            f"goal={event.get('goal_id', '?')}"
+        )
+
+    async def _learn_from_fruitless_goal(self, event: dict):
+        """Extinction causale sur abandon fruitless.
+
+        Ecoute UNIQUEMENT les events avec completion_mode=abandoned_fruitless.
+        Distribue la penalite EXTINCTION_DELTA UNIFORMEMENT sur les
+        step_intents (Gemini Q1 : pas de triangulaire inverse, car un
+        echec est opaque — tous les maillons sont suspects).
+
+        Plancher strict : EXTINCTION_FLOOR = 0.0 (Gemini Q2). Le genome
+        du registre (Brique 1) protege les liens canoniques.
+        """
+        # F1' : seule l'abandon fruitless enseigne par extinction
+        completion_mode = event.get("completion_mode", "")
+        if completion_mode != "abandoned_fruitless":
+            return
+
+        # F2' : pas de steps tentes -> rien a eteindre
+        step_intents = event.get("step_intents") or []
+        if not step_intents:
+            return
+
+        # F3' : drive inconnu -> skip avec WARNING
+        source_drive = (event.get("source_drive") or "").upper()
+        if source_drive not in HEBBIAN_CAUSAL_KNOWN_DRIVES:
+            logger.warning(
+                f"SYNAPSE_HEBB_V3_EXT: source_drive='{source_drive}' inconnu, "
+                f"goal={event.get('goal_id', '?')} — skip extinction."
+            )
+            return
+
+        drive_nid = _make_node_id(f"pulsion:{source_drive.lower()}")
+        if drive_nid not in self.nodes:
+            return
+
+        # ─── Extinction uniforme ───────────────────────────────────
+        # Gemini : "En cas d'echec d'une chaine, tous les maillons sont
+        # suspects. Distribue la penalite uniformement."
+        extinctions_applied = 0
+        for intent in step_intents:
+            if not intent:
+                continue
+            intent_nid = _make_node_id(intent)
+            if intent_nid not in self.nodes:
+                continue  # pas de noeud = pas de synapse a affaiblir
+
+            # Appliquer la penalite avec plancher strict 0.0
+            self._apply_causal_delta(
+                intent_nid, drive_nid,
+                -HEBBIAN_CAUSAL_EXTINCTION_DELTA,
+                context=f"hebb_v3_ext:{source_drive}<-{intent}",
+                floor=HEBBIAN_CAUSAL_EXTINCTION_FLOOR,
+            )
+            extinctions_applied += 1
+
+        if extinctions_applied > 0:
+            self.stats["hebbian_causal_extinctions"] = \
+                self.stats.get("hebbian_causal_extinctions", 0) + 1
+            logger.info(
+                f"SYNAPSE_HEBB_V3_EXT: -{HEBBIAN_CAUSAL_EXTINCTION_DELTA:.3f} "
+                f"x {extinctions_applied} sur {source_drive} "
+                f"via {step_intents} goal={event.get('goal_id', '?')}"
+            )
+
+    def _apply_causal_delta(self, src_nid: str, tgt_nid: str, delta: float,
+                             context: str = "", floor: float = 0.0) -> None:
+        """Applique un delta (positif ou negatif) sur la synapse src<->tgt.
+
+        Cree la synapse si necessaire (seulement pour delta > 0). Pour
+        delta < 0, si la synapse n'existe pas, no-op gracieux (pas de
+        synapse negative creee). Plancher strict : weight >= floor.
+
+        Contrairement a hebbian_strengthen, ce delta est PRE-CALCULE
+        par la regle V3 (pas de multiplication par e_src * e_tgt). C'est
+        voulu : la magnitude est entierement determinee par le causal_drop
+        et la distribution triangulaire, pas par l'activation instantanee
+        des noeuds (qui serait une contamination temporelle).
+        """
+        src = self.nodes.get(src_nid)
+        tgt = self.nodes.get(tgt_nid)
+        if not src or not tgt:
+            return
+
+        key = _synapse_key(src_nid, tgt_nid)
+
+        if delta > 0:
+            # Renforcement : creer la synapse si absente
+            is_new = key not in self.synapses
+            if is_new:
+                syn = _make_synapse(src_nid, tgt_nid, 0.05, "hebbian", context)
+                self.synapses[key] = syn
+                self._enforce_synapse_limit()
+            syn = self.synapses[key]
+            syn["weight"] = min(1.0, syn["weight"] + delta)
+            syn["formation_count"] += 1
+            syn["last_strengthened"] = time.time()
+            if context and len(context) > len(syn.get("context", "")):
+                syn["context"] = context[:200]
+            change = "synapse_new" if is_new else "synapse_strengthen"
+            self._publish_delta(change, {
+                "source": src_nid, "target": tgt_nid,
+                "weight": round(syn["weight"], 3),
+                "type": syn["synapse_type"],
+            })
+        else:
+            # Extinction : ne jamais creer une synapse pour l'affaiblir
+            if key not in self.synapses:
+                return
+            syn = self.synapses[key]
+            new_weight = max(floor, syn["weight"] + delta)  # delta est negatif
+            syn["weight"] = new_weight
+            # Note : on ne supprime pas la synapse si weight atteint 0.0
+            # Le pruning naturel s'en chargera au prochain cycle dream.
+
+        self._mutations_since_save += 1
+        self._auto_save()
 
     async def _on_reptilian_alert(self, event: dict):
         """Reflexe reptilien -> flash intense dans le reseau."""
@@ -1294,22 +1543,39 @@ class SynapticNetwork:
                 self.hebbian_strengthen(intent_nid, cnid, success=success,
                                         context=f"routine:{intent}")
 
-            # Liens entre routine et pulsions satisfaites
-            if success:
-                try:
-                    from core.desire_engine import DRIVE_ROUTINE_AFFINITY
-                    for drive, routines in DRIVE_ROUTINE_AFFINITY.items():
-                        if intent in routines:
-                            drive_nid = _make_node_id(
-                                f"pulsion:{drive.lower()}"
-                            )
-                            if drive_nid in self.nodes:
-                                self.hebbian_strengthen(
-                                    intent_nid, drive_nid, success=True,
-                                    context=f"affinity:{intent}->{drive}",
-                                )
-                except ImportError:
-                    pass
+            # ================================================================
+            # PHASE B LEGACY - TEMPORAL SUPERSTITION (commente 2026-04-14)
+            # ================================================================
+            # Ce bloc renforcait drive<->intent sur la seule base de
+            # status=success et quality>=0.6, SANS verifier si la tension
+            # upstream avait vraiment baisse. Loi de Goodhart appliquee au
+            # graphe synaptique lui-meme.
+            #
+            # Pire : utilisait DRIVE_ROUTINE_AFFINITY (table heretique de la
+            # V1) pour decider quel drive renforcer, potentiellement
+            # renforcant des liens vers plusieurs drives qui n'etaient pas
+            # la vraie source du goal courant (superstition multi-drive).
+            #
+            # Remplace par _learn_from_homeostatic_closure (Phase C Etape 3,
+            # V3) qui n'ecoute QUE PREFRONTAL_GOAL_COMPLETE mode=homeostatic
+            # avec source_drive + causal_drop + step_intents signes
+            # causalement. Voir docs/phase_c_etape_3_hebbian_causal.md.
+            # ================================================================
+            # if success:
+            #     try:
+            #         from core.desire_engine import DRIVE_ROUTINE_AFFINITY
+            #         for drive, routines in DRIVE_ROUTINE_AFFINITY.items():
+            #             if intent in routines:
+            #                 drive_nid = _make_node_id(
+            #                     f"pulsion:{drive.lower()}"
+            #                 )
+            #                 if drive_nid in self.nodes:
+            #                     self.hebbian_strengthen(
+            #                         intent_nid, drive_nid, success=True,
+            #                         context=f"affinity:{intent}->{drive}",
+            #                     )
+            #     except ImportError:
+            #         pass
 
             # Sync immediat deprivation -> energie pulsions
             try:
