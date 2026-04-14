@@ -335,5 +335,125 @@ def get_routines_for_drive(
     return selected
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Phase C Etape 4 — Provider Pattern (Inversion de Controle)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Probleme : get_routines_for_drive() est pure et exige un synaptic_weights
+# injecte. Forcer chaque consommateur (autonomy_engine, prefrontal, council,
+# etc.) a importer synaptic_network cree du boilerplate, des risques d'imports
+# circulaires, et contamine les consommateurs avec la connaissance du graphe.
+#
+# Solution : le registre expose une fonction set_synaptic_provider() que
+# synaptic_network appelle AU BOOT pour enregistrer son lecteur de poids.
+# Les consommateurs appellent alors get_routines_for_drive_live() qui fait
+# automatiquement la lecture via le provider enregistre.
+#
+# Principe : le registre reste PUR (aucun import de synaptic_network). C'est
+# synaptic_network qui vient brancher sa prise. Cela preserve l'isolation
+# testable de la Brique 3 et evite les imports circulaires.
+#
+# Design doc : docs/phase_c_etape_3_hebbian_causal.md (annexe Etape 4)
+# Valide par Jean-Michel 2026-04-14 apres challenge adversarial Gemini.
+
+# Type alias pour le provider synaptic : drive_name -> {intent: weight}
+SynapticWeightProvider = Callable[[str], Dict[str, float]]
+
+_synaptic_provider: Optional[SynapticWeightProvider] = None
+_stability_provider: Optional[CompetitorStabilityFn] = None
+
+
+def set_synaptic_provider(fn: Optional[SynapticWeightProvider]) -> None:
+    """Enregistre le lecteur de poids synaptiques.
+
+    Appele au boot par synaptic_network pour brancher le graphe sur le
+    registre via inversion de controle. Le registre ne connait jamais
+    synaptic_network directement.
+
+    Passer None deconnecte le provider (utile pour les tests ou un reset).
+    """
+    global _synaptic_provider
+    _synaptic_provider = fn
+    if fn is None:
+        logger.info("[drive_routine_registry] synaptic_provider cleared")
+    else:
+        logger.info("[drive_routine_registry] synaptic_provider registered")
+
+
+def set_stability_provider(fn: Optional[CompetitorStabilityFn]) -> None:
+    """Enregistre la fonction de stabilite competiteur pour la depreciation
+    genomique (Brique 1). Appele au boot par synaptic_network.
+    """
+    global _stability_provider
+    _stability_provider = fn
+    if fn is None:
+        logger.info("[drive_routine_registry] stability_provider cleared")
+    else:
+        logger.info("[drive_routine_registry] stability_provider registered")
+
+
+def get_synaptic_provider() -> Optional[SynapticWeightProvider]:
+    """Accesseur lecture pour les tests. Ne pas utiliser en production."""
+    return _synaptic_provider
+
+
+def get_routines_for_drive_live(
+    drive: str,
+    context_multipliers: Optional[Dict[str, float]] = None,
+    temperature: float = 0.0,
+    top_k: int = 5,
+    rng: Optional[_random_module.Random] = None,
+) -> List[Tuple[str, float]]:
+    """Facade live pour les consommateurs.
+
+    Version "branchee" de get_routines_for_drive() qui lit automatiquement
+    les poids synaptiques via le provider enregistre par synaptic_network
+    au boot. C'est la fonction que les consommateurs (autonomy_engine,
+    prefrontal, council_analytics, etc.) doivent utiliser apres la
+    migration Phase C Etape 4.
+
+    Usage typique :
+        from core.drive_routine_registry import get_routines_for_drive_live
+        routines = get_routines_for_drive_live("MAITRISE", top_k=5)
+        # routines = [(intent, final_weight), ...]
+
+    Comportement en cas de provider absent :
+    Si set_synaptic_provider() n'a jamais ete appele (ex: tests isoles,
+    boot partiel), la facade utilise synaptic_weights={} — seul le genome
+    contribue. C'est un fallback SAFE : Promethee continue de fonctionner
+    avec les routines canoniques du genome, sans adaptation dynamique.
+
+    Comportement en cas d'erreur du provider :
+    Si le provider leve une exception (ex: synaptic_network crashe au
+    boot), la facade logge un WARNING et utilise synaptic_weights={}.
+    Aucune propagation d'exception vers les consommateurs — ils restent
+    fonctionnels meme si le graphe est KO.
+
+    Args : meme signature que get_routines_for_drive() mais sans
+    synaptic_weights ni competitor_stability_fn (injectes automatiquement).
+    """
+    synaptic_weights: Dict[str, float] = {}
+    if _synaptic_provider is not None:
+        try:
+            result = _synaptic_provider(drive)
+            if result:
+                synaptic_weights = result
+        except Exception as e:
+            logger.warning(
+                f"[drive_routine_registry] synaptic_provider failed "
+                f"for drive={drive}: {e}"
+            )
+
+    return get_routines_for_drive(
+        drive=drive,
+        synaptic_weights=synaptic_weights,
+        context_multipliers=context_multipliers,
+        temperature=temperature,
+        top_k=top_k,
+        competitor_stability_fn=_stability_provider,
+        rng=rng,
+    )
+
+
 # Initialisation automatique des entry_cycles au chargement du module
 _initialize_genome_entry_cycles()

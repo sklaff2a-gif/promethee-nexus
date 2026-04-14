@@ -1456,6 +1456,55 @@ class SynapticNetwork:
         self._mutations_since_save += 1
         self._auto_save()
 
+    # ================================================================
+    # PHASE C ETAPE 4 - Provider pour drive_routine_registry
+    # ================================================================
+
+    def get_drive_intent_weights(self, drive: str) -> Dict[str, float]:
+        """Retourne les poids synaptiques drive<->intents pour un drive donne.
+
+        Utilise par le drive_routine_registry via le Provider Pattern
+        (Phase C Etape 4). Expose les poids appris par la regle Hebbian
+        causale V3 (_learn_from_homeostatic_closure) pour que les
+        consommateurs puissent les utiliser via get_routines_for_drive_live().
+
+        Parcourt toutes les synapses qui touchent le noeud 'pulsion:{drive}'
+        et retourne un dict {intent_concept: weight}. Si plusieurs synapses
+        existent (rare), garde le max.
+
+        Retourne {} si le drive n'est pas dans le graphe (boot precoce ou
+        drive inconnu).
+
+        Note de purete : cette methode est une LECTURE pure, elle ne modifie
+        jamais l'etat du graphe. Appel safe a chaque cycle de scoring.
+        """
+        drive_nid = _make_node_id(f"pulsion:{drive.lower()}")
+        if drive_nid not in self.nodes:
+            return {}
+
+        weights: Dict[str, float] = {}
+        for key, syn in self.synapses.items():
+            try:
+                src, tgt = key.split("->", 1)
+            except ValueError:
+                continue
+            if src != drive_nid and tgt != drive_nid:
+                continue
+            other_nid = tgt if src == drive_nid else src
+            other_node = self.nodes.get(other_nid)
+            if not other_node:
+                continue
+            # On ne garde que les noeuds de type "event" (routines/intents)
+            if other_node.get("type") != "event":
+                continue
+            concept = other_node.get("concept", "")
+            if not concept:
+                continue
+            # Si plusieurs synapses existent (bi-directionnel rare), prendre le max
+            current = weights.get(concept, 0.0)
+            weights[concept] = max(current, float(syn.get("weight", 0.0)))
+        return weights
+
     async def _on_reptilian_alert(self, event: dict):
         """Reflexe reptilien -> flash intense dans le reseau."""
         try:
@@ -2343,3 +2392,17 @@ try:
     register_organ("synaptic", cortex)
 except Exception:
     pass
+
+# --- Phase C Etape 4 : brancher le Provider sur drive_routine_registry ---
+# Principe d'inversion de controle : le registre reste pur (il n'importe
+# jamais synaptic_network). C'est synaptic_network qui vient "brancher sa
+# prise" via set_synaptic_provider() au boot. Les consommateurs peuvent
+# ensuite utiliser get_routines_for_drive_live() sans connaitre le graphe.
+try:
+    from core.drive_routine_registry import set_synaptic_provider
+    set_synaptic_provider(cortex.get_drive_intent_weights)
+    logger.info("[synaptic_network] registered as synaptic_provider for drive_routine_registry")
+except ImportError:
+    pass  # registry pas encore disponible (tests isoles, boot partiel)
+except Exception as e:
+    logger.warning(f"[synaptic_network] failed to register synaptic_provider: {e}")
