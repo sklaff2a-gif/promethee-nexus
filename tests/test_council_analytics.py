@@ -146,6 +146,32 @@ class TestAnalyzeEvolutionTriage:
 # ═══════════════════════════════════════════════════════════
 
 class TestAnalyzeDriveBalance:
+    """Phase C Etape 4a (2026-04-14) : les assertions ont ete mises a jour
+    pour refleter le nouveau comportement via drive_routine_registry.
+
+    L'ancien DRIVE_INTENT_MAP contenait des intents morts (VEILLE_TECHNO,
+    EVOLUTION_PIPELINE) qui n'existaient meme pas dans le genome V3.
+    La migration vers la facade corrige naturellement ces incoherences.
+
+    Les tests forcent set_synaptic_provider(None) au setup pour garantir
+    la reproductibilite (sinon les poids synaptiques appris en runtime
+    pourraient biaiser le top 1).
+    """
+
+    def setup_method(self):
+        """Reset le provider pour que seul le genome contribue."""
+        from core.drive_routine_registry import set_synaptic_provider
+        set_synaptic_provider(None)
+
+    def teardown_method(self):
+        """Re-enregistre le provider du runtime reel pour ne pas polluer
+        les autres tests qui dependent du branchement par defaut."""
+        try:
+            from core.drive_routine_registry import set_synaptic_provider
+            from core.synaptic_network import cortex
+            set_synaptic_provider(cortex.get_drive_intent_weights)
+        except Exception:
+            pass
 
     def test_no_deprived(self):
         drives = {
@@ -157,22 +183,32 @@ class TestAnalyzeDriveBalance:
         assert result["suggested_intent"] is None
 
     def test_deprived_drive_detected(self):
+        """CURIOSITE deprived -> VEILLE_SILENCIEUSE (top du genome, 0.9).
+
+        Avant : assertion == VEILLE_TECHNO (intent mort).
+        Apres : assertion == VEILLE_SILENCIEUSE (top du genome V3).
+        """
         drives = {
             "CURIOSITE": FakeDrive("CURIOSITE", 85.0),
             "CREATION": FakeDrive("CREATION", 30.0),
         }
         result = analyze_drive_balance(drives)
         assert result["most_deprived"] == "CURIOSITE"
-        assert result["suggested_intent"] == "VEILLE_TECHNO"
+        assert result["suggested_intent"] == "VEILLE_SILENCIEUSE"
 
     def test_dict_input(self):
+        """MAITRISE deprived -> REFACTORING_AUDIT (top du genome, 0.9).
+
+        Avant : assertion == EVOLUTION_PIPELINE (intent mort).
+        Apres : assertion == REFACTORING_AUDIT (victoire Phase B + top genome).
+        """
         drives = {
             "MAITRISE": {"deprivation": 90.0},
             "STABILITE": {"deprivation": 20.0},
         }
         result = analyze_drive_balance(drives)
         assert result["most_deprived"] == "MAITRISE"
-        assert result["suggested_intent"] == "EVOLUTION_PIPELINE"
+        assert result["suggested_intent"] == "REFACTORING_AUDIT"
 
 
 # ═══════════════════════════════════════════════════════════
