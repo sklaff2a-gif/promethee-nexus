@@ -1255,10 +1255,9 @@ class SelfAwarenessEngine:
 
         causal_drop = expected_if_no_action - current_tension
 
-        # Seuil de resolution : 40% de la tension au depart (meme que desire_engine)
-        # Note : avec le vrai sentence_transformers le score sera plus eleve
-        # que le mock bag-of-words, donc ce seuil sera plus facilement atteint.
-        resolution_threshold = max(8.0, tension_at_birth * 0.40)
+        # Seuil de resolution : 25% de la tension au depart (aligne sur desire_engine).
+        # Historique : 40% -> 25% apres audit 14/04 (0 homeostatique en 16h).
+        resolution_threshold = max(8.0, tension_at_birth * 0.25)
         is_resolved = causal_drop >= resolution_threshold
 
         is_worsened = causal_drop <= -10.0

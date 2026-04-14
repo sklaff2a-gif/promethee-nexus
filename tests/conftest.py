@@ -1,5 +1,11 @@
 import sys
 import os
+
+# Barriere sanitaire — redirige les chemins d'etat de production vers
+# des fichiers temporaires. DOIT etre pose AVANT tout import de `core.*`
+# car certains modules (synaptic_network) resolvent STATE_FILE a l'import.
+os.environ["PROMETHEE_TEST_MODE"] = "1"
+
 import pytest
 
 # Ajouter le dossier racine du projet au path

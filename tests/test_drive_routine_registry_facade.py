@@ -92,9 +92,15 @@ class TestFacadeFallback:
         assert intents == set(DRIVE_GENOME["MAITRISE"].keys())
 
     def test_no_provider_equals_empty_weights(self):
-        """L'absence de provider est equivalent a synaptic_weights={}."""
+        """L'absence de provider est equivalent a synaptic_weights={}.
+
+        use_context_multipliers=False pour desactiver l'auto-injection de
+        l'etape 5 et comparer purement provider vs pure.
+        """
         set_synaptic_provider(None)
-        r1 = get_routines_for_drive_live("MAITRISE", temperature=0.0)
+        r1 = get_routines_for_drive_live(
+            "MAITRISE", temperature=0.0, use_context_multipliers=False
+        )
         r2 = get_routines_for_drive(
             "MAITRISE", synaptic_weights={}, temperature=0.0
         )
@@ -405,9 +411,15 @@ class TestFacadePurityGuarantees:
         assert "EXPANSION_CODE" not in intents  # pas dans genome MAITRISE
 
     def test_facade_vs_pure_identical_when_empty_provider(self):
-        """Avec provider None, facade == fonction pure avec {}."""
+        """Avec provider None, facade == fonction pure avec {}.
+
+        use_context_multipliers=False requis depuis l'etape 5 pour maintenir
+        l'equivalence stricte (sinon la facade auto-injecte les modulateurs).
+        """
         set_synaptic_provider(None)
-        r_live = get_routines_for_drive_live("MAITRISE", temperature=0.0, top_k=5)
+        r_live = get_routines_for_drive_live(
+            "MAITRISE", temperature=0.0, top_k=5, use_context_multipliers=False
+        )
         r_pure = get_routines_for_drive(
             "MAITRISE", synaptic_weights={}, temperature=0.0, top_k=5
         )

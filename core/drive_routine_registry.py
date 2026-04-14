@@ -457,6 +457,7 @@ def get_routines_for_drive_live(
     temperature: float = 0.0,
     top_k: int = 5,
     rng: Optional[_random_module.Random] = None,
+    use_context_multipliers: bool = True,
 ) -> List[Tuple[str, float]]:
     """Facade live pour les consommateurs.
 
@@ -498,6 +499,17 @@ def get_routines_for_drive_live(
                 f"for drive={drive}: {e}"
             )
 
+    # Phase C Etape 5 : auto-injection des modulateurs contextuels.
+    # Si l'appelant n'a pas fourni de context_multipliers et que use_context_multipliers
+    # est True (defaut), on agrege les 5 tables d'affinite via compute_context_multipliers.
+    # Les tests qui veulent un comportement deterministe peuvent passer
+    # use_context_multipliers=False pour desactiver l'auto-injection.
+    if context_multipliers is None and use_context_multipliers:
+        genome_intents = set(DRIVE_GENOME.get(drive, {}).keys())
+        all_intents = list(genome_intents | set(synaptic_weights.keys()))
+        if all_intents:
+            context_multipliers = compute_context_multipliers(drive, all_intents)
+
     return get_routines_for_drive(
         drive=drive,
         synaptic_weights=synaptic_weights,
@@ -507,6 +519,204 @@ def get_routines_for_drive_live(
         competitor_stability_fn=_stability_provider,
         rng=rng,
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase C Etape 5 — Migration des Modulateurs (2026-04-14)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Jusqu'ici les 5 tables d'affinite contextuelle etaient eparpillees dans
+# les organes (inner_voice, psyche, hypothalamus) et appliquees de maniere
+# ad hoc par chaque consommateur du scoring. Etape 5 les migre en un agregateur
+# unique qui produit un Dict[intent, multiplier] consomme par
+# get_routines_for_drive_live().
+#
+# Regle d'or (Gemini-valide) : un modulateur est un adjectif, pas un nom.
+# Il MODULE un intent deja candidat (present dans genome ∪ graphe synaptique)
+# mais ne peut jamais en creer un nouveau. L'isolation structurelle est
+# garantie par get_routines_for_drive qui filtre weighted > 0 : un intent
+# absent a base = 0, donc 0 * multiplicateur = 0 → reste exclu.
+#
+# Design :
+#  - Multiplier par table bornee dans [0.5, 1.5] via _bonus_to_multiplier
+#  - Compound multiplicatif des tables
+#  - Clip final dans [_MULTIPLIER_MIN, _MULTIPLIER_MAX] = [0.5, 2.0]
+#  - Lazy imports : toute exception → modulateur neutre (1.0), pas de crash
+# ═══════════════════════════════════════════════════════════════════════
+
+_MULTIPLIER_MIN: float = 0.5
+_MULTIPLIER_MAX: float = 2.0
+
+
+def _bonus_to_multiplier(bonus: float) -> float:
+    """Convertit un bonus additif V1 (range ~[-1, +1]) en multiplicateur V3.
+
+    Mapping lineaire borne :
+      bonus = 0.0  -> 1.0   (neutre)
+      bonus = +0.5 -> 1.25
+      bonus = +1.0 -> 1.5
+      bonus = -0.5 -> 0.75
+      bonus = -1.0 -> 0.5
+    Clip dans [0.5, 1.5] pour qu'un modulateur individuel reste "adjectif".
+    """
+    clamped = max(-1.0, min(1.0, float(bonus)))
+    return max(0.5, min(1.5, 1.0 + clamped * 0.5))
+
+
+def compute_context_multipliers(
+    drive: str,
+    intents: List[str],
+) -> Dict[str, float]:
+    """Agrege les 5 tables d'affinite contextuelle en multiplicateurs par intent.
+
+    Phase C Etape 5. Remplace la dispersion de calculs d'affinite dans chaque
+    organe par une fonction pure d'agregation qui lit :
+      - inner_voice._EMOTION_ROUTINE_AFFINITY (emotion dominante des 10 dernieres pensees)
+      - inner_voice._MODE_ROUTINE_AFFINITY (mode Vygotsky dominant)
+      - inner_voice._SOURCE_ROUTINE_AFFINITY (source pensee dominante, proportionnel)
+      - psyche.ROUTINE_AFFINITY (affinite traits de personnalite du systeme)
+      - hypothalamus._INTENT_ENERGY_MAP + _INTENT_STRESS_MAP + _INTENT_DOPAMINE_MAP
+
+    Chaque table contribue un multiplicateur individuel dans [0.5, 1.5]. Les
+    multiplicateurs se composent multiplicativement, puis le produit final est
+    clippe dans [_MULTIPLIER_MIN, _MULTIPLIER_MAX] = [0.5, 2.0].
+
+    Garde-fou structurel : cette fonction n'a aucune responsabilite de
+    selection d'intents. Elle recoit la liste des intents candidats (issue
+    du genome ∪ graphe pour le drive) et retourne uniquement des coefficients
+    multiplicatifs. Un intent absent de `intents` ne recevra aucun multiplier.
+    Un multiplier de 0.5 sur un intent n'empeche pas sa selection si son base
+    synaptique est eleve — il le penalise seulement.
+
+    Lazy imports : chaque bloc d'organe est protege par un try/except. Si un
+    organe n'est pas disponible (boot partiel, test isole, crash), son
+    modulateur est skippe avec un WARNING, les autres continuent.
+
+    Args:
+        drive: nom du drive (reserve pour contextualisation future — actuellement
+            non utilise, mais l'API est stable pour l'etape 6 qui introduira
+            des modulateurs drive-specifiques).
+        intents: liste des intents candidats. Seuls ces intents recevront un
+            multiplicateur eventuel.
+
+    Returns:
+        Dict[intent, multiplier]. Seuls les intents avec un multiplier != 1.0
+        apparaissent (les intents neutres sont omis pour economie). L'appelant
+        doit defaulter a 1.0 pour les intents absents.
+    """
+    if not intents:
+        return {}
+
+    per_intent_mult: Dict[str, float] = {intent: 1.0 for intent in intents}
+
+    # 1. Inner voice (emotion dominante, mode dominant, source proportionnelle)
+    try:
+        from core.inner_voice import voice as _inner_voice
+        stream = list(getattr(_inner_voice, "stream", []) or [])[-10:]
+        if stream:
+            src_counts: Dict[str, int] = {}
+            emo_counts: Dict[str, int] = {}
+            mode_counts: Dict[str, int] = {}
+            for t in stream:
+                s = getattr(t, "source", None)
+                if s:
+                    src_counts[s] = src_counts.get(s, 0) + 1
+                e = getattr(t, "emotion", None)
+                if e:
+                    emo_counts[e] = emo_counts.get(e, 0) + 1
+                m = getattr(t, "mode", None)
+                if m:
+                    mode_counts[m] = mode_counts.get(m, 0) + 1
+
+            IV = type(_inner_voice)
+            EMO_TABLE = getattr(IV, "_EMOTION_ROUTINE_AFFINITY", {}) or {}
+            MODE_TABLE = getattr(IV, "_MODE_ROUTINE_AFFINITY", {}) or {}
+            SRC_TABLE = getattr(IV, "_SOURCE_ROUTINE_AFFINITY", {}) or {}
+
+            if emo_counts:
+                dom_emo = max(emo_counts, key=emo_counts.get)
+                emo_aff = EMO_TABLE.get(dom_emo, {})
+                for intent in intents:
+                    b = emo_aff.get(intent, 0.0)
+                    if b:
+                        per_intent_mult[intent] *= _bonus_to_multiplier(b)
+
+            if mode_counts:
+                dom_mode = max(mode_counts, key=mode_counts.get)
+                mode_aff = MODE_TABLE.get(dom_mode, {})
+                for intent in intents:
+                    b = mode_aff.get(intent, 0.0)
+                    if b:
+                        per_intent_mult[intent] *= _bonus_to_multiplier(b)
+
+            total = len(stream)
+            for src, count in src_counts.items():
+                src_aff = SRC_TABLE.get(src, {})
+                if not src_aff:
+                    continue
+                proportion = count / total
+                for intent in intents:
+                    b = src_aff.get(intent, 0.0) * proportion
+                    if b:
+                        per_intent_mult[intent] *= _bonus_to_multiplier(b)
+    except Exception as e:
+        logger.warning(f"[context_mult] inner_voice modulation skipped: {e}")
+
+    # 2. Hypothalamus (energy, stress, dopamine — homoeostasis)
+    try:
+        from core.hypothalamus import (
+            Hypothalamus,
+            _INTENT_ENERGY_MAP,
+            _INTENT_STRESS_MAP,
+            _INTENT_DOPAMINE_MAP,
+        )
+        hypo = Hypothalamus()
+        vals = getattr(hypo, "current_values", {}) or {}
+        # Setpoint neutre 0.5. L'ecart au setpoint amplifie/attenue l'effet.
+        # _INTENT_ENERGY_MAP : + = favorise quand energy bas ; - = penalise quand bas
+        energy_delta = 0.5 - float(vals.get("energy", 0.5))
+        stress_delta = float(vals.get("stress", 0.5)) - 0.5
+        dopamine_delta = 0.5 - float(vals.get("dopamine", 0.5))
+        for intent in intents:
+            bonus = (
+                _INTENT_ENERGY_MAP.get(intent, 0.0) * energy_delta
+                + _INTENT_STRESS_MAP.get(intent, 0.0) * stress_delta
+                + _INTENT_DOPAMINE_MAP.get(intent, 0.0) * dopamine_delta
+            )
+            if bonus:
+                per_intent_mult[intent] *= _bonus_to_multiplier(bonus)
+    except Exception as e:
+        logger.warning(f"[context_mult] hypothalamus modulation skipped: {e}")
+
+    # 3. Psyche (traits de personnalite systeme)
+    try:
+        from core.psyche import psyche as _psyche, ROUTINE_AFFINITY
+        traits_avg: Dict[str, float] = {}
+        if hasattr(_psyche, "get_system_average"):
+            traits_avg = _psyche.get_system_average() or {}
+        if traits_avg and ROUTINE_AFFINITY:
+            for intent in intents:
+                trait_weights = ROUTINE_AFFINITY.get(intent, {})
+                if not trait_weights:
+                    continue
+                # Dot product centre : chaque trait en [0, 100] recentre a 50.
+                # Resultat brut ~[-50 * sum(weights), +50 * sum(weights)] / 100.
+                # Les weights sont typiquement ~0.2-0.5, donc bonus ~[-0.75, +0.75].
+                bonus = 0.0
+                for trait, weight in trait_weights.items():
+                    trait_val = float(traits_avg.get(trait, 50.0))
+                    bonus += weight * (trait_val - 50.0) / 50.0
+                if bonus:
+                    per_intent_mult[intent] *= _bonus_to_multiplier(bonus)
+    except Exception as e:
+        logger.warning(f"[context_mult] psyche modulation skipped: {e}")
+
+    # Clip final puis filtre les neutres (economie memoire pour l'appelant)
+    return {
+        intent: max(_MULTIPLIER_MIN, min(_MULTIPLIER_MAX, mult))
+        for intent, mult in per_intent_mult.items()
+        if abs(mult - 1.0) > 1e-9
+    }
 
 
 # Initialisation automatique des entry_cycles au chargement du module

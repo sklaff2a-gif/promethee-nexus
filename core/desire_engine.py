@@ -453,9 +453,12 @@ class DesireEngine:
         # PLUS BASSE que ce qu'elle serait sans action.
         causal_drop = expected_if_no_action - current_tension
 
-        # Resolu si la baisse causale represente >= 40% de la tension au depart
-        # (50% etait trop strict, 40% est plus realiste pour des goals partiels)
-        resolution_threshold = max(8.0, tension_at_birth * 0.40)
+        # Resolu si la baisse causale represente >= 25% de la tension au depart.
+        # Historique : 50% -> 40% -> 25%. La volatilite naturelle des drives
+        # oscille en ~10-15 points, un seuil a 40% exigeait ~32 points de drop
+        # pour tension_at_birth=80, mathematiquement hors de portee. Audit du
+        # 14/04 : 0 homeostatique / 8 extinction en 16h.
+        resolution_threshold = max(8.0, tension_at_birth * 0.25)
         is_resolved = causal_drop >= resolution_threshold
 
         # Aggrave si causal_drop significativement negatif (action contre-productive)

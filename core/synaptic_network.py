@@ -90,10 +90,13 @@ _NODE_STOPLIST = frozenset({
     "failed", "traceback", "exception", "file", "line",
 })
 
-STATE_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "memory", "synaptic_network.json"
-)
+if os.environ.get("PROMETHEE_TEST_MODE") == "1":
+    STATE_FILE = os.path.join("memory", "test_synaptic_network.json")
+else:
+    STATE_FILE = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "memory", "synaptic_network.json"
+    )
 
 # Types de noeuds valides
 VALID_NODE_TYPES = frozenset({

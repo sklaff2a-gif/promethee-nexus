@@ -1783,9 +1783,25 @@ class PrefrontalCortex:
             payload["causal_drop"] = meta.get("causal_drop")
             payload["tension_at_birth"] = meta.get("tension_at_birth")
             payload["fruitless_cycles"] = meta.get("fruitless_cycles", 0)
-            payload["step_intents"] = [
-                s.intent for s in goal.steps if s.status == "done"
-            ]
+            # Audit 14/04 Fix #2 : Fix 1.5 (tension-first) peut fermer un goal
+            # AVANT qu'un step ne soit marque done -> step_intents vide -> F3
+            # du Hebbian V3 skip silencieusement le renforcement.
+            # - ABANDONED : punir tout ce qui a ete tente (symetrie Gemini Q1)
+            # - COMPLETE : recompenser "done", fallback sur les tentes si vide
+            TRIED_STATUSES = ("done", "doing", "failed", "skipped")
+            if event_type == "PREFRONTAL_GOAL_ABANDONED":
+                payload["step_intents"] = [
+                    s.intent for s in goal.steps if s.status in TRIED_STATUSES
+                ]
+            else:
+                done_intents = [s.intent for s in goal.steps if s.status == "done"]
+                if done_intents:
+                    payload["step_intents"] = done_intents
+                else:
+                    payload["step_intents"] = [
+                        s.intent for s in goal.steps
+                        if s.status in ("doing", "failed", "skipped")
+                    ]
             # Phase C Etape 3 (2026-04-14) : exposer source_drive pour
             # l'apprentissage Hebbian causal. Fallback via drive_alignment
             # si aucun source_key primaire (goals non-drive : council, etc.).
