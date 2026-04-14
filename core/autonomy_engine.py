@@ -1234,16 +1234,40 @@ class AutonomyEngine:
             # Boost special pour opportunite : booster selon le drive affame
             elif target == "_DRIVE_BOOST":
                 # Le codelet opportunity mentionne le drive dans son contenu
-                # On booste les routines liees a ce drive via desire_engine
+                # On booste les routines liees a ce drive via drive_routine_registry
+                # (Phase C Etape 4c-1, 2026-04-14 : migration Strangler Fig de
+                #  DRIVE_ROUTINE_AFFINITY vers la facade SSOT).
                 try:
-                    from core.desire_engine import desires, DRIVE_ROUTINE_AFFINITY
+                    from core.desire_engine import desires
                     dominant = max(desires.drives.values(), key=lambda d: d.deprivation)
-                    affinity = DRIVE_ROUTINE_AFFINITY.get(dominant.name, {})
-                    for intent in affinity:
+                    # Facade V3 : top 10 routines du drive dominant (via genome
+                    # + graphe synaptique V3). Limite top_k=10 pour eviter de
+                    # booster du bruit de fond.
+                    boosted_intents = []
+                    try:
+                        from core.drive_routine_registry import get_routines_for_drive_live
+                        routines = get_routines_for_drive_live(dominant.name, top_k=10)
+                        boosted_intents = [r[0] for r in routines]
+                    except Exception as e:
+                        logger.warning(
+                            f"[autonomy] facade registry echec pour boost "
+                            f"{dominant.name}: {e} — fallback legacy"
+                        )
+                    # Fallback Strangler Fig : table legacy si facade vide
+                    if not boosted_intents:
+                        from core.desire_engine import DRIVE_ROUTINE_AFFINITY
+                        boosted_intents = list(DRIVE_ROUTINE_AFFINITY.get(dominant.name, {}).keys())
+                        if boosted_intents:
+                            logger.debug(
+                                f"[autonomy] Fallback legacy DRIVE_ROUTINE_AFFINITY "
+                                f"pour {dominant.name}: {len(boosted_intents)} intents"
+                            )
+
+                    for intent in boosted_intents:
                         self._reptilian_boosts[intent] = {
                             "boost": 2.0, "expires": now + 300, "source": source,
                         }
-                    print(f"   🦎 REPTILIEN REFLEX: Boost {dominant.name} routines +3.0")
+                    print(f"   🦎 REPTILIEN REFLEX: Boost {dominant.name} routines +3.0 ({len(boosted_intents)} intents)")
                 except Exception:
                     pass
             else:
@@ -3532,7 +3556,7 @@ class AutonomyEngine:
             self._drive_force_counts = {}  # reset fenêtre tous les 5 cycles
         if not self._forced_next_intent:
             try:
-                from core.desire_engine import desires as _desires, DRIVE_ROUTINE_AFFINITY
+                from core.desire_engine import desires as _desires
                 frustrated = [
                     (name, d) for name, d in _desires.drives.items()
                     if (d.frustration_streak >= 4 and d.deprivation >= 70) or d.deprivation >= 90
@@ -3548,11 +3572,45 @@ class AutonomyEngine:
                     elif total_forces >= 10:
                         logger.info(f"[EVEIL] Pulsion {drive_name} plafond session ({total_forces} forçages), skip")
                     else:
-                        forced_intent_map = DRIVE_ROUTINE_AFFINITY.get(drive_name, {})
-                        if forced_intent_map:
-                            best_intent = max(forced_intent_map, key=forced_intent_map.get)
-                            # Anti-boucle : ne pas forcer le même intent deux fois de suite
+                        # Phase C Etape 4c-2 (2026-04-14) : migration Strangler Fig
+                        # du mecanisme EVEIL vers drive_routine_registry.
+                        # Amelioration : top_k=5 permet de tomber sur le runner-up
+                        # si le top 1 est bloque par l'anti-boucle (vs l'ancien
+                        # argmax qui ne permettait pas cette recuperation).
+                        ranked_intents = []
+                        try:
+                            from core.drive_routine_registry import get_routines_for_drive_live
+                            routines = get_routines_for_drive_live(drive_name, top_k=5)
+                            ranked_intents = [r[0] for r in routines]
+                        except Exception as e:
+                            logger.warning(
+                                f"[EVEIL] facade registry echec pour {drive_name}: "
+                                f"{e} — fallback legacy DRIVE_ROUTINE_AFFINITY"
+                            )
+                        # Fallback Strangler Fig : table legacy si facade vide
+                        if not ranked_intents:
+                            from core.desire_engine import DRIVE_ROUTINE_AFFINITY
+                            forced_intent_map = DRIVE_ROUTINE_AFFINITY.get(drive_name, {})
+                            if forced_intent_map:
+                                # Tri par valeur decroissante (equivalent argmax etendu)
+                                ranked_intents = sorted(
+                                    forced_intent_map.keys(),
+                                    key=lambda k: forced_intent_map[k],
+                                    reverse=True,
+                                )
+                                logger.debug(
+                                    f"[EVEIL] Fallback legacy pour {drive_name}: "
+                                    f"{ranked_intents[:3]}"
+                                )
+
+                        if ranked_intents:
+                            # Anti-boucle ameliore : chercher le premier intent
+                            # different du dernier dispatche (runner-up recovery)
                             last_intent = self.routine_history[-1].get("intent", "") if self.routine_history else ""
+                            best_intent = next(
+                                (intent for intent in ranked_intents if intent != last_intent),
+                                ranked_intents[0],  # fallback sur le top si tous identiques
+                            )
                             if best_intent != last_intent:
                                 self._forced_next_intent = best_intent
                                 self._drive_force_counts[drive_name] = force_count + 1
