@@ -149,6 +149,15 @@ class NarrativeEntry:
 
 # ─── Mapping pulsions → intents ──────────────────────────────────────
 
+# DEPRECATED Phase C Etape 4b (2026-04-14) : table heretique remplacee par
+# drive_routine_registry.get_routines_for_drive_live(). Conservee comme
+# fallback Strangler Fig au cas ou la facade serait indisponible au boot
+# (import circulaire, tests isoles, etc.). Supprimee integralement apres
+# validation longue duree de tous les consommateurs migres.
+#
+# Les valeurs ci-dessous sont synchronisees avec DRIVE_GENOME dans
+# drive_routine_registry.py, mais la facade lit aussi le graphe synaptique
+# (Hebbian V3) pour adapter dynamiquement le top 3 selon l'experience.
 _DRIVE_ROUTINE_MAP = {
     "CURIOSITE": ["VEILLE_SILENCIEUSE", "EXPANSION_CODE", "GRIMOIRE_INVOKE"],
     "MAITRISE": ["REFACTORING_AUDIT", "SECURITY_AUDIT", "CI_PIPELINE_RUN"],
@@ -1380,10 +1389,35 @@ class PrefrontalCortex:
                     if recent_for_drive:
                         continue
 
-                    routines = _DRIVE_ROUTINE_MAP.get(name, ["VEILLE_SILENCIEUSE"])
+                    # Phase C Etape 4b (2026-04-14) : migration Strangler Fig
+                    # de _DRIVE_ROUTINE_MAP vers drive_routine_registry (SSOT
+                    # dynamique via genome + graphe synaptique V3). La facade
+                    # consulte le Hebbian V3 pour adapter le top 3 selon
+                    # l'experience recente, avec fallback gracieux sur la
+                    # table legacy en cas d'indisponibilite.
+                    routine_intents: List[str] = []
+                    try:
+                        from core.drive_routine_registry import get_routines_for_drive_live
+                        result = get_routines_for_drive_live(name, top_k=3)
+                        routine_intents = [r[0] for r in result]
+                    except Exception as e:
+                        logger.warning(
+                            f"[prefrontal] facade registry echec pour {name}: "
+                            f"{e} — fallback legacy _DRIVE_ROUTINE_MAP"
+                        )
+                    # Fallback Strangler Fig : table legacy si vide
+                    if not routine_intents:
+                        routine_intents = _DRIVE_ROUTINE_MAP.get(
+                            name, ["VEILLE_SILENCIEUSE"]
+                        )
+                        logger.debug(
+                            f"[prefrontal] Fallback legacy _DRIVE_ROUTINE_MAP "
+                            f"pour {name}: {routine_intents[:3]}"
+                        )
+
                     steps = [
                         GoalStep(intent=r, description=f"Satisfaire {name}")
-                        for r in routines[:3]
+                        for r in routine_intents[:3]
                     ]
                     goal_id = uuid.uuid4().hex[:8]
                     # Fix 1 : metadata pour fermeture homeostatique
