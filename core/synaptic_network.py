@@ -1599,40 +1599,6 @@ class SynapticNetwork:
                 self.hebbian_strengthen(intent_nid, cnid, success=success,
                                         context=f"routine:{intent}")
 
-            # ================================================================
-            # PHASE B LEGACY - TEMPORAL SUPERSTITION (commente 2026-04-14)
-            # ================================================================
-            # Ce bloc renforcait drive<->intent sur la seule base de
-            # status=success et quality>=0.6, SANS verifier si la tension
-            # upstream avait vraiment baisse. Loi de Goodhart appliquee au
-            # graphe synaptique lui-meme.
-            #
-            # Pire : utilisait DRIVE_ROUTINE_AFFINITY (table heretique de la
-            # V1) pour decider quel drive renforcer, potentiellement
-            # renforcant des liens vers plusieurs drives qui n'etaient pas
-            # la vraie source du goal courant (superstition multi-drive).
-            #
-            # Remplace par _learn_from_homeostatic_closure (Phase C Etape 3,
-            # V3) qui n'ecoute QUE PREFRONTAL_GOAL_COMPLETE mode=homeostatic
-            # avec source_drive + causal_drop + step_intents signes
-            # causalement. Voir docs/phase_c_etape_3_hebbian_causal.md.
-            # ================================================================
-            # if success:
-            #     try:
-            #         from core.desire_engine import DRIVE_ROUTINE_AFFINITY
-            #         for drive, routines in DRIVE_ROUTINE_AFFINITY.items():
-            #             if intent in routines:
-            #                 drive_nid = _make_node_id(
-            #                     f"pulsion:{drive.lower()}"
-            #                 )
-            #                 if drive_nid in self.nodes:
-            #                     self.hebbian_strengthen(
-            #                         intent_nid, drive_nid, success=True,
-            #                         context=f"affinity:{intent}->{drive}",
-            #                     )
-            #     except ImportError:
-            #         pass
-
             # Sync immediat deprivation -> energie pulsions
             try:
                 from core.desire_engine import desires

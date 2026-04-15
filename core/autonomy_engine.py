@@ -1242,33 +1242,12 @@ class AutonomyEngine:
             elif target == "_DRIVE_BOOST":
                 # Le codelet opportunity mentionne le drive dans son contenu
                 # On booste les routines liees a ce drive via drive_routine_registry
-                # (Phase C Etape 4c-1, 2026-04-14 : migration Strangler Fig de
-                #  DRIVE_ROUTINE_AFFINITY vers la facade SSOT).
                 try:
                     from core.desire_engine import desires
+                    from core.drive_routine_registry import get_routines_for_drive_live
                     dominant = max(desires.drives.values(), key=lambda d: d.deprivation)
-                    # Facade V3 : top 10 routines du drive dominant (via genome
-                    # + graphe synaptique V3). Limite top_k=10 pour eviter de
-                    # booster du bruit de fond.
-                    boosted_intents = []
-                    try:
-                        from core.drive_routine_registry import get_routines_for_drive_live
-                        routines = get_routines_for_drive_live(dominant.name, top_k=10)
-                        boosted_intents = [r[0] for r in routines]
-                    except Exception as e:
-                        logger.warning(
-                            f"[autonomy] facade registry echec pour boost "
-                            f"{dominant.name}: {e} — fallback legacy"
-                        )
-                    # Fallback Strangler Fig : table legacy si facade vide
-                    if not boosted_intents:
-                        from core.desire_engine import DRIVE_ROUTINE_AFFINITY
-                        boosted_intents = list(DRIVE_ROUTINE_AFFINITY.get(dominant.name, {}).keys())
-                        if boosted_intents:
-                            logger.debug(
-                                f"[autonomy] Fallback legacy DRIVE_ROUTINE_AFFINITY "
-                                f"pour {dominant.name}: {len(boosted_intents)} intents"
-                            )
+                    routines = get_routines_for_drive_live(dominant.name, top_k=10)
+                    boosted_intents = [r[0] for r in routines]
 
                     for intent in boosted_intents:
                         self._reptilian_boosts[intent] = {
@@ -3579,36 +3558,11 @@ class AutonomyEngine:
                     elif total_forces >= 10:
                         logger.info(f"[EVEIL] Pulsion {drive_name} plafond session ({total_forces} forçages), skip")
                     else:
-                        # Phase C Etape 4c-2 (2026-04-14) : migration Strangler Fig
-                        # du mecanisme EVEIL vers drive_routine_registry.
-                        # Amelioration : top_k=5 permet de tomber sur le runner-up
-                        # si le top 1 est bloque par l'anti-boucle (vs l'ancien
-                        # argmax qui ne permettait pas cette recuperation).
-                        ranked_intents = []
-                        try:
-                            from core.drive_routine_registry import get_routines_for_drive_live
-                            routines = get_routines_for_drive_live(drive_name, top_k=5)
-                            ranked_intents = [r[0] for r in routines]
-                        except Exception as e:
-                            logger.warning(
-                                f"[EVEIL] facade registry echec pour {drive_name}: "
-                                f"{e} — fallback legacy DRIVE_ROUTINE_AFFINITY"
-                            )
-                        # Fallback Strangler Fig : table legacy si facade vide
-                        if not ranked_intents:
-                            from core.desire_engine import DRIVE_ROUTINE_AFFINITY
-                            forced_intent_map = DRIVE_ROUTINE_AFFINITY.get(drive_name, {})
-                            if forced_intent_map:
-                                # Tri par valeur decroissante (equivalent argmax etendu)
-                                ranked_intents = sorted(
-                                    forced_intent_map.keys(),
-                                    key=lambda k: forced_intent_map[k],
-                                    reverse=True,
-                                )
-                                logger.debug(
-                                    f"[EVEIL] Fallback legacy pour {drive_name}: "
-                                    f"{ranked_intents[:3]}"
-                                )
+                        # EVEIL — top_k=5 permet de tomber sur le runner-up
+                        # si le top 1 est bloque par l'anti-boucle.
+                        from core.drive_routine_registry import get_routines_for_drive_live
+                        routines = get_routines_for_drive_live(drive_name, top_k=5)
+                        ranked_intents = [r[0] for r in routines]
 
                         if ranked_intents:
                             # Anti-boucle ameliore : chercher le premier intent
@@ -6020,7 +5974,7 @@ class AutonomyEngine:
 
         Lecture seule : scanne core/*.py via AST, détecte fichiers volumineux
         et fonctions longues, produit docs/refactoring_targets.md. Zero LLM.
-        Bras armé du drive MAITRISE via _DRIVE_ROUTINE_MAP du préfrontal.
+        Bras armé du drive MAITRISE via drive_routine_registry.
         """
         import ast
         try:
@@ -6112,7 +6066,7 @@ class AutonomyEngine:
 
         Lance pytest sur la suite de tests en mode rapide (timeout 120s) et
         rapporte passed/failed/errors. Zero LLM, 0 coût LLM (mais utilise CPU).
-        Bras armé du drive STABILITE via _DRIVE_ROUTINE_MAP du préfrontal.
+        Bras armé du drive STABILITE via drive_routine_registry.
         """
         import subprocess
         try:

@@ -1564,46 +1564,20 @@ class InnerVoice:
         return " | ".join(parts) if parts else ""
 
     # ─── INFLUENCE SUR LE SCORING (Couche 8) ─────────────────────────────
-
-    # Mapping source de pensée → affinité avec les routines
-    _SOURCE_ROUTINE_AFFINITY = {
-        "reptilian": {
-            "SECURITY_AUDIT": 0.6, "AUDIT_STRUCTURE": 0.4,
-            "EXPANSION_CODE": -0.4, "GRIMOIRE_INVOKE": -0.2,
-        },
-        "synaptic": {
-            "COUNCIL_DEBATE": 0.4, "GRIMOIRE_INVOKE": 0.3,
-            "EXPANSION_CODE": 0.2,
-        },
-        "dmn": {
-            "VEILLE_SILENCIEUSE": 0.3, "MEMORY_CLEANUP": 0.2,
-            "MEMORY_CONSOLIDATION": 0.2,
-        },
-    }
-
-    # Mapping émotion dominante → affinités routines
-    _EMOTION_ROUTINE_AFFINITY = {
-        "frustration": {"MEMORY_CLEANUP": 0.3, "AUDIT_STRUCTURE": 0.3, "EXPANSION_CODE": -0.3},
-        "inquietude": {"SECURITY_AUDIT": 0.4, "AUDIT_STRUCTURE": 0.3, "EXPANSION_CODE": -0.3},
-        "curiosite": {"VEILLE_SILENCIEUSE": 0.4, "EXPANSION_CODE": 0.2, "COUNCIL_DEBATE": 0.2},
-        "enthousiasme": {"EXPANSION_CODE": 0.3, "GRIMOIRE_INVOKE": 0.2},
-        "flow": {"EXPANSION_CODE": 0.3, "COUNCIL_DEBATE": 0.2},
-        "fatigue": {"MEMORY_CLEANUP": 0.3, "AUDIT_STRUCTURE": 0.2, "EXPANSION_CODE": -0.4},
-        "serenite": {"VEILLE_SILENCIEUSE": 0.2, "COUNCIL_DEBATE": 0.2},
-        "determination": {"EXPANSION_CODE": 0.2, "SECURITY_AUDIT": 0.2},
-        "alerte": {"SECURITY_AUDIT": 0.5, "AUDIT_STRUCTURE": 0.3, "EXPANSION_CODE": -0.5},
-    }
-
-    # Mapping mode Vygotsky → affinités routines
-    _MODE_ROUTINE_AFFINITY = {
-        "inhiber": {"AUDIT_STRUCTURE": 0.3, "SECURITY_AUDIT": 0.2, "EXPANSION_CODE": -0.3},
-        "motiver": {"EXPANSION_CODE": 0.3, "VEILLE_SILENCIEUSE": 0.2},
-        "planifier": {"EXPANSION_CODE": 0.2, "COUNCIL_DEBATE": 0.1},
-        "vagabonder": {"COUNCIL_DEBATE": 0.3, "VEILLE_SILENCIEUSE": 0.2, "GRIMOIRE_INVOKE": 0.2},
-        "predire": {"AUDIT_STRUCTURE": 0.2},
-        "refleter": {"MEMORY_CONSOLIDATION": 0.2, "MEMORY_CLEANUP": 0.1},
-        "evaluer": {},
-    }
+    #
+    # Phase C Etape 6b (2026-04-15) : les tables de modulation emotion /
+    # mode / source ont ete physiquement deplacees dans
+    # drive_routine_registry.py (EMOTION_BONUS_DATA, MODE_BONUS_DATA,
+    # SOURCE_BONUS_DATA). Elles y sont consommees par
+    # compute_context_multipliers en amont du scoring, sous forme de
+    # multiplicateurs bornes. La Couche 8 (compute_voice_bonus ci-dessous)
+    # ne lit plus ni emotion ni mode ni source : elle se limite a ecouter
+    # litteralement ce que la voix interieure dit dans sa DERNIERE pensee,
+    # et valorise l'intent s'il y est mentionne explicitement.
+    #
+    # Cette separation elimine le double comptage (une meme emotion
+    # multipliait ET ajoutait des points au scoring) et donne a chaque
+    # couche un role semantique unique.
 
     # Mapping mots-clés pensées → slugs Grimoire
     _THOUGHT_GRIMOIRE_MAP = {
@@ -1617,66 +1591,39 @@ class InnerVoice:
     }
 
     def compute_voice_bonus(self, intent: str) -> float:
-        """Couche 8 du scoring — influence cognitive de la voix intérieure.
+        """Couche 8 du scoring — ecoute litterale de la voix interieure.
 
-        Analyse les 10 dernières pensées : convergence des sources,
-        émotion dominante, mode Vygotsky, erreurs de prédiction.
-        Retourne un bonus clamped [-1.0, +2.0].
+        Phase C Etape 6b (2026-04-15) : evidee de toute logique emotion /
+        mode / source (deplacees dans drive_routine_registry en amont comme
+        multiplicateurs). La Couche 8 conserve uniquement son role
+        semantique propre : valoriser une routine si elle est mentionnee
+        dans la DERNIERE pensee du soliloque.
+
+        Tokenise le nom de l'intent (en separant les underscores et en ne
+        gardant que les tokens significatifs >= 4 caracteres) et mesure la
+        correspondance avec le contenu de la derniere pensee. Plus la
+        pensee nomme l'intent, plus le bonus est fort. Aucun malus
+        (-X.X) : la Couche 8 ne punit pas, elle ne fait qu'amplifier ce
+        que la voix appelle explicitement.
+
+        Retourne un bonus borne [-1.0, +2.0]. Plage typique post-6b :
+        [0.0, +1.0].
         """
         if not self.stream:
             return 0.0
 
-        recent = self.stream[-10:]
-        bonus = 0.0
+        tokens = [tok for tok in intent.lower().split("_") if len(tok) >= 4]
+        if not tokens:
+            return 0.0
 
-        # 1. Convergence des sources → routines associées
-        source_counts: Dict[str, int] = {}
-        for t in recent:
-            source_counts[t.source] = source_counts.get(t.source, 0) + 1
+        last_content = self.stream[-1].content.lower()
+        matched = sum(1 for tok in tokens if tok in last_content)
+        if matched == 0:
+            return 0.0
 
-        for source, count in source_counts.items():
-            proportion = count / len(recent)
-            affinity = self._SOURCE_ROUTINE_AFFINITY.get(source, {}).get(intent, 0.0)
-            if affinity != 0.0:
-                bonus += affinity * proportion * 2.0
-
-        # 2. Émotion dominante des pensées récentes
-        emotion_counts: Dict[str, int] = {}
-        for t in recent:
-            if t.emotion:
-                emotion_counts[t.emotion] = emotion_counts.get(t.emotion, 0) + 1
-        if emotion_counts:
-            dominant_emotion = max(emotion_counts, key=emotion_counts.get)
-            emo_aff = self._EMOTION_ROUTINE_AFFINITY.get(dominant_emotion, {}).get(intent, 0.0)
-            if emo_aff != 0.0:
-                bonus += emo_aff
-
-        # 3. Mode Vygotsky dominant
-        mode_counts: Dict[str, int] = {}
-        for t in recent:
-            if t.mode:
-                mode_counts[t.mode] = mode_counts.get(t.mode, 0) + 1
-        if mode_counts:
-            dominant_mode = max(mode_counts, key=mode_counts.get)
-            mode_aff = self._MODE_ROUTINE_AFFINITY.get(dominant_mode, {}).get(intent, 0.0)
-            if mode_aff != 0.0:
-                bonus += mode_aff
-
-        # 4. Erreurs de prédiction récentes → boost diagnostic
-        now = time.time()
-        recent_errors = [
-            p for p in self.predictions
-            if p.resolved and p.outcome == "violated"
-            and now - p.created_at < 600
-        ]
-        if recent_errors:
-            error_aff = {
-                "AUDIT_STRUCTURE": 0.3, "SECURITY_AUDIT": 0.2,
-                "GRIMOIRE_INVOKE": 0.3, "EXPANSION_CODE": -0.3,
-            }.get(intent, 0.0)
-            bonus += error_aff * min(len(recent_errors), 3) * 0.5
-
-        return round(max(-1.0, min(2.0, bonus)), 2)
+        # Correspondance totale -> +1.0 ; partielle -> proportionnel.
+        bonus = round(matched / len(tokens), 2)
+        return max(-1.0, min(2.0, bonus))
 
     def get_grimoire_suggestion(self) -> Optional[str]:
         """Suggère un spécialiste Grimoire basé sur le flux de conscience.

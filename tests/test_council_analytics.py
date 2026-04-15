@@ -11,7 +11,6 @@ from core.council_analytics import (
     _heuristic_verdict,
     _build_data_mission,
     _THEME_INTENT_MAP,
-    DRIVE_INTENT_MAP,
 )
 
 

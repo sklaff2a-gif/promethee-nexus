@@ -4626,3 +4626,1320 @@ METRIQUES ROUTINES (dernieres 40):
 
 **Fichiers cibles** : (aucun fichier cité)
 **Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-03-31 18:59] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-01 07:27] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : 4 | **Consensus** : non
+
+**Propositions clés** :
+  **ÉTAT DU SYSTÈME :** STRATEGIST [ACTIVE] | TOUR 4/4 | MODALITÉ : SYNTHÈSE CRÉATIVE & CORRECTION
+  **CONSENSUS : Non encore atteint.** Les critiques précédentes soulignent une divergence majeure entre les pulsions du sy
+  **ÉTAT DU SYSTÈME :** ARCHITECT [ACTIVE] | TOUR 4/4 | MODALITÉ : SYNTHÈSE CRÉATIVE & CORRECTION
+  **CONSENSUS ATTEINT ?** Non encore totalement atteint sur la définition de l'évolution, mais les pistes de résolution so
+  **ÉTAT DU SYSTÈME :** SECURITY [ACTIVE] | TOUR 4/4 | MODALITÉ : VALIDATION & SYNTHÈSE CRITIQUE
+
+**Fichiers cibles** : `core/grimoire/hallucination_doctor.py`, `core/memory/vector_store.py`
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-01 13:11] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-01 15:36] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- SELF_AN
+
+**Participants** : strategist, coder, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : DEPRIORISER EXPANSION_CODE — Verdict Council
+
+---
+
+## [2026-04-02 07:01] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : DEPRIORISER SCHOOL_BULLETIN — Verdict Council
+
+---
+
+## [2026-04-02 11:07] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-02 13:19] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- AUDIT_S
+
+**Participants** : strategist, coder, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-03 06:14] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **CONSENSUS PARTIEL : Priorisation Immédiate de la Survie du Système**
+  *   **Action :** Implémenter un "Kill Switch" logiciel simple via `core/autonomy_engine.py pour qu'il écoute des signaux
+  **CONSENSUS PARTIEL : Priorisation Immédiate de la Survie du Système**
+  *   **Implémentation :**
+  *   Modifier **`orchestrator.py`** pour lire les signaux critiques provenant de **`bus.py`** (via `signal_bus.py`).
+
+**Fichiers cibles** : `core/autonomy_engine.py`, `core/grimoire/loop_breaker.py`, `core/orchestrator.py`
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-03 08:24] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-03 10:32] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- AUDIT_S
+
+**Participants** : strategist, coder, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-04 10:03] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-05 02:09] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : 4 | **Consensus** : oui
+
+**Propositions clés** :
+  **ANALYSE DES CONFLITS ET CORRECTIONS :**
+  *   *Correction* : Utiliser le fichier existant `prefrontal.py` pour recalibrer les priorités de raisonnement et éviter 
+  *   *Correction* : Solliciter `basal_ganglia.py` pour valider la séquence d'action actuelle (la réponse ci-dessous) et r
+  **Nature du problème** : Manque de contrôle inhibiteur. L'agent tente de "halluciner" des structures (dossiers `grimoire
+
+**Fichiers cibles** : `core/autonomy_engine.py`, `core/grimoire.py`
+**Verdict** : PRIORISER EXPANSION_CODE — Verdict heuristique : prioriser code
+
+---
+
+## [2026-04-05 06:49] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-1774848014-24e7`: [CURATION] perimee: 89h (>12h)
+  - `COUNCIL-1775189680-4f9c`: [CURATION] perimee: 17h (>12h)
+
+---
+
+## [2026-04-05 06:49] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : DEPRIORISER SCHOOL_CREATION — Verdict Council
+
+---
+
+## [2026-04-05 11:19] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- AUDIT_S
+
+**Participants** : strategist, coder, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-06 03:53] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **[COUNCIL VIRTUEL] CONSENSUS DÉTERMINISTE (CONFLIT=0.00)**
+  *   **Action sur `orchestrator.py` :** Nous modifions la logique de routage pour injecter un facteur de "pulsion créativ
+  *   **Action sur `orchestrator.py` :** Modifier la logique de routage pour injecter un facteur de "pulsion c
+
+**Fichiers cibles** : `core/bug_antibodies.py`, `core/council.py`, `core/desire_engine.py`, `core/vector_store.py`
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-06 07:57] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 4 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-06 14:07] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- SELF_AN
+
+**Participants** : strategist, coder, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-07 01:05] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 01:05] Test under limit
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 01:05] Test old council ok
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 01:05] Test virtual not counted
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 01:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-04-07 01:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-04-07 01:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-04-07 01:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-04-07 01:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-04-07 01:06] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-04-07 01:06] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-04-07 01:06] Test curation
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-07 01:07] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 01:07] Test under limit
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 01:07] Test old council ok
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 01:07] Test virtual not counted
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 01:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-04-07 01:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-04-07 01:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-04-07 01:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-04-07 01:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-04-07 01:08] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-04-07 01:08] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-04-07 01:08] Test curation
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-07 01:11] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 01:12] Test under limit
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 01:12] Test old council ok
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 01:12] Test virtual not counted
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 05:05] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 05:05] Test under limit
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 05:05] Test old council ok
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 05:05] Test virtual not counted
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 05:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-04-07 05:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-04-07 05:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-04-07 05:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-04-07 05:06] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-04-07 05:06] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-04-07 05:06] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-04-07 05:06] Test curation
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-07 05:07] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 05:07] Test under limit
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 05:07] Test old council ok
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 05:07] Test virtual not counted
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-07 05:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-04-07 05:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-04-07 05:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-04-07 05:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-04-07 05:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-04-07 05:08] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-04-07 05:08] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-04-07 05:08] Test curation
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-07 07:38] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-07 12:21] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- EXPANSI
+
+**Participants** : strategist, coder, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-07 14:44] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-08 06:29] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-08 09:10] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **ANALYSE DES CONFLITS ET PRIORISATION**
+  - **Conflit Préfrontal (Planification) vs Basal Ganglia (Action) :** La peur de l'échec ou de la complexité paralyse l'i
+  - **DMN (Réflexion interne) vs Temporal (Mémoire) :** Le système se perd dans l'analyse théorique sans ancrer la créatio
+  **STRATÉGIE DE RÉSOLUTION (SURVIE & CRÉATION)**
+  **PLAN D'ACTION CONCRET :**
+
+**Fichiers cibles** : `core/autonomy_engine.py`, `core/bug_antibodies.py`, `core/hippocampus.py`
+**Verdict** : ABANDONNER LES — Verdict heuristique extrait du consensus
+
+---
+
+## [2026-04-09 06:20] CURATION AUTOMATIQUE
+
+**3 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-1775347775-f166`: [CURATION] perimee: 100h (>12h)
+  - `COUNCIL-1775440430-0450`: [CURATION] perimee: 74h (>12h)
+  - `COUNCIL-1775632203-6c48`: [CURATION] perimee: 21h (>12h)
+
+---
+
+## [2026-04-09 06:23] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  *   Ignorer les routines "fantômes" non implémentées.
+  *   Prioriser la **sécurité** (fichier `security_agent.py`) et la **stabilité du budget** avant toute création.
+  *   Limiter les appels à `Ollama` en forçant le mode de pensée rapide (moins de tokens) pour les décisions routinières.
+  **Action :** Modifier la logique de routage dans `core/council.py pour qu'il rejette automatiquement les demandes d
+  *   Ignorer les routines "fantômes" non implémentées.
+
+**Fichiers cibles** : `core/autonomy_engine.py`, `core/council.py`
+**Verdict** : PRIORISER LA — Verdict heuristique extrait du consensus
+
+---
+
+## [2026-04-09 10:20] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-09 13:31] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- AUDIT_S
+
+**Participants** : strategist, coder, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-10 02:42] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **CONSENSUS PARTIAL** — Le consensus est atteint sur l'abandon des répertoires `[core/grimoire/→INEXISTANT] `[core/event
+  **Problème :** Ces zones indiquent une tension entre la prise de décision rationnelle et la régulation émotionnelle/du s
+  **Solution :** Activer le module de résilience interne et désamorcer les alarmes de sécu
+  **CONSENSUS PARTIAL** — Le consensus est atteint sur l'abandon des répertoires `[[core/grimoire/]→INEXISTANT] `[[core/ev
+  **Problème :** Ces zones indiquent une tension entre la prise de décision rationnelle et la régulation émotionnelle/du s
+
+**Fichiers cibles** : `core/autonomy_engine.py`
+**Verdict** : PRIORISER LES — Verdict heuristique extrait du consensus
+
+---
+
+## [2026-04-10 07:03] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **ANALYSE CRITIQUE ET CORRECTION DES ERREURS PRECEDENTES**
+  **STRATÉGIE DE SURVIE (TOUR 3) : PRIORISATION DU CŒUR VITAL**
+
+**Fichiers cibles** : `core/ambience.py`, `core/autonomy_engine.py`, `core/orchestrator.py`, `core/vector_store.py`
+**Verdict** : PRIORISER MEMORY_CONSOLIDATION — Verdict heuristique : concentrer consolid
+
+---
+
+## [2026-04-10 09:10] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-1775708624-e022`: [CURATION] perimee: 17h (>12h)
+
+---
+
+## [2026-04-10 09:10] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- AUDIT_S
+
+**Participants** : strategist, coder, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-12 07:20] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-12 10:00] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **ÉTAT DU SYSTÈME :** CRITIQUE [MODE SURVIE ACTIVÉ] **AGENT :** STRATEGIST
+  **CONSTAT :** Les agents (ARCHITECT, SECURITY) ont identifié des références à des fichiers inexistants dans mes réponses
+  **ACTION :** Concentrer l'effort sur les conflits cognitifs détectés (PFC vs DMN) en utilisant les modules neuronaux exi
+  - **DMN (3.286)** : Très élevé. Indique une rumination, une divergence de pensée ou une exploration créative excessive. 
+  - **PFC (-0.313)** : Négatif. Indique une difficulté à mainten
+
+**Fichiers cibles** : `Agents/architect_agent.py`, `core/autonomy_engine.py`, `core/brain_vm.py`, `core/global_workspace.py`, `core/organ_registry.py`
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-12 19:53] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-1775797437-0bb0`: [CURATION] perimee: 61h (>12h)
+
+---
+
+## [2026-04-12 19:53] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- AUDIT_S
+
+**Participants** : strategist, coder, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-12 23:39] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-13 04:31] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-13 18:33] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [reveri
+
+**Participants** : researcher, evolution, strategist | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-13 20:06] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+SPECS RETENTABLES (14):
+  - PERF-002: 1 tent
+
+**Participants** : strategist, evolution, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-13 23:30] L'instinct de survie est extrême. Est-ce de la prudence excessive ?
+
+**Participants** : architect, security, strategist | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **PROFESSEUR :** Écoute-moi bien, Prométhée-Étudiant. Tu as raison de protester. Le silence de mes collègues (ARCHITECT,
+  *   **Action 1 : La validation humaine avant l'exécution critique.**
+  *   **Fichier ciblé :** `core/ethics_module.py
+
+**Fichiers cibles** : `core/brain_vm.py`, `core/council.py`, `core/ethics_module.py`, `core/grimoire/loop_breaker.py`
+**Verdict** : PRIORISER AUDIT_STRUCTURE — Verdict heuristique : plus de stabilit
+
+---
+
+## [2026-04-14 13:06] CURATION AUTOMATIQUE
+
+**3 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-1775781773-b41e`: [CURATION] perimee: 14h (>12h)
+  - `COUNCIL-1775980807-8c37`: [CURATION] perimee: 17h (>12h)
+  - `COUNCIL-1776115828-8728`: [CURATION] perimee: 14h (>12h)
+
+---
+
+## [2026-04-14 13:06] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-14 13:06] Test under limit
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-14 13:06] Test old council ok
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-14 13:06] Test virtual not counted
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-14 13:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-04-14 13:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-04-14 13:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-04-14 13:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-04-14 13:08] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-04-14 13:08] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-04-14 13:08] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-04-14 13:08] Test curation
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-14 13:12] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-14 13:12] Test under limit
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-14 13:12] Test old council ok
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-14 13:12] Test virtual not counted
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-14 13:15] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-04-14 13:15] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-04-14 13:15] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-04-14 13:15] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-04-14 13:15] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-04-14 13:15] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-04-14 13:15] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-04-14 13:15] Test curation
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-14 15:51] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [reveri
+
+**Participants** : researcher, evolution, strategist | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-14 19:57] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- ROADMAP
+
+**Participants** : strategist, coder, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-15 02:37] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  *   **Action :** Activer le mode "V
+  **Problème :** Le conflit `basal_ganglia` (-0.222) indique une tension entre l'impulsion d'agir et la nécessité de plani
+  **Cible :** `core/orchestrator.py et `core/basal_ganglia.py
+  **Objectif :** Éviter les gelures logicielles sur Windows en régulant les appels Ollama/Gemini.
+  *   **Action sur `core/orchestrator.py :**
+
+**Fichiers cibles** : `core/basal_ganglia.py`, `core/orchestrator.py`, `core/performance_utils.py`
+**Verdict** : (aucun verdict extrait)

@@ -92,9 +92,10 @@ def simulate_goal_lifecycle(drive_name: str, scenario: str, goal_num: int) -> di
     )
     goal_meta["max_fruitless"] = 3  # Test rapide
 
-    # Steps depuis _DRIVE_ROUTINE_MAP (vraie source de Promethee)
-    from core.prefrontal import _DRIVE_ROUTINE_MAP
-    routines = _DRIVE_ROUTINE_MAP.get(drive_name, ["VEILLE_SILENCIEUSE"])[:2]
+    # Steps depuis drive_routine_registry (SSOT V3 — genome + graphe synaptique)
+    from core.drive_routine_registry import get_routines_for_drive_live
+    ranked = get_routines_for_drive_live(drive_name, top_k=2)
+    routines = [r[0] for r in ranked] or ["VEILLE_SILENCIEUSE"]
     steps = [GoalStep(intent=r, description=f"Test {drive_name}") for r in routines]
 
     goal = Goal(

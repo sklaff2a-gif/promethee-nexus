@@ -123,17 +123,6 @@ ROUTINE_SUCCESS_THRESHOLD: Dict[str, float] = {
     "DROPZONE_SCAN": 0.3,
 }
 
-# --- Affinite pulsion -> routine (pour le scoring) ---
-DRIVE_ROUTINE_AFFINITY: Dict[str, Dict[str, float]] = {
-    "CURIOSITE":      {"VEILLE_SILENCIEUSE": 1.2, "DROPZONE_SCAN": 0.8, "COUNCIL_DEBATE": 0.3, "ROADMAP_RESEARCH": 1.2, "SELF_INSPECT": 1.5, "VISUAL_OBSERVATION": 1.3},
-    "MAITRISE":       {"EXPANSION_CODE": 0.8, "EXPANSION_CATALOG": 1.0, "REFACTOR_RANDOM": 1.0, "AUDIT_STRUCTURE": 0.5, "SELF_ANALYSIS": 1.2, "PARAM_EXPERIMENT": 1.0},
-    "STABILITE":      {"SECURITY_AUDIT": 1.2, "AUDIT_STRUCTURE": 1.0, "MEMORY_CLEANUP": 0.8},
-    "CONNEXION":      {"COUNCIL_DEBATE": 1.5, "DROPZONE_SCAN": 0.5, "SOLILOQUE_INTERNE": 1.8, "VISUAL_OBSERVATION": 1.0, "VEILLE_SILENCIEUSE": 0.5},
-    "CROISSANCE":     {"EXPANSION_CODE": 1.2, "EXPANSION_CATALOG": 1.5, "GRIMOIRE_INVOKE": 1.0, "VEILLE_SILENCIEUSE": 0.3, "ROADMAP_SPEC": 1.5},
-    "CREATION":       {"EXPANSION_CODE": 1.5, "EXPANSION_CATALOG": 1.8, "GRIMOIRE_INVOKE": 0.5, "REFACTOR_RANDOM": 0.3},
-    "COMPREHENSION":  {"VEILLE_SILENCIEUSE": 1.0, "COUNCIL_DEBATE": 0.8, "AUDIT_STRUCTURE": 0.5, "MEMORY_CONSOLIDATION": 1.5, "ROADMAP_RESEARCH": 1.0, "SELF_INSPECT": 1.2, "VISUAL_OBSERVATION": 1.2, "SELF_ANALYSIS": 1.5},
-}
-
 # --- Narratifs par pulsion et seuil ---
 DRIVE_NARRATIVES: Dict[str, Dict[int, str]] = {
     "CURIOSITE": {
@@ -568,23 +557,13 @@ class DesireEngine:
         get_routines_for_drive_live() qui ferait un tri inutile.
         """
         bonus = 0.0
-        # Phase C Etape 4c-3b : import lazy pour eviter un couplage global
-        try:
-            from core.drive_routine_registry import get_affinity_for_drive_intent
-            use_v3 = True
-        except ImportError:
-            use_v3 = False
+        from core.drive_routine_registry import get_affinity_for_drive_intent
 
         for drive in self.drives.values():
             if drive.deprivation <= 30:
                 continue  # pas assez frustre pour contribuer
 
-            if use_v3:
-                # V3 : lecture O(1) du registre (genome + graphe synaptique)
-                affinity = get_affinity_for_drive_intent(drive.name, intent)
-            else:
-                # Fallback Strangler Fig : table legacy si registre indisponible
-                affinity = DRIVE_ROUTINE_AFFINITY.get(drive.name, {}).get(intent, 0.0)
+            affinity = get_affinity_for_drive_intent(drive.name, intent)
 
             if affinity > 0:
                 urgency = (drive.deprivation - 30) / 70  # 0.0 a 1.0

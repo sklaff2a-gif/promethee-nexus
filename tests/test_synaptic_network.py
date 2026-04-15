@@ -1300,7 +1300,6 @@ class TestOrganIntegration:
 
         with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
             desires=mock_desires,
-            DRIVE_ROUTINE_AFFINITY={"MAITRISE": ["EXPANSION_CODE"]},
         )}):
             await network._on_routine_complete({
                 "intent": "EXPANSION_CODE",

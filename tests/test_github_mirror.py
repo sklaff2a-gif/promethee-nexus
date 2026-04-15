@@ -410,9 +410,3 @@ class TestSelfInspectIntegration:
         assert "SELF_INSPECT" in costs
         assert costs["SELF_INSPECT"]["cost"] == 0
 
-    def test_self_inspect_desire_affinity(self):
-        """SELF_INSPECT a une affinité avec CURIOSITE et COMPREHENSION."""
-        from core.desire_engine import DRIVE_ROUTINE_AFFINITY
-        assert "SELF_INSPECT" in DRIVE_ROUTINE_AFFINITY["CURIOSITE"]
-        assert "SELF_INSPECT" in DRIVE_ROUTINE_AFFINITY["COMPREHENSION"]
-        assert DRIVE_ROUTINE_AFFINITY["CURIOSITE"]["SELF_INSPECT"] > 1.0

@@ -1087,139 +1087,98 @@ class TestModeVygotsky:
 
 
 class TestVoiceBonusScoring:
+    """Phase C Etape 6b : la Couche 8 n'ecoute plus que la derniere pensee.
+
+    Plus de bonus emotion/mode/source : ces modulations sont maintenant
+    gerees par drive_routine_registry.compute_context_multipliers en amont.
+    La Couche 8 valorise uniquement la mention litterale de l'intent dans
+    la derniere pensee du soliloque (match NLP par tokens).
+    """
+
     def test_bonus_empty_stream(self, voice):
         """Bonus 0.0 si pas de pensées."""
         assert voice.compute_voice_bonus("EXPANSION_CODE") == 0.0
 
-    def test_bonus_reptilian_convergence(self, voice):
-        """Pensées reptiliennes boostent SECURITY_AUDIT."""
+    def test_bonus_no_mention(self, voice):
+        """Derniere pensee sans aucun token de l'intent → 0.0."""
         from core.inner_voice import Thought
-        for i in range(6):
-            voice.stream.append(Thought(
-                timestamp=time.time(), content=f"Menace {i}. SHED.",
-                source="reptilian", mode="inhiber", salience=0.8,
-                emotion="alerte",
-            ))
-        bonus_sec = voice.compute_voice_bonus("SECURITY_AUDIT")
-        bonus_exp = voice.compute_voice_bonus("EXPANSION_CODE")
-        # Reptilian → bonus sécurité, malus expansion
-        assert bonus_sec > 0, f"Attendu > 0, obtenu {bonus_sec}"
-        assert bonus_exp < 0, f"Attendu < 0, obtenu {bonus_exp}"
-
-    def test_bonus_synaptic_creative(self, voice):
-        """Pensées synaptiques boostent COUNCIL_DEBATE."""
-        from core.inner_voice import Thought
-        for i in range(5):
-            voice.stream.append(Thought(
-                timestamp=time.time(), content=f"Tiens. concept_{i} <-> autre.",
-                source="synaptic", mode="evaluer", salience=0.5,
-                emotion="curiosite",
-            ))
-        bonus = voice.compute_voice_bonus("COUNCIL_DEBATE")
-        assert bonus > 0
-
-    def test_bonus_emotion_frustration(self, voice):
-        """Émotion frustration → boost MEMORY_CLEANUP, malus EXPANSION."""
-        from core.inner_voice import Thought
-        for i in range(8):
-            voice.stream.append(Thought(
-                timestamp=time.time(), content=f"Pensée {i}",
-                source="cardiac", mode="evaluer", salience=0.4,
-                emotion="frustration",
-            ))
-        bonus_mem = voice.compute_voice_bonus("MEMORY_CLEANUP")
-        bonus_exp = voice.compute_voice_bonus("EXPANSION_CODE")
-        assert bonus_mem > 0
-        assert bonus_exp < 0
-
-    def test_bonus_prediction_errors(self, voice):
-        """Prédictions violées boostent AUDIT_STRUCTURE et malus EXPANSION."""
-        from core.inner_voice import Thought, Prediction
         voice.stream.append(Thought(
-            timestamp=time.time(), content="Signal.",
-            source="cardiac", mode="evaluer", salience=0.3,
+            timestamp=time.time(),
+            content="Ciel bleu, nuages blancs, vent doux.",
+            source="dmn", mode="vagabonder", salience=0.3,
             emotion="serenite",
         ))
-        # Ajouter des prédictions violées récentes
+        assert voice.compute_voice_bonus("EXPANSION_CODE") == 0.0
+        assert voice.compute_voice_bonus("SECURITY_AUDIT") == 0.0
+
+    def test_bonus_full_mention(self, voice):
+        """Derniere pensee mentionne TOUS les tokens de l'intent → bonus max (1.0)."""
+        from core.inner_voice import Thought
+        voice.stream.append(Thought(
+            timestamp=time.time(),
+            content="Je dois lancer un audit de la structure maintenant.",
+            source="prefrontal", mode="planifier", salience=0.7,
+            emotion="determination",
+        ))
+        bonus = voice.compute_voice_bonus("AUDIT_STRUCTURE")
+        assert bonus == 1.0
+
+    def test_bonus_partial_mention(self, voice):
+        """Derniere pensee ne mentionne qu'une partie des tokens → bonus partiel."""
+        from core.inner_voice import Thought
+        voice.stream.append(Thought(
+            timestamp=time.time(),
+            content="L'expansion du module me parait necessaire.",
+            source="synaptic", mode="planifier", salience=0.6,
+            emotion="enthousiasme",
+        ))
+        # EXPANSION_CODE : 2 tokens ("expansion" >= 4, "code" >= 4)
+        # "expansion" matche, "code" non → ratio 0.5
+        bonus = voice.compute_voice_bonus("EXPANSION_CODE")
+        assert bonus == 0.5
+
+    def test_bonus_only_last_thought_counts(self, voice):
+        """Seule la DERNIERE pensee est lue, pas les precedentes."""
+        from core.inner_voice import Thought
+        # Pensees anterieures mentionnent AUDIT_STRUCTURE — ignorees
         for i in range(3):
-            voice.predictions.append(Prediction(
-                id=f"p{i}", content=f"Prevu X, reel Y",
-                target_event="AUTONOMY_ROUTINE_COMPLETE",
-                predicted_value="X", confidence=0.5,
-                created_at=time.time() - 60,
-                resolved=True, outcome="violated",
-                prediction_error=0.7,
+            voice.stream.append(Thought(
+                timestamp=time.time(),
+                content="audit structure",
+                source="prefrontal", mode="evaluer", salience=0.5,
             ))
-        bonus_audit = voice.compute_voice_bonus("AUDIT_STRUCTURE")
-        bonus_exp = voice.compute_voice_bonus("EXPANSION_CODE")
-        assert bonus_audit > 0
-        assert bonus_exp < 0
+        # Derniere pensee ne mentionne rien de AUDIT_STRUCTURE
+        voice.stream.append(Thought(
+            timestamp=time.time(),
+            content="Je me repose.",
+            source="dmn", mode="refleter", salience=0.3,
+        ))
+        assert voice.compute_voice_bonus("AUDIT_STRUCTURE") == 0.0
+
+    def test_bonus_no_malus(self, voice):
+        """La Couche 8 ne produit jamais de malus (pas de -X.X)."""
+        from core.inner_voice import Thought
+        voice.stream.append(Thought(
+            timestamp=time.time(),
+            content="Menace imminente, danger extreme, crise totale.",
+            source="reptilian", mode="inhiber", salience=0.9,
+            emotion="alerte",
+        ))
+        # Quel que soit l'intent, le bonus est >= 0
+        assert voice.compute_voice_bonus("EXPANSION_CODE") >= 0.0
+        assert voice.compute_voice_bonus("VEILLE_SILENCIEUSE") >= 0.0
 
     def test_bonus_clamping(self, voice):
-        """Bonus clampé à [-1.0, +2.0]."""
-        from core.inner_voice import Thought, Prediction
-        # Saturer toutes les sources vers le positif pour SECURITY_AUDIT
-        for i in range(10):
-            voice.stream.append(Thought(
-                timestamp=time.time(), content=f"Menace {i}. Danger.",
-                source="reptilian", mode="inhiber", salience=0.9,
-                emotion="alerte",
-            ))
-        # Ajouter des prédictions violées
-        for i in range(5):
-            voice.predictions.append(Prediction(
-                id=f"e{i}", content="err",
-                target_event="X", predicted_value="X",
-                confidence=0.5, created_at=time.time() - 30,
-                resolved=True, outcome="violated",
-                prediction_error=0.8,
-            ))
+        """Bonus reste borne [-1.0, +2.0] meme en sortie maximale."""
+        from core.inner_voice import Thought
+        voice.stream.append(Thought(
+            timestamp=time.time(),
+            content="security security security audit audit audit",
+            source="reptilian", mode="inhiber", salience=1.0,
+            emotion="alerte",
+        ))
         bonus = voice.compute_voice_bonus("SECURITY_AUDIT")
-        assert bonus <= 2.0
-        malus = voice.compute_voice_bonus("EXPANSION_CODE")
-        assert malus >= -1.0
-
-    def test_bonus_mode_inhiber(self, voice):
-        """Mode inhiber → bonus AUDIT, malus EXPANSION."""
-        from core.inner_voice import Thought
-        for i in range(7):
-            voice.stream.append(Thought(
-                timestamp=time.time(), content="Non. Stop.",
-                source="reptilian", mode="inhiber", salience=0.6,
-                emotion="inquietude",
-            ))
-        bonus_audit = voice.compute_voice_bonus("AUDIT_STRUCTURE")
-        bonus_exp = voice.compute_voice_bonus("EXPANSION_CODE")
-        assert bonus_audit > 0
-        assert bonus_exp < 0
-
-    def test_bonus_motiver_boosts_expansion(self, voice):
-        """Mode motiver → bonus EXPANSION et VEILLE."""
-        from core.inner_voice import Thought
-        for i in range(6):
-            voice.stream.append(Thought(
-                timestamp=time.time(), content=f"CURIOSITE affamee. Explorer.",
-                source="desire", mode="motiver", salience=0.6,
-                emotion="curiosite",
-            ))
-        bonus_exp = voice.compute_voice_bonus("EXPANSION_CODE")
-        bonus_veille = voice.compute_voice_bonus("VEILLE_SILENCIEUSE")
-        assert bonus_exp > 0
-        assert bonus_veille > 0
-
-    def test_bonus_dmn_vagabonder(self, voice):
-        """Mode vagabonder → bonus COUNCIL et GRIMOIRE."""
-        from core.inner_voice import Thought
-        for i in range(5):
-            voice.stream.append(Thought(
-                timestamp=time.time(), content=f"Idée libre {i}",
-                source="dmn", mode="vagabonder", salience=0.4,
-                emotion="serenite",
-            ))
-        bonus_council = voice.compute_voice_bonus("COUNCIL_DEBATE")
-        bonus_grimoire = voice.compute_voice_bonus("GRIMOIRE_INVOKE")
-        assert bonus_council > 0
-        assert bonus_grimoire > 0
+        assert -1.0 <= bonus <= 2.0
 
 
 # ============================================================

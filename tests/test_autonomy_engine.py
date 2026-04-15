@@ -1739,9 +1739,6 @@ class TestAwakeningFrustration:
              patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
              patch.dict("sys.modules", {"core.desire_engine": MagicMock(
                  desires=mock_desires,
-                 DRIVE_ROUTINE_AFFINITY={
-                     "CURIOSITE": {"VEILLE_SILENCIEUSE": 1.2, "DROPZONE_SCAN": 0.8}
-                 }
              )}):
             mock_orch.dispatch_task = AsyncMock(return_value={
                 "status": "success",
@@ -1766,7 +1763,6 @@ class TestAwakeningFrustration:
              patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
              patch.dict("sys.modules", {"core.desire_engine": MagicMock(
                  desires=mock_desires,
-                 DRIVE_ROUTINE_AFFINITY={"CURIOSITE": {"VEILLE_SILENCIEUSE": 1.2}}
              )}):
             mock_orch.dispatch_task = AsyncMock(return_value={
                 "status": "success",
@@ -2060,16 +2056,11 @@ class TestDeprivationCritique:
             "CONNEXION": self._make_mock_drive("CONNEXION", 95.0, frustration_streak=0),
             "CURIOSITE": self._make_mock_drive("CURIOSITE", 30.0, frustration_streak=0),
         }
-        affinity_map = {
-            "CONNEXION": {"COUNCIL_DEBATE": 1.5, "VEILLE_SILENCIEUSE": 0.3},
-            "CURIOSITE": {"VEILLE_SILENCIEUSE": 1.0},
-        }
 
         with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-            desires=mock_desires, DRIVE_ROUTINE_AFFINITY=affinity_map
+            desires=mock_desires,
         )}):
-            # Simuler le bloc de code de frustration
-            from core.desire_engine import desires as _desires, DRIVE_ROUTINE_AFFINITY
+            from core.desire_engine import desires as _desires
             frustrated = [
                 (name, d) for name, d in _desires.drives.items()
                 if (d.frustration_streak >= 4 and d.deprivation >= 70) or d.deprivation >= 90
@@ -2085,7 +2076,7 @@ class TestDeprivationCritique:
         }
 
         with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-            desires=mock_desires, DRIVE_ROUTINE_AFFINITY={}
+            desires=mock_desires,
         )}):
             from core.desire_engine import desires as _desires
             frustrated = [
@@ -2095,7 +2086,7 @@ class TestDeprivationCritique:
             assert len(frustrated) == 0
 
     def test_anti_loop_prevents_double_force(self):
-        """Ne force pas le même intent deux fois de suite."""
+        """Ne force pas le même intent deux fois de suite (runner-up recovery V3)."""
         self.engine._forced_next_intent = ""
         self.engine.routine_history = [_make_history_entry("COUNCIL_DEBATE")]
 
@@ -2103,28 +2094,23 @@ class TestDeprivationCritique:
         mock_desires.drives = {
             "CONNEXION": self._make_mock_drive("CONNEXION", 95.0, frustration_streak=0),
         }
-        affinity_map = {
-            "CONNEXION": {"COUNCIL_DEBATE": 1.5},
-        }
 
         with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-            desires=mock_desires, DRIVE_ROUTINE_AFFINITY=affinity_map
+            desires=mock_desires,
         )}):
-            from core.desire_engine import desires as _desires, DRIVE_ROUTINE_AFFINITY
-            frustrated = [
-                (name, d) for name, d in _desires.drives.items()
-                if (d.frustration_streak >= 4 and d.deprivation >= 70) or d.deprivation >= 90
-            ]
-            if frustrated:
-                frustrated.sort(key=lambda x: x[1].deprivation, reverse=True)
-                drive_name, drive = frustrated[0]
-                forced_intent_map = DRIVE_ROUTINE_AFFINITY.get(drive_name, {})
-                if forced_intent_map:
-                    best_intent = max(forced_intent_map, key=forced_intent_map.get)
-                    last_intent = self.engine.routine_history[-1].get("intent", "")
-                    # Anti-boucle : COUNCIL_DEBATE == COUNCIL_DEBATE → pas de forçage
-                    assert best_intent == last_intent
-                    # Le code ne devrait PAS mettre _forced_next_intent
+            # V3 : la logique EVEIL utilise drive_routine_registry top_k=5
+            # et skip le top si == last_intent (runner-up recovery).
+            from core.drive_routine_registry import get_routines_for_drive_live
+            routines = get_routines_for_drive_live("CONNEXION", top_k=5)
+            ranked = [r[0] for r in routines]
+            last_intent = self.engine.routine_history[-1].get("intent", "")
+            best_intent = next(
+                (i for i in ranked if i != last_intent),
+                ranked[0] if ranked else None,
+            )
+            # Si top 1 == COUNCIL_DEBATE, on doit avoir pris le runner-up
+            if ranked and ranked[0] == last_intent and len(ranked) > 1:
+                assert best_intent != last_intent
 
     def test_highest_deprivation_prioritized(self):
         """La pulsion avec la plus haute déprivation est priorisée."""
@@ -2135,7 +2121,7 @@ class TestDeprivationCritique:
         }
 
         with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-            desires=mock_desires, DRIVE_ROUTINE_AFFINITY={}
+            desires=mock_desires,
         )}):
             from core.desire_engine import desires as _desires
             frustrated = [
@@ -2595,7 +2581,7 @@ class TestForcedFailureThreshold:
              patch.object(self.engine, "_execute_audit_structure", new_callable=AsyncMock,
                           return_value={"status": "success", "result": "ok"}), \
              patch.object(self.engine, "_persist_state"), \
-             patch.dict("sys.modules", {"core.desire_engine": type("M", (), {"desires": type("D", (), {"drives": {}})(), "DRIVE_ROUTINE_AFFINITY": {}})}):
+             patch.dict("sys.modules", {"core.desire_engine": type("M", (), {"desires": type("D", (), {"drives": {}})()})}):
             await self.engine._execute_scored_routine(health)
         # REFACTOR_RANDOM a ete ignore, AUDIT_STRUCTURE executee
         assert self.engine._forced_next_intent == ""

@@ -548,6 +548,52 @@ _MULTIPLIER_MIN: float = 0.5
 _MULTIPLIER_MAX: float = 2.0
 
 
+# ─── SSOT des modulateurs voix interieure (Phase C Etape 6b) ────────────
+# Ces tables etaient auparavant des attributs prives de InnerVoice. Elles
+# ont ete physiquement deplacees ici parce que leur seul role legitime est
+# d'alimenter compute_context_multipliers : elles n'ont jamais eu leur
+# place dans la logique de compute_voice_bonus (double comptage avec les
+# multiplicateurs). Ce sont des DATA pures, publiques, consommees
+# exclusivement par le Registre.
+
+EMOTION_BONUS_DATA: Dict[str, Dict[str, float]] = {
+    "frustration":  {"MEMORY_CLEANUP": 0.3, "AUDIT_STRUCTURE": 0.3, "EXPANSION_CODE": -0.3},
+    "inquietude":   {"SECURITY_AUDIT": 0.4, "AUDIT_STRUCTURE": 0.3, "EXPANSION_CODE": -0.3},
+    "curiosite":    {"VEILLE_SILENCIEUSE": 0.4, "EXPANSION_CODE": 0.2, "COUNCIL_DEBATE": 0.2},
+    "enthousiasme": {"EXPANSION_CODE": 0.3, "GRIMOIRE_INVOKE": 0.2},
+    "flow":         {"EXPANSION_CODE": 0.3, "COUNCIL_DEBATE": 0.2},
+    "fatigue":      {"MEMORY_CLEANUP": 0.3, "AUDIT_STRUCTURE": 0.2, "EXPANSION_CODE": -0.4},
+    "serenite":     {"VEILLE_SILENCIEUSE": 0.2, "COUNCIL_DEBATE": 0.2},
+    "determination": {"EXPANSION_CODE": 0.2, "SECURITY_AUDIT": 0.2},
+    "alerte":       {"SECURITY_AUDIT": 0.5, "AUDIT_STRUCTURE": 0.3, "EXPANSION_CODE": -0.5},
+}
+
+MODE_BONUS_DATA: Dict[str, Dict[str, float]] = {
+    "inhiber":    {"AUDIT_STRUCTURE": 0.3, "SECURITY_AUDIT": 0.2, "EXPANSION_CODE": -0.3},
+    "motiver":    {"EXPANSION_CODE": 0.3, "VEILLE_SILENCIEUSE": 0.2},
+    "planifier":  {"EXPANSION_CODE": 0.2, "COUNCIL_DEBATE": 0.1},
+    "vagabonder": {"COUNCIL_DEBATE": 0.3, "VEILLE_SILENCIEUSE": 0.2, "GRIMOIRE_INVOKE": 0.2},
+    "predire":    {"AUDIT_STRUCTURE": 0.2},
+    "refleter":   {"MEMORY_CONSOLIDATION": 0.2, "MEMORY_CLEANUP": 0.1},
+    "evaluer":    {},
+}
+
+SOURCE_BONUS_DATA: Dict[str, Dict[str, float]] = {
+    "reptilian": {
+        "SECURITY_AUDIT": 0.6, "AUDIT_STRUCTURE": 0.4,
+        "EXPANSION_CODE": -0.4, "GRIMOIRE_INVOKE": -0.2,
+    },
+    "synaptic": {
+        "COUNCIL_DEBATE": 0.4, "GRIMOIRE_INVOKE": 0.3,
+        "EXPANSION_CODE": 0.2,
+    },
+    "dmn": {
+        "VEILLE_SILENCIEUSE": 0.3, "MEMORY_CLEANUP": 0.2,
+        "MEMORY_CONSOLIDATION": 0.2,
+    },
+}
+
+
 def _bonus_to_multiplier(bonus: float) -> float:
     """Convertit un bonus additif V1 (range ~[-1, +1]) en multiplicateur V3.
 
@@ -569,11 +615,11 @@ def compute_context_multipliers(
 ) -> Dict[str, float]:
     """Agrege les 5 tables d'affinite contextuelle en multiplicateurs par intent.
 
-    Phase C Etape 5. Remplace la dispersion de calculs d'affinite dans chaque
-    organe par une fonction pure d'agregation qui lit :
-      - inner_voice._EMOTION_ROUTINE_AFFINITY (emotion dominante des 10 dernieres pensees)
-      - inner_voice._MODE_ROUTINE_AFFINITY (mode Vygotsky dominant)
-      - inner_voice._SOURCE_ROUTINE_AFFINITY (source pensee dominante, proportionnel)
+    Phase C Etape 5 puis Etape 6b. Remplace la dispersion de calculs d'affinite
+    dans chaque organe par une fonction pure d'agregation qui lit :
+      - EMOTION_BONUS_DATA (emotion dominante des 10 dernieres pensees — SSOT local)
+      - MODE_BONUS_DATA (mode Vygotsky dominant — SSOT local)
+      - SOURCE_BONUS_DATA (source pensee dominante, proportionnel — SSOT local)
       - psyche.ROUTINE_AFFINITY (affinite traits de personnalite du systeme)
       - hypothalamus._INTENT_ENERGY_MAP + _INTENT_STRESS_MAP + _INTENT_DOPAMINE_MAP
 
@@ -628,14 +674,9 @@ def compute_context_multipliers(
                 if m:
                     mode_counts[m] = mode_counts.get(m, 0) + 1
 
-            IV = type(_inner_voice)
-            EMO_TABLE = getattr(IV, "_EMOTION_ROUTINE_AFFINITY", {}) or {}
-            MODE_TABLE = getattr(IV, "_MODE_ROUTINE_AFFINITY", {}) or {}
-            SRC_TABLE = getattr(IV, "_SOURCE_ROUTINE_AFFINITY", {}) or {}
-
             if emo_counts:
                 dom_emo = max(emo_counts, key=emo_counts.get)
-                emo_aff = EMO_TABLE.get(dom_emo, {})
+                emo_aff = EMOTION_BONUS_DATA.get(dom_emo, {})
                 for intent in intents:
                     b = emo_aff.get(intent, 0.0)
                     if b:
@@ -643,7 +684,7 @@ def compute_context_multipliers(
 
             if mode_counts:
                 dom_mode = max(mode_counts, key=mode_counts.get)
-                mode_aff = MODE_TABLE.get(dom_mode, {})
+                mode_aff = MODE_BONUS_DATA.get(dom_mode, {})
                 for intent in intents:
                     b = mode_aff.get(intent, 0.0)
                     if b:
@@ -651,7 +692,7 @@ def compute_context_multipliers(
 
             total = len(stream)
             for src, count in src_counts.items():
-                src_aff = SRC_TABLE.get(src, {})
+                src_aff = SOURCE_BONUS_DATA.get(src, {})
                 if not src_aff:
                     continue
                 proportion = count / total

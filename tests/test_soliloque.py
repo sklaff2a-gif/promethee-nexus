@@ -733,11 +733,12 @@ class TestDesireEngineIntegration:
         assert impacts["CONNEXION"] == -22
         assert impacts["COMPREHENSION"] == -5
 
-    def test_soliloque_interne_in_affinity(self):
-        """SOLILOQUE_INTERNE est dans DRIVE_ROUTINE_AFFINITY."""
-        from core.desire_engine import DRIVE_ROUTINE_AFFINITY
-        assert "SOLILOQUE_INTERNE" in DRIVE_ROUTINE_AFFINITY["CONNEXION"]
-        assert DRIVE_ROUTINE_AFFINITY["CONNEXION"]["SOLILOQUE_INTERNE"] == 1.8
+    def test_soliloque_interne_in_registry(self):
+        """SOLILOQUE_INTERNE est enregistre comme routine du drive CONNEXION."""
+        from core.drive_routine_registry import get_routines_for_drive_live
+        routines = get_routines_for_drive_live("CONNEXION", top_k=20)
+        intent_names = [r[0] for r in routines]
+        assert "SOLILOQUE_INTERNE" in intent_names
 
 
 # ============================================================

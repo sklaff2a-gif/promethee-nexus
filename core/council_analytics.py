@@ -10,30 +10,6 @@ import logging
 
 logger = logging.getLogger("CouncilAnalytics")
 
-# DEPRECATED Phase C Etape 4a (2026-04-14) : table heretique remplacee par
-# drive_routine_registry.get_routines_for_drive_live(). Conservee comme
-# fallback ultime (Strangler Fig) si la facade est indisponible au boot,
-# mais les intents ci-dessous peuvent ne plus exister en V3. Supprimee
-# integralement apres validation longue duree de la Phase C Etape 4.
-#
-# Intents corrects en V3 (selon DRIVE_GENOME) :
-#   CURIOSITE     -> VEILLE_SILENCIEUSE (top du genome)
-#   MAITRISE      -> REFACTORING_AUDIT
-#   STABILITE     -> MEMORY_CONSOLIDATION / AUDIT_SURVIE
-#   CROISSANCE    -> EXPANSION_CODE
-#   CREATION      -> EXPANSION_CODE
-#   COMPREHENSION -> VEILLE_SILENCIEUSE / COURS_SOUTIEN
-#   CONNEXION     -> COUNCIL_DEBATE
-DRIVE_INTENT_MAP = {
-    "CURIOSITE": "VEILLE_TECHNO",
-    "CREATION": "EXPANSION_CODE",
-    "MAITRISE": "EVOLUTION_PIPELINE",
-    "CROISSANCE": "EXPANSION_CODE",
-    "COMPREHENSION": "COUNCIL_DEBATE",
-    "CONNEXION": "COUNCIL_DEBATE",
-    "STABILITE": "AUDIT_STRUCTURE",
-}
-
 # Actions de verdict reconnues
 VERDICT_ACTIONS = {"PRIORISER", "DEPRIORISER", "ABANDONNER", "MAINTENIR"}
 
@@ -176,31 +152,12 @@ def analyze_drive_balance(drives_state: dict) -> dict:
 
     most_deprived = deprived[0][0] if deprived and deprived[0][1] > 70 else None
 
-    # Phase C Etape 4a (2026-04-14) : migration Strangler Fig de
-    # DRIVE_INTENT_MAP vers drive_routine_registry (SSOT dynamique).
-    # La facade consulte le graphe synaptique + le genome pour retourner
-    # l'intent le plus pertinent dans le contexte actuel. Fallback gracieux
-    # sur la table legacy si la facade est indisponible (boot partiel).
     suggested_intent = None
     if most_deprived:
-        try:
-            from core.drive_routine_registry import get_routines_for_drive_live
-            routines = get_routines_for_drive_live(most_deprived, top_k=1)
-            if routines:
-                suggested_intent = routines[0][0]
-        except Exception as e:
-            logger.warning(
-                f"[council_analytics] facade registry echec pour "
-                f"{most_deprived}: {e} — fallback legacy DRIVE_INTENT_MAP"
-            )
-        # Fallback Strangler Fig : table legacy si la facade n'a rien donne
-        if suggested_intent is None:
-            suggested_intent = DRIVE_INTENT_MAP.get(most_deprived)
-            if suggested_intent:
-                logger.debug(
-                    f"[council_analytics] Fallback legacy DRIVE_INTENT_MAP "
-                    f"pour {most_deprived}: {suggested_intent}"
-                )
+        from core.drive_routine_registry import get_routines_for_drive_live
+        routines = get_routines_for_drive_live(most_deprived, top_k=1)
+        if routines:
+            suggested_intent = routines[0][0]
 
     lines = ["EQUILIBRE DES PULSIONS:"]
     for name, dep in deprived:
