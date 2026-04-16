@@ -382,10 +382,14 @@ class InnerVoice:
         c'est le chemin somatique (cardiac inquietude) qui biaise le scoring.
         """
         description = event.get("description", "Anomalie metabolique detectee.")
+        prescription = event.get("prescription", "")
         severity = float(event.get("severity", 0.5))
+        content = description
+        if prescription:
+            content += f" Suggestion : {prescription}"
         thought = Thought(
             timestamp=time.time(),
-            content=description,
+            content=content,
             source="meta",
             salience=max(0.8, min(1.0, severity)),
             emotion="inquietude",

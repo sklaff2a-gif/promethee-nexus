@@ -53,6 +53,56 @@ _STATE_FILE = os.path.join(
 
 # ─── Snapshot ────────────────────────────────────────────────────────────
 
+# ─── Prescriptions deterministes (V1 — arbre de decision hardcode) ─────
+# Le meta_observer est le medecin ET le prescripteur. Le LLM est le
+# messager qui articule la prescription dans le dream_journal. L'humain
+# (Jean-Michel) est le pharmacien qui decide d'appliquer ou non.
+# Pas d'auto-chirurgie en V1.
+
+KNOWN_PRESCRIPTIONS: Dict[str, Dict[str, str]] = {
+    "hebbian_ratio_drift": {
+        "description": "Le ratio Hebbian a derive significativement par rapport a la moyenne.",
+        "suggestion": "Verifier les seuils homeostatiques (resolution_threshold) et la patience "
+                      "du prefrontal (max_fruitless). Si le ratio baisse, les routines sont "
+                      "punies plus qu'elles ne sont recompensees — le systeme desapprend.",
+        "parameter": "desire_engine.resolution_factor / tension_protocol.max_fruitless",
+    },
+    "extinction_dominance": {
+        "description": "Les extinctions Hebbian dominent massivement les renforcements.",
+        "suggestion": "Augmenter max_fruitless pour les drives Slow-Burn (+2 cycles) ou "
+                      "verifier que le Bouclier de Momentum Causal fonctionne (ratio_pct >= 50%).",
+        "parameter": "desire_engine.DRIVE_METABOLIC_TEMPO / prefrontal._check_goal_abandonment",
+    },
+    "goal_success_collapse": {
+        "description": "Les goals ne se ferment plus en mode homeostatique.",
+        "suggestion": "Verifier le seuil de resolution (tension_at_birth * 0.25) ou le bouclier "
+                      "de momentum. Si tous les goals sont tues par priorite effondree, "
+                      "le seuil du bouclier (50%) est peut-etre trop strict.",
+        "parameter": "desire_engine.measure_tension / prefrontal.CAUSAL_MOMENTUM_THRESHOLD",
+    },
+    "emotion_monotony": {
+        "description": "Le spectre emotionnel est effondre sur une seule emotion.",
+        "suggestion": "Verifier EMOTION_HALF_LIFE (devrait etre ~300s) et le mapping "
+                      "_DRIVE_SUCCESS_EMOTION dans cardiac_engine. Si 90%+ enthousiasme, "
+                      "le pacemaker intelligent ne diversifie pas correctement.",
+        "parameter": "cardiac_engine.EMOTION_HALF_LIFE / cardiac_engine._DRIVE_SUCCESS_EMOTION",
+    },
+}
+
+
+def _enrich_with_prescription(anomaly: Dict[str, Any]) -> Dict[str, Any]:
+    """Ajoute la prescription connue a une anomalie detectee."""
+    anomaly_type = anomaly.get("type", "")
+    prescription = KNOWN_PRESCRIPTIONS.get(anomaly_type, {})
+    if prescription:
+        anomaly["prescription"] = prescription["suggestion"]
+        anomaly["parameter"] = prescription.get("parameter", "")
+    else:
+        anomaly["prescription"] = "Anomalie inconnue — investigation manuelle requise."
+        anomaly["parameter"] = ""
+    return anomaly
+
+
 def _take_snapshot() -> Dict[str, Any]:
     """Capture un cliche compresse du metabolisme actuel."""
     snapshot = {
@@ -280,6 +330,8 @@ async def _trigger_narrative_inception(anomaly: Dict[str, Any]):
             "type": anomaly["type"],
             "metric": anomaly.get("metric", ""),
             "description": anomaly["description"],
+            "prescription": anomaly.get("prescription", ""),
+            "parameter": anomaly.get("parameter", ""),
             "severity": anomaly.get("severity", 0.5),
             "current_value": anomaly.get("current"),
             "historical_mean": anomaly.get("mean"),
@@ -347,7 +399,11 @@ class MetaObserver:
         self._snapshots.append(snapshot)
         _save_history(self._snapshots)
 
-        # 4. Inception somatique + narrative pour chaque anomalie
+        # 4. Enrichir chaque anomalie avec sa prescription deterministe
+        for anomaly in anomalies:
+            _enrich_with_prescription(anomaly)
+
+        # 5. Inception somatique + narrative pour chaque anomalie
         if anomalies:
             self._last_anomalies = anomalies
             for anomaly in anomalies:
