@@ -397,6 +397,26 @@ def get_synaptic_provider() -> Optional[SynapticWeightProvider]:
     return _synaptic_provider
 
 
+def get_primary_drive_for_intent(intent: str) -> Optional[str]:
+    """Retourne le drive qui a le poids genomique le plus eleve pour cet intent.
+
+    Audit 16/04 (Trio Adversarial) : utilisee par cardiac_engine pour
+    diversifier l'emotion generee par un succes de routine selon le drive
+    satisfait (success STABILITE → serenite, pas enthousiasme).
+
+    Lookup inverse simple du DRIVE_GENOME. O(drives * intents_per_drive),
+    ~50 lookups — pas un hot path (appelee 1 fois par routine, pas par tick).
+    """
+    best_drive = None
+    best_weight = 0.0
+    for drive, intents in DRIVE_GENOME.items():
+        w = intents.get(intent, 0.0)
+        if w > best_weight:
+            best_weight = w
+            best_drive = drive
+    return best_drive
+
+
 def get_affinity_for_drive_intent(drive: str, intent: str) -> float:
     """Retourne le poids final d'un lien drive -> intent specifique.
 

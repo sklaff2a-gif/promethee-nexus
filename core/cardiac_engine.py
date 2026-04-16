@@ -34,7 +34,7 @@ BEAT_INTERVAL = 30.0          # Un "battement" toutes les 30 secondes
 # --- Demi-vies temporelles (en secondes) ---
 # Découplées du BEAT_INTERVAL : la décroissance est calculée sur le temps réel écoulé
 BPM_HALF_LIFE = 240.0         # BPM revient à mi-chemin du repos en 4 min
-EMOTION_HALF_LIFE = 1200.0    # Émotions persistent ~20 min (survit entre 2 routines)
+EMOTION_HALF_LIFE = 300.0     # Émotions persistent ~5 min (audit 16/04 : 1200s causait mono-emotion enthousiasme 91%)
 ANS_HALF_LIFE = 300.0         # ANS revient au neutre en ~5 min
 
 # --- Système nerveux autonome ---
@@ -269,27 +269,45 @@ class CardiacEngine:
     # Phase 1 : Réactions émotionnelles
     # ============================================================
 
-    def react(self, stimulus: str, context: Optional[Dict] = None):
-        """Réaction cardiaque à un stimulus émotionnel.
+    # Emotions de survie : ecrasent TOUJOURS l'emotion positive actuelle,
+    # meme a intensite egale ou inferieure. Bio-inspire : la peur
+    # interrompt la joie. Audit 16/04 (Trio Adversarial).
+    _SURVIVAL_EMOTIONS = frozenset({"frustration", "inquietude", "alerte", "fatigue"})
 
-        Le coeur accélère/ralentit, l'émotion change, l'ANS se déplace.
+    def react(self, stimulus: str, context: Optional[Dict] = None):
+        """Reaction cardiaque a un stimulus emotionnel.
+
+        Le coeur accelere/ralentit, l'emotion change, l'ANS se deplace.
+
+        Audit 16/04 (Gemini) — 3 modifications :
+        - Fix A : context["override_emotion"] permet de diversifier l'emotion
+          selon le Drive (success STABILITE → serenite, pas enthousiasme)
+        - Fix D : les emotions de survie (frustration, alerte, inquietude,
+          fatigue) ecrasent l'emotion positive actuelle MEME si leur intensite
+          est inferieure. Bio-inspire : le stress interrompt la joie.
+        - Fix C : EMOTION_HALF_LIFE passe de 1200s a 300s (hors de ce bloc,
+          dans les constantes).
         """
         spec = _STIMULUS_MAP.get(stimulus)
         if not spec:
-            logger.debug(f"COEUR: stimulus inconnu '{stimulus}' ignoré.")
+            logger.debug(f"COEUR: stimulus inconnu '{stimulus}' ignore.")
             return
 
         self._total_stimuli += 1
 
-        # Intensité de base
+        # Intensite de base
         intensity = spec["intensity"]
         emotion = spec["emotion"]
 
-        # Amplification PSYCHE (résonance trait-émotion)
+        # Fix A : override_emotion depuis le contexte (diversification drive)
+        if context and context.get("override_emotion"):
+            emotion = context["override_emotion"]
+
+        # Amplification PSYCHE (resonance trait-emotion)
         psyche_mult = self._get_psyche_resonance(emotion)
         intensity *= psyche_mult
 
-        # Modulation par ANS (sympathique amplifie les réactions positives d'arousal)
+        # Modulation par ANS (sympathique amplifie les reactions positives d'arousal)
         valence, arousal = EMOTIONS.get(emotion, (0, 0.5))
         ans_mult = 1.0
         if self.ans_balance > 0.6 and arousal > 0.5:
@@ -304,20 +322,26 @@ class CardiacEngine:
         # Shift ANS
         self.ans_balance = max(0.0, min(1.0, self.ans_balance + spec["ans_shift"] * intensity))
 
-        # Mise à jour émotion (seulement si plus intense que l'actuelle)
-        if intensity > self.emotion_intensity:
+        # Fix D : gating bio-inspire. Les emotions de survie ecrasent
+        # les positives meme a intensite inferieure (la peur domine la joie).
+        is_survival = emotion in self._SURVIVAL_EMOTIONS
+        should_update = (
+            intensity > self.emotion_intensity  # classique : plus intense
+            or is_survival                      # survie : ecrase toujours
+        )
+
+        if should_update:
             if emotion != self.current_emotion:
                 self._prev_emotion = self.current_emotion
                 self._emotion_since = time.time()
                 self._emotion_cause = stimulus
                 self._transition_count += 1
-                # Publier la transition émotionnelle pour le réseau synaptique
                 self._try_publish_emotion_change(emotion, intensity, stimulus)
             self.current_emotion = emotion
             self.emotion_intensity = min(1.0, intensity)
 
         logger.debug(
-            f"COEUR: stimulus={stimulus} → émotion={emotion}(I={intensity:.2f}), "
+            f"COEUR: stimulus={stimulus} → emotion={emotion}(I={intensity:.2f}), "
             f"BPM={self.bpm:.1f}, ANS={self.ans_balance:.2f}"
         )
 
@@ -609,14 +633,48 @@ class CardiacEngine:
         elif mode == "inhiber":
             self.ans_balance = max(0.0, self.ans_balance - 0.05)
 
+    # Mapping drive → emotion cardiaque pour les succes de routines.
+    # Audit 16/04 (Trio Adversarial) : briser le verrouillage
+    # "success=enthousiasme" qui causait 91% de mono-emotion.
+    # L'emotion generee par un succes depend du Drive satisfait.
+    _DRIVE_SUCCESS_EMOTION = {
+        "CURIOSITE":     "curiosite",      # explorer satisfait la curiosite
+        "COMPREHENSION": "curiosite",      # comprendre aussi
+        "MAITRISE":      "determination",  # maitriser nourrit la determination
+        "STABILITE":     "serenite",       # stabiliser apaise
+        "CREATION":      "enthousiasme",   # creer exalte (legitime)
+        "CROISSANCE":    "flow",           # grandir met en flow
+        "CONNEXION":     "flow",           # dialoguer met en flow
+    }
+
     async def _on_routine_complete(self, event: dict):
-        """Routine terminée → enthousiasme/frustration selon qualité."""
+        """Routine terminee → emotion diversifiee selon qualite ET drive.
+
+        Audit 16/04 (Gemini) : l'ancien mapping success→enthousiasme
+        systematique causait un verrouillage par intensite (91% mono-emotion).
+        Le nouveau mapping lie l'emotion au Drive satisfait par la routine.
+        """
         quality = event.get("quality_score", 0.5)
         intent = event.get("intent", "")
         status = event.get("status", "")
 
         if status == "success" and quality >= 0.6:
-            self.react("success")
+            # Determiner le drive dominant pour cette routine
+            stimulus = "success"
+            try:
+                from core.drive_routine_registry import get_primary_drive_for_intent
+                drive = get_primary_drive_for_intent(intent)
+                if drive:
+                    custom_emo = self._DRIVE_SUCCESS_EMOTION.get(drive)
+                    if custom_emo:
+                        # Injecter l'emotion specifique au drive dans le context
+                        self.react(stimulus, context={"override_emotion": custom_emo})
+                        self.form_somatic_marker(intent, "success", quality, "routine success")
+                        return
+            except Exception:
+                pass
+            # Fallback : success generique
+            self.react(stimulus)
             self.form_somatic_marker(intent, "success", quality, "routine success")
         elif status == "error" or quality < 0.3:
             self.react("failure")

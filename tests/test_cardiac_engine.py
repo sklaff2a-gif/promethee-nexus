@@ -86,15 +86,15 @@ class TestHeartbeat:
         assert h.bpm <= 180.0
 
     def test_beat_attenuates_emotion(self, isolate_cardiac):
-        """L'intensité émotionnelle diminue à chaque battement (demi-vie 20 min)."""
+        """L'intensite emotionnelle diminue a chaque battement (demi-vie 5 min)."""
         h = isolate_cardiac
         h.emotion_intensity = 0.8
         h.current_emotion = "enthousiasme"
         h._last_beat = time.time() - 30.0
         h._beat()
         assert h.emotion_intensity < 0.8
-        # Formule : 0.8 * 0.5^(30/1200) ≈ 0.8 * 0.9828 ≈ 0.786
-        assert h.emotion_intensity == pytest.approx(0.786, abs=0.01)
+        # Formule : 0.8 * 0.5^(30/300) = 0.8 * 0.933 = 0.746
+        assert h.emotion_intensity == pytest.approx(0.746, abs=0.01)
 
     def test_beat_returns_ans_to_neutral(self, isolate_cardiac):
         """L'ANS revient vers le neutre à chaque battement (demi-vie 5 min)."""

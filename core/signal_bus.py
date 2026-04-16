@@ -28,7 +28,7 @@ SIGNAL_BUS_STATE_FILE = os.path.join(
 # --- Constantes ---
 
 AUTO_FLOOD_WINDOW = 60.0        # Fenetre de detection flood (secondes)
-AUTO_FLOOD_THRESHOLD = 50       # >50 signaux/60s → auto-throttle
+AUTO_FLOOD_THRESHOLD = 200      # >200 signaux/60s → auto-throttle (etait 50, monte le 16/04 car graphe 4x plus actif post-Phase C)
 AUTO_FLOOD_LIMIT = 10           # Limite imposee apres detection flood
 AUTO_FLOOD_DURATION = 300.0     # Duree du throttle auto (5 min)
 
