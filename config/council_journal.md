@@ -5943,3 +5943,59 @@ METRIQUES ROUTINES (dernieres 40):
 
 **Fichiers cibles** : `core/basal_ganglia.py`, `core/orchestrator.py`, `core/performance_utils.py`
 **Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-15 09:36] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- ROADMAP
+
+**Participants** : strategist, coder, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-15 13:59] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-04-16 00:55] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : 3 | **Consensus** : oui
+
+**Propositions clés** :
+  **Stratégie de Résolution :**
+  *   **Action :** Le module **`core/autonomy_engine.py doit impérativement utiliser le
+
+**Fichiers cibles** : `core/ambulance.py`, `core/attention_codelets.py`, `core/autonomy_engine.py`, `core/desire_engine.py`, `core/ethics_module.py`, `core/event_bus/bus.py`, `core/grimoire/code_reviewer.py`, `core/performance_utils.py`
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-04-16 05:10] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- AUDIT_S
+
+**Participants** : strategist, coder, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council

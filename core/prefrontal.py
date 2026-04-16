@@ -773,6 +773,26 @@ class PrefrontalCortex:
         self.stats["goals_completed"] += 1
         self.stats.setdefault("homeostatic_completions", 0)
         self.stats["homeostatic_completions"] += 1
+
+        # Audit metabolique symetrique (Gemini 2026-04-15) : logger les
+        # succes homeostatiques pour construire un tableau de bord complet
+        # (fast-action vs slow-burn). Pendant de _abandon_for_frustration.
+        if measurement:
+            extra = getattr(measurement, "extra", {}) or {}
+            drive_name = extra.get("drive_name", meta.get("source_key", "?"))
+            threshold = extra.get("resolution_threshold", 0.0)
+            tension_birth = getattr(measurement, "tension_at_birth", 0.0)
+            cd = measurement.causal_drop
+            ratio_pct = (cd / threshold * 100.0) if threshold > 0 else 0.0
+            fc = meta.get("fruitless_cycles", 0)
+            logger.info(
+                f"[PREFRONTAL_METABOLIC_AUDIT] Goal {goal.id} ({drive_name}) "
+                f"COMPLETED fruitless_cycles={fc}. "
+                f"tension_at_birth={tension_birth:.1f} | "
+                f"causal_drop={cd:.2f} / threshold={threshold:.2f} "
+                f"({ratio_pct:.1f}% du seuil)"
+            )
+
         self._narrate(
             "goal",
             f"Goal accompli (homeostatique): {goal.title} | causal_drop={measurement.causal_drop:.1f}"
@@ -790,6 +810,27 @@ class PrefrontalCortex:
         self.stats.setdefault("false_completions", 0)
         self.stats["false_completions"] += 1
         self.stats["goals_abandoned"] += 1
+
+        # ─── Instrumentation Phase C post-deploiement (2026-04-15, Gemini) ─
+        # Audit metabolique : mesurer l'ecart reel entre causal_drop et seuil
+        # de resolution au moment de l'abandon. But : comprendre si les
+        # routines d'infrastructure (STABILITE/MAITRISE) sont tuees a 24%
+        # (frustrant, seuil trop strict) ou a 5% (inefficacite totale).
+        if measurement:
+            extra = getattr(measurement, "extra", {}) or {}
+            drive_name = extra.get("drive_name", meta.get("source_key", "?"))
+            threshold = extra.get("resolution_threshold", 0.0)
+            tension_birth = getattr(measurement, "tension_at_birth", 0.0)
+            ratio_pct = (cd / threshold * 100.0) if threshold > 0 else 0.0
+            fc = meta.get("fruitless_cycles", "?")
+            logger.info(
+                f"[PREFRONTAL_METABOLIC_AUDIT] Goal {goal.id} ({drive_name}) "
+                f"abandoned fruitless_cycles={fc}. "
+                f"tension_at_birth={tension_birth:.1f} | "
+                f"causal_drop={cd:.2f} / threshold={threshold:.2f} "
+                f"({ratio_pct:.1f}% du seuil)"
+            )
+
         self._narrate("frustration",
                       f"Goal abandonne (sterile): {goal.title} | {goal.abandon_reason}")
         self._publish_goal_event("PREFRONTAL_GOAL_ABANDONED", goal)
@@ -799,7 +840,16 @@ class PrefrontalCortex:
             self._record_strategy_failure(sequence)
 
     def _check_goal_abandonment(self, goal: Goal) -> bool:
-        """Vérifie si un goal doit être abandonné."""
+        """Vérifie si un goal doit être abandonné.
+
+        Phase C post-6b (2026-04-15, Gemini) : Bouclier de Momentum Causal.
+        Avant d'evaluer les causes d'abandon, on mesure a froid le
+        causal_drop du goal. Si la routine a fait au moins 50% du chemin
+        vers le seuil homeostatique, on intercepte la cause "priorite
+        effondree" (le TDAH cybernetique identifie le 2026-04-15). Les
+        autres causes legitimes (cout excessif, stagnation vraie) restent
+        actives.
+        """
         now = time.time()
 
         # Période de grâce : pas d'abandon avant GOAL_GRACE_PERIOD
@@ -807,18 +857,47 @@ class PrefrontalCortex:
         if age < GOAL_GRACE_PERIOD:
             return False
 
+        # ─── Mesure du momentum causal (une seule fois, reutilisee) ─────
+        meta_a = getattr(goal, "metadata", None) or {}
+        drive_name = meta_a.get("source_key", "?")
+        tension_birth = float(meta_a.get("tension_at_birth", 0.0) or 0.0)
+        cd = 0.0
+        threshold = 0.0
+        try:
+            source_name = meta_a.get("source_organ", "")
+            if source_name:
+                source = self._resolve_tension_source(source_name)
+                if source is not None:
+                    m = source.measure_tension(meta_a)
+                    cd = float(getattr(m, "causal_drop", 0.0) or 0.0)
+                    extra = getattr(m, "extra", {}) or {}
+                    drive_name = extra.get("drive_name", drive_name)
+                    threshold = float(extra.get("resolution_threshold", 0.0) or 0.0)
+        except Exception:
+            pass
+        ratio_pct = (cd / threshold * 100.0) if threshold > 0 else 0.0
+
         reasons = []
 
-        # Coût excessif
+        # Coût excessif (cause legitime — non protegee par le bouclier)
         if goal.cost_spent > goal.cost_estimated * 1.5 and goal.progress < 0.5:
             reasons.append("coût excessif")
 
-        # Priorité effondrée
+        # Priorité effondrée — PROTEGE par le Bouclier de Momentum Causal
         new_prio = self._compute_goal_priority(goal)
         if new_prio < -2.0:
-            reasons.append(f"priorité effondrée ({new_prio:.1f})")
+            if ratio_pct >= 50.0:
+                # Le goal fait son travail. On bloque les distractions.
+                logger.info(
+                    f"[PREFRONTAL_SHIELD] Goal {goal.id} ({drive_name}) "
+                    f"priority collapsed ({new_prio:.1f}) BUT saved by causal "
+                    f"momentum ({ratio_pct:.1f}% du seuil, cd={cd:.2f}). "
+                    f"Let it finish."
+                )
+            else:
+                reasons.append(f"priorité effondrée ({new_prio:.1f})")
 
-        # Stagnation + échecs
+        # Stagnation + échecs (cause legitime — non protegee par le bouclier)
         stale_time = now - goal.last_advanced
         failed_steps = sum(1 for s in goal.steps if s.status == "failed")
         horizon_sec = _HORIZON_DURATIONS.get(goal.horizon, HORIZON_SHORT)
@@ -829,6 +908,33 @@ class PrefrontalCortex:
             goal.status = "abandoned"
             goal.abandon_reason = "; ".join(reasons)
             self.stats["goals_abandoned"] += 1
+
+            # Extinction elargie (Gemini 2026-04-15) : si la tension a
+            # monte pendant le goal (cd < 0), c'est un vrai echec causal
+            # — les routines tentees n'ont pas aide voire ont aggrave.
+            # On flag le completion_mode comme abandoned_fruitless pour
+            # que _learn_from_fruitless_goal puisse punir (-0.03). Les
+            # abandons a cd ≈ 0 (arbitrage de priorite entre drives)
+            # restent silencieux : ils ne portent pas de signal causal.
+            if cd < 0:
+                meta_a["completion_mode"] = "abandoned_fruitless"
+                logger.info(
+                    f"[PREFRONTAL_METABOLIC_AUDIT] Goal {goal.id} ({drive_name}) "
+                    f"abandoned_other reason='{goal.abandon_reason}' "
+                    f"CAUSAL_NEGATIVE -> flagged abandoned_fruitless for Hebb extinction. "
+                    f"tension_at_birth={tension_birth:.1f} | "
+                    f"causal_drop={cd:.2f} / threshold={threshold:.2f} "
+                    f"({ratio_pct:.1f}% du seuil)"
+                )
+            else:
+                logger.info(
+                    f"[PREFRONTAL_METABOLIC_AUDIT] Goal {goal.id} ({drive_name}) "
+                    f"abandoned_other reason='{goal.abandon_reason}'. "
+                    f"tension_at_birth={tension_birth:.1f} | "
+                    f"causal_drop={cd:.2f} / threshold={threshold:.2f} "
+                    f"({ratio_pct:.1f}% du seuil)"
+                )
+
             self._narrate("frustration", f"Goal abandonné: {goal.title} — {goal.abandon_reason}")
             self._publish_goal_event("PREFRONTAL_GOAL_ABANDONED", goal)
             return True
@@ -1378,12 +1484,17 @@ class PrefrontalCortex:
                     goal_id = uuid.uuid4().hex[:8]
                     # Fix 1 : metadata pour fermeture homeostatique
                     from core.tension_protocol import make_goal_metadata
+                    # Phase C post-6b : patience différenciée selon le
+                    # tempo métabolique du drive (Fast-Action / Slow-Burn).
+                    from core.desire_engine import get_max_fruitless_for_drive
+                    mf = get_max_fruitless_for_drive(name)
                     goal_meta = make_goal_metadata(
                         source_organ="desire_engine",
                         source_key=name,
                         tension_at_birth=drive.deprivation,
                         goal_id=goal_id,
                         created_at=now_gen,
+                        max_fruitless=mf,
                     )
                     goal = Goal(
                         id=goal_id,

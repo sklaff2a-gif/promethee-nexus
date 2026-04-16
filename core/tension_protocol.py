@@ -97,8 +97,16 @@ class TensionSource(Protocol):
 
 def make_goal_metadata(source_organ: str, source_key: str,
                        tension_at_birth: float, goal_id: str,
-                       created_at: float) -> Dict[str, Any]:
-    """Helper pour construire un metadata coherent a la creation d'un goal."""
+                       created_at: float,
+                       max_fruitless: int = 5) -> Dict[str, Any]:
+    """Helper pour construire un metadata coherent a la creation d'un goal.
+
+    Phase C post-6b (2026-04-15) : max_fruitless est maintenant configurable
+    par l'appelant. Pour les drives, utiliser
+    `desire_engine.get_max_fruitless_for_drive(name)` qui retourne 5, 6 ou 8
+    selon le tempo métabolique (fast / medium / slow). Default 5 pour
+    backward compat avec les goals non-drive (council, gap, strategy...).
+    """
     return {
         "source_organ": source_organ,
         "source_key": source_key,
@@ -107,6 +115,6 @@ def make_goal_metadata(source_organ: str, source_key: str,
         "goal_id": goal_id,
         "attempts_count": 0,
         "fruitless_cycles": 0,
-        "max_fruitless": 5,  # Garde-fou : nombre max de cycles steriles avant abandon
+        "max_fruitless": int(max_fruitless),
         "completion_mode": None,  # Sera rempli a la fermeture : "homeostatic"|"bureaucratic"|"abandoned"
     }

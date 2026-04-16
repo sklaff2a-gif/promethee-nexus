@@ -16,6 +16,48 @@ logger = logging.getLogger("DesireEngine")
 
 # --- Constantes ---
 
+# ─── Profil métabolique par pulsion (Phase C post-6b, 2026-04-15) ──────
+# Les pulsions n'ont pas toutes le même tempo. Les "Fast-Action" (CURIOSITE,
+# CREATION, CONNEXION) se nourrissent de routines rapides (VEILLE, DROPZONE,
+# COUNCIL) qui font chuter la tension en 1-3 cycles. Les "Slow-Burn"
+# (STABILITE, MAITRISE, CROISSANCE) sont des chantiers d'infrastructure
+# traités par MEMORY_CONSOLIDATION, SECURITY_AUDIT, REFACTORING_AUDIT qui
+# demandent 6-9 cycles pour atteindre le seuil homéostatique de 25%.
+#
+# Validation empirique : audit métabolique 2026-04-15 sur 3h51 →
+#   - STABILITE goal=39a13502 : MEMORY_CONSOLIDATION atteint 97.5% du
+#     seuil en 5 cycles (0.3 points de trop) → frustration frôlée.
+#   - MAITRISE goal=26dc15a9 : SECURITY_AUDIT atteint 54.6% en 5 cycles
+#     (1.48 pts/cycle) → il faudrait ~9 cycles pour fermer.
+# Gemini (2026-04-15) : lier la patience à la nature du drive, pas à une
+# table hardcodée drive→routine. Le tempo est une propriété biologique du
+# drive, pas un routage.
+DRIVE_METABOLIC_TEMPO: Dict[str, str] = {
+    "CURIOSITE":     "fast",   # soif d'info — routines rapides
+    "CREATION":      "fast",   # bouffée créative — expansion/grimoire
+    "CONNEXION":     "fast",   # dialogue — council/soliloque
+    "COMPREHENSION": "medium", # analyse — mix veille + consolidation
+    "MAITRISE":      "slow",   # chantier code — refactoring/security
+    "STABILITE":     "slow",   # mémoire & audit — consolidation
+    "CROISSANCE":    "slow",   # roadmap/expansion — routines lourdes
+}
+
+_MAX_FRUITLESS_BY_TEMPO: Dict[str, int] = {
+    "fast":   5,
+    "medium": 6,
+    "slow":   8,
+}
+
+
+def get_max_fruitless_for_drive(drive_name: str) -> int:
+    """Retourne le nombre de fruitless_cycles accordés à un drive selon son
+    tempo métabolique. Utilisé à la création des goals pour moduler la
+    patience du préfrontal selon la vitesse naturelle de guérison du drive.
+    """
+    tempo = DRIVE_METABOLIC_TEMPO.get(drive_name.upper(), "fast")
+    return _MAX_FRUITLESS_BY_TEMPO.get(tempo, 5)
+
+
 DRIVE_NAMES = ("CURIOSITE", "MAITRISE", "STABILITE", "CONNEXION",
                "CROISSANCE", "CREATION", "COMPREHENSION")
 
