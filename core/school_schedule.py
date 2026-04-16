@@ -364,6 +364,43 @@ class SchoolSchedule:
             pass
         return ""
 
+    # Mots-outils francais a ignorer dans le calcul Jaccard (stop words).
+    _STOP_WORDS = frozenset({
+        "le", "la", "les", "de", "du", "des", "un", "une", "et", "en",
+        "a", "au", "aux", "ce", "ces", "pour", "par", "sur", "dans",
+        "avec", "que", "qui", "est", "sont", "pas", "ne", "se", "son",
+        "sa", "ses", "ou", "si", "il", "elle", "nous", "vous", "ils",
+        "tu", "te", "ta", "tes", "ton", "je", "mon", "ma", "mes",
+        "cette", "cet", "tout", "tous", "plus", "tres", "bien",
+        "the", "and", "of", "to", "in", "for", "on", "with", "is", "at",
+    })
+
+    def _is_challenge_relevant(self, topic: str, challenge: str) -> bool:
+        """Filtre Jaccard : le defi n'est injecte que s'il partage du vocabulaire
+        significatif avec le sujet du jour.
+
+        Audit 16/04 (Trio Adversarial) : les modeles 9B ne respectent pas les
+        garde-fous conditionnels ("ignore si autre sujet"). On filtre AVANT
+        de leur envoyer le texte. Seuil = au moins 2 mots significatifs en
+        commun ou 20% d'overlap Jaccard.
+        """
+        def _tokenize(text: str) -> set:
+            words = set(text.lower().split())
+            return {w for w in words if len(w) >= 3 and w not in self._STOP_WORDS}
+
+        t_words = _tokenize(topic)
+        c_words = _tokenize(challenge)
+
+        if not t_words or not c_words:
+            return False
+
+        intersection = t_words & c_words
+        union = t_words | c_words
+        jaccard = len(intersection) / len(union) if union else 0.0
+
+        # Seuil : au moins 2 mots communs OU Jaccard >= 20%
+        return len(intersection) >= 2 or jaccard >= 0.20
+
     def get_difficulty(self, slot: str) -> float:
         """P1: Retourne la difficulte actuelle via le curriculum du professeur."""
         try:
@@ -421,16 +458,30 @@ class SchoolSchedule:
         # FIX 2026-04-12: Le defi est une CONTRAINTE SECONDAIRE — il ne doit JAMAIS
         # ecraser le sujet du jour. Avant ce fix, l'agent suivait le defi au lieu du sujet,
         # produisant des livrables hors-sujet (mentor Claude notait 3.5/10 vs local 8.5/10).
+        # FIX 2026-04-16 (Trio Adversarial) : le garde-fou textuel "IGNORE-LE si autre sujet"
+        # ne fonctionne PAS avec les modeles 9B (Attention Hijacking par Hyper-Concretude).
+        # Le filtre Jaccard bloque l'injection AVANT qu'elle n'atteigne le LLM.
         challenge = self.get_last_challenge(slot)
         difficulty = self.get_difficulty(slot)
         challenge_ctx = ""
         if challenge:
-            challenge_ctx = (
-                "\n[CONTRAINTE SECONDAIRE — defi du professeur precedent]\n"
-                f"Si compatible avec le sujet du jour ci-dessus, integre cette contrainte : {challenge}\n"
-                "ATTENTION : si ce defi parle d'un AUTRE sujet que celui d'aujourd'hui, IGNORE-LE.\n"
-                "Le sujet du jour est PRIORITAIRE. Ne change pas de fichier ou de theme pour suivre le defi.\n"
+            # FIX 2026-04-16 (Trio Adversarial) : le filtre Jaccard ne s'applique
+            # qu'aux creneaux RESEARCH ou les sujets changent chaque jour (risque
+            # de contamination croisee Event Sourcing → Prompt Optimization).
+            # Pour CODE_REVIEW, WORKSHOP, CREATION, le challenge est toujours une
+            # technique complementaire (ex: "concentre-toi sur les imports") qui
+            # reste pertinente quel que soit le fichier/sujet cible.
+            needs_jaccard = slot in (SLOT_RESEARCH,)
+            is_relevant = (
+                self._is_challenge_relevant(topic, challenge)
+                if needs_jaccard and topic
+                else True  # CODE_REVIEW/WORKSHOP/CREATION : toujours injecter
             )
+            if is_relevant:
+                challenge_ctx = (
+                    "\n[CONTRAINTE SECONDAIRE — defi du professeur precedent]\n"
+                    f"Integre cette contrainte dans ton livrable : {challenge}\n"
+                )
         difficulty_ctx = f"\nNIVEAU DE DIFFICULTE : {difficulty:.1f}/3.0\n"
 
         # P2: Theme hebdomadaire
