@@ -3332,6 +3332,21 @@ class AutonomyEngine:
                     + "\n".join(mod_lines)
                     + "\nAvant d'agir, demande-toi : ces changements affectent-ils ta routine actuelle ?"
                 )
+            # Phase D (2026-04-16) : injecter les anomalies meta dans le contexte
+            # pour que le LLM de la routine sache POURQUOI l'organisme est inquiet.
+            try:
+                from core.meta_observer import observer as _meta_obs
+                meta_anomalies = _meta_obs.get_last_anomalies()
+                if meta_anomalies:
+                    anomaly_lines = [f"- {a['description']}" for a in meta_anomalies[:3]]
+                    purpose_ctx += (
+                        "\n[META-OBSERVATION — anomalies metaboliques detectees]\n"
+                        + "\n".join(anomaly_lines)
+                        + "\nSi ta routine peut investiguer ces tendances, fais-le."
+                    )
+            except Exception:
+                pass
+
             # Mission propre (sans wrapper ni guardrail — évite la fuite de prompt dans les recherches web)
             raw_mission = selected["mission"]
             # Retirer le préfixe [MODE VEILLE] déjà présent dans certaines missions
@@ -6588,6 +6603,14 @@ class AutonomyEngine:
                     "error_streak": self.error_streak,
                     "is_processing": self.is_processing,
                 })
+
+                # Phase D (2026-04-16) : tick du meta_observer a chaque cycle
+                # Il ne fait rien si son intervalle (4h) n'est pas ecoule.
+                try:
+                    from core.meta_observer import observer as _meta_obs
+                    await _meta_obs.tick()
+                except Exception:
+                    pass
 
                 if health["verdict"] == "NO_GO":
                     logger.warning(f"[AUTONOMY] NO_GO : {health.get('warnings', [])}. Routine annulée.")

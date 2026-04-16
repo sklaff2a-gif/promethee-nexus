@@ -89,6 +89,9 @@ _STIMULUS_MAP: Dict[str, Dict[str, Any]] = {
     "sleep_deep":   {"emotion": "serenite",    "bpm_delta": -20,  "ans_shift": -0.30, "intensity": 0.15},
     "dawn":         {"emotion": "curiosite",   "bpm_delta": +5,   "ans_shift": +0.05, "intensity": 0.4},
     "soothe":       {"emotion": "serenite",    "bpm_delta": -10,  "ans_shift": -0.20, "intensity": 0.3},
+    # Phase D (2026-04-16) : stimulus meta-cognitif — l'organisme s'inquiete
+    # de ses propres tendances metaboliques (detectees par meta_observer).
+    "meta_anomaly": {"emotion": "inquietude",  "bpm_delta": +10,  "ans_shift": +0.20, "intensity": 0.9},
 }
 
 # ============================================================

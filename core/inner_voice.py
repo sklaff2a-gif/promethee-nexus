@@ -305,6 +305,9 @@ class InnerVoice:
             bus.subscribe("AUTONOMY_HEARTBEAT", self._on_autonomy_heartbeat)
             bus.subscribe("EUREKA_BRIDGE", self._on_eureka)
             bus.subscribe("KNOWLEDGE_GAP_DETECTED", self._on_knowledge_gap)
+            # Phase D (2026-04-16) : le meta_observer injecte des pensees
+            # source="meta" quand il detecte une anomalie metabolique.
+            bus.subscribe("META_ANOMALY_DETECTED", self._on_meta_anomaly)
             bus.subscribe("HALLUCINATION_DETECTED", self._on_hallucination)
             bus.subscribe("SOLILOQUE_START", self._on_soliloque_start)
             bus.subscribe("SOLILOQUE_COMPLETE", self._on_soliloque_complete)
@@ -369,6 +372,29 @@ class InnerVoice:
                 await bus.publish("CURIOSITY_SPARK", {"topic": topic})
             except Exception:
                 pass
+
+    async def _on_meta_anomaly(self, event: dict):
+        """Phase D — Inception narrative : le meta_observer a detecte une anomalie.
+
+        Injecte une pensee source='meta' a haute saillance. Ce canal VIP
+        sera filtre par EVENING_REFLECTION pour construire la memoire
+        autobiographique. Le prefrontal ne cree PAS de goal directement ;
+        c'est le chemin somatique (cardiac inquietude) qui biaise le scoring.
+        """
+        description = event.get("description", "Anomalie metabolique detectee.")
+        severity = float(event.get("severity", 0.5))
+        thought = Thought(
+            timestamp=time.time(),
+            content=description,
+            source="meta",
+            salience=max(0.8, min(1.0, severity)),
+            emotion="inquietude",
+            mode="evaluer",
+        )
+        self.stream.append(thought)
+        self.stats["total_thoughts"] = self.stats.get("total_thoughts", 0) + 1
+        if len(self.stream) > MAX_STREAM:
+            self.stream = self.stream[-MAX_STREAM:]
 
     async def _on_hallucination(self, event: dict):
         pass  # Enrichit prédictions
