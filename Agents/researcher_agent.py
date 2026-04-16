@@ -39,9 +39,24 @@ class DivineResearcher(BaseAgent):
         # --- 2. MODE RECHERCHE WEB (Par défaut ou explicite) ---
         # Si la mission contient des mots de recherche OU si aucune autre action n'est détectée
         
-        # Nettoyage de la requête
+        # Nettoyage de la requête — Fix D (Trio Adversarial 2026-04-16)
+        # Le prompt école contient des sections (CONTRAINTE SECONDAIRE, REGLES
+        # ABSOLUES, etc.) qui polluent le moteur de recherche si elles sont
+        # envoyees comme query. On extrait uniquement le sujet principal.
         query = mission.replace("Researcher:", "").replace("Scanne le web pour", "").replace("Cherche", "").strip()
-        
+        # Tronquer aux delimiteurs de structure connus (garde uniquement le sujet)
+        for delimiter in [
+            "[CONTRAINTE SECONDAIRE",
+            "REGLES ABSOLUES",
+            "CAHIER DE BROUILLON",
+            "CONTENU REEL DU FICHIER",
+            "DIRECTION DU MENTOR",
+            "DEFI DU MENTOR",
+        ]:
+            idx = query.find(delimiter)
+            if idx > 0:
+                query = query[:idx].strip()
+
         self.log_thought(f"🌍 Lancement WebSurfer Hybride : {query[:30]}...", "info")
         
         # Appel à l'outil dans un executor (search() est synchrone/bloquant)
