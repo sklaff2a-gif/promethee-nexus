@@ -465,13 +465,16 @@ class SchoolSchedule:
         difficulty = self.get_difficulty(slot)
         challenge_ctx = ""
         if challenge:
-            # FIX 2026-04-16 (Trio Adversarial) : le filtre Jaccard ne s'applique
-            # qu'aux creneaux RESEARCH ou les sujets changent chaque jour (risque
-            # de contamination croisee Event Sourcing → Prompt Optimization).
-            # Pour CODE_REVIEW, WORKSHOP, CREATION, le challenge est toujours une
-            # technique complementaire (ex: "concentre-toi sur les imports") qui
-            # reste pertinente quel que soit le fichier/sujet cible.
-            needs_jaccard = slot in (SLOT_RESEARCH,)
+            # FIX 2026-04-16 (Trio Adversarial) : filtre Jaccard anti-hijacking.
+            # FIX 2026-04-17 : hypothese de l'ancien fix INVALIDEE par livrable
+            # CREATION 04:02 (challenge "Souris de Vector Store + haiku" a
+            # contamine une fable sans rapport, +code Python hors-sujet).
+            # Le challenge du prof precedent peut etre ultra-specifique (pas
+            # juste une technique generique) -> verification Jaccard sur TOUS
+            # les slots de production qui ont un topic.
+            needs_jaccard = slot in (
+                SLOT_RESEARCH, SLOT_CREATION, SLOT_CODE_REVIEW, SLOT_WORKSHOP,
+            )
             is_relevant = (
                 self._is_challenge_relevant(topic, challenge)
                 if needs_jaccard and topic

@@ -423,16 +423,36 @@ class TestClosedLoop:
         assert challenge == ""
 
     def test_challenge_injected_in_prompt(self, isolate_schedule):
+        """Challenge PERTINENT (partage vocabulaire avec topic) -> injecte."""
+        # FIX 2026-04-17 : le filtre Jaccard s'applique desormais a CODE_REVIEW.
+        # Le challenge doit partager du vocabulaire avec le topic "Revue de code : ...".
         isolate_schedule._deliverables_today = [{
-            "slot": "CODE_REVIEW", "challenge": "Concentre-toi sur les imports.",
+            "slot": "CODE_REVIEW",
+            "challenge": "Revue approfondie code imports securite",
             "timestamp": "2026-03-15T09:00:00",
         }]
         prompt = isolate_schedule.get_slot_prompt(SLOT_CODE_REVIEW)
-        assert "Concentre-toi sur les imports" in prompt
+        assert "Revue approfondie code imports" in prompt
         # FIX 2026-04-12: le defi est maintenant injecte comme CONTRAINTE SECONDAIRE
         # pour eviter qu'il n'ecrase le sujet du jour
         assert "CONTRAINTE SECONDAIRE" in prompt
         assert "PRIORITE ABSOLUE" in prompt
+
+    def test_challenge_filtered_when_not_relevant(self, isolate_schedule):
+        """FIX 2026-04-17 : challenge ULTRA-SPECIFIQUE hors-sujet -> filtre.
+
+        Cas reel du 17/04 : challenge CREATION 16/04 'validate_factuality
+        Ollama ChromaDB' reinjecte sur un sujet fable a contamine le livrable.
+        """
+        isolate_schedule._deliverables_today = [{
+            "slot": "CREATION",
+            "challenge": "Implemente validate_factuality via Ollama ChromaDB haiku vector.",
+            "timestamp": "2026-04-16T04:00:00",
+        }]
+        prompt = isolate_schedule.get_slot_prompt(SLOT_CREATION)
+        # Le challenge etranger NE DOIT PAS etre injecte
+        assert "validate_factuality" not in prompt
+        assert "CONTRAINTE SECONDAIRE" not in prompt
 
     def test_difficulty_in_prompt(self, isolate_schedule, tmp_path, monkeypatch):
         # Creer un curriculum avec difficulte elevee
