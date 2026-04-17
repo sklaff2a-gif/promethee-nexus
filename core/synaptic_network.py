@@ -34,6 +34,22 @@ HEBBIAN_CAUSAL_KNOWN_DRIVES = frozenset([
     "CURIOSITE", "MAITRISE", "STABILITE", "CONNEXION",
     "CROISSANCE", "CREATION", "COMPREHENSION",
 ])
+
+# --- Hebbian epistemique V3.1 (famine synaptique fix, 2026-04-17) ---
+# Elargissement de la cloture homeostatique aux succes epistemiques
+# (exercices scolaires notes, feedback utilisateur). Design valide par
+# Gemini (challenge famine_synaptique 2026-04-17) apres diagnostic de
+# 4 nuits a 0 renforcement et max_weight=0.487/5134 synapses.
+# delta max = EPISTEMIC_LR * triangular * surprise_factor
+# soit ~0.09 moyen et 0.27 max. Seuil 0.5 atteint en 4-5 fermetures.
+EPISTEMIC_LEARNING_RATE = 0.18           # Separe de HEBBIAN_CAUSAL (Gemini Q4)
+EPISTEMIC_RPE_UPPER_BOUND = 3.0          # Plafond surprise (Gemini Q3)
+EPISTEMIC_RPE_LOWER_BOUND = 0.1          # Plancher anti-farming (Gemini Q3)
+EPISTEMIC_MIN_NOTE_FOR_CLOSURE = 7.0     # Seuil en deca : pas de dopamine
+EPISTEMIC_COOLDOWN_SECONDS = 300.0       # Pas de renforcement < 5min meme slot
+EPISTEMIC_HISTORY_WINDOW = 10            # Moyenne glissante (Jean-Michel: N=10)
+EPISTEMIC_ENTROPY_MIN = 0.2              # Variance min inputs (anti-repetition)
+EPISTEMIC_DRIVES = frozenset(["MAITRISE_EPISTEMIC"])  # Compartimente (Gemini Q1)
 SPIKE_TIMING_WINDOW = 300.0       # 5 min pour causalite temporelle
 HOMEOSTATIC_TARGET = 0.3
 SYNAPSE_DECAY_PER_DAY = 0.02
@@ -214,6 +230,11 @@ class SynapticNetwork:
         # v1.4.1 (2026-04-14) : Phase C Etape 3 utilise self.stats pour
         # les compteurs Hebbian causal V3. Initialisation explicite au boot.
         self.stats: Dict[str, Any] = {}
+        # v1.4.2 (2026-04-17) : fermeture epistemique V3.1
+        # Historique glissant des notes par categorie (pour calcul RPE)
+        # et timestamp du dernier renforcement par categorie (cooldown).
+        self._epistemic_history: Dict[str, List[float]] = {}
+        self._epistemic_last_closure: Dict[str, float] = {}
         self._load()
 
     # --- Init & Reset ---
@@ -1014,6 +1035,8 @@ class SynapticNetwork:
             bus.subscribe("PREFRONTAL_GOAL_CREATED", self._on_goal_created)
             bus.subscribe("PREFRONTAL_GOAL_COMPLETE", self._on_goal_complete)
             bus.subscribe("PREFRONTAL_GOAL_ABANDONED", self._on_goal_abandoned)
+            # Phase C V3.1 (2026-04-17) : fermeture epistemique sur livrable scolaire
+            bus.subscribe("SCHOOL_DELIVERABLE", self._on_school_deliverable)
             bus.subscribe("CARDIAC_EMOTION_CHANGE", self._on_cardiac_emotion_change)
             # Sensorium hardware (Sprint 2 Sensorium)
             bus.subscribe("SENSORIUM_UPDATE", self._on_sensorium_update)
@@ -1409,6 +1432,130 @@ class SynapticNetwork:
                 f"x {extinctions_applied} sur {source_drive} "
                 f"via {step_intents} goal={event.get('goal_id', '?')}"
             )
+
+    async def _on_school_deliverable(self, event: dict):
+        """Reception d'un livrable scolaire note -> fermeture epistemique V3.1."""
+        try:
+            await self._learn_from_epistemic_closure(event)
+        except Exception as e:
+            logger.warning(f"SYNAPSE: Erreur _on_school_deliverable: {e}")
+
+    async def _learn_from_epistemic_closure(self, event: dict):
+        """Renforcement Hebbian causal sur fermeture epistemique (V3.1).
+
+        Elargit la cloture homeostatique aux succes externes objectifs :
+        exercices notes, feedback utilisateur explicite, validations.
+        Design Gemini 2026-04-17 (challenge famine_synaptique).
+
+        Filtres (F1-F4) adaptes au flux epistemique :
+          F1. score < EPISTEMIC_MIN_NOTE       -> skip (pas de dopamine)
+          F2. slot ou step_intents vides       -> skip
+          F3. cooldown par categorie actif     -> skip (anti-farming)
+          F4. task_entropy < seuil             -> skip (meme input repete)
+
+        Pondération RPE multiplicative : delta *= clip(exp(score-moyenne), 0.1, 3.0).
+        Le RPE regle 80% du loophole farming : reussir 100 fois un calcul
+        trivial predit au max donnera un facteur 0.1, renforcement nul.
+        """
+        score = float(event.get("grade") or event.get("score") or 0)
+        slot = (event.get("slot") or event.get("task_category") or "").upper()
+
+        # F1 : score insuffisant = pas de fermeture epistemique
+        if score < EPISTEMIC_MIN_NOTE_FOR_CLOSURE:
+            self.stats["epistemic_skipped_low_score"] = \
+                self.stats.get("epistemic_skipped_low_score", 0) + 1
+            return
+
+        # F2 : slot ou intent manquants
+        intent = event.get("intent", "")
+        if not slot or not intent:
+            self.stats["epistemic_skipped_empty_meta"] = \
+                self.stats.get("epistemic_skipped_empty_meta", 0) + 1
+            return
+
+        # F3 : cooldown par categorie (anti-farming)
+        now = time.time()
+        last = self._epistemic_last_closure.get(slot, 0.0)
+        if now - last < EPISTEMIC_COOLDOWN_SECONDS:
+            self.stats["epistemic_skipped_cooldown"] = \
+                self.stats.get("epistemic_skipped_cooldown", 0) + 1
+            return
+
+        # F4 : task_entropy (calcule amont par school_schedule)
+        entropy = float(event.get("task_entropy", 1.0))
+        if entropy < EPISTEMIC_ENTROPY_MIN:
+            self.stats["epistemic_skipped_low_entropy"] = \
+                self.stats.get("epistemic_skipped_low_entropy", 0) + 1
+            return
+
+        # --- RPE : surprise = score obtenu vs moyenne glissante (N=10) ---
+        history = self._epistemic_history.get(slot, [])
+        expected = sum(history) / len(history) if history else 5.0
+        surprise_factor = math.exp(score - expected)
+        surprise_factor = max(
+            EPISTEMIC_RPE_LOWER_BOUND,
+            min(EPISTEMIC_RPE_UPPER_BOUND, surprise_factor),
+        )
+
+        # --- Causal drop = intensite de la fermeture (normalise 0-1) ---
+        normalized_drop = (score / 10.0) * surprise_factor
+
+        # --- Construction des step_intents (distribution triangulaire) ---
+        # Pattern : [PREPARE, INTENT, CONCLUDE] -> le geste final (CONCLUDE)
+        # recoit le plus gros credit (2/(n+1) = 0.5 pour n=3).
+        step_intents = [
+            f"SCHOOL_{slot}_PREPARE",
+            intent,
+            f"SCHOOL_{slot}_CONCLUDE",
+        ]
+
+        # --- Drive epistemique (nouveau noeud, compartimente des drives vitaux) ---
+        drive_concept = "pulsion:maitrise_epistemic"
+        drive_nid = _make_node_id(drive_concept)
+        if drive_nid not in self.nodes:
+            self.ensure_node(drive_concept, "desire", 0.4, ["epistemic"])
+            drive_nid = _make_node_id(drive_concept)
+
+        # --- Application via _apply_causal_delta (memoire structurale V3) ---
+        n = len(step_intents)
+        total_delta = 0.0
+        for idx, step_intent in enumerate(step_intents):
+            if not step_intent:
+                continue
+            intent_nid = _make_node_id(step_intent)
+            if intent_nid not in self.nodes:
+                intent_nid = self.ensure_node(
+                    step_intent, "event", 0.6, ["epistemic"]
+                )
+                if not intent_nid:
+                    continue
+            weight_triangular = self._triangular_weight(idx, n)
+            delta = normalized_drop * weight_triangular * EPISTEMIC_LEARNING_RATE
+            self._apply_causal_delta(intent_nid, drive_nid, delta, context=(
+                f"epistemic:{slot}<-{step_intent}[{idx+1}/{n}] "
+                f"rpe={surprise_factor:.2f} score={score}"
+            ))
+            total_delta += delta
+
+        # --- MAJ historique glissant (N=10) + cooldown ---
+        history.append(score)
+        if len(history) > EPISTEMIC_HISTORY_WINDOW:
+            history.pop(0)
+        self._epistemic_history[slot] = history
+        self._epistemic_last_closure[slot] = now
+
+        # --- Stats ---
+        self.stats["epistemic_reinforcements"] = \
+            self.stats.get("epistemic_reinforcements", 0) + 1
+        self.stats["epistemic_total_delta_applied"] = round(
+            self.stats.get("epistemic_total_delta_applied", 0.0) + total_delta, 4
+        )
+
+        logger.info(
+            f"SYNAPSE_EPISTEMIC: +{total_delta:.4f} sur {slot} "
+            f"score={score} expected={expected:.2f} rpe={surprise_factor:.2f} "
+            f"entropy={entropy:.2f} via {n} step(s)"
+        )
 
     def _apply_causal_delta(self, src_nid: str, tgt_nid: str, delta: float,
                              context: str = "", floor: float = 0.0) -> None:
@@ -2279,6 +2426,9 @@ class SynapticNetwork:
                 self.nodes = nodes
                 self.synapses = synapses
                 self._last_dream_time = data.get("last_dream_time", time.time())
+                # v1.4.2 : historique epistemique pour RPE multiplicatif
+                self._epistemic_history = data.get("epistemic_history", {})
+                self._epistemic_last_closure = data.get("epistemic_last_closure", {})
                 self._loaded_node_count = len(self.nodes)
                 logger.info(
                     f"SYNAPSE: Charge {len(self.nodes)} noeuds, "
@@ -2332,6 +2482,8 @@ class SynapticNetwork:
             "nodes": self.nodes,
             "synapses": self.synapses,
             "last_dream_time": self._last_dream_time,
+            "epistemic_history": self._epistemic_history,
+            "epistemic_last_closure": self._epistemic_last_closure,
         }
         tmp_path = STATE_FILE + ".tmp"
         try:

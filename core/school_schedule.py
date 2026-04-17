@@ -658,17 +658,54 @@ class SchoolSchedule:
 
         return 0.0
 
+    def _compute_task_entropy(self, slot: str, challenge: str) -> float:
+        """Mesure la variance des challenges sur les 3 derniers exercices du slot.
+
+        Anti-farming dopamine (Gemini Q5) : si Promethee refait le meme
+        type de tache avec les memes entrees, entropy -> 0 -> skip
+        renforcement. Jaccard moyen sur les tokens du challenge.
+
+        Retourne 1 - jaccard_mean (entropy dans [0, 1]).
+        """
+        if not challenge:
+            return 1.0
+        tokens_now = set(challenge.lower().split())
+        if not tokens_now:
+            return 1.0
+        recent = [
+            e for e in reversed(self._deliverables_today)
+            if e.get("slot") == slot and e.get("challenge")
+        ][:3]
+        if not recent:
+            return 1.0
+        similarities = []
+        for past in recent:
+            tokens_past = set(past["challenge"].lower().split())
+            if not tokens_past:
+                continue
+            inter = len(tokens_now & tokens_past)
+            union = len(tokens_now | tokens_past)
+            if union > 0:
+                similarities.append(inter / union)
+        if not similarities:
+            return 1.0
+        jaccard_mean = sum(similarities) / len(similarities)
+        return max(0.0, 1.0 - jaccard_mean)
+
     def record_deliverable(self, slot: str, intent: str, result: dict):
         """Enregistre un livrable produit (preview dans state, complet dans fichier)."""
         self._check_day_reset()
+        challenge = result.get("challenge", "")
+        task_entropy = self._compute_task_entropy(slot, challenge)
         entry = {
             "slot": slot,
             "intent": intent,
             "timestamp": datetime.now().isoformat(),
             "grade": result.get("grade"),
             "feedback": result.get("feedback", ""),
-            "challenge": result.get("challenge", ""),
+            "challenge": challenge,
             "result_preview": result.get("result_preview", "")[:500],
+            "task_entropy": task_entropy,
         }
         self._deliverables_today.append(entry)
         self.save()
@@ -682,7 +719,8 @@ class SchoolSchedule:
         if slot == "FREE_TIME":
             self._record_free_time_choice(full_content or entry.get("result_preview", ""))
 
-        # Publier sur le bus
+        # Publier sur le bus (entry contient grade, slot, intent, task_entropy
+        # -> synaptic_network._on_school_deliverable -> fermeture epistemique V3.1)
         try:
             from core.event_bus.bus import bus
             import asyncio
