@@ -192,3 +192,80 @@ class TestCompartimentage:
             if "epistemic" in ctx:
                 for vd in vital_drives:
                     assert f"pulsion:{vd}" not in ctx
+
+
+class TestFactualityVeto:
+    """Filtre F5 : Veto Epistemique V3.2 (Jean-Michel 2026-04-18)."""
+
+    @pytest.mark.asyncio
+    async def test_f5_skip_when_no_proof_of_work(self, network):
+        """CODE_REVIEW avec factuality=-1.0 (0 ref parsable) -> skip."""
+        event = _build_event(slot="CODE_REVIEW")
+        event["factuality_score"] = -1.0
+        event["factuality_total_refs"] = 0
+        await network._learn_from_epistemic_closure(event)
+        assert network.stats.get("epistemic_skipped_no_proof_of_work") == 1
+        assert "epistemic_reinforcements" not in network.stats
+
+    @pytest.mark.asyncio
+    async def test_f5_skip_only_on_structural_slots(self, network):
+        """RESEARCH avec factuality=-1.0 : continue normalement (pas structurel)."""
+        event = _build_event(slot="RESEARCH")
+        event["factuality_score"] = -1.0
+        await network._learn_from_epistemic_closure(event)
+        assert network.stats.get("epistemic_reinforcements") == 1
+        assert "epistemic_skipped_no_proof_of_work" not in network.stats
+
+    @pytest.mark.asyncio
+    async def test_f5_veto_triggers_extinction(self, network):
+        """factuality < 0.6 -> extinction sur synapses pre-existantes."""
+        # Premiere fermeture valide pour creer les synapses
+        ok_event = _build_event(slot="CODE_REVIEW", grade=9.0)
+        ok_event["factuality_score"] = 0.9
+        ok_event["factuality_total_refs"] = 10
+        await network._learn_from_epistemic_closure(ok_event)
+        # Bypass cooldown
+        network._epistemic_last_closure["CODE_REVIEW"] = 0
+        # Capturer les poids AVANT veto
+        from core.synaptic_network import _make_node_id, _synapse_key
+        drive_nid = _make_node_id("pulsion:maitrise_epistemic")
+        conclude_nid = _make_node_id("SCHOOL_CODE_REVIEW_CONCLUDE")
+        key = _synapse_key(conclude_nid, drive_nid)
+        weight_before = network.synapses[key]["weight"]
+        # Second livrable hallucine
+        bad_event = _build_event(slot="CODE_REVIEW", grade=8.7)
+        bad_event["factuality_score"] = 0.3
+        bad_event["factuality_total_refs"] = 10
+        await network._learn_from_epistemic_closure(bad_event)
+        assert network.stats.get("epistemic_veto_hallucination") == 1
+        # Le poids doit avoir DIMINUE (extinction)
+        weight_after = network.synapses[key]["weight"]
+        assert weight_after < weight_before
+
+    @pytest.mark.asyncio
+    async def test_f5_above_threshold_proceeds(self, network):
+        """factuality >= 0.6 -> fermeture normale."""
+        event = _build_event(slot="CODE_REVIEW", grade=8.5)
+        event["factuality_score"] = 0.75
+        event["factuality_total_refs"] = 4
+        await network._learn_from_epistemic_closure(event)
+        assert network.stats.get("epistemic_reinforcements") == 1
+        assert "epistemic_veto_hallucination" not in network.stats
+
+    @pytest.mark.asyncio
+    async def test_f5_veto_when_drive_does_not_exist(self, network):
+        """factuality bas au tout premier livrable : drive pas encore ne -> warning."""
+        event = _build_event(slot="CODE_REVIEW")
+        event["factuality_score"] = 0.2
+        event["factuality_total_refs"] = 5
+        await network._learn_from_epistemic_closure(event)
+        assert network.stats.get("epistemic_veto_no_drive_yet") == 1
+
+    @pytest.mark.asyncio
+    async def test_f5_veto_no_cooldown_set(self, network):
+        """Un veto NE DOIT PAS enregistrer de cooldown (prochain livrable libre)."""
+        event = _build_event(slot="CODE_REVIEW")
+        event["factuality_score"] = 0.2
+        event["factuality_total_refs"] = 5
+        await network._learn_from_epistemic_closure(event)
+        assert "CODE_REVIEW" not in network._epistemic_last_closure

@@ -50,6 +50,10 @@ EPISTEMIC_COOLDOWN_SECONDS = 300.0       # Pas de renforcement < 5min meme slot
 EPISTEMIC_HISTORY_WINDOW = 10            # Moyenne glissante (Jean-Michel: N=10)
 EPISTEMIC_ENTROPY_MIN = 0.2              # Variance min inputs (anti-repetition)
 EPISTEMIC_DRIVES = frozenset(["MAITRISE_EPISTEMIC"])  # Compartimente (Gemini Q1)
+# V3.2 (2026-04-18) Veto epistemique (Jean-Michel, apres nuit 1 avec
+# hallucinations renforcees). Hard filter deterministe via AST/regex
+# sur CODE_REVIEW/WORKSHOP. Sous ce ratio -> extinction active.
+EPISTEMIC_FACTUALITY_THRESHOLD = 0.6
 SPIKE_TIMING_WINDOW = 300.0       # 5 min pour causalite temporelle
 HOMEOSTATIC_TARGET = 0.3
 SYNAPSE_DECAY_PER_DAY = 0.02
@@ -1486,6 +1490,75 @@ class SynapticNetwork:
         if entropy < EPISTEMIC_ENTROPY_MIN:
             self.stats["epistemic_skipped_low_entropy"] = \
                 self.stats.get("epistemic_skipped_low_entropy", 0) + 1
+            return
+
+        # F5 : VETO EPISTEMIQUE V3.2 (Jean-Michel 2026-04-18, post-nuit 1)
+        # Hard filter deterministe sur les slots structurels. Le factuality_score
+        # vient de core/factuality_verifier.py (AST + regex sur target_file).
+        # Active uniquement si factuality_score est explicitement fourni dans
+        # l event (retrocompat : chat feedback sans verification = pas de F5).
+        # Trois chemins si active :
+        #   - score == -1.0 sur CODE_REVIEW/WORKSHOP : 0 ref parsable -> skip
+        #     ("pas de preuve de travail = pas de dopamine, mais pas de punition")
+        #   - 0 <= score < 0.6 : hallucination active -> extinction sur le
+        #     triplet de step_intents qui AURAIT ete renforce (inverse cible)
+        #   - score >= 0.6 ou -1.0 sur autre slot : continue normalement
+        factuality_raw = event.get("factuality_score")
+        factuality = float(factuality_raw) if factuality_raw is not None else None
+        total_refs = int(event.get("factuality_total_refs", 0))
+
+        if factuality is not None and factuality == -1.0 and slot in ("CODE_REVIEW", "WORKSHOP"):
+            self.stats["epistemic_skipped_no_proof_of_work"] = \
+                self.stats.get("epistemic_skipped_no_proof_of_work", 0) + 1
+            logger.info(
+                f"SYNAPSE_EPISTEMIC_SKIP: {slot} 0 ref parsable -> bypass"
+            )
+            return
+
+        if factuality is not None and 0 <= factuality < EPISTEMIC_FACTUALITY_THRESHOLD:
+            # Extinction active : appliquer la penalite sur les synapses
+            # qui auraient ete renforcees. Delta negatif uniforme (comme
+            # _learn_from_fruitless_goal Gemini Q1) sans construire d event
+            # hebbian_causal_known_drive (compartimentage preserve).
+            drive_nid_veto = _make_node_id("pulsion:maitrise_epistemic")
+            step_intents_veto = [
+                f"SCHOOL_{slot}_PREPARE",
+                intent,
+                f"SCHOOL_{slot}_CONCLUDE",
+            ]
+            if drive_nid_veto in self.nodes:
+                extincted = 0
+                for step in step_intents_veto:
+                    if not step:
+                        continue
+                    step_nid = _make_node_id(step)
+                    if step_nid in self.nodes:
+                        self._apply_causal_delta(
+                            step_nid, drive_nid_veto,
+                            -HEBBIAN_CAUSAL_EXTINCTION_DELTA,
+                            context=(
+                                f"epistemic_veto:{slot}<-{step} "
+                                f"factuality={factuality:.2f}"
+                            ),
+                            floor=HEBBIAN_CAUSAL_EXTINCTION_FLOOR,
+                        )
+                        extincted += 1
+                self.stats["epistemic_veto_hallucination"] = \
+                    self.stats.get("epistemic_veto_hallucination", 0) + 1
+                logger.warning(
+                    f"SYNAPSE_EPISTEMIC_VETO: {slot} factuality={factuality:.2f} "
+                    f"< {EPISTEMIC_FACTUALITY_THRESHOLD} -> "
+                    f"-{HEBBIAN_CAUSAL_EXTINCTION_DELTA:.3f} x{extincted} "
+                    f"refs={total_refs} score_propose={score}"
+                )
+            else:
+                # Drive epistemique pas encore ne : pas de punition possible
+                self.stats["epistemic_veto_no_drive_yet"] = \
+                    self.stats.get("epistemic_veto_no_drive_yet", 0) + 1
+                logger.warning(
+                    f"SYNAPSE_EPISTEMIC_VETO: {slot} factuality={factuality:.2f} "
+                    f"- drive inexistant, pas d extinction"
+                )
             return
 
         # --- RPE : surprise = score obtenu vs moyenne glissante (N=10) ---

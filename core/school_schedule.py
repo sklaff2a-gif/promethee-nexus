@@ -700,6 +700,31 @@ class SchoolSchedule:
         self._check_day_reset()
         challenge = result.get("challenge", "")
         task_entropy = self._compute_task_entropy(slot, challenge)
+
+        # FIX 2026-04-18 (V3.2 Veto Epistemique) : calcul du factuality_score
+        # pour les slots structurels (CODE_REVIEW, WORKSHOP). Livrables dont
+        # >40% des references (fonctions, lignes) sont hallucinees -> veto
+        # dans _learn_from_epistemic_closure. Le Mentor Claude restera le
+        # filtre asynchrone pour RESEARCH et CREATION (contenu non-structurel).
+        factuality_score = -1.0
+        factuality_total_refs = 0
+        full_content = result.get("full_content", result.get("result_preview", ""))
+        if slot in (SLOT_CODE_REVIEW, SLOT_WORKSHOP) and full_content:
+            try:
+                from core.factuality_verifier import compute_factuality_score
+                subject = self.get_subject_for_slot(slot)
+                target = subject.get("target_file", "")
+                if target:
+                    factuality_score, factuality_total_refs, fact_details = \
+                        compute_factuality_score(full_content, target, _PROJECT_ROOT)
+                    logger.info(
+                        f"[SCHOOL][FACTUALITY] {slot} target={target} "
+                        f"ratio={factuality_score:.2f} refs={factuality_total_refs} "
+                        f"hits={fact_details.get('true_refs', 0)}"
+                    )
+            except Exception as e:
+                logger.warning(f"[SCHOOL][FACTUALITY] Erreur verification: {e}")
+
         entry = {
             "slot": slot,
             "intent": intent,
@@ -709,12 +734,13 @@ class SchoolSchedule:
             "challenge": challenge,
             "result_preview": result.get("result_preview", "")[:500],
             "task_entropy": task_entropy,
+            "factuality_score": factuality_score,
+            "factuality_total_refs": factuality_total_refs,
         }
         self._deliverables_today.append(entry)
         self.save()
 
         # P0: Sauvegarder le livrable COMPLET dans un fichier dedie
-        full_content = result.get("full_content", result.get("result_preview", ""))
         if full_content:
             self._save_deliverable_file(slot, full_content, entry)
 
