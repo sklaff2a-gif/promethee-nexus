@@ -2318,7 +2318,7 @@ class SynapticNetwork:
         )
         return report
 
-    def _curiosity_explore(self, max_links: int = 5) -> int:
+    def _curiosity_explore(self, max_links: int = 3) -> int:
         """Curiosite synaptique : cree des liens entre systemes fonctionnels differents.
         Force l'exploration de connexions inattendues entre noeuds de domaines separes."""
         created = 0
