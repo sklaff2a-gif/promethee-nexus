@@ -54,6 +54,19 @@ EPISTEMIC_DRIVES = frozenset(["MAITRISE_EPISTEMIC"])  # Compartimente (Gemini Q1
 # hallucinations renforcees). Hard filter deterministe via AST/regex
 # sur CODE_REVIEW/WORKSHOP. Sous ce ratio -> extinction active.
 EPISTEMIC_FACTUALITY_THRESHOLD = 0.6
+
+# --- V4.0 Clean-up Hebbian (2026-04-18, Shadow Audit Jean-Michel) ---
+# Extinction de la Temporal Superstition encore active a 13 call sites
+# (commit 732e03c avait commente UN seul bloc, les 12 autres restaient).
+# Chaque handler de bus qui utilisait hebbian_strengthen est soit purge
+# (bruit basal), soit migre vers _apply_causal_delta (signal causal fort).
+# Les deltas ci-dessous sont calibres pour donner >10x de force aux
+# evenements rares par rapport a l'ancien hebbian_strengthen (~0.006/appel).
+PROCEDURAL_DELTA = 0.08       # intent<->emotion, si quality >= 0.8 (memoire procedurale)
+EUREKA_DELTA = 0.15           # eureka bidirectionnel (autoroute cognitive)
+MISSION_AGENT_DELTA = 0.08    # mission<->agent (qui a fait quoi)
+ARTIFACT_AGENT_DELTA = 0.08   # agent<->file (production)
+REPTILIAN_BASE_DELTA = 0.10   # reflexe reptilien, x (threat_level / 5.0) pour scaling
 SPIKE_TIMING_WINDOW = 300.0       # 5 min pour causalite temporelle
 HOMEOSTATIC_TARGET = 0.3
 SYNAPSE_DECAY_PER_DAY = 0.02
@@ -1120,21 +1133,11 @@ class SynapticNetwork:
                 if nid in self.nodes:
                     self.nodes[nid]["affect"]["trait_value"] = round(value, 1)
 
-            # Renforcer le lien trait dominant -> ses pulsions
-            dominant = max(avg, key=avg.get)
-            dominant_nid = _make_node_id(f"trait:{dominant}")
-            try:
-                from core.desire_engine import TRAIT_RESONANCE
-                for drive, traits in TRAIT_RESONANCE.items():
-                    if dominant in traits:
-                        drive_nid = _make_node_id(f"pulsion:{drive.lower()}")
-                        if drive_nid in self.nodes and dominant_nid in self.nodes:
-                            self.hebbian_strengthen(
-                                dominant_nid, drive_nid, success=True,
-                                context=f"psyche_resonance:{dominant}",
-                            )
-            except ImportError:
-                pass
+            # V4.0 (2026-04-18) : PURGE du lien trait_dominant->drive.
+            # L'ancien hebbian_strengthen creait un renforcement a chaque
+            # PSYCHE_UPDATE (haute frequence), generant du bruit basal qui
+            # diluait le signal causal V3. Le lien trait/drive est deja
+            # capture par la resonance psychique via modulateurs de scoring.
         except Exception as e:
             logger.warning(f"SYNAPSE: Erreur _on_psyche_update: {e}")
 
@@ -1208,18 +1211,10 @@ class SynapticNetwork:
             if not nid:
                 return
 
-            # Lier le goal a la pulsion dominante
-            try:
-                from core.desire_engine import desires
-                dominant = max(desires.drives.values(), key=lambda d: d.deprivation)
-                drive_nid = _make_node_id(f"pulsion:{dominant.name.lower()}")
-                if drive_nid in self.nodes:
-                    self.hebbian_strengthen(
-                        nid, drive_nid, success=True,
-                        context=f"goal_drive:{title[:50]}",
-                    )
-            except ImportError:
-                pass
+            # V4.0 (2026-04-18) : PURGE du lien goal->drive_dominant a la creation.
+            # Redondance totale avec V3 _learn_from_homeostatic_closure qui
+            # cree ce meme lien causalement quand le goal FERME (pas a la
+            # creation, qui est prematuree et sans information causale).
         except Exception as e:
             logger.warning(f"SYNAPSE: Erreur _on_goal_created: {e}")
 
@@ -1747,20 +1742,25 @@ class SynapticNetwork:
             if not nid:
                 return
 
+            # V4.0 (2026-04-18) : MIGRATION CAUSALE. Delta proportionnel
+            # au threat_level (severite du danger reel = force du lien).
+            # threat_level 3.0 -> delta 0.06, threat_level 10.0 -> delta 0.20.
+            delta = REPTILIAN_BASE_DELTA * min(2.0, threat_level / 5.0)
+
             # Lier a pulsion:stabilite (instinct de survie)
             stab_nid = _make_node_id("pulsion:stabilite")
             if stab_nid in self.nodes:
-                self.hebbian_strengthen(
-                    nid, stab_nid, success=True,
-                    context=f"threat:{reflex}:{threat_level:.0f}",
+                self._apply_causal_delta(
+                    nid, stab_nid, delta,
+                    context=f"reptilian_v4:{reflex}:threat={threat_level:.1f}",
                 )
 
             # Lier a trait:survie
             surv_nid = _make_node_id("trait:survie")
             if surv_nid in self.nodes:
-                self.hebbian_strengthen(
-                    nid, surv_nid, success=True,
-                    context=f"survival:{reflex}",
+                self._apply_causal_delta(
+                    nid, surv_nid, delta,
+                    context=f"reptilian_v4:survival:{reflex}",
                 )
         except Exception as e:
             logger.warning(f"SYNAPSE: Erreur _on_reptilian_alert: {e}")
@@ -1804,22 +1804,36 @@ class SynapticNetwork:
                 logger.debug(f"SYNAPSE: Routine '{intent}' en échec (q={quality:.2f}), skip extraction concepts")
                 return
 
-            # Extraire concepts du resultat (limite differenciee selon richesse)
+            # V4.0 (2026-04-18) : refonte complete du bloc de renforcement.
+            # Shadow audit a revele 8-15 liens/routine en Temporal Superstition
+            # -> 330+ creations/jour par ce seul handler.
+            #
+            # Purges :
+            #  - intent<->concepts_resultat : les concepts existent comme noeuds,
+            #    dream_consolidation fera les liens par co-activation reelle
+            #  - intent<->cogstate : meta_observer trace deja cet axe
+            #  - intent<->drive : REDONDANT avec V3 _learn_from_homeostatic_closure
+            #    qui fait le meme lien avec delta causal 5x plus fort
+            #
+            # Conserve (migre causal) :
+            #  - intent<->emotion : memoire procedurale ("je suis bon en X
+            #    quand je suis en Y"), SEULEMENT si quality >= 0.8 et reussite
+
+            # Extraction concepts (garde les noeuds, pas les liens)
             _ROUTINE_CONCEPT_LIMITS = {
                 "COUNCIL_DEBATE": 12, "EXPANSION_CODE": 8, "REFACTOR_RANDOM": 8,
                 "VEILLE_SILENCIEUSE": 8, "SOLILOQUE_INTERNE": 10,
                 "GRIMOIRE_INVOKE": 8, "SECURITY_AUDIT": 6,
             }
             max_c = _ROUTINE_CONCEPT_LIMITS.get(intent, 5)
-            concept_nids = self._extract_and_ensure(result_text, "memory", ["autonomy"], max_c)
+            concept_nids = self._extract_and_ensure(
+                result_text, "memory", ["autonomy"], max_c
+            )
 
-            # Liens Hebbiens entre intent et concepts
             success = (status == "success" and quality >= 0.6)
-            for cnid in concept_nids:
-                self.hebbian_strengthen(intent_nid, cnid, success=success,
-                                        context=f"routine:{intent}")
 
-            # Sync immediat deprivation -> energie pulsions
+            # Sync immediat deprivation -> energie pulsions (inchange, c'est
+            # de l'energie pas des synapses, pas concerne par V4)
             try:
                 from core.desire_engine import desires
                 for drive in desires.drives.values():
@@ -1831,55 +1845,30 @@ class SynapticNetwork:
             except ImportError:
                 pass
 
-            # --- Renforcement Hebbian contextuel ---
-            # "Cells that fire together wire together" : associer l'intent
-            # a l'etat cognitif dans lequel il a ete execute.
-            # Permet d'apprendre que certaines routines reussissent mieux
-            # dans certains etats (flow, crisis, exploration, etc.)
+            # V4.0 : memoire procedurale conditionnelle.
+            # Un seul lien causal, fort, sur reussite de haute qualite.
             cog_ctx = event.get("cognitive_context", {})
-            hebbian_context_links = 0
-
-            if cog_ctx.get("cognitive_state"):
-                state_nid = self.ensure_node(
-                    f"cogstate:{cog_ctx['cognitive_state']}", "affect",
-                    0.4, ["hebbian"],
-                )
-                if state_nid and intent_nid:
-                    self.hebbian_strengthen(
-                        intent_nid, state_nid, success=success,
-                        context=f"hebbian:{intent}<>{cog_ctx['cognitive_state']}",
-                    )
-                    hebbian_context_links += 1
-
-            if cog_ctx.get("dominant_drive"):
-                drive_ctx_nid = self.ensure_node(
-                    f"drive:{cog_ctx['dominant_drive'].lower()}", "affect",
-                    0.4, ["hebbian"],
-                )
-                if drive_ctx_nid and intent_nid:
-                    self.hebbian_strengthen(
-                        intent_nid, drive_ctx_nid, success=success,
-                        context=f"hebbian:{intent}<>{cog_ctx['dominant_drive']}",
-                    )
-                    hebbian_context_links += 1
-
-            if cog_ctx.get("cardiac_emotion"):
+            procedural_link = 0
+            if (success and quality >= 0.8
+                    and cog_ctx.get("cardiac_emotion") and intent_nid):
                 emo_nid = self.ensure_node(
                     f"emotion:{cog_ctx['cardiac_emotion']}", "affect",
-                    0.4, ["hebbian"],
+                    0.4, ["procedural"],
                 )
-                if emo_nid and intent_nid:
-                    self.hebbian_strengthen(
-                        intent_nid, emo_nid, success=success,
-                        context=f"hebbian:{intent}<>{cog_ctx['cardiac_emotion']}",
+                if emo_nid:
+                    self._apply_causal_delta(
+                        intent_nid, emo_nid, PROCEDURAL_DELTA,
+                        context=(
+                            f"procedural_v4:{intent}<>"
+                            f"{cog_ctx['cardiac_emotion']} q={quality:.2f}"
+                        ),
                     )
-                    hebbian_context_links += 1
+                    procedural_link = 1
 
             logger.info(
                 f"SYNAPSE: Routine '{intent}' -> +1 noeud, "
-                f"{len(concept_nids)} concepts, "
-                f"{len(concept_nids)} liens, "
-                f"{hebbian_context_links} ctx hebbiens "
+                f"{len(concept_nids)} concepts extraits, "
+                f"{procedural_link} lien procedural V4 "
                 f"({len(self.nodes)} noeuds, "
                 f"{len(self.synapses)} synapses total)"
             )
@@ -1905,10 +1894,14 @@ class SynapticNetwork:
                 summary or topic, "memory", ["council"], max_concepts=12
             )
 
-            success = (status == "consensus")
-            for cnid in concept_nids:
-                self.hebbian_strengthen(topic_nid, cnid, success=success,
-                                        context=f"council:{topic[:50]}")
+            # V4.0 (2026-04-18) : PURGE de la boucle topic<->concepts.
+            # L'ancien code creait jusqu'a 12 synapses par council. Les
+            # concepts existent deja comme noeuds (ensure_node ci-dessus),
+            # dream_consolidation et spreading_activation feront les liens
+            # basés sur la co-activation reelle, pas sur la co-occurrence
+            # textuelle (Temporal Superstition). _batch_mode garde pour
+            # la compat de _flush_deltas sur les creations de noeuds.
+            _ = status  # garde la variable pour future reutilisation eventuelle
 
             # Flush : publier un seul evenement SYNAPTIC_BATCH
             self._suppress_deltas = False
@@ -1931,11 +1924,12 @@ class SynapticNetwork:
             nid_a = self.ensure_node(node_a, "eureka", 0.8, ["creativity"])
             nid_b = self.ensure_node(node_b, "eureka", 0.8, ["creativity"])
 
-            # Synapse forte bidirectionnelle
-            self.hebbian_strengthen(nid_a, nid_b, success=True,
-                                    context=f"eureka:{hypothesis[:100]}")
-            self.hebbian_strengthen(nid_b, nid_a, success=True,
-                                    context=f"eureka:{hypothesis[:100]}")
+            # V4.0 (2026-04-18) : MIGRATION CAUSALE. Un eureka est un
+            # changement de paradigme cognitif rare -> autoroute synaptique
+            # (delta 0.15 vs ~0.006 en hebbian_strengthen classique).
+            ctx = f"eureka_v4:{hypothesis[:100]}"
+            self._apply_causal_delta(nid_a, nid_b, EUREKA_DELTA, context=ctx)
+            self._apply_causal_delta(nid_b, nid_a, EUREKA_DELTA, context=ctx)
         except Exception as e:
             logger.warning(f"SYNAPSE: Erreur _on_eureka_bridge: {e}")
 
@@ -1948,8 +1942,11 @@ class SynapticNetwork:
                 return
             agent_nid = self.ensure_node(agent, "event", 0.5, ["production"])
             file_nid = self.ensure_node(filename, "memory", 0.6, ["production"])
-            self.hebbian_strengthen(agent_nid, file_nid, success=True,
-                                    context=f"artifact:{filename[:100]}")
+            # V4.0 : MIGRATION CAUSALE. Signal de production agent<->file conserve.
+            self._apply_causal_delta(
+                agent_nid, file_nid, ARTIFACT_AGENT_DELTA,
+                context=f"artifact_v4:{filename[:100]}"
+            )
         except Exception as e:
             logger.warning(f"SYNAPSE: Erreur _on_artifact_created: {e}")
 
@@ -1985,18 +1982,23 @@ class SynapticNetwork:
                 return
 
             mission_nid = self.ensure_node(mission, "event", 0.7, ["mission"])
-            if agent:
+            if agent and success:
+                # V4.0 : MIGRATION CAUSALE. Le lien mission<->agent (qui a
+                # fait quoi) est conserve causalement, seulement en cas de
+                # succes (sinon on renforcerait l'agent d'une mission ratee).
                 agent_nid = self.ensure_node(agent, "event", 0.4, ["mission"])
-                self.hebbian_strengthen(mission_nid, agent_nid,
-                                        success=success,
-                                        context=f"mission:{mission[:80]}")
+                self._apply_causal_delta(
+                    mission_nid, agent_nid, MISSION_AGENT_DELTA,
+                    context=f"mission_v4:{mission[:80]}",
+                )
 
-            concept_nids = self._extract_and_ensure(
+            # V4.0 : PURGE de la boucle mission<->concepts (jusqu'a 10 liens
+            # par mission, pure Temporal Superstition). Les concepts sont
+            # crees comme noeuds via ensure_node, mais non lies directement
+            # a la mission. dream_consolidation fera le travail causal.
+            self._extract_and_ensure(
                 result or mission, "memory", ["mission"], max_concepts=10
             )
-            for cnid in concept_nids:
-                self.hebbian_strengthen(mission_nid, cnid, success=success,
-                                        context=f"mission:{mission[:80]}")
         except Exception as e:
             logger.warning(f"SYNAPSE: Erreur _on_mission_finished: {e}")
 

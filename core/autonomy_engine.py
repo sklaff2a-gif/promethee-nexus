@@ -8885,17 +8885,16 @@ RAISON: <1 phrase courte>"""
 
             result_text = response.get("result", "") if response else ""
 
-            # 5. Renforcer les connexions entre les concepts exercés
-            reinforced = 0
-            for i in range(len(exercise_concepts)):
-                for j in range(i + 1, len(exercise_concepts)):
-                    src_id = cortex.ensure_node(exercise_concepts[i])
-                    tgt_id = cortex.ensure_node(exercise_concepts[j])
-                    cortex.hebbian_strengthen(src_id, tgt_id, success=True,
-                                              context="neural_training")
-                    reinforced += 1
-
-            print(f"   🧠 NEURAL_TRAINING: {reinforced} connexions hebbiennes renforcées")
+            # V4.0 (2026-04-18) : PURGE de la boucle carresienne. L'ancien
+            # code creait N*(N-1)/2 liens entre tous les concepts de l'exercice
+            # (jusqu'a 45 liens pour 10 concepts). Pure Temporal Superstition :
+            # lier tous les concepts d'un meme exercice entre eux cree un
+            # cluster dense sans information causale. Les noeuds sont crees
+            # (via la sequence d'activation reelle durant le training), et
+            # dream_consolidation liera ceux qui s'activent vraiment ensemble.
+            for concept in exercise_concepts:
+                cortex.ensure_node(concept)
+            print(f"   🧠 NEURAL_TRAINING V4: {len(exercise_concepts)} noeuds assures (sans cluster force)")
 
             return response or {"status": "error", "result": "Pas de réponse."}
 

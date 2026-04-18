@@ -979,8 +979,10 @@ class TestOrganSeed:
         drive_nid = _make_node_id("pulsion:curiosite")
         key = _synapse_key(dominant_nid, drive_nid)
 
-        # Noter le poids avant (peut ne pas exister en sens inverse)
-        weight_before = network.synapses.get(key, {}).get("weight", 0.0)
+        # V4.0 (2026-04-18) : le lien trait_dominant->drive n'est PLUS cree
+        # par _on_psyche_update (purge de la Temporal Superstition).
+        # Le test verifie maintenant l'inverse : PAS de synapse creee.
+        synapses_before = set(network.synapses.keys())
 
         await network._on_psyche_update({
             "system_average": {
@@ -989,9 +991,13 @@ class TestOrganSeed:
             }
         })
 
-        # Le lien dominant_trait -> pulsion doit etre cree ou renforce
-        assert key in network.synapses
-        assert network.synapses[key]["weight"] > weight_before
+        # V4 : psyche_update ne doit PAS creer de synapse
+        new_synapses = set(network.synapses.keys()) - synapses_before
+        assert key not in network.synapses or key in synapses_before
+        # Aucune synapse creee avec contexte psyche_resonance (l'ancien bloc)
+        for k in new_synapses:
+            ctx = network.synapses[k].get("context", "")
+            assert "psyche_resonance" not in ctx
 
     @pytest.mark.skip(reason=(
         "Phase C Etape 3 (2026-04-14) : l'ancien Hebbian temporel dans "
@@ -1190,10 +1196,16 @@ class TestOrganIntegration:
                 "horizon": "long",
             })
 
+        # V4.0 (2026-04-18) : goal_created ne cree PLUS de synapse vers
+        # le drive dominant (redondance totale avec V3 homeostatic_closure
+        # qui fait ce lien causalement quand le goal FERME).
         goal_nid = _make_node_id("goal:Apprendre design patterns")
         drive_nid = _make_node_id("pulsion:croissance")
         key = _synapse_key(goal_nid, drive_nid)
-        assert key in network.synapses
+        # Le noeud goal doit exister (creation preservee)
+        assert goal_nid in network.nodes
+        # Mais pas de synapse goal<->drive a la creation (V4)
+        assert key not in network.synapses
 
     @pytest.mark.asyncio
     @patch("core.synaptic_network.SynapticNetwork._capture_affect_signature",
