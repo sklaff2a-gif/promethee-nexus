@@ -701,26 +701,40 @@ class SchoolSchedule:
         challenge = result.get("challenge", "")
         task_entropy = self._compute_task_entropy(slot, challenge)
 
-        # FIX 2026-04-18 (V3.2 Veto Epistemique) : calcul du factuality_score
-        # pour les slots structurels (CODE_REVIEW, WORKSHOP). Livrables dont
-        # >40% des references (fonctions, lignes) sont hallucinees -> veto
-        # dans _learn_from_epistemic_closure. Le Mentor Claude restera le
-        # filtre asynchrone pour RESEARCH et CREATION (contenu non-structurel).
+        # V3.2 (2026-04-18) : calcul du factuality_score pour slots structurels
+        # (CODE_REVIEW, WORKSHOP) via AST+regex sur target_file.
+        # V3.3 (2026-04-19) : extension a CREATION via 3 vecteurs deterministes
+        # (tech_ratio, key_terms coverage, format_rule) sans target_file.
+        # Livrables sous seuil 0.6 -> veto dans _learn_from_epistemic_closure.
         factuality_score = -1.0
         factuality_total_refs = 0
         full_content = result.get("full_content", result.get("result_preview", ""))
-        if slot in (SLOT_CODE_REVIEW, SLOT_WORKSHOP) and full_content:
+        if full_content:
             try:
-                from core.factuality_verifier import compute_factuality_score
-                subject = self.get_subject_for_slot(slot)
-                target = subject.get("target_file", "")
-                if target:
-                    factuality_score, factuality_total_refs, fact_details = \
-                        compute_factuality_score(full_content, target, _PROJECT_ROOT)
+                if slot in (SLOT_CODE_REVIEW, SLOT_WORKSHOP):
+                    from core.factuality_verifier import compute_factuality_score
+                    subject = self.get_subject_for_slot(slot)
+                    target = subject.get("target_file", "")
+                    if target:
+                        factuality_score, factuality_total_refs, fact_details = \
+                            compute_factuality_score(full_content, target, _PROJECT_ROOT)
+                        logger.info(
+                            f"[SCHOOL][FACTUALITY] {slot} target={target} "
+                            f"ratio={factuality_score:.2f} refs={factuality_total_refs} "
+                            f"hits={fact_details.get('true_refs', 0)}"
+                        )
+                elif slot == SLOT_CREATION:
+                    from core.factuality_verifier import compute_creation_factuality
+                    factuality_score, fact_details = compute_creation_factuality(
+                        full_content, challenge
+                    )
+                    # On ne met pas total_refs (non-structurel), on utilise le
+                    # nombre de vecteurs actifs comme proxy pour F5.
+                    factuality_total_refs = fact_details.get("active_vectors", 0)
                     logger.info(
-                        f"[SCHOOL][FACTUALITY] {slot} target={target} "
-                        f"ratio={factuality_score:.2f} refs={factuality_total_refs} "
-                        f"hits={fact_details.get('true_refs', 0)}"
+                        f"[SCHOOL][FACTUALITY] CREATION "
+                        f"ratio={factuality_score:.2f} vectors={factuality_total_refs} "
+                        f"details={fact_details.get('vectors', {})}"
                     )
             except Exception as e:
                 logger.warning(f"[SCHOOL][FACTUALITY] Erreur verification: {e}")

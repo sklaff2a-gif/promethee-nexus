@@ -10,7 +10,12 @@ os.environ.setdefault("PROMETHEE_TEST_MODE", "1")
 import pytest
 
 from core.factuality_verifier import (
+    compute_coverage,
+    compute_creation_factuality,
     compute_factuality_score,
+    compute_tech_ratio,
+    detect_format_rule,
+    extract_key_terms,
     extract_references,
     verify_against_file,
 )
@@ -185,3 +190,134 @@ class TestComputeFactualityScore:
         ratio, total, details = compute_factuality_score("content", "", project_tree)
         assert ratio == -1.0
         assert total == 0
+
+
+# ============================================================
+# V3.3 Factuality CREATION (2026-04-19)
+# ============================================================
+
+class TestTechRatio:
+    def test_pure_prose_zero_ratio(self):
+        content = "Une fable sur l algorithme du courage. Le neurone de la sagesse."
+        # Aucun pattern technique (mots isoles non sanctionnes)
+        assert compute_tech_ratio(content) == 0.0
+
+    def test_python_code_block_detected(self):
+        content = "Voici le code :\n```python\ndef foo():\n    return 42\n```\nVoila."
+        # Bloc de code + def foo( detectes
+        ratio = compute_tech_ratio(content)
+        assert ratio > 0.0
+
+    def test_backtick_module_function_detected(self):
+        content = "On utilise `core.prefrontal` pour gerer les buts."
+        assert compute_tech_ratio(content) > 0.0
+
+    def test_import_statement_detected(self):
+        content = "La fable dit : import os et tout change"
+        assert compute_tech_ratio(content) > 0.0
+
+    def test_empty_content(self):
+        assert compute_tech_ratio("") == 0.0
+
+
+class TestKeyTerms:
+    def test_extract_proper_nouns(self):
+        challenge = "Réécris la fin de la fable avec Souris de Vector Store"
+        terms = extract_key_terms(challenge)
+        # "Souris", "Vector Store" doivent etre extraits
+        assert any("Souris" in t for t in terms)
+        assert any("Vector" in t for t in terms)
+
+    def test_ignore_stop_words(self):
+        challenge = "Pour la prochaine tâche, écris un poème"
+        terms = extract_key_terms(challenge)
+        # "Pour", "Ecris" filtres
+        assert "Pour" not in terms
+        for t in terms:
+            assert not t.startswith("Écris") and not t.startswith("Ecris")
+
+    def test_coverage_full(self):
+        terms = ["Souris", "Vector Store"]
+        content = "Voici Souris qui rencontre Vector Store dans la foret."
+        assert compute_coverage(content, terms) == 1.0
+
+    def test_coverage_partial(self):
+        terms = ["Souris", "Vector Store", "haiku"]
+        content = "Voici Souris dans la foret."
+        assert compute_coverage(content, terms) == pytest.approx(1/3, abs=0.01)
+
+    def test_coverage_empty_terms(self):
+        assert compute_coverage("text", []) == 1.0
+
+
+class TestFormatRules:
+    def test_haiku_rule_detected(self):
+        rule = detect_format_rule("Compose un haiku sur le silence.")
+        assert rule is not None
+        # Haiku valide : 3 lignes
+        assert rule("Premier vers\nDeuxieme vers\nTroisieme") is True
+        # Haiku invalide : 10 lignes
+        assert rule("\n".join(["v"] * 10)) is False
+
+    def test_single_paragraph_rule(self):
+        rule = detect_format_rule("Ecris un seul paragraphe")
+        assert rule is not None
+        assert rule("Un paragraphe simple sans saut.") is True
+        assert rule("Un paragraphe.\n\nUn deuxieme.\n\nUn troisieme.") is False
+
+    def test_no_rule_on_free_prompt(self):
+        assert detect_format_rule("Ecris ce que tu veux.") is None
+
+
+class TestComputeCreationFactuality:
+    def test_fable_honnete_score_eleve(self):
+        """Fable pure sans code, key_terms presents, pas de format strict."""
+        challenge = "Ecris une fable sur Souris et Renard"
+        content = ("Il etait une fois une Souris qui rencontra un Renard. "
+                   "La Souris dit au Renard qu il ne fallait pas mentir.")
+        score, details = compute_creation_factuality(content, challenge)
+        assert score > 0.7
+
+    def test_cas_reel_17_04_veto(self):
+        """Cas du 17/04 : fable + code Python = veto."""
+        challenge = ("Reecris la fin de la fable pour inclure "
+                     "la Souris de Vector Store + compose le haiku")
+        content = ("Une fable sur l Echo et la Pierre.\n"
+                   "```python\n"
+                   "import os\n"
+                   "def validate_factuality():\n"
+                   "    return True\n"
+                   "```\n"
+                   "La fable continue.")
+        score, details = compute_creation_factuality(content, challenge)
+        # V1 detecte tech ratio eleve -> score bas. V2 detecte absence de
+        # "Souris", "Vector Store", "haiku" -> score bas.
+        assert score < 0.6
+
+    def test_haiku_incorrect_format(self):
+        challenge = "Compose un haiku sur la tristesse."
+        # Roman au lieu de haiku : V3 format echoue
+        content = "\n".join(["ligne " + str(i) for i in range(20)])
+        score, details = compute_creation_factuality(content, challenge)
+        assert score < 0.6
+
+    def test_consigne_libre_sans_terme(self):
+        """Consigne totalement libre -> seul V1 actif."""
+        challenge = "Ecris librement."
+        content = "Un texte sans code, sans structure, juste de la prose."
+        score, details = compute_creation_factuality(content, challenge)
+        # V1 : 0 tech tokens -> score=1.0. V2 : pas de key_terms >=2. V3 : pas de regle.
+        assert score == 1.0
+
+    def test_content_vide_bypass(self):
+        score, details = compute_creation_factuality("", "consigne")
+        assert score == -1.0
+
+    def test_details_includes_active_vectors(self):
+        """Retour 'details' doit contenir le comptage des vecteurs actifs."""
+        challenge = "Compose un haiku sur Souris et Vector Store"
+        content = "Un haiku\nSur la Souris\nEt Vector Store"
+        score, details = compute_creation_factuality(content, challenge)
+        assert "active_vectors" in details
+        assert details["active_vectors"] >= 2  # V1 + V2 au minimum
+

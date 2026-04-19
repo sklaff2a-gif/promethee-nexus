@@ -269,3 +269,61 @@ class TestFactualityVeto:
         event["factuality_total_refs"] = 5
         await network._learn_from_epistemic_closure(event)
         assert "CODE_REVIEW" not in network._epistemic_last_closure
+
+
+class TestSoftCap:
+    """V4.1 Soft Cap plasticite (2026-04-19, Gemini)."""
+
+    def test_soft_cap_activates_above_threshold(self, network):
+        """Si weight > 0.85, delta est divise par 4."""
+        from core.synaptic_network import _synapse_key, SOFT_CAP_DIVISOR
+        # Creer deux noeuds + une synapse pre-chargee a ~0.90
+        src_nid = network.ensure_node("concept_a", "event", 0.5, ["test"])
+        tgt_nid = network.ensure_node("concept_b", "event", 0.5, ["test"])
+        # Preload : naissance 0.05 + 0.40 + 0.45 = 0.90
+        network._apply_causal_delta(src_nid, tgt_nid, 0.40, context="preload1")
+        network._apply_causal_delta(src_nid, tgt_nid, 0.45, context="preload2")
+        key = _synapse_key(src_nid, tgt_nid)
+        w_after_push = network.synapses[key]["weight"]
+        assert w_after_push == pytest.approx(0.90, abs=0.001)
+        # Nouveau delta de 0.20 : avec soft cap divise par 4 -> 0.05
+        network._apply_causal_delta(src_nid, tgt_nid, 0.20, context="soft_capped")
+        w_final = network.synapses[key]["weight"]
+        # Attendu = 0.90 + 0.20/4 = 0.95
+        expected = 0.90 + 0.20 / SOFT_CAP_DIVISOR
+        assert w_final == pytest.approx(expected, abs=0.001)
+        # Sans soft cap : aurait ete min(1.0, 0.90 + 0.20) = 1.0
+        assert w_final < 1.0
+
+    def test_soft_cap_inactive_below_threshold(self, network):
+        """Si weight < 0.85, le delta est applique plein."""
+        src_nid = network.ensure_node("concept_c", "event", 0.5, ["test"])
+        tgt_nid = network.ensure_node("concept_d", "event", 0.5, ["test"])
+        # Synapse creee a 0.05 + 0.30 = 0.35. Nouveau delta 0.10 -> 0.45.
+        network._apply_causal_delta(src_nid, tgt_nid, 0.30, context="preload")
+        from core.synaptic_network import _synapse_key
+        key = _synapse_key(src_nid, tgt_nid)
+        w_before = network.synapses[key]["weight"]
+        network._apply_causal_delta(src_nid, tgt_nid, 0.10, context="normal")
+        w_after = network.synapses[key]["weight"]
+        assert w_after == pytest.approx(w_before + 0.10, abs=0.001)
+
+    def test_procedural_saturation_blocked(self, network):
+        """Simule l'attracteur procedural_v4 qui allait geler a 1.0."""
+        from core.synaptic_network import _synapse_key, PROCEDURAL_DELTA
+        src_nid = network.ensure_node("REFACTORING_AUDIT", "event", 0.5, ["test"])
+        tgt_nid = network.ensure_node("emotion:determination", "affect", 0.5, ["test"])
+        # 10 applications de PROCEDURAL_DELTA (0.08 chaque)
+        for _ in range(10):
+            network._apply_causal_delta(
+                src_nid, tgt_nid, PROCEDURAL_DELTA,
+                context="procedural_v4:REFACTORING_AUDIT<>determination"
+            )
+        key = _synapse_key(src_nid, tgt_nid)
+        w_final = network.synapses[key]["weight"]
+        # Sans soft cap : aurait grimpe bien au-dessus de 0.85 (plafond 1.0)
+        # Avec soft cap : monte vers 0.85 puis ralentit
+        # 10 * 0.08 = 0.80 cumulatif + naissance 0.05 = 0.85 theorique. Avec
+        # soft cap on reste juste autour de 0.85-0.87.
+        assert w_final < 1.0
+        assert w_final > 0.80  # quand meme monte

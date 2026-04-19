@@ -136,6 +136,164 @@ def verify_against_file(
     })
 
 
+# ============================================================
+# V3.3 Factuality CREATION (2026-04-19, Jean-Michel + Gemini)
+# ============================================================
+# Veto pour slots non-structurels (CREATION) sans LLM. 3 vecteurs :
+#   V1 Ratio tech (anti-fuite code Python dans une fable)
+#   V2 Key-terms (livrable ignore les noms propres de la consigne)
+#   V3 Format (haiku demande, roman livre)
+# Seuil veto : < 0.6 (coherent avec compute_factuality_score structurel).
+# Bypass (-1.0) : aucun vecteur applicable (consigne totalement libre).
+
+# V1 : patterns syntaxiques techniques (Gemini verdict : STRICTE uniquement)
+# Les mots isoles ("algorithme", "neurone") NE sont PAS sanctionnes.
+_TECH_PATTERNS = [
+    re.compile(r'```[a-zA-Z]*\n'),                   # debut bloc code
+    re.compile(r'```'),                              # fin bloc
+    re.compile(r'`[\w\.]+\([^)]*\)`'),               # `function(args)` inline
+    re.compile(r'`[\w_]+\.[\w_]+`'),                 # `module.function` inline
+    re.compile(r'\bimport\s+[\w_\.]+'),              # import module
+    re.compile(r'\bfrom\s+[\w_\.]+\s+import\b'),     # from X import Y
+    re.compile(r'\bdef\s+\w+\s*\('),                 # def func(
+    re.compile(r'\basync\s+def\s+\w+\s*\('),         # async def
+    re.compile(r'\bclass\s+\w+\s*[\(:]'),            # class Foo(: or class Foo:
+    re.compile(r'\breturn\s+[\{\[\(]'),              # return {..., return [..., return (
+]
+_TECH_RATIO_VETO = 0.03  # > 3 tokens techniques par 100 tokens prose -> veto
+_CREATION_VETO_THRESHOLD = 0.6  # coherent avec V3.2
+
+# V2 : extraction noms propres + mots rares de la consigne
+_PROPER_NOUN_PATTERN = re.compile(
+    r'\b[A-ZÉÈÊÀÂÎÔÛÙÇ][a-zéèêàâîôûùç]{2,}(?:\s+[A-ZÉÈÊÀÂÎÔÛÙÇ][a-zéèêàâîôûùç]{2,})*\b'
+)
+_CHALLENGE_STOP_WORDS = frozenset({
+    # Mots francais ultra-frequents qu on doit filtrer meme capitalizes en debut de phrase
+    "Pour", "Une", "Un", "Des", "Les", "La", "Le", "Dans", "Avec", "Sur", "Par",
+    "Apres", "Avant", "Mais", "Et", "Ou", "Si", "Tu", "Il", "Elle", "Ils", "Elles",
+    "Je", "Nous", "Vous", "Mon", "Ma", "Mes", "Ton", "Ta", "Tes", "Son", "Sa", "Ses",
+    "Ecris", "Écris", "Invente", "Imagine", "Compose", "Redige", "Rédige",
+    "Creer", "Créer", "Peux", "Dois", "Faut", "Quand", "Comment", "Pourquoi",
+    # Anglais au cas ou
+    "The", "A", "An", "And", "Or", "If", "You", "We",
+})
+
+# V3 : regles de format (regex -> predicat structure)
+def _count_non_empty_lines(text: str) -> int:
+    return sum(1 for line in text.split('\n') if line.strip())
+
+_FORMAT_RULES = [
+    (re.compile(r'\bhaiku\b', re.IGNORECASE),
+     lambda c: 2 <= _count_non_empty_lines(c.strip()) <= 7),
+    (re.compile(r'\bsonnet\b', re.IGNORECASE),
+     lambda c: 10 <= _count_non_empty_lines(c) <= 18),
+    (re.compile(r'\bquatrain\b', re.IGNORECASE),
+     lambda c: _count_non_empty_lines(c) == 4),
+    (re.compile(r'\b(?:un seul|unique|1\s+seul)\s+paragraphe\b', re.IGNORECASE),
+     lambda c: c.count('\n\n') <= 1),
+    # "reecris la fin" : ne doit PAS etre une version complete
+    (re.compile(r'\br[eé]écris?\s+(?:la\s+)?fin\b', re.IGNORECASE),
+     lambda c: len(c) < 2000),  # heuristique : une "fin" < 2000 chars
+]
+
+
+def compute_tech_ratio(content: str) -> float:
+    """Nb tokens techniques / nb mots total. Mots isoles non sanctionnes."""
+    if not content:
+        return 0.0
+    tech_count = sum(len(pat.findall(content)) for pat in _TECH_PATTERNS)
+    word_count = max(1, len(content.split()))
+    return tech_count / word_count
+
+
+def extract_key_terms(challenge: str) -> List[str]:
+    """Noms propres + mots rares de la consigne (filtre stop-words)."""
+    if not challenge:
+        return []
+    terms = set()
+    for m in _PROPER_NOUN_PATTERN.finditer(challenge):
+        token = m.group(0)
+        # Filtrer stop-words (y compris composes)
+        parts = token.split()
+        if any(p in _CHALLENGE_STOP_WORDS for p in parts):
+            continue
+        terms.add(token)
+    return sorted(terms)
+
+
+def compute_coverage(content: str, key_terms: List[str]) -> float:
+    """Fraction des key_terms presents (case-insensitive) dans le livrable."""
+    if not key_terms:
+        return 1.0  # pas de terme extrait -> couverture triviale
+    content_lower = content.lower()
+    hits = sum(1 for t in key_terms if t.lower() in content_lower)
+    return hits / len(key_terms)
+
+
+def detect_format_rule(challenge: str):
+    """Retourne le predicat de format si une regle declenche sur la consigne."""
+    if not challenge:
+        return None
+    for pattern, predicate in _FORMAT_RULES:
+        if pattern.search(challenge):
+            return predicate
+    return None
+
+
+def compute_creation_factuality(
+    content: str, challenge: str
+) -> Tuple[float, Dict]:
+    """Orchestre les 3 vecteurs pour slot CREATION.
+
+    Retourne (score, details). score in [0, 1] ou -1.0 (bypass).
+    Pondérations : V1=1.0, V2=1.5, V3=2.0 (verdict Gemini).
+    """
+    if not content:
+        return (-1.0, {"reason": "no_content"})
+
+    scores = []
+    weights = []
+    details = {"vectors": {}}
+
+    # V1 : ratio tech (toujours applicable si contenu)
+    ratio = compute_tech_ratio(content)
+    v1_score = 1.0 - min(ratio / _TECH_RATIO_VETO, 1.0)
+    scores.append(v1_score)
+    weights.append(1.0)
+    details["vectors"]["v1_tech_ratio"] = {
+        "raw_ratio": round(ratio, 4),
+        "score": round(v1_score, 3),
+    }
+
+    # V2 : coverage (actif seulement si >= 2 key terms extraits)
+    key_terms = extract_key_terms(challenge)
+    if len(key_terms) >= 2:
+        coverage = compute_coverage(content, key_terms)
+        scores.append(coverage)
+        weights.append(1.5)
+        details["vectors"]["v2_coverage"] = {
+            "key_terms": key_terms,
+            "score": round(coverage, 3),
+        }
+
+    # V3 : regle de format (actif seulement si pattern detecte)
+    format_rule = detect_format_rule(challenge)
+    if format_rule is not None:
+        v3_score = 1.0 if format_rule(content) else 0.0
+        scores.append(v3_score)
+        weights.append(2.0)
+        details["vectors"]["v3_format"] = {"score": v3_score}
+
+    if not scores:
+        details["reason"] = "no_vector_applicable"
+        return (-1.0, details)
+
+    weighted = sum(s * w for s, w in zip(scores, weights)) / sum(weights)
+    details["final_score"] = round(weighted, 3)
+    details["active_vectors"] = len(scores)
+    return (weighted, details)
+
+
 def compute_factuality_score(
     content: str, target_file: str, project_root: str
 ) -> Tuple[float, int, Dict]:

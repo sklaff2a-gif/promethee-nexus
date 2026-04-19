@@ -67,6 +67,15 @@ EUREKA_DELTA = 0.15           # eureka bidirectionnel (autoroute cognitive)
 MISSION_AGENT_DELTA = 0.08    # mission<->agent (qui a fait quoi)
 ARTIFACT_AGENT_DELTA = 0.08   # agent<->file (production)
 REPTILIAN_BASE_DELTA = 0.10   # reflexe reptilien, x (threat_level / 5.0) pour scaling
+
+# --- V4.1 Soft Cap plasticite (2026-04-19, Gemini post-V4 victoire) ---
+# Une synapse qui gele a 1.0 devient un attracteur permanent qui biaise
+# toutes les futures decisions (reflexe conditionne). En biologie, la
+# fatigue synaptique empeche ce gel total. Au-dela de 0.85, le delta
+# est divise par 4 -> la synapse peut monter jusqu a 0.95 mais tres
+# lentement, gardant la porte ouverte a un recul en cas d erreur.
+SOFT_CAP_THRESHOLD = 0.85
+SOFT_CAP_DIVISOR = 4.0
 SPIKE_TIMING_WINDOW = 300.0       # 5 min pour causalite temporelle
 HOMEOSTATIC_TARGET = 0.3
 SYNAPSE_DECAY_PER_DAY = 0.02
@@ -1502,7 +1511,7 @@ class SynapticNetwork:
         factuality = float(factuality_raw) if factuality_raw is not None else None
         total_refs = int(event.get("factuality_total_refs", 0))
 
-        if factuality is not None and factuality == -1.0 and slot in ("CODE_REVIEW", "WORKSHOP"):
+        if factuality is not None and factuality == -1.0 and slot in ("CODE_REVIEW", "WORKSHOP", "CREATION"):
             self.stats["epistemic_skipped_no_proof_of_work"] = \
                 self.stats.get("epistemic_skipped_no_proof_of_work", 0) + 1
             logger.info(
@@ -1654,6 +1663,10 @@ class SynapticNetwork:
                 self.synapses[key] = syn
                 self._enforce_synapse_limit()
             syn = self.synapses[key]
+            # V4.1 (2026-04-19) : Soft cap a 0.85. Au-dela, le delta est
+            # divise par 4 -> plasticite preservee, pas de gel total.
+            if syn["weight"] > SOFT_CAP_THRESHOLD:
+                delta = delta / SOFT_CAP_DIVISOR
             syn["weight"] = min(1.0, syn["weight"] + delta)
             syn["formation_count"] += 1
             syn["last_strengthened"] = time.time()
