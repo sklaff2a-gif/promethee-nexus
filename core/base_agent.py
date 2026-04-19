@@ -868,6 +868,21 @@ class BaseAgent:
         except Exception:
             pass  # Fallback transparent — ne jamais bloquer le flux
 
+        # ===== BLOOM FILTER V4.2 : veto pre-LLM anti-hallucination =====
+        # Design : Promethee lui-meme ex.80 (m=20000, k=7)
+        # Seuil STRICT (Jean-Michel 2026-04-19) : 1 faux negatif Bloom = veto
+        # Economie : 100% du budget d'inference sur les rejets certains
+        try:
+            from core.bloom_filter import bloom_pre_llm
+            veto = bloom_pre_llm.check_prompt(self.name, prompt)
+            if veto is not None:
+                self.log_thought(
+                    f"🚫 BLOOM VETO V4.2 : {veto.reason}", type="info"
+                )
+                return veto.response
+        except Exception:
+            pass  # Fallback transparent
+
         # Etape 1 : RAG (Toujours utile)
         context_memory = ""
         mem1 = self.recall(prompt, collection="collective_wisdom")

@@ -294,6 +294,19 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             print(f"   [ERR] {slug}: {e}")
     
+    # --- BLOOM V4.2 : indexes pre-LLM (anti-hallucination) ---
+    try:
+        from core.bloom_filter import initialize_bloom_at_boot
+        _project_root = os.path.dirname(os.path.abspath(__file__))
+        _bloom_stats = initialize_bloom_at_boot(_project_root)
+        print(
+            f"   🧬 BLOOM V4.2: {_bloom_stats['functions']} fns + "
+            f"{_bloom_stats['classes']} cls + {_bloom_stats['files']} files "
+            f"({_bloom_stats['memory_kb_total']} KB, {_bloom_stats['build_ms']}ms)"
+        )
+    except Exception as _e:
+        print(f"   ⚠️ BLOOM V4.2: init echouee ({_e}) - fallback transparent")
+
     # --- PSYCHE : Moteur de personnalité ---
     psyche.init(list(orchestrator.agents.keys()))
     print("   🧬 PSYCHE: Moteur de personnalité actif.")
