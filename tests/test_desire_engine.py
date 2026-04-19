@@ -529,13 +529,22 @@ class TestTolerance:
         assert abs(maitrise_rise - curiosite_rise) < 0.01
 
     def test_maitrise_oscillation_not_stuck(self, engine):
-        """MAITRISE ne reste pas collee a 100 apres des REFACTOR_RANDOM repetes."""
+        """MAITRISE ne reste pas collee a 100 apres des REFACTOR_RANDOM repetes.
+
+        V5.0 (2026-04-19) : le refractory_period de 180s bloque les satisfactions
+        en rafale. Le test doit maintenant simuler l'espacement temporel entre
+        satisfactions (181s) pour reproduire le scenario d'oscillation realiste.
+        """
+        import time as _t
+        from core.desire_engine import SATISFY_REFRACTORY_SEC, TOLERANCE_MAX
         engine.drives["MAITRISE"].deprivation = 100.0
-        engine.drives["MAITRISE"].tolerance_accumulator = 200.0  # Max tolerance
-        # Simuler 5 REFACTOR_RANDOM succes
+        engine.drives["MAITRISE"].tolerance_accumulator = TOLERANCE_MAX  # Max V5.0 = 100
+        # V5.0 : simuler 5 REFACTOR_RANDOM succes ESPACES de >180s
         for _ in range(5):
             engine.on_event("ROUTINE_SUCCESS", {"intent": "REFACTOR_RANDOM"})
-        # Deprivation devrait avoir baisse significativement (sous le seuil urgent 75)
+            # Simuler 181s ecoulees depuis la derniere satisfaction
+            engine.drives["MAITRISE"].last_satisfied = _t.time() - (SATISFY_REFRACTORY_SEC + 1)
+        # Deprivation devrait avoir baisse sous le seuil urgent 75
         assert engine.drives["MAITRISE"].deprivation < 75.0
 
     def test_tolerance_persisted(self, engine, tmp_path):

@@ -69,13 +69,29 @@ STATE_FILE = os.path.join(
 # Rise naturelle par heure
 NATURAL_RISE_PER_HOUR = 3.0
 
-# Tolerance biologique (habituation)
+# Tolerance biologique (habituation) - V5.0 ajuste (2026-04-19) :
+# diagnostic de saturation pathologique (MAITRISE tol=169 / 200, plafond)
+# avec recovery 15/h exactement compense par rythme de satisfaction 15/h,
+# donc regime stable en zone anesthesiee.
+# Fix : doubler recovery (30/h), relever floor min (0.30), baisser plafond
+# (100), ajouter periode refractaire et event DRIVE_SATURATED.
 TOLERANCE_HALF_LIFE = 8.0        # Apres 8 satisfactions, effet divise par 2
-TOLERANCE_MIN = 0.15             # Plancher : meme sature, 15% d'effet reste
-TOLERANCE_RECOVERY_PER_HOUR = 15.0  # L'accumulateur diminue de 15/h (demi-vie ~24h pour accumulation typique)
-TOLERANCE_MAX = 200.0            # Plafond de tolerance — au-delà, plus d'accumulation
+TOLERANCE_MIN = 0.30             # V5.0 (0.15->0.30) : effet min double, plus d'addiction profonde
+TOLERANCE_RECOVERY_PER_HOUR = 30.0  # V5.0 (15->30) : oubli 2x plus rapide, casse le steady-state
+TOLERANCE_MAX = 100.0            # V5.0 (200->100) : amplitude d'addiction divisee par 2
 DEPRIVATION_TOLERANCE_BYPASS = 80.0   # Au-dessus, tolerance ignoree (privation extreme)
 DEPRIVATION_CEILING_START = 85.0      # Au-dessus, la montee naturelle ralentit (homeostasie)
+
+# V5.0 NEW : periode refractaire absolue (equivalent neurone biologique)
+# Empeche le binge-eating cognitif : 2 satisfactions du meme drive a moins
+# de 3 min sont impossibles. La 2e est ignoree (pas de satiation_count,
+# pas d'accumulation de tolerance, pas de delta applique).
+SATISFY_REFRACTORY_SEC = 180.0
+
+# V5.0 NEW : seuil de saturation pathologique declenchant un event bus
+# DRIVE_SATURATED. Permet au meta_observer de prescrire une intervention
+# deterministe au lieu d'halluciner des conflits (cf ex.81 reward hacking).
+DRIVE_SATURATED_TOLERANCE_THRESHOLD = 70.0  # 70% du nouveau TOLERANCE_MAX
 
 
 @dataclass
@@ -523,10 +539,25 @@ class DesireEngine:
         """Traite un evenement et met a jour les pulsions affectees."""
         context = context or {}
         impacts = self._resolve_impacts(event_type, context)
+        now = time.time()
         for drive_name, delta in impacts.items():
             drive = self.drives.get(drive_name)
             if not drive:
                 continue
+            # V5.0 : periode refractaire (2026-04-19)
+            # Une satisfaction sur un drive <180s apres la precedente est
+            # IGNOREE : pas d'effet, pas de satiation, pas d'accumulator.
+            # Force le drive a "respirer" entre deux repas cognitifs.
+            if delta < 0 and drive.last_satisfied > 0:
+                elapsed_since_satisfy = now - drive.last_satisfied
+                if elapsed_since_satisfy < SATISFY_REFRACTORY_SEC:
+                    logger.debug(
+                        f"DESIRE: {drive_name} refractory actif "
+                        f"({elapsed_since_satisfy:.0f}s < {SATISFY_REFRACTORY_SEC}s), "
+                        f"satisfaction ignoree"
+                    )
+                    continue
+
             if delta < 0:  # Satisfaction → appliquer tolerance (sauf privation extreme)
                 if drive.deprivation >= DEPRIVATION_TOLERANCE_BYPASS:
                     # Privation extreme : la satisfaction a plein effet
@@ -543,10 +574,32 @@ class DesireEngine:
             if delta < 0:  # Satisfaction bookkeeping
                 drive.satiation_count += 1
                 drive.total_satisfied += 1
-                drive.last_satisfied = time.time()
+                drive.last_satisfied = now
                 drive.frustration_streak = 0
+                # V5.0 : detection saturation pathologique (anti-addiction)
+                if drive.tolerance_accumulator > DRIVE_SATURATED_TOLERANCE_THRESHOLD:
+                    self._emit_drive_saturated(drive)
             elif delta > 0 and abs(delta) >= 5:  # Frustration significative
                 drive.frustration_streak += 1
+
+    def _emit_drive_saturated(self, drive: "Drive") -> None:
+        """V5.0 : emet DRIVE_SATURATED sur le bus quand tolerance > seuil.
+        Signal deterministe pour meta_observer (remplace l'hallucination de
+        conflit type ex.81 de la Serie VIII)."""
+        try:
+            import asyncio
+            payload = {
+                "drive_name": drive.name,
+                "tolerance_accumulator": round(drive.tolerance_accumulator, 2),
+                "deprivation": round(drive.deprivation, 2),
+                "satiation_count": drive.satiation_count,
+                "timestamp": time.time(),
+            }
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(bus.publish("DRIVE_SATURATED", payload))
+        except Exception:
+            pass  # Fallback silencieux : pas bloquer la boucle pulsionnelle
 
     def _resolve_impacts(self, event_type: str, context: dict) -> Dict[str, float]:
         """Resout les impacts d'un evenement sur les pulsions."""
