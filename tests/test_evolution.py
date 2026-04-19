@@ -2086,7 +2086,11 @@ class TestKnowledgeSynthesis:
     # --- _crystallize ---
 
     def test_crystallize_strengthens(self):
-        """hebbian_strengthen appelé entre paires de ponts."""
+        """V4.0 (2026-04-19) : _crystallize utilise desormais
+        _apply_causal_delta (EVOLUTION_BRIDGE_DELTA=0.12) au lieu
+        de l ancien hebbian_strengthen (Temporal Superstition).
+        Test mis a jour : verifie le nouveau call pattern causal V4.
+        """
         evo = self._make_evo()
 
         mock_cortex = MagicMock()
@@ -2101,13 +2105,18 @@ class TestKnowledgeSynthesis:
         with patch.dict("sys.modules", {"core.synaptic_network": MagicMock(cortex=mock_cortex)}), \
              patch.dict("sys.modules", {"core.event_bus": MagicMock(bus=mock_bus)}), \
              patch.object(evo, "remember"):
-            evo._crystallize(cross_result, "Un insight de test pour vérifier le renforcement hebbien.")
+            evo._crystallize(cross_result, "Un insight de test pour verifier le renforcement causal V4.")
 
-        # hebbian_strengthen appelé 2 fois (a→b, b→c)
-        assert mock_cortex.hebbian_strengthen.call_count == 2
-        mock_cortex.hebbian_strengthen.assert_any_call(
-            "concept_a", "concept_b", success=True, context="knowledge_synthesis"
-        )
+        # V4 : _apply_causal_delta appele 2 fois (a->b, b->c)
+        assert mock_cortex._apply_causal_delta.call_count == 2
+        # Premier appel : concept_a -> concept_b avec delta 0.12
+        first_call = mock_cortex._apply_causal_delta.call_args_list[0]
+        assert first_call.args[0] == "concept_a"
+        assert first_call.args[1] == "concept_b"
+        assert first_call.args[2] == 0.12  # EVOLUTION_BRIDGE_DELTA
+        assert "knowledge_synthesis_v4" in first_call.kwargs.get("context", "")
+        # V4 : hebbian_strengthen ne doit PLUS etre appele (Temporal Superstition purgee)
+        assert mock_cortex.hebbian_strengthen.call_count == 0
 
     # --- Pipeline complet ---
 

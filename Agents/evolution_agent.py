@@ -485,19 +485,26 @@ class DivineEvolution(BaseAgent):
 
     def _crystallize(self, cross_result: dict, insight_text: str):
         """Renforce les connexions synaptiques, mémorise et publie (déterministe)."""
-        # 1. Renforcement hebbien entre paires de ponts
+        # 1. Renforcement causal V4 entre paires de ponts
+        # V4.0 (2026-04-18, 14e call site corrige le 2026-04-19) :
+        # ancien hebbian_strengthen (Temporal Superstition) migre vers
+        # _apply_causal_delta. Un pont inter-domaines est un evenement
+        # rare mais structurant (synthese cognitive), delta fixe 0.12
+        # (entre PROCEDURAL=0.08 et EUREKA=0.15).
         bridges = cross_result.get("bridges", [])
         if len(bridges) >= 2:
             try:
                 from core.synaptic_network import cortex as synapse_net
                 bridge_ids = [c for c, _ in bridges[:5]]
+                EVOLUTION_BRIDGE_DELTA = 0.12
                 for i in range(len(bridge_ids) - 1):
-                    synapse_net.hebbian_strengthen(
+                    synapse_net._apply_causal_delta(
                         bridge_ids[i], bridge_ids[i + 1],
-                        success=True, context="knowledge_synthesis"
+                        EVOLUTION_BRIDGE_DELTA,
+                        context=f"knowledge_synthesis_v4:{bridge_ids[i][:20]}->{bridge_ids[i+1][:20]}"
                     )
             except Exception as e:
-                logger.debug(f"crystallize hebbian echoue: {e}")
+                logger.debug(f"crystallize causal echoue: {e}")
 
         # 2. Mémoriser l'insight
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
