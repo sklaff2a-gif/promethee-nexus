@@ -737,10 +737,14 @@ class TestHebbianContextual:
     """Renforcement Hebbian : intent ↔ etat cognitif."""
 
     @pytest.mark.asyncio
-    async def test_success_creates_cognitive_state_node(self, synaptic_instance):
-        """Routine reussie cree un noeud cogstate et le renforce."""
+    async def test_success_does_not_create_cognitive_state_node(self, synaptic_instance):
+        """V4.0 (2026-04-18) : le bloc intent<->cogstate a ete purge de
+        _on_routine_complete (Temporal Superstition). Le noeud cogstate
+        N'EST PLUS cree par ce handler. Ancien test renforcait la
+        Temporal Superstition en creant 330+ synapses/jour inutiles.
+        """
         s = synaptic_instance
-        from core.synaptic_network import _make_node_id
+        from core.synaptic_network import _make_node_id, _synapse_key
 
         await s._on_routine_complete({
             "intent": "VEILLE_IA",
@@ -754,21 +758,20 @@ class TestHebbianContextual:
             },
         })
 
-        # Noeud cogstate:flow doit exister
+        # V4 : le noeud cogstate NE DOIT PLUS etre cree par _on_routine_complete
         flow_nid = _make_node_id("cogstate:flow")
-        assert flow_nid in s.nodes
-        assert s.nodes[flow_nid]["concept"] == "cogstate:flow"
-
-        # Synapse intent → cogstate:flow doit exister
+        assert flow_nid not in s.nodes
+        # Pas de synapse intent<->cogstate
         intent_nid = _make_node_id("VEILLE_IA")
-        from core.synaptic_network import _synapse_key
         key = _synapse_key(intent_nid, flow_nid)
-        assert key in s.synapses
-        assert s.synapses[key]["weight"] > 0
+        assert key not in s.synapses
 
     @pytest.mark.asyncio
-    async def test_success_creates_drive_node(self, synaptic_instance):
-        """Routine reussie cree un noeud drive et le renforce."""
+    async def test_success_does_not_create_drive_node(self, synaptic_instance):
+        """V4.0 : le bloc intent<->drive_ctx a ete purge (redondant avec V3
+        _learn_from_homeostatic_closure qui fait ce lien causalement
+        quand le goal ferme, pas a chaque routine).
+        """
         s = synaptic_instance
         from core.synaptic_network import _make_node_id
 
@@ -782,8 +785,9 @@ class TestHebbianContextual:
             },
         })
 
+        # V4 : le noeud drive_ctx NE DOIT PLUS etre cree par _on_routine_complete
         drive_nid = _make_node_id("drive:curiosite")
-        assert drive_nid in s.nodes
+        assert drive_nid not in s.nodes
 
     @pytest.mark.asyncio
     async def test_success_creates_emotion_node(self, synaptic_instance):
@@ -846,8 +850,11 @@ class TestHebbianContextual:
         assert intent_nid in s.nodes
 
     @pytest.mark.asyncio
-    async def test_repeated_success_strengthens_synapse(self, synaptic_instance):
-        """Succes repetes renforcent la synapse intent ↔ etat."""
+    async def test_repeated_procedural_v4_strengthens_emotion_link(self, synaptic_instance):
+        """V4.0 : memoire procedurale intent<->emotion renforcee par
+        procedural_v4 quand quality >= 0.8 (remplace l'ancien lien
+        intent<->cogstate purge). Cumul sur plusieurs succes.
+        """
         s = synaptic_instance
         from core.synaptic_network import _make_node_id, _synapse_key
 
@@ -856,16 +863,18 @@ class TestHebbianContextual:
             "status": "success",
             "quality_score": 0.9,
             "result": "Excellent article sur les architectures neuronales et le deep learning",
-            "cognitive_context": {"cognitive_state": "flow"},
+            "cognitive_context": {"cardiac_emotion": "enthousiasme"},
         }
 
         await s._on_routine_complete(event)
         intent_nid = _make_node_id("VEILLE_IA")
-        flow_nid = _make_node_id("cogstate:flow")
-        key = _synapse_key(intent_nid, flow_nid)
+        emo_nid = _make_node_id("emotion:enthousiasme")
+        key = _synapse_key(intent_nid, emo_nid)
+        # V4 cree la synapse procedurale causale
+        assert key in s.synapses
         weight_1 = s.synapses[key]["weight"]
 
-        # Deuxieme succes → poids augmente
+        # Deuxieme succes avec meme emotion -> poids augmente
         await s._on_routine_complete(event)
         weight_2 = s.synapses[key]["weight"]
         assert weight_2 > weight_1
