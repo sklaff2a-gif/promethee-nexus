@@ -1,10 +1,49 @@
+import hashlib
 import re
 import os
+import time
 import httpx
 import json
 import logging
 import unicodedata
 from typing import Optional
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V7.0 (Phase 9 - 2026-04-20) : Filtre Mnemonique du Router Chunking
+# ═══════════════════════════════════════════════════════════════════════
+# Audit Phase 8 : council_learned_rules.json contenait 23 entrees dont
+# 78% de doublons (10x "budget quotidien", 10x "Promethee ressent le
+# besoin"). Mecanique append lineaire -> encombrement, pas apprentissage.
+# De plus `decision` du Council etait jetee avant V7.0.
+
+# Stopwords d'infrastructure : apparaissent dans tous les prompts councils
+# (enrobage systeme) et n'ont aucun pouvoir discriminant pour le routage.
+_INFRA_STOPWORDS = frozenset({
+    "debat", "debats", "autonome", "conseil", "council",
+    "systeme", "system", "promethee", "prometheus",
+    "ressent", "besoin", "discussion", "discuter", "discutons",
+    "preoccupations", "suivantes", "analyse", "analyses",
+    "donnees", "metriques", "routines", "sujet",
+    # Artefacts de formatage qui polluaient les keywords pre-V7
+    "[debat", "autonome]", "[conflit]", "[debat]",
+})
+
+# Stopwords francais classiques (hérités de l'ancienne on_council_rule_learned)
+_FR_STOPWORDS = frozenset({
+    "pour", "dans", "avec", "cette", "notre", "projet", "comment",
+    "faire", "faut", "mode", "veille", "peut", "doit", "quel",
+})
+
+_ALL_STOPWORDS = _INFRA_STOPWORDS | _FR_STOPWORDS
+
+
+def _keyword_signature(keywords: list) -> str:
+    """Empreinte stable d'un ensemble de keywords (ordre-insensible).
+    Utilisee comme cle de deduplication pour le renforcement Hebbien."""
+    return hashlib.md5(
+        "|".join(sorted(set(keywords))).encode("utf-8")
+    ).hexdigest()[:12]
 
 logger = logging.getLogger("router")
 
@@ -168,7 +207,13 @@ class RouterAgent:
 
     @staticmethod
     def _load_learned_rules():
-        """Charge les regles apprises depuis le fichier JSON."""
+        """Charge les regles apprises depuis le fichier JSON.
+
+        V7.0 (2026-04-20) : migration transparente des regles pre-V7 et
+        collapse des doublons par signature. Les 23 regles heritage (dont
+        10x "budget quotidien", 10x "Promethee ressent...") deviennent
+        5 regles uniques avec weight accumule au premier load.
+        """
         if RouterAgent._learned_rules:
             return
         try:
@@ -176,67 +221,173 @@ class RouterAgent:
                 RouterAgent._learned_rules = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             RouterAgent._learned_rules = []
+            return
+
+        # V7.0 migration : injecter signature + weight + timestamps sur
+        # les regles pre-V7 (qui n'ont pas ces champs).
+        now = time.time()
+        migrated = 0
+        for rule in RouterAgent._learned_rules:
+            if "signature" not in rule:
+                kws = rule.get("keywords", [])
+                if kws:
+                    rule["signature"] = _keyword_signature(kws)
+                    rule.setdefault("weight", 1)
+                    rule.setdefault("created_at", now)
+                    rule.setdefault("last_seen", now)
+                    rule.setdefault("last_decision", "")
+                    migrated += 1
+
+        # Collapse des doublons heritage : 10 regles avec meme signature
+        # deviennent 1 regle avec weight = 10. Fusion de la decision la
+        # plus recente.
+        by_sig: dict = {}
+        for rule in RouterAgent._learned_rules:
+            sig = rule.get("signature")
+            if sig is None:
+                continue
+            if sig in by_sig:
+                by_sig[sig]["weight"] = (by_sig[sig].get("weight", 1)
+                                         + rule.get("weight", 1))
+                if rule.get("last_seen", 0) > by_sig[sig].get("last_seen", 0):
+                    by_sig[sig]["last_seen"] = rule["last_seen"]
+                    if rule.get("last_decision"):
+                        by_sig[sig]["last_decision"] = rule["last_decision"]
+            else:
+                by_sig[sig] = rule
+
+        collapsed = len(RouterAgent._learned_rules) - len(by_sig)
+        if collapsed > 0 or migrated > 0:
+            RouterAgent._learned_rules = list(by_sig.values())
+            logger.info(
+                f"ROUTER V7.0 load: {migrated} regles migrees, "
+                f"{collapsed} doublons collapses -> "
+                f"{len(RouterAgent._learned_rules)} regles uniques."
+            )
 
     @staticmethod
     def _save_learned_rules():
-        """Sauvegarde les regles apprises."""
+        """Sauvegarde les regles apprises.
+
+        V7.0 : l'eviction est faite dans on_council_rule_learned (tri par
+        weight desc). On sauvegarde la liste telle quelle. L'ancien
+        [-MAX:] FIFO aveugle aurait jete les plus ponderees car la liste
+        est maintenant triee weight desc au moment du save.
+        """
         os.makedirs(os.path.dirname(RouterAgent._LEARNED_RULES_FILE), exist_ok=True)
         with open(RouterAgent._LEARNED_RULES_FILE, "w", encoding="utf-8") as f:
-            json.dump(RouterAgent._learned_rules[-RouterAgent._MAX_LEARNED_RULES:],
+            json.dump(RouterAgent._learned_rules,
                       f, indent=2, ensure_ascii=False)
 
     @staticmethod
     def _check_learned_rules(mission_lower: str) -> Optional[str]:
-        """Consulte les regles apprises pour un raccourci direct."""
+        """Consulte les regles apprises pour un raccourci direct.
+
+        V7.0 (2026-04-20) : routage par renforcement memoriel. Au lieu
+        de retourner le premier match (FIFO aveugle), on scanne TOUS les
+        matches et on retourne l'agent de la regle la plus ponderee.
+        Plus un Parlement a renforce un routage (repetition = weight
+        croissant), plus ce routage gagne face aux concurrents.
+        """
         RouterAgent._load_learned_rules()
         mission_norm = RouterAgent._normalize(mission_lower)
+        matches = []
         for rule in RouterAgent._learned_rules:
-            keywords = rule.get("keywords", [])
-            for kw in keywords:
+            for kw in rule.get("keywords", []):
                 if kw in mission_norm and len(kw) >= 4:
-                    return rule.get("agent", "strategist")
-        return None
+                    matches.append(rule)
+                    break  # 1 match par regle suffit
+        if not matches:
+            return None
+        # Selection : weight descendant, puis last_seen descendant (recence)
+        winner = max(matches,
+                     key=lambda r: (r.get("weight", 1), r.get("last_seen", 0)))
+        return winner.get("agent", "strategist")
 
     @staticmethod
     async def on_council_rule_learned(event: dict):
         """COUNCIL_RULE_LEARNED : compiler la deliberation en regle directe.
 
-        Chunking SOAR : le Council a resolu un probleme — on extrait les
-        mots-cles de la mission et l'agent qui a ete le plus pertinent,
-        pour court-circuiter la deliberation la prochaine fois.
+        V7.0 (2026-04-20) : Filtre Mnemonique.
+          - Deduplication ponderee : meme signature de keywords -> weight++
+            (renforcement Hebbien au lieu d'une nouvelle ligne).
+          - Nettoyage semantique : _INFRA_STOPWORDS filtre les mots
+            d'enrobage systeme (debat, autonome, promethee, ressent...)
+            qui polluaient les keywords des regles pre-V7.
+          - Persistance de la decision : le champ `decision` du Council
+            est stocke dans la regle (droppé avant V7.0) pour future
+            exploitation par le Grimoire ou d'autres organes.
         """
         mission = event.get("mission", "")
-        decision = event.get("decision", "")
+        decision = event.get("decision", "")       # V7.0 : on persiste
         participants = event.get("participants", [])
         if not mission or not participants:
             return
 
-        # Extraire les mots-cles de la mission (mots > 3 chars, pas stopwords)
-        _stopwords = {"pour", "dans", "avec", "cette", "notre", "projet", "comment",
-                      "faire", "faut", "mode", "veille", "peut", "doit", "quel"}
-        words = RouterAgent._normalize(mission.lower()).split()
-        keywords = [w for w in words if len(w) >= 4 and w not in _stopwords][:5]
+        # V7.0 : nettoyage semantique. Strip des crochets/ponctuation
+        # d'encadrement AVANT filtrage stopwords (evite "[debat" comme keyword).
+        raw = RouterAgent._normalize(mission.lower())
+        words = [w.strip("[](),.:;-—'\"") for w in raw.split()]
+        keywords = [w for w in words
+                    if len(w) >= 4 and w not in _ALL_STOPWORDS][:5]
 
         if not keywords:
             return
 
-        # L'agent principal = premier participant (souvent le plus pertinent)
+        signature = _keyword_signature(keywords)
         agent = participants[0] if participants else "strategist"
 
-        rule = {
-            "mission_preview": mission[:100],
-            "keywords": keywords,
-            "agent": agent,
-            "source": "council_chunking",
-        }
-
         RouterAgent._load_learned_rules()
-        RouterAgent._learned_rules.append(rule)
-        # FIFO
+
+        # V7.0 : deduplication par signature.
+        existing = None
+        for rule in RouterAgent._learned_rules:
+            if rule.get("signature") == signature:
+                existing = rule
+                break
+
+        now = time.time()
+        if existing is not None:
+            # Renforcement Hebbien : incrementer le poids
+            existing["weight"] = existing.get("weight", 1) + 1
+            existing["last_seen"] = now
+            if decision:
+                existing["last_decision"] = decision[:500]
+            logger.info(
+                f"🧠 ROUTER CHUNKING: renforcement [{', '.join(keywords)}] -> "
+                f"{existing['agent']} (weight={existing['weight']})"
+            )
+        else:
+            rule = {
+                "signature": signature,
+                "mission_preview": mission[:100],
+                "keywords": keywords,
+                "agent": agent,
+                "source": "council_chunking",
+                "weight": 1,
+                "created_at": now,
+                "last_seen": now,
+                "last_decision": decision[:500] if decision else "",
+            }
+            RouterAgent._learned_rules.append(rule)
+            logger.info(
+                f"🧠 ROUTER CHUNKING: regle apprise [{', '.join(keywords)}] -> "
+                f"{agent} (sig={signature[:8]})"
+            )
+
+        # V7.0 eviction intelligente : au depassement MAX, on garde les
+        # plus lourdes et les plus recentes (tri weight desc, last_seen desc).
+        # Finis le FIFO aveugle qui jetait les fondations les plus renforcees.
         if len(RouterAgent._learned_rules) > RouterAgent._MAX_LEARNED_RULES:
-            RouterAgent._learned_rules = RouterAgent._learned_rules[-RouterAgent._MAX_LEARNED_RULES:]
+            RouterAgent._learned_rules.sort(
+                key=lambda r: (r.get("weight", 1), r.get("last_seen", 0)),
+                reverse=True
+            )
+            RouterAgent._learned_rules = RouterAgent._learned_rules[
+                :RouterAgent._MAX_LEARNED_RULES
+            ]
+
         RouterAgent._save_learned_rules()
-        logger.info(f"🧠 ROUTER CHUNKING: Regle apprise [{', '.join(keywords)}] -> {agent}")
 
     @staticmethod
     def _get_grimoire_slugs() -> list:
