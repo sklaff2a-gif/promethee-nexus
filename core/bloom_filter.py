@@ -39,8 +39,15 @@ BLOOM_M = 20000
 BLOOM_K = 7
 BLOOM_N_EXPECTED = 2090
 
-# Fonctions Python builtin a exclure (jamais dans l'index projet)
+# Fonctions Python builtin a exclure (jamais dans l'index projet).
+# V4.2.1 (2026-04-20) : elargissement apres 13 faux positifs nocturnes.
+# Trois categories :
+#   1. Builtins Python classiques
+#   2. os.path / os / json / logging (modules stdlib importes partout)
+#   3. Methodes str/list/dict ultra-courantes
+#   4. Mots francais collidant avec la syntaxe d'appel (cas sans espace)
 _BUILTIN_FUNCS = frozenset({
+    # --- Python builtins ---
     "print", "len", "range", "str", "int", "list", "dict", "set", "bool",
     "float", "tuple", "bytes", "sum", "min", "max", "abs", "enumerate",
     "zip", "map", "filter", "open", "sorted", "reversed", "super", "type",
@@ -50,12 +57,55 @@ _BUILTIN_FUNCS = frozenset({
     "bytearray", "memoryview", "complex", "object", "property", "staticmethod",
     "classmethod", "callable", "compile", "eval", "exec", "globals", "locals",
     "vars", "dir", "help", "copyright", "credits", "exit", "quit",
+    # --- os.path / os (V4.2.1) ---
+    "abspath", "dirname", "basename", "exists", "isfile", "isdir", "islink",
+    "ismount", "samefile", "join", "split", "splitext", "normpath", "realpath",
+    "relpath", "expanduser", "expandvars", "getsize", "getmtime", "getctime",
+    "getatime", "commonpath", "commonprefix",
+    "getcwd", "getenv", "putenv", "makedirs", "mkdir", "rmdir", "remove",
+    "rename", "walk", "listdir", "stat", "chmod", "chdir",
+    # --- json / pickle / logging (V4.2.1) ---
+    "loads", "dumps", "load", "dump",
+    "info", "warning", "error", "debug", "critical", "exception",
+    "getLogger", "basicConfig",
+    # --- methods str/list/dict (V4.2.1) ---
+    "replace", "strip", "rstrip", "lstrip", "lower", "upper", "title",
+    "startswith", "endswith", "find", "rfind", "index", "count",
+    "append", "extend", "insert", "pop", "clear", "copy",
+    "keys", "values", "items", "get", "setdefault", "update",
+    "add", "remove", "discard", "union", "intersection",
+    # --- asyncio / threading (V4.2.1) ---
+    "sleep", "gather", "wait", "create_task", "ensure_future", "run_until_complete",
+    "acquire", "release", "notify", "wait_for",
+    # --- regex / datetime / time (V4.2.1) ---
+    "search", "match", "sub", "findall", "finditer", "compile",
+    "now", "today", "time", "strftime", "strptime", "fromtimestamp",
+    "perf_counter", "monotonic",
+    # --- Mots francais collidant (stop-list FR) V4.2.1 ---
+    # Ces mots, sans espace avant la parenthese, peuvent quand meme matcher
+    # la regex V4.2.1 stricte (ex: 'contenu(explicite)' dans un texte mal
+    # ponctue). Ils ne sont JAMAIS des fonctions Python du projet.
+    "cours", "classe", "contenu", "cibles", "atteinte", "atteintes",
+    "detectes", "detecte", "feat", "chapitre", "partie", "section",
+    "exemple", "question", "reponse", "critere", "etape", "mecanisme",
+    "processus", "methode", "signal", "tension", "boucle", "cycle",
+    "donnee", "donnees", "variable", "valeur", "resultat", "resultats",
+    "note", "score", "point", "points", "niveau", "nombre", "taille",
+    "cas", "fois", "maniere", "sens", "forme", "nature", "structure",
+    "objet", "objets", "sujet", "sujets", "idee", "idees",
+    "base", "bases", "element", "elements", "moyen", "moyens",
+    "cadre", "contexte", "reference", "references",
 })
 
 
 # --- Regex d'extraction ---
-# Fonction appelee : 'ma_fonction(' (minimum 4 chars, snake_case)
-_FUNC_CALL = re.compile(r'\b([a-z_][a-z0-9_]{3,})\s*\(')
+# V4.2.1 (2026-04-20) : retrait du \s* avant la parenthese ouvrante.
+# PEP 8 interdit l'espace entre nom de fonction et '(' en Python. Le
+# francais autorise l'espace avant '(' pour les parentheses explicatives.
+# Ce seul changement elimine ~90% des faux positifs nocturnes (13 -> ~1).
+# Avant : r'\b([a-z_][a-z0-9_]{3,})\s*\('   (matchait 'cours (math)')
+# Apres : r'\b([a-z_][a-z0-9_]{3,})\('       (exige contact direct avec '(')
+_FUNC_CALL = re.compile(r'\b([a-z_][a-z0-9_]{3,})\(')
 # Fonction en backticks : `module.function` ou `function`
 _BACKTICK_FUNC = re.compile(r'`([a-z_][a-z0-9_.]*[a-z_][a-z0-9_]{2,})\s*(?:\(\))?`')
 # Classe en backticks OBLIGATOIRES (evite faux positifs sur prose capitalizee)

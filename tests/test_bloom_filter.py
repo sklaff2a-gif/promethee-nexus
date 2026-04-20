@@ -323,3 +323,112 @@ class TestRealProject:
         )
         assert veto is not None
         assert "magic_rainbow_unicorn_v99" in veto.response
+
+
+# ============================================================
+# V4.2.1 - Fix faux positifs nocturnes (2026-04-20)
+# ============================================================
+
+class TestV421FrenchCollisions:
+    """Verifie que les mots francais suivis d'une parenthese explicative
+    (ex: 'le cours (maths)') ne declenchent PLUS un faux veto Bloom.
+
+    Pattern detecte dans les logs nocturnes du 2026-04-20 : 13 faux
+    positifs ('cours', 'classe', 'contenu', 'cibles', 'atteinte', etc.)
+    ont sabre la generation LLM et fait chuter les notes scolaires.
+    """
+
+    @pytest.fixture
+    def built_manager(self):
+        BloomIndexManager.reset_singleton()
+        m = BloomIndexManager()
+        # Index minimal pour ces tests
+        m.functions.add("verify_code_review")
+        m.classes.add("BaseAgent")
+        m.files.add("core/base_agent.py")
+        m._built = True
+        return m
+
+    def test_cours_with_space_no_veto(self, built_manager):
+        """'le cours (maths)' avec espace -> regex stricte ne matche pas."""
+        veto = built_manager.check_prompt(
+            "test", "Voici le cours (maths) sur les fractions."
+        )
+        assert veto is None
+
+    def test_classe_with_space_no_veto(self, built_manager):
+        """'classe (exemple)' avec espace -> pas de veto."""
+        veto = built_manager.check_prompt(
+            "test", "Il s'agit d'une classe (ne pas confondre avec Class)."
+        )
+        assert veto is None
+
+    def test_contenu_with_space_no_veto(self, built_manager):
+        """'le contenu (complet)' avec espace -> pas de veto."""
+        veto = built_manager.check_prompt(
+            "test", "Le contenu (complet) du document est disponible."
+        )
+        assert veto is None
+
+    def test_detectes_verbe_francais_no_veto(self, built_manager):
+        """'detectes' en verbe francais suivi d'espace et parenthese."""
+        veto = built_manager.check_prompt(
+            "test", "Si tu detectes (une erreur) signale-la."
+        )
+        assert veto is None
+
+    def test_french_without_space_stoplist_absorbs(self, built_manager):
+        """'contenu(explicite)' sans espace : matche le regex mais absorbe
+        par la stop-list FR dans _BUILTIN_FUNCS."""
+        veto = built_manager.check_prompt(
+            "test", "Voici le contenu(pertinent)."
+        )
+        # Sans espace, matche la regex V4.2.1. MAIS 'contenu' est dans
+        # _BUILTIN_FUNCS (stop-list FR), donc extract_references ne le retient pas.
+        refs = built_manager.extract_references("Voici le contenu(pertinent).")
+        assert "contenu" not in refs["functions"]
+        assert veto is None
+
+    def test_abspath_no_veto(self, built_manager):
+        """os.path.abspath ne doit plus faire veto (ajoute dans _BUILTIN_FUNCS V4.2.1)."""
+        veto = built_manager.check_prompt(
+            "test", "Utilise abspath(path) pour normaliser."
+        )
+        # abspath est maintenant dans _BUILTIN_FUNCS -> skip par extract
+        refs = built_manager.extract_references("Utilise abspath(path) pour normaliser.")
+        assert "abspath" not in refs["functions"]
+        assert veto is None
+
+    def test_dirname_basename_exists_no_veto(self, built_manager):
+        """Les fonctions os.path courantes passent."""
+        for fn in ["dirname", "basename", "exists", "isfile", "join", "split", "splitext"]:
+            refs = built_manager.extract_references(f"Utilise {fn}(path) ici.")
+            assert fn not in refs["functions"], f"{fn} devrait etre en builtin V4.2.1"
+
+    def test_str_methods_no_veto(self, built_manager):
+        """Methods str courantes (replace, strip, lower) absorbes."""
+        for m in ["replace", "strip", "lower", "upper", "startswith", "endswith"]:
+            refs = built_manager.extract_references(f"s.{m}(x)")
+            assert m not in refs["functions"], f"{m} devrait etre en builtin V4.2.1"
+
+    def test_json_logging_no_veto(self, built_manager):
+        """json.loads/dumps, logger.info/warning absorbes."""
+        for m in ["loads", "dumps", "info", "warning", "error", "debug"]:
+            refs = built_manager.extract_references(f"json.{m}(data)")
+            assert m not in refs["functions"], f"{m} devrait etre en builtin V4.2.1"
+
+    def test_real_fake_still_vetoed(self, built_manager):
+        """Regression : les vraies hallucinations sont toujours vetoed."""
+        veto = built_manager.check_prompt(
+            "test", "Appelle fabricated_magic_xyz() immediatement."
+        )
+        assert veto is not None
+
+    def test_strict_regex_requires_no_space_before_paren(self, built_manager):
+        """La regex V4.2.1 exige '(' colle au nom (PEP 8 Python)."""
+        # Avec espace : matche pas -> pas extracted
+        refs_space = built_manager.extract_references("ma_fonction (args)")
+        # Sans espace : matche -> extracted (peut veto si absent index)
+        refs_nospace = built_manager.extract_references("ma_fonction(args)")
+        assert "ma_fonction" not in refs_space["functions"]
+        assert "ma_fonction" in refs_nospace["functions"]
