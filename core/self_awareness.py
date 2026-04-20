@@ -111,6 +111,12 @@ class SelfAwarenessEngine:
         # exact (ex: error_streak >= 7). get_strategic_mode applique un sas
         # : entree stricte, sortie seulement sous un seuil plus bas.
         self._last_strategic_mode: str = "standard"
+        # V8.0 (Phase 11 - 2026-04-20) : alignement budget / mode strategique.
+        # Flag leve par AUTONOMY_BUDGET_EXHAUSTED, abaisse par
+        # AUTONOMY_BUDGET_RESTORED (NAP productif ou reset quotidien).
+        # Sortie causale sans TTL : le systeme sort de famine parce que
+        # le budget a ete restaure, pas parce que du temps s'est ecoule.
+        self._budget_exhausted_today: bool = False
         self._load()
 
     # --- Init & Reset ---
@@ -125,6 +131,7 @@ class SelfAwarenessEngine:
         self._subscribed = False
         self._initialized = False
         self._last_strategic_mode = "standard"
+        self._budget_exhausted_today = False
         self._mission_count = 0
         self._mission_success = 0
         self._council_count = 0
@@ -168,6 +175,9 @@ class SelfAwarenessEngine:
         bus.subscribe("OBJECTIVE_COMPLETED", self._on_objective_completed)
         bus.subscribe("OBJECTIVE_FAILED", self._on_objective_failed)
         bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
+        # V8.0 (Phase 11) : alignement budget / mode strategique
+        bus.subscribe("AUTONOMY_BUDGET_EXHAUSTED", self._on_budget_exhausted)
+        bus.subscribe("AUTONOMY_BUDGET_RESTORED", self._on_budget_restored)
         bus.subscribe("DOPAMINE_STATE", self._on_dopamine_state)
         bus.subscribe("INNER_VOICE_IDENTITY", self._on_inner_voice_identity)
         bus.subscribe("INNER_VOICE_STATE", self._on_inner_voice_state)
@@ -1342,6 +1352,29 @@ class SelfAwarenessEngine:
         self._meta_reflect_ts = now
         return result
 
+    async def _on_budget_exhausted(self, event: dict):
+        """V8.0 (Phase 11) : reception de la famine metabolique depuis
+        autonomy_engine. Force compute_strategic_mode en 'survie' jusqu'a
+        reception de AUTONOMY_BUDGET_RESTORED."""
+        self._budget_exhausted_today = True
+        logger.info(
+            f"[SELF_AWARENESS] Budget epuise recu -> mode strategique force "
+            f"en 'survie' (used={event.get('daily_budget_used')}pt, "
+            f"{event.get('daily_count')} routines)."
+        )
+
+    async def _on_budget_restored(self, event: dict):
+        """V8.0 (Phase 11) : liberation de la famine (NAP productif ou
+        daily reset). Retire le forcage 'survie'. L'hysteresis V5.1
+        decidera si le mode doit rester survie (autres conditions) ou
+        sortir vers consolidation/standard/exploration."""
+        self._budget_exhausted_today = False
+        reason = event.get("reason", "?")
+        logger.info(
+            f"[SELF_AWARENESS] Budget restaure ({reason}) -> liberation "
+            f"du forcage 'survie'. compute_strategic_mode libre."
+        )
+
     def compute_strategic_mode(self) -> str:
         """Determine le mode strategique global (calcul brut, zero LLM).
 
@@ -1350,7 +1383,16 @@ class SelfAwarenessEngine:
         preferer get_strategic_mode() qui applique une hysteresis
         anti-flickering. Cette methode reste publique pour les tests
         deterministes et les appels legacy (soliloque).
+
+        V8.0 (Phase 11) : si le budget est epuise, force 'survie' AVANT
+        toute autre condition. Un Promethee sans jetons API n'a aucun
+        sens en exploration/standard — il doit se concentrer sur la
+        survie cognitive (tâches 0-LLM, attendre le refill).
         """
+        # V8.0 : famine budgetaire = survie non-negociable
+        if self._budget_exhausted_today:
+            return "survie"
+
         reflection = self.meta_reflect()
         latest = self._snapshots[-1] if self._snapshots else {}
         perf = latest.get("performance", {})

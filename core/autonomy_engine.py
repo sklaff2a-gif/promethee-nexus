@@ -1286,6 +1286,8 @@ class AutonomyEngine:
             self._curiosity_explored_tonight = False
             self._nap_refund_used_today = False  # Nouveau second souffle disponible
             self._forced_failure_counts.clear()  # Reset blacklist pour la nouvelle journee
+            # V8.0 : si on etait en famine, signaler la restauration par reset
+            self._broadcast_budget_restored("daily_reset")
             self._persist_state()
 
             # Bilan et seed objectifs quotidiens
@@ -1298,14 +1300,72 @@ class AutonomyEngine:
 
         if self.daily_count >= MAX_DAILY_ROUTINES:
             logger.warning(f"[AUTONOMY] Budget quotidien atteint ({MAX_DAILY_ROUTINES} routines). Pause jusqu'à demain.")
+            self._broadcast_budget_exhausted()   # V8.0
             return "exhausted"
         if self.daily_budget_used >= DAILY_BUDGET_POINTS:
             logger.warning(f"[AUTONOMY] Budget points épuisé ({self.daily_budget_used}/{DAILY_BUDGET_POINTS}). Pause jusqu'à demain.")
+            self._broadcast_budget_exhausted()   # V8.0
             return "exhausted"
         if self.daily_budget_used >= DAILY_BUDGET_POINTS - BUDGET_RESERVE_POINTS:
             logger.info(f"[AUTONOMY] Budget en réserve ({self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt). Mode dégradé.")
             return "reserve"
         return "full"
+
+    # V8.0 (Phase 11 - 2026-04-20) : signalisation budget exhausted/restored
+    # ----------------------------------------------------------------------
+    # Avant V8 : le budget etait orthogonal au mode strategique de
+    # self_awareness -> un Promethee sans jetons API pouvait rester en mode
+    # "exploration" (absurde). V8 couple les deux via le bus evenementiel :
+    # une seule famine = un seul broadcast par jour pour eviter le spam.
+    _budget_exhausted_broadcast_today: bool = False
+
+    def _broadcast_budget_exhausted(self):
+        """V8.0 : signale la famine metabolique a self_awareness pour
+        forcer le mode strategique en 'survie'. Un seul broadcast par
+        jour (reset au changement de date)."""
+        if self._budget_exhausted_broadcast_today:
+            return
+        self._budget_exhausted_broadcast_today = True
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            loop.create_task(bus.publish("AUTONOMY_BUDGET_EXHAUSTED", {
+                "daily_budget_used": self.daily_budget_used,
+                "daily_count": self.daily_count,
+                "timestamp": time.time(),
+            }))
+            logger.info(
+                f"[AUTONOMY] BUDGET_EXHAUSTED broadcast -> self_awareness "
+                f"({self.daily_budget_used}/{DAILY_BUDGET_POINTS}pt, "
+                f"{self.daily_count}/{MAX_DAILY_ROUTINES} routines)"
+            )
+        except Exception:
+            pass
+
+    def _broadcast_budget_restored(self, reason: str):
+        """V8.0 : signale la sortie de famine (NAP productif ou daily
+        reset) pour liberer le forcage 'survie' dans self_awareness.
+
+        Causal, sans TTL magique : le systeme sort de famine parce que
+        le budget a ete restaure, pas parce que 24h se sont ecoulees.
+        """
+        if not self._budget_exhausted_broadcast_today:
+            return  # Pas en famine active, rien a liberer
+        self._budget_exhausted_broadcast_today = False
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            loop.create_task(bus.publish("AUTONOMY_BUDGET_RESTORED", {
+                "reason": reason,
+                "daily_budget_used": self.daily_budget_used,
+                "timestamp": time.time(),
+            }))
+            logger.info(
+                f"[AUTONOMY] BUDGET_RESTORED broadcast ({reason}) -> "
+                f"self_awareness peut relacher 'survie'."
+            )
+        except Exception:
+            pass
 
     def reset_timer(self, event):
         self.last_user_interaction = time.time()
@@ -5102,7 +5162,23 @@ class AutonomyEngine:
         return True
 
     _NAP_BUDGET_REFUND = 20  # Second souffle post-sieste (points)
+    _NAP_MIN_PRODUCTIVE_TASKS = 1  # V8.0 (2026-04-20) : seuil meritocratique
     _nap_refund_used_today: bool = False  # 1 seul refund par jour
+
+    def _nap_was_productive(self) -> bool:
+        """V8.0 (Phase 11) : Sommeil meritocratique.
+
+        Verifie si la sieste a produit au moins _NAP_MIN_PRODUCTIVE_TASKS
+        tache reussie. Toutes les entrees dans _nap_tasks_done sont deja
+        conditionnees sur success=True en amont (DREAM si dream_report !='',
+        circadian task si result.success, LORA si success). Donc len()
+        suffit comme proxy de productivite.
+
+        Sans ce filtre (pre-V8), le nap_refund etait inconditionnel -> le
+        TD-learning aurait pu apprendre "dormir = gagner budget sans
+        effort" (narcolepsie apprise).
+        """
+        return len(self._nap_tasks_done) >= self._NAP_MIN_PRODUCTIVE_TASKS
 
     async def exit_nap(self):
         """Désactive le mode sieste, génère un résumé + restauration énergie."""
@@ -5118,11 +5194,23 @@ class AutonomyEngine:
         # === RESTAURATION POST-SIESTE ===
         restored = []
 
-        # 1. Second souffle budget (1x/jour max)
-        if not self._nap_refund_used_today and hasattr(self, 'daily_budget_used'):
+        # 1. Second souffle budget (V8.0 : conditionne a la productivite
+        #    de la sieste pour eviter la narcolepsie apprise par TD-learning).
+        if (not self._nap_refund_used_today
+                and hasattr(self, 'daily_budget_used')
+                and self._nap_was_productive()):
             self.daily_budget_used = max(0, self.daily_budget_used - self._NAP_BUDGET_REFUND)
             self._nap_refund_used_today = True
-            restored.append(f"budget +{self._NAP_BUDGET_REFUND}pt")
+            restored.append(f"budget +{self._NAP_BUDGET_REFUND}pt (merite)")
+            # V8.0 : si on etait en famine budgetaire, signaler la sortie
+            # pour que self_awareness relache le forcage 'survie'.
+            self._broadcast_budget_restored("nap_productive")
+        elif not self._nap_refund_used_today:
+            logger.info(
+                f"[AUTONOMY] Sieste non productive ({len(self._nap_tasks_done)} taches) "
+                f"-> refund budget REFUSE. Pas de narcolepsie apprise."
+            )
+            restored.append("refund refuse (sieste sterile)")
 
         # 2. Dopamine boost
         try:
