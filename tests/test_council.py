@@ -245,7 +245,9 @@ class TestCouncilRun:
 
     @pytest.mark.asyncio
     async def test_prompt_tour_2_autorise_consensus(self):
-        """Le prompt du tour 2+ autorise le consensus."""
+        """V6.0 : le prompt du tour MIN+ autorise le consensus via VOTE: POUR.
+        Avant V6.0 le prompt mentionnait "CONSENSUS" directement ; depuis la
+        Reforme 2, le format structure est "VOTE: POUR" / "VOTE: CONTRE"."""
         agents = {
             "coder": self._make_mock_agent(),
             "security": self._make_mock_agent(),
@@ -254,7 +256,9 @@ class TestCouncilRun:
         prompt = council._build_prompt("coder", MIN_ROUNDS_BEFORE_CONSENSUS)
 
         assert "CRITIQUE OBLIGATOIRE" not in prompt
-        assert "CONSENSUS" in prompt  # Mentionne qu'on PEUT donner CONSENSUS
+        # Le format de vote structure est present
+        assert "VOTE:" in prompt
+        assert "POUR" in prompt
 
     @pytest.mark.asyncio
     async def test_prompt_contient_contexte_projet(self):
@@ -275,11 +279,18 @@ class TestCouncilRun:
         assert MIN_ROUNDS_BEFORE_CONSENSUS == 3
 
     @pytest.mark.asyncio
-    async def test_consensus_partiel_ne_suffit_pas(self):
-        """Un seul agent en consensus ne suffit pas, il faut tous."""
+    async def test_consensus_partiel_suffit_v6(self):
+        """V6.0 Reforme 2 : Majorite simple - 1 vote POUR + President non-ABORT
+        suffit desormais a atteindre le consensus.
+
+        Avant V6.0 : quorum 2/3 -> 1 agent POUR / 1 agent CONTRE = max_rounds.
+        Apres V6.0 : 1 seul POUR + pas d'ABORT president = consensus. Audit
+        Phase 6 : 0% de consensus en 10 jours a cause du quorum 2/3 infaisable
+        avec des LLM 8B qui hallucinent leurs propres marqueurs.
+        """
         _S = TestConsensus._SUBSTANCE
         coder_responses = [f"CONSENSUS : {_S}"] * 3
-        security_responses = ["Non, je refuse."] * 3
+        security_responses = ["Je reste en desaccord sur plusieurs points."] * 3
 
         agents = {
             "coder": self._make_mock_agent(coder_responses),
@@ -288,7 +299,8 @@ class TestCouncilRun:
         council = Council(agents, ["coder", "security"], "test", max_rounds=3)
         result = await council.run()
 
-        assert result["status"] == "max_rounds"
+        # Nouveau comportement : 1 vote POUR + pas d'ABORT -> consensus
+        assert result["status"] == "consensus"
 
     @pytest.mark.asyncio
     async def test_agent_manquant_retourne_error(self):

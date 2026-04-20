@@ -249,7 +249,11 @@ def _strip_markdown_prefix(text: str) -> str:
 
 def _is_consensus(text: str) -> bool:
     """Vérifie que la réponse COMMENCE par un marqueur de consensus (tolère le markdown)
-    ET que le contenu après le marqueur est substantiel (>= MIN_CONSENSUS_CONTENT_LENGTH chars)."""
+    ET que le contenu après le marqueur est substantiel (>= MIN_CONSENSUS_CONTENT_LENGTH chars).
+
+    V6.0 (2026-04-20) : conserve pour backward-compat. Le nouveau parseur
+    est _is_consensus_v2 qui est utilise dans Council.run().
+    """
     cleaned = _strip_markdown_prefix(text)
     cleaned_upper = cleaned.upper()
     for marker in CONSENSUS_MARKERS:
@@ -260,6 +264,75 @@ def _is_consensus(text: str) -> bool:
                 return False  # Shallow consensus — contenu insuffisant
             return True
     return False
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V6.0 (Phase 7 Reforme 2) : Le Vote Flou — parser robuste anti-8B
+# ═══════════════════════════════════════════════════════════════════════
+# Audit Phase 6 : 0% de consensus en 10 jours. Cause : les LLM 8B locaux
+# font des fautes de frappe sur leurs marqueurs (CONSENU, CONSENSS) et
+# l'ancien _is_consensus exigeait un startswith strict sur une liste
+# fermee. De plus le quorum 2/3 rendait le vote impossible en pratique.
+#
+# Strategie 3 couches :
+#  Couche 1 - contrainte de forme : MAJUSCULES en debut de ligne avec
+#             terminateur. Elimine consequence, consentement, accordeon.
+#  Couche 2 - fautes canoniques : stems listes explicitement (pas de
+#             Levenshtein qui matcherait consentement a distance 2).
+#  Couche 3 - vote structure VOTE:/VERDICT: en debut de reponse (case
+#             insensible car c'est un format commande).
+
+# Stems canoniques + variantes observees dans les logs (47 occurrences
+# CONSENU sur 7 jours). Case-sensitive : majuscules requises.
+# APPROUV[ÉE]E? -> APPROUVE / APPROUVÉ / APPROUVEE / APPROUVÉE.
+_CONSENSUS_REGEX_STRICT = re.compile(
+    r'(?:^|\n)\s*'                              # debut de ligne obligatoire
+    r'(?:CONSENSUS|CONSENSU|CONSENUS|CONSENU|'  # racines canoniques
+    r'CONSENSS|APPROUV[EÉ]E?|'                  # APPROUVE / APPROUVÉ / APPROUVEE
+    r'ACCORD\s+FINAL|D[\'’]ACCORD)'
+    r'(?=\s*[\n.:,!—-]|$)',                     # terminateur (pas en milieu de phrase)
+    re.MULTILINE                                 # CASE-SENSITIVE
+)
+
+# Format commande pour prompts structures. Case-insensitive car le LLM
+# peut ecrire "Vote: pour" ou "VERDICT : POUR" indifferamment.
+_VOTE_LINE_FLEX = re.compile(
+    r'^\s*(?:VOTE|VERDICT|POSITION)\s*[:=]\s*'
+    r'(?:POUR|OUI|APPROUV[EÉ]E?)\b',
+    re.MULTILINE | re.IGNORECASE
+)
+
+# Detection d'un vote NEGATIF explicite : invalide le consensus meme si
+# un marqueur positif apparait ailleurs dans le texte.
+_VOTE_NEGATIVE = re.compile(
+    r'^\s*(?:VOTE|VERDICT|POSITION)\s*[:=]\s*'
+    r'(?:CONTRE|NON|REJETE|REFUS|OPPOSE)\b',
+    re.MULTILINE | re.IGNORECASE
+)
+
+
+def _is_consensus_v2(text: str) -> bool:
+    """V6.0 : parser robuste tolerant aux fautes 8B, refractaire aux
+    faux positifs du vocabulaire courant (consequence, consentement,
+    accordeon).
+
+    3 couches :
+      1. Filtre longueur minimale (MIN_CONSENSUS_CONTENT_LENGTH)
+      2. Rejet explicite si vote negatif en debut de texte
+      3. Match positif via VOTE:/VERDICT: OU marqueur majuscule en
+         debut de ligne avec terminateur ponctuation
+    """
+    if not text or len(text) < MIN_CONSENSUS_CONTENT_LENGTH:
+        return False
+    # Retirer les prefixes markdown (## CONSENSUS, **CONSENSUS**, etc.)
+    # avant le match pour gerer les LLM locaux qui formatent en markdown.
+    cleaned = _strip_markdown_prefix(text)
+    # Rejet si vote negatif explicite
+    if _VOTE_NEGATIVE.search(cleaned):
+        return False
+    # Match positif (soit vote structure, soit marqueur majuscule)
+    return bool(_VOTE_LINE_FLEX.search(cleaned) or
+                _CONSENSUS_REGEX_STRICT.search(cleaned))
 
 
 def _parse_president_verdict(response: str) -> Dict[str, str]:
@@ -316,13 +389,49 @@ class Council:
                  mission: str, max_rounds: int = 5, enable_student: bool = True,
                  enable_advocate: bool = True):
         self.agents = agents
-        self.participants = participants
+        self.participants = list(participants)  # copie mutable
         self.mission = mission
         self.max_rounds = max_rounds
         self.enable_student = enable_student
         self.enable_advocate = enable_advocate
         self.council_id = str(uuid.uuid4())[:8]
         self.transcript: List[Dict[str, Any]] = []
+
+        # ─── Phase 7 Reforme 1 (2026-04-20) : Separation des pouvoirs ───
+        # Le President (architect) ne peut PAS etre participant, sinon il perd
+        # son role d'arbitre (cf. _evaluate_round qui skip l'evaluation si le
+        # president est dans self.participants).
+        #
+        # Audit Phase 6 : 89% des councils avaient architect dans les
+        # participants -> 0% de consensus sur 10 jours. Sans arbitre, pas de
+        # REDIRECT ni ABORT possible -> les debats tournent dans le vide.
+        _FALLBACK_PARTICIPANTS = ("evolution", "coder", "writer", "researcher",
+                                  "strategist", "formatter")
+        if PRESIDENT_AGENT_NAME in self.participants:
+            _original = list(self.participants)
+            self.participants = [p for p in self.participants
+                                 if p != PRESIDENT_AGENT_NAME]
+            for cand in _FALLBACK_PARTICIPANTS:
+                if cand in self.agents and cand not in self.participants:
+                    self.participants.append(cand)
+                    break
+            logger.info(
+                f"[COUNCIL {self.council_id}] Separation des pouvoirs : "
+                f"'{PRESIDENT_AGENT_NAME}' retire de {_original} -> "
+                f"{self.participants} (il reste President arbitre)."
+            )
+
+        # Securite : au moins 2 participants, sinon run() va rejeter.
+        # Si le filtre a laisse < 2, on complete avec des fallback dispos.
+        while len(self.participants) < 2:
+            added = False
+            for cand in _FALLBACK_PARTICIPANTS:
+                if cand in self.agents and cand not in self.participants:
+                    self.participants.append(cand)
+                    added = True
+                    break
+            if not added:
+                break  # agents epuises, laisser run() rejeter proprement
 
     def _build_student_contribution(self, round_num: int) -> str:
         """Construit la contribution de Prométhée-étudiant (déterministe, 0 LLM).
@@ -716,6 +825,9 @@ class Council:
             pass
 
         # Instructions différenciées selon le tour
+        # V6.0 Reforme 2 : format de vote structure en DEBUT de reponse.
+        # Les LLM 8B respectent beaucoup mieux les gabarits de debut que
+        # les consignes abstraites ou tardives.
         if current_round < MIN_ROUNDS_BEFORE_CONSENSUS:
             round_instructions = (
                 f"INSTRUCTIONS TOUR {current_round} (CRITIQUE OBLIGATOIRE) :\n"
@@ -724,15 +836,21 @@ class Council:
                 f"- Sois précis et technique : cite des fichiers, des fonctions, des cas limites.\n"
                 f"- Si la proposition mentionne des technologies que le projet n'utilise pas "
                 f"(Kubernetes, Docker, Kafka, blockchain, etc.), signale-le comme hors-périmètre.\n"
+                f"- FORMAT : commence obligatoirement ta reponse par une ligne "
+                f"`VOTE: CONTRE` suivie d'une ligne vide, puis ta critique.\n"
             )
         else:
             round_instructions = (
                 f"INSTRUCTIONS TOUR {current_round} :\n"
                 f"- Analyse les critiques des tours précédents.\n"
                 f"- Si toutes les critiques ont été adressées ET que la solution est concrète "
-                f"et applicable au projet, commence ta réponse par CONSENSUS.\n"
-                f"- Sinon, apporte de nouvelles critiques ou propositions.\n"
+                f"et applicable au projet, c'est le moment de voter POUR.\n"
+                f"- Sinon, apporte de nouvelles critiques ou propositions et vote CONTRE.\n"
                 f"- Rappel : une bonne solution est SIMPLE et cible des fichiers EXISTANTS.\n"
+                f"- FORMAT OBLIGATOIRE — commence par l'UNE de ces deux lignes :\n"
+                f"    VOTE: POUR      (si tu valides la solution actuelle)\n"
+                f"    VOTE: CONTRE    (si tu veux continuer le debat)\n"
+                f"  Puis une ligne vide, puis ta justification.\n"
             )
 
         # Structure projet réelle (anti-hallucination de fichiers)
@@ -911,6 +1029,67 @@ class Council:
             logger.warning(f"Council {self.council_id} — Erreur président: {e}")
             return {"verdict": "PERTINENT", "feedback": ""}
 
+    def _extract_partial_insight(self) -> Optional[Dict[str, Any]]:
+        """V6.0 Reforme 3 : extrait la valeur d'un debat max_rounds.
+
+        Retourne un dict avec :
+          - convergence_keywords : mots-cles presents chez >= 50% des agents
+          - divergence_by_agent : mots uniques a chaque agent (top 5 par agent)
+          - best_argument : meilleur argument (agent + score + extrait)
+        Ou None si moins de 2 contributions exploitables.
+        """
+        real_entries = [e for e in self.transcript
+                        if not e.get("is_student") and not e.get("is_advocate")]
+        if len(real_entries) < 2:
+            return None
+
+        # Grouper les mots-cles par agent (union sur tous ses tours)
+        agents_kw: Dict[str, set] = {}
+        for e in real_entries:
+            kw = _extract_keywords(e.get("content", ""), top_n=10)
+            agents_kw.setdefault(e["agent"], set()).update(kw)
+
+        if len(agents_kw) < 2:
+            return None
+
+        # Convergence : mots-cles presents chez >= 50% des agents
+        all_kw: set = set()
+        for kws in agents_kw.values():
+            all_kw |= kws
+        threshold = max(1, len(agents_kw) // 2)
+        convergence = sorted(
+            kw for kw in all_kw
+            if sum(1 for ks in agents_kw.values() if kw in ks) >= threshold
+        )[:10]
+
+        # Divergence : mots-cles propres a un seul agent (top 5/agent)
+        divergence: Dict[str, list] = {}
+        for agent, kws in agents_kw.items():
+            others_kw: set = set()
+            for other_agent, other_kws in agents_kw.items():
+                if other_agent != agent:
+                    others_kw |= other_kws
+            unique = kws - others_kw
+            if unique:
+                divergence[agent] = sorted(unique)[:5]
+
+        # Meilleur argument individuel
+        scored = [e for e in real_entries if e.get("score") is not None]
+        best = max(scored, key=lambda e: e.get("score", 0), default=None)
+        best_arg = None
+        if best:
+            best_arg = {
+                "agent": best.get("agent", ""),
+                "score": round(float(best.get("score", 0)), 2),
+                "excerpt": best.get("content", "")[:300],
+            }
+
+        return {
+            "convergence_keywords": convergence,
+            "divergence_by_agent": divergence,
+            "best_argument": best_arg,
+        }
+
     async def run(self) -> Dict[str, Any]:
         """Exécute le débat multi-tours."""
         # Validation : au moins 2 participants
@@ -1030,8 +1209,9 @@ class Council:
                     "confidence": arg_score["confidence"]
                 })
 
-                # Consensus ignoré avant MIN_ROUNDS_BEFORE_CONSENSUS
-                if round_num >= MIN_ROUNDS_BEFORE_CONSENSUS and _is_consensus(content):
+                # V6.0 : utilise _is_consensus_v2 (parser robuste 3 couches).
+                # Consensus ignore avant MIN_ROUNDS_BEFORE_CONSENSUS.
+                if round_num >= MIN_ROUNDS_BEFORE_CONSENSUS and _is_consensus_v2(content):
                     round_consensus_count += 1
 
             # --- Avocat du Diable (round 2+) ---
@@ -1068,10 +1248,20 @@ class Council:
             else:
                 president_feedback = ""
 
-            # Consensus = majorité qualifiée (>= 2/3 des participants)
-            quorum = max(2, (len(self.participants) * 2 + 2) // 3)  # ceil(2/3)
-            if round_consensus_count >= quorum:
+            # V6.0 Reforme 2 : Majorite simple validee par le President.
+            # Avant : quorum ceil(2/3) -> impossible avec 3 LLM 8B qui
+            # hallucinent individuellement. Maintenant : 1 marqueur clair
+            # + le President n'a pas emis ABORT au dernier round suffit.
+            # Le President (architect, retire des participants par
+            # Reforme 1) conserve son droit de veto via ABORT.
+            if (round_consensus_count >= 1 and
+                    verdict.get("verdict") != "ABORT"):
                 consensus_reached = True
+                logger.info(
+                    f"[COUNCIL {self.council_id}] Consensus atteint au tour "
+                    f"{round_num} : {round_consensus_count} vote(s) POUR, "
+                    f"President={verdict.get('verdict', 'PERTINENT')}."
+                )
                 break
 
         # Résumé final
@@ -1107,6 +1297,38 @@ class Council:
                 "participants": self.participants,
                 "rounds": rounds_used,
             })
+
+        # V6.0 Reforme 3 : capturer la valeur partielle d'un max_rounds.
+        # Un debat de N tours sans consensus formel contient quand meme
+        # des signaux exploitables (convergences partielles, divergences
+        # structurelles, meilleur argument individuel). Au lieu de jeter,
+        # on extrait et on journalise pour alimenter les futurs debats.
+        if status == "max_rounds" and rounds_used >= 2:
+            partial = self._extract_partial_insight()
+            if partial:
+                await bus.publish("COUNCIL_PARTIAL_INSIGHT", {
+                    "council_id": self.council_id,
+                    "mission": self.mission[:200],
+                    "rounds_used": rounds_used,
+                    **partial,
+                })
+                logger.info(
+                    f"[COUNCIL {self.council_id}] Partial insight : "
+                    f"{len(partial.get('convergence_keywords', []))} convergences, "
+                    f"{len(partial.get('divergence_by_agent', {}))} divergences."
+                )
+                # Journaliser dans strategic_journal (appel direct, pas bus)
+                try:
+                    from core.strategic_journal import journal as strat_journal
+                    if hasattr(strat_journal, "append_partial_insight"):
+                        strat_journal.append_partial_insight(
+                            mission=self.mission[:200],
+                            rounds_used=rounds_used,
+                            partial=partial,
+                            participants=self.participants,
+                        )
+                except Exception as e:
+                    logger.warning(f"[COUNCIL] Journal partial_insight echoue: {e}")
 
         # Publication AGENT_RESPONSE pour le dialogue principal
         await bus.publish("AGENT_RESPONSE", {

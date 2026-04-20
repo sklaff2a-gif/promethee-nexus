@@ -104,6 +104,40 @@ class StrategicJournal:
         self._save()
         logger.info(f"[JOURNAL] +Council: {subject[:60]}")
 
+    def append_partial_insight(self, mission: str, rounds_used: int,
+                                partial: dict, participants: list):
+        """V6.0 Reforme 3 (2026-04-20) : archive la valeur extraite d'un
+        debat max_rounds (sans consensus). Les convergences partielles et
+        les divergences structurelles sont conservees pour alimenter les
+        debats futurs (via get_recent_context).
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        parts = [
+            f"### {now} — Partial Insight (max_rounds)",
+            f"**Participants**: {', '.join(participants)}",
+            f"**Sujet**: {mission[:200]}",
+            f"**Tours utilises**: {rounds_used}",
+        ]
+        convergence = partial.get("convergence_keywords") or []
+        if convergence:
+            parts.append(f"**Convergences**: {', '.join(convergence)}")
+        divergence = partial.get("divergence_by_agent") or {}
+        if divergence:
+            div_lines = [f"  - {agent}: {', '.join(kws)}"
+                         for agent, kws in divergence.items()]
+            parts.append("**Divergences par agent**:\n" + "\n".join(div_lines))
+        best = partial.get("best_argument")
+        if best:
+            parts.append(
+                f"**Meilleur argument** ({best['agent']}, score={best['score']}):\n"
+                f"{best['excerpt']}"
+            )
+        entry = "\n".join(parts)
+        self._entries.append(entry)
+        self._trim()
+        self._save()
+        logger.info(f"[JOURNAL] +Partial Insight: {mission[:60]}")
+
     def append_objectives_report(self, report_text: str):
         """Ajoute un bilan d'objectifs au journal."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
