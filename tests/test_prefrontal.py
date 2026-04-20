@@ -231,10 +231,14 @@ class TestWorkingMemory:
         assert wm[0]["next_intent"] == "NEXT_STEP"
 
     def test_working_memory_priority_sort(self):
+        # V5.1 (2026-04-20) : la priorite est desormais recalculee depuis
+        # BASE_PRIORITY_BY_SOURCE, donc on ne peut plus forcer un ordre en
+        # fixant goal.priority arbitrairement. On utilise des sources
+        # differentes dont les bases different (pattern=4.0, meta=7.0).
         pf = _make_prefrontal()
-        g1 = _make_goal(title="Low", priority=2.0)
+        g1 = _make_goal(title="Low", source="pattern")
         g1.id = "low"
-        g2 = _make_goal(title="High", priority=8.0)
+        g2 = _make_goal(title="High", source="meta")
         g2.id = "high"
         pf.goals.extend([g1, g2])
         wm = pf.get_working_memory()

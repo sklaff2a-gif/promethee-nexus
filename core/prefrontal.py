@@ -76,6 +76,23 @@ COGNITIVE_LOAD_THRESHOLD = 5         # Dégradation au-delà
 GOAL_GRACE_PERIOD = 600              # 10 min minimum avant abandon possible
 GOAL_CREATION_COOLDOWN = 300         # 5 min entre créations pour le même drive
 
+# V5.1 (2026-04-20) : fix "spirale de la mort" du cortex prefrontal.
+# Avant : _compute_goal_priority lisait goal.priority (valeur decroissee du
+# tick precedent) comme base, puis re-appliquait les malus. Resultat : les
+# malus s'accumulaient cycle apres cycle jusqu'au clamp -5.0 en 3-5
+# deliberations -> 86% d'abandons a progress=0%. Maintenant on part d'une
+# base stable par source : la priorite est RECALCULEE, plus ACCUMULEE.
+BASE_PRIORITY_BY_SOURCE = {
+    "desire": 4.5,     # Pulsion frustree (deprivation >= 40)
+    "gap": 5.0,        # Lacune de connaissance detectee
+    "pattern": 4.0,    # Eureka bridge cree par spreading_activation
+    "council": 5.5,    # Consensus council actionnable
+    "strategy": 5.0,   # Habitude cristallisee reactivee
+    "meta": 7.0,       # Mode consolidation / redressement
+    "auto": 5.0,       # create_goal() manuel par defaut
+    "user": 6.0,       # Requete utilisateur explicite
+}
+
 
 # ─── Structures de données ────────────────────────────────────────────
 
@@ -586,9 +603,18 @@ class PrefrontalCortex:
         return goal
 
     def _compute_goal_priority(self, goal: Goal) -> float:
-        """Recalcule la priorité dynamique d'un goal."""
+        """Recalcule la priorite dynamique d'un goal.
+
+        V5.1 (2026-04-20) : on part de BASE_PRIORITY_BY_SOURCE[goal.source]
+        au lieu de goal.priority. L'ancienne version transformait des malus
+        lineaires en une spirale de la mort : chaque cycle lisait la
+        priorite deja decroissee du tick precedent, re-appliquait les
+        malus, la stockait, etc. Un goal MAITRISE stale atteignait -5.0
+        (clamp) en 3-5 cycles sans jamais avoir progresse. V5.1 rend la
+        priorite recalculee a chaque tick depuis une base stable.
+        """
         now = time.time()
-        priority = goal.priority
+        priority = BASE_PRIORITY_BY_SOURCE.get(goal.source, 3.0)
 
         # 1. Urgence temporelle (deadline)
         if goal.deadline:

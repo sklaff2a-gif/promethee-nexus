@@ -106,6 +106,11 @@ class SelfAwarenessEngine:
         self._workspace_history_max: int = 20
         self._last_metacognition_insight: str = ""
         self._metacognition_count: int = 0
+        # V5.1 (2026-04-20) : hysteresis anti-flickering du mode strategique.
+        # Le mode brut calcule par compute_strategic_mode change au seuil
+        # exact (ex: error_streak >= 7). get_strategic_mode applique un sas
+        # : entree stricte, sortie seulement sous un seuil plus bas.
+        self._last_strategic_mode: str = "standard"
         self._load()
 
     # --- Init & Reset ---
@@ -119,6 +124,7 @@ class SelfAwarenessEngine:
         self._snapshots = []
         self._subscribed = False
         self._initialized = False
+        self._last_strategic_mode = "standard"
         self._mission_count = 0
         self._mission_success = 0
         self._council_count = 0
@@ -1337,7 +1343,14 @@ class SelfAwarenessEngine:
         return result
 
     def compute_strategic_mode(self) -> str:
-        """Détermine le mode stratégique global. Zero LLM."""
+        """Determine le mode strategique global (calcul brut, zero LLM).
+
+        Cette methode retourne le mode "instantane" calcule aux seuils
+        stricts. Pour la consommation externe (prefrontal, chat_engine),
+        preferer get_strategic_mode() qui applique une hysteresis
+        anti-flickering. Cette methode reste publique pour les tests
+        deterministes et les appels legacy (soliloque).
+        """
         reflection = self.meta_reflect()
         latest = self._snapshots[-1] if self._snapshots else {}
         perf = latest.get("performance", {})
@@ -1347,7 +1360,7 @@ class SelfAwarenessEngine:
         success_rate = perf.get("success_rate", 0.5)
         trend = reflection.get("success_trend", 0)
 
-        # SURVIE : erreurs critiques, santé dégradée
+        # SURVIE : erreurs critiques, sante degradee
         if error_streak >= 7 or health.get("verdict") == "NO_GO":
             return "survie"
 
@@ -1355,12 +1368,58 @@ class SelfAwarenessEngine:
         if trend < -0.15 or (error_streak >= 4 and success_rate < 0.5):
             return "consolidation"
 
-        # EXPLORATION : performance stable/haute, curiosité dominante
+        # EXPLORATION : performance stable/haute, curiosite dominante
         if success_rate > 0.75 and trend >= 0:
             return "exploration"
 
-        # STANDARD : par défaut
+        # STANDARD : par defaut
         return "standard"
+
+    def get_strategic_mode(self) -> str:
+        """Mode strategique avec hysteresis anti-flickering (V5.1).
+
+        Le mode brut (compute_strategic_mode) change instantanement aux
+        seuils : on entre en survie a error_streak=7, on sort a 6, on
+        rentre a 7, etc. Cela produit un clignotement permanent qui, avec
+        le -5.0 du prefrontal, tuait les goals en cascade.
+
+        Cette methode applique un sas :
+          - Entree survie : conditions strictes (error_streak>=7 ou NO_GO)
+          - Sortie survie : error_streak<3 ET verdict!=NO_GO
+          - Entree consolidation : trend<-0.15 ou (err>=4 & sr<0.5)
+          - Sortie consolidation : trend>=-0.05 ET err<3 ET sr>=0.5
+
+        Entre les seuils d'entree et de sortie, le mode precedent persiste.
+        Appelee par prefrontal._compute_goal_priority (mode survie) et
+        _generate_goals (mode consolidation).
+        """
+        raw = self.compute_strategic_mode()
+        last = getattr(self, "_last_strategic_mode", "standard")
+
+        latest = self._snapshots[-1] if self._snapshots else {}
+        perf = latest.get("performance", {})
+        health = latest.get("health", {})
+        error_streak = perf.get("error_streak", 0)
+        success_rate = perf.get("success_rate", 0.5)
+        trend = self.meta_reflect().get("success_trend", 0)
+
+        # Hysteresis survie : ne sortir que si reellement calme
+        if last == "survie":
+            can_exit = (error_streak < 3 and health.get("verdict") != "NO_GO")
+            result = raw if can_exit else "survie"
+        # Hysteresis consolidation : ne sortir que si trend redresse ET
+        # pas d'erreurs ET success_rate retabli
+        elif last == "consolidation":
+            can_exit = (trend >= -0.05 and error_streak < 3 and success_rate >= 0.5)
+            result = raw if can_exit else "consolidation"
+        else:
+            # Depuis standard/exploration : on suit le raw (pas d'hysteresis
+            # pour eviter qu'une exploration lointaine empeche d'entrer en
+            # survie si un evenement critique se declenche).
+            result = raw
+
+        self._last_strategic_mode = result
+        return result
 
     # --- Mission existentielle ---
 
