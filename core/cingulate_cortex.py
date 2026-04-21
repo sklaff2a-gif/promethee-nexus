@@ -24,12 +24,26 @@ CINGULATE_STATE_FILE = os.path.join(
 # --- Constantes ---
 
 CONFLICT_DETECTION_WINDOW = 10
-CONFLICT_THRESHOLD = 1.5
+CONFLICT_THRESHOLD = 1.5          # Seuil de DETECTION (log interne)
 ERROR_MEMORY_SIZE = 30
 ADAPTATION_RATE = 0.1
 CONFLICT_COOLDOWN = 120
 ADAPTATION_DECAY = 0.99
 MAX_ADAPTATION_MALUS = 0.8
+
+# V11.0 (Phase 12C - 2026-04-21) : Filtre mnemonique du cingulate
+# Contexte : 59071 CINGULATE_CONFLICT emis par le cingulate (observe via
+# les 59071 inhibitions cumulees dans basal_ganglia). Cause : chaque
+# divergence entre 2 couches du scoring (ex: amygdale +0.5 vs ganglions
+# -1.0, ecart 1.5) declenchait un conflict public, alors que la
+# divergence est le mode de fonctionnement NORMAL d'un systeme multi-agents.
+# V11.0 (validation Gemini) : seuil de publication 2.5 (vs detection 1.5)
+# pour filtrer le bruit a la source.
+CONFLICT_PUBLISH_SEVERITY = 2.5   # Seuil de PUBLICATION bus (plus strict)
+
+# V11.0 : hooks periodiques via cardiac_beat
+ADAPTATION_DECAY_INTERVAL = 100   # decay_adaptations tous les 100 beats (~50min)
+CINGULATE_PERSIST_INTERVAL = 500  # _save() tous les 500 beats (~4h)
 
 
 class CingulateCortex:
@@ -93,8 +107,38 @@ class CingulateCortex:
             bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
             bus.subscribe("ROUTINE_FAILED", self._on_routine_failed)
             bus.subscribe("HYPOTHALAMUS_REGULATION", self._on_homeostatic_regulation)
+            # V11.0 Piste C+E : decay adaptations + persistance periodique
+            bus.subscribe("CARDIAC_BEAT", self._on_cardiac_beat)
         except Exception as e:
             logger.warning(f"[CINGULATE] Souscription echouee: {e}")
+
+    async def _on_cardiac_beat(self, data: dict):
+        """V11.0 (2026-04-21) : hook cardiaque pour cycle metabolique.
+
+        Piste C : decay_adaptations (rancune algorithmique evitee).
+        Piste E : persistance periodique (guerit l'amnesie anterograde
+        observee le 21/04 - cingulate_state vierge malgre 59071 conflits).
+        """
+        self._cardiac_ticks = getattr(self, '_cardiac_ticks', 0) + 1
+
+        # Piste C : decay des poids d'adaptation tous les 100 beats
+        if self._cardiac_ticks % ADAPTATION_DECAY_INTERVAL == 0:
+            n_before = len(self.adaptation_weights)
+            self.decay_adaptations()
+            n_after = len(self.adaptation_weights)
+            if n_before != n_after:
+                logger.info(
+                    f"[CINGULATE] V11.0 decay : {n_before} -> {n_after} adaptations"
+                )
+
+        # Piste E : persistance tous les 500 beats (~4h)
+        if self._cardiac_ticks % CINGULATE_PERSIST_INTERVAL == 0:
+            self._save()
+            logger.info(
+                f"[CINGULATE] V11.0 save : tick #{self._cardiac_ticks}, "
+                f"{self.total_conflicts} conflicts, "
+                f"{len(self.adaptation_weights)} adaptations"
+            )
 
     # --- Handlers bus ---
 
@@ -111,15 +155,26 @@ class CingulateCortex:
         if conflicts:
             self._active_conflicts = conflicts
             for conflict in conflicts:
+                # Log interne : TOUS les conflits (pour stats + debug)
                 self.conflict_log.append({
                     "timestamp": time.time(),
                     **conflict,
                 })
                 self.total_conflicts += 1
-                try:
-                    await bus.publish("CINGULATE_CONFLICT", conflict)
-                except Exception:
-                    pass
+
+                # V11.0 Piste D : Gate de severite a la publication.
+                # Seuls les conflits reellement severes (>= 2.5) sont
+                # publies sur le bus pour declencher une inhibition downstream.
+                # Les conflits mineurs (divergence normale entre couches du
+                # scoring) restent visibles dans le log mais ne punissent
+                # pas les ganglions.
+                severity = conflict.get("severity", 0)
+                if severity >= CONFLICT_PUBLISH_SEVERITY:
+                    try:
+                        await bus.publish("CINGULATE_CONFLICT", conflict)
+                    except Exception:
+                        pass
+                # Sinon : log interne uniquement, pas d'inhibition des ganglions
 
         # Si echec, enregistrer l'erreur
         if status in ("error", "failed", "failure"):
