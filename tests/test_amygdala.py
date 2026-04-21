@@ -11,7 +11,9 @@ from core.amygdala import (
     Amygdala, amygdala, EmotionalMemory,
     AMYGDALA_STATE_FILE, EXTINCTION_THRESHOLD, EXTINCTION_DECAY,
     MIN_MEMORY_AROUSAL, MAX_MEMORIES, EMOTIONAL_BIAS_RANGE,
-    _APPRAISAL_MAP, _DEFAULT_APPRAISAL, _INTENT_EMOTION_MAP,
+    _APPRAISAL_MAP, _DEFAULT_APPRAISAL,
+    # V10.0 : _INTENT_EMOTION_MAP remplace par _INTENT_SPECIAL_EVENTS
+    _INTENT_SPECIAL_EVENTS,
 )
 
 
@@ -261,13 +263,18 @@ class TestExtinction:
 # ════════════════════════════════════════════════════════════════════
 
 class TestEmotionalBias:
+    # V10.0 : Les cles realles emises par _on_routine_complete suivent la
+    # convention `<intent_lower>_<status>` (ex: expansion_code_success).
+    # Les cles "code_success" / "code_error" utilisees pre-V10 etaient
+    # fantomes (jamais emises par le bus). Tests mis a jour pour refleter
+    # le nommage reel du systeme.
     def test_bias_positive(self):
-        amygdala.condition("code_success", valence=0.8, arousal=0.6)
+        amygdala.condition("expansion_code_success", valence=0.8, arousal=0.6)
         bias = amygdala.compute_emotional_bias("EXPANSION_CODE")
         assert bias > 0
 
     def test_bias_negative(self):
-        amygdala.condition("code_error", valence=-0.8, arousal=0.6)
+        amygdala.condition("expansion_code_error", valence=-0.8, arousal=0.6)
         bias = amygdala.compute_emotional_bias("EXPANSION_CODE")
         assert bias < 0
 
@@ -277,15 +284,15 @@ class TestEmotionalBias:
 
     def test_bias_clamping_positive(self):
         # Forcer des mémoires très intenses
-        amygdala.condition("code_success", valence=1.0, arousal=1.0)
-        amygdala.condition("code_error", valence=1.0, arousal=1.0)
+        amygdala.condition("expansion_code_success", valence=1.0, arousal=1.0)
+        amygdala.condition("expansion_code_error", valence=1.0, arousal=1.0)
         amygdala.condition("HALLUCINATION_DETECTED", valence=1.0, arousal=1.0)
         bias = amygdala.compute_emotional_bias("EXPANSION_CODE")
         assert bias <= EMOTIONAL_BIAS_RANGE[1]
 
     def test_bias_clamping_negative(self):
-        amygdala.condition("code_success", valence=-1.0, arousal=1.0)
-        amygdala.condition("code_error", valence=-1.0, arousal=1.0)
+        amygdala.condition("expansion_code_success", valence=-1.0, arousal=1.0)
+        amygdala.condition("expansion_code_error", valence=-1.0, arousal=1.0)
         amygdala.condition("HALLUCINATION_DETECTED", valence=-1.0, arousal=1.0)
         bias = amygdala.compute_emotional_bias("EXPANSION_CODE")
         assert bias >= EMOTIONAL_BIAS_RANGE[0]
@@ -295,13 +302,15 @@ class TestEmotionalBias:
         assert bias == 0.0
 
     def test_bias_includes_intent_substring_match(self):
-        amygdala.condition("expansion_code_related", valence=0.6, arousal=0.5)
+        # V10.0 : le fallback substring capte les cles qui contiennent
+        # intent_lower (ex: expansion_code_related contient "expansion_code")
+        amygdala.condition("expansion_code_related_event", valence=0.6, arousal=0.5)
         bias = amygdala.compute_emotional_bias("EXPANSION_CODE")
         assert bias > 0
 
     def test_bias_mixed_valence(self):
-        amygdala.condition("code_success", valence=0.8, arousal=0.6)
-        amygdala.condition("code_error", valence=-0.8, arousal=0.6)
+        amygdala.condition("expansion_code_success", valence=0.8, arousal=0.6)
+        amygdala.condition("expansion_code_error", valence=-0.8, arousal=0.6)
         bias = amygdala.compute_emotional_bias("EXPANSION_CODE")
         # Devrait être proche de 0 (positif et négatif s'annulent)
         assert abs(bias) < 0.5

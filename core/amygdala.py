@@ -63,18 +63,30 @@ _APPRAISAL_MAP: Dict[str, tuple] = {
 
 _DEFAULT_APPRAISAL = (0.0, 0.2)
 
-# Intent → patterns émotionnels associés (pour compute_emotional_bias)
-_INTENT_EMOTION_MAP: Dict[str, List[str]] = {
-    "EXPANSION_CODE":       ["HALLUCINATION_DETECTED", "code_success", "code_error"],
-    "COUNCIL_DEBATE":       ["COUNCIL_DEBATE:success", "COUNCIL_DEBATE:error"],
-    "EVOLUTION_RUN":        ["evolution_success", "evolution_error", "HALLUCINATION_DETECTED"],
-    "MEMORY_CONSOLIDATION": ["memory_success", "memory_error"],
-    "AUDIT_STRUCTURE":      ["audit_success", "audit_error"],
-    "SECURITY_AUDIT":       ["security_success", "security_error"],
-    "MEMORY_CLEANUP":       ["memory_cleanup_success", "memory_cleanup_error"],
-    "DREAM":                ["dream_success"],
-    "CREATIVE_WRITING":     ["creative_success", "creative_error"],
-    "RESEARCH":             ["research_success", "research_error"],
+# V10.0 (Phase 12A - 2026-04-21) : remplace _INTENT_EMOTION_MAP hardcode.
+#
+# Avant V10 : le dict listait en dur des patterns comme "COUNCIL_DEBATE:success"
+# qui ne correspondaient JAMAIS aux cles reellement creees par
+# _on_routine_complete ("council_debate_success"). Mismatch de casse +
+# separateur. Resultat : les patterns explicites ne matchaient pas, le
+# fallback par substring (lignes 269-272) capturait les memoires mais avec
+# demi-poids (0.5). L'amygdale etait myope a 50% sur les routines observees.
+#
+# V10.0 (valide par Gemini contre-expertise) : generation dynamique des
+# patterns de routine selon la convention <intent_lower>_<status> emise
+# par _on_routine_complete. Le dict _INTENT_SPECIAL_EVENTS ne contient
+# plus QUE les events upstream non-generables (events externes au cycle
+# standard success/error de la routine).
+
+# Events pavloviens upstream (non emis par _on_routine_complete).
+# Ces patterns ont une nomenclature propre (majuscules, events bus) et
+# doivent etre associes manuellement a l'intent concerne.
+_INTENT_SPECIAL_EVENTS: Dict[str, List[str]] = {
+    "EXPANSION_CODE":  ["HALLUCINATION_DETECTED"],
+    "EVOLUTION_RUN":   ["HALLUCINATION_DETECTED"],
+    "COUNCIL_DEBATE":  ["COUNCIL_END"],
+    # Les autres intents n'ont pas d'event upstream special :
+    # patterns generes automatiquement via la convention <lower>_<status>.
 }
 
 
@@ -251,10 +263,24 @@ class Amygdala:
         """Biais [-1.5, +1.5] pour le scoring autonomy_engine.
 
         Combine valence × arousal des mémoires liées à l'intent.
+
+        V10.0 (Phase 12A - 2026-04-21) : patterns generes dynamiquement
+        selon la convention <intent_lower>_<status> emise par
+        _on_routine_complete, PLUS events upstream speciaux (ex:
+        HALLUCINATION_DETECTED, COUNCIL_END). Correctif du mismatch de
+        casse pre-V10 qui divisait l'intensite emotionnelle par 2 via
+        fallback substring.
         """
-        patterns = _INTENT_EMOTION_MAP.get(intent, [])
-        if not patterns:
-            return 0.0
+        intent_lower = intent.lower()
+
+        # V10.0 : patterns generes automatiquement (convention cycle de vie)
+        auto_patterns = [
+            f"{intent_lower}_success",
+            f"{intent_lower}_error",
+        ]
+        # V10.0 : events upstream non-standard (pavloviens)
+        special_patterns = _INTENT_SPECIAL_EVENTS.get(intent, [])
+        patterns = auto_patterns + special_patterns
 
         total_bias = 0.0
         count = 0
@@ -264,11 +290,12 @@ class Amygdala:
                 total_bias += mem.valence * mem.arousal
                 count += 1
 
-        # Chercher aussi les mémoires dont le pattern contient l'intent
-        intent_lower = intent.lower()
+        # Fallback substring preserve : capte les memoires avec une
+        # nomenclature divergente (conditionnement manuel, events legacy).
+        # Demi-poids pour indiquer "match approximatif".
         for key, mem in self.memories.items():
             if intent_lower in key.lower() and key not in patterns:
-                total_bias += mem.valence * mem.arousal * 0.5  # Demi-poids
+                total_bias += mem.valence * mem.arousal * 0.5
                 count += 1
 
         if count == 0:
