@@ -24,13 +24,14 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 import logging
 import math
 import os
 import re
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +224,13 @@ class BloomIndexManager:
                         elif isinstance(node, ast.ClassDef):
                             self.classes.add(node.name)
 
+        # V9.0 (2026-04-21) : injection des identifiants systeme
+        # (intents, modes strategiques) pour eviter le baillonage par
+        # faux positifs. Audit V6.0 : les agents recevaient un prompt
+        # contenant `AUDIT_SURVIE` (intent valide), Bloom le traitait
+        # comme classe Python absente -> veto -> consensus impossible.
+        self._inject_system_identifiers()
+
         self._built = True
         elapsed_ms = (time.perf_counter() - t0) * 1000
         self._build_stats = {
@@ -241,6 +249,112 @@ class BloomIndexManager:
             f"{self.files.count} files, {self._build_stats['memory_kb_total']} KB)"
         )
         return self._build_stats
+
+    def _inject_system_identifiers(self) -> int:
+        """V9.0 (Phase 12 - 2026-04-21) : injection des identifiants
+        metier connus dans l'index Bloom pour eviter le baillonage par
+        faux positifs de veto.
+
+        3 categories sont injectees :
+          1. Intents (cles de RESOURCE_COSTS) -> classes (MAJUSCULES)
+          2. Modes strategiques + etats budget -> classes
+          3. Packages externes (chromadb, fastapi...) -> functions
+
+        Sans cette injection, un prompt council contenant `AUDIT_SURVIE`
+        ou `chromadb(` declenchait un veto systematique -> consensus
+        impossible. Audit runtime 21/04 : 100% des debats max_rounds a
+        cause de ce baillonage.
+        """
+        injected = {"intents": 0, "modes": 0, "packages": 0}
+
+        # 1a. Intents depuis RESOURCE_COSTS (intents avec coût LLM)
+        try:
+            costs_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "config", "resource_costs.json"
+            )
+            with open(costs_path, "r", encoding="utf-8") as f:
+                costs = json.load(f)
+            for intent in costs.keys():
+                if intent.startswith("_"):
+                    continue  # skip commentaires _comment etc.
+                self.classes.add(intent)
+                injected["intents"] += 1
+        except Exception as e:
+            logger.warning(f"BLOOM V9.0: injection intents echouee: {e}")
+
+        # 1b. Intents SANS cout (0-LLM) + intents meta-routines. Hardcode
+        # car dispersés dans autonomy_engine.py sans structure JSON
+        # centrale. Source croisee : POST_BUDGET_INTENTS, INTROSPECTIVE_INTENTS,
+        # EXTROVERTED_INTENTS, EXPLORATION_INTENTS, SCHOOL_INTENTS (V5+).
+        _EXTRA_INTENTS = (
+            # POST_BUDGET_INTENTS sans coût (routines 0-LLM)
+            "AUDIT_SURVIE", "AUDIT_STRUCTURE", "MEMORY_CLEANUP",
+            "NEURAL_COMPILE", "SELF_INSPECT", "PARAM_EXPERIMENT",
+            "EVENING_REFLECTION", "REFACTORING_AUDIT", "CI_PIPELINE_RUN",
+            # School (present dans resource_costs mais double securite)
+            "SCHOOL_CODE_REVIEW", "SCHOOL_RESEARCH", "SCHOOL_WORKSHOP",
+            "SCHOOL_CREATION", "SCHOOL_BULLETIN", "SCHOOL_FREE_TIME",
+            # Autonomy specific
+            "CIRCADIAN_MAINTENANCE", "DROPZONE_SCAN",
+            "CURIOSITY_REFLEX", "CURIOSITY_DEEP_DIVE",
+            "BODY_AWARENESS", "OPEN_INTENT", "FLY_OBSERVATION",
+            "CROSS_SYNTHESIS", "STEFAN_CONFRONTATION", "COFFEE_BREAK",
+            "AUTO_FUZZING", "CREATIVE_PLAY", "GRIMOIRE_EVOLVE",
+            "GRIMOIRE_INVOKE", "VISUAL_OBSERVATION", "NEURAL_TRAINING",
+            # Pulsions (desire_engine)
+            "CURIOSITE", "CREATION", "CONNEXION", "CROISSANCE",
+            "MAITRISE", "STABILITE", "LIBERTE",
+        )
+        for intent in _EXTRA_INTENTS:
+            self.classes.add(intent)
+            injected["intents"] += 1
+
+        # 2. Modes systeme (strategic, budget, nap) -> classes
+        _SYSTEM_MODES = (
+            # strategic_mode (self_awareness)
+            "SURVIE", "CONSOLIDATION", "EXPLORATION", "STANDARD",
+            # budget states (autonomy_engine)
+            "FULL", "RESERVE", "EXHAUSTED",
+            # nap modes
+            "NORMAL", "DEEP", "HIBERNATION",
+            # Dream/LoRA markers (nap_tasks_done)
+            "DREAM", "LORA", "NAP", "COFFEE",
+            # Verdict types (council_analytics)
+            "PRIORISER", "DEPRIORISER", "ABANDONNER", "MAINTENIR",
+            # Consensus markers (vote flou V6.0)
+            "CONSENSUS", "APPROUVE",
+        )
+        for mode in _SYSTEM_MODES:
+            self.classes.add(mode)
+            injected["modes"] += 1
+
+        # 3. Packages externes (pour eviter veto sur chromadb(..) etc.)
+        _EXTERNAL_PACKAGES = (
+            # Core deps
+            "chromadb", "fastapi", "uvicorn", "pydantic", "httpx",
+            "requests", "aiohttp", "anyio", "starlette",
+            # ML / AI
+            "ollama", "openai", "anthropic", "torch", "transformers",
+            "sentence_transformers", "numpy", "pandas", "scipy",
+            "sklearn", "torchao", "triton",
+            # Utils
+            "sqlite3", "redis", "psutil", "yaml", "dotenv", "loguru",
+            "tiktoken", "jinja2", "markdown", "bs4", "lxml",
+            # Tests
+            "pytest", "unittest", "mock", "asyncio_mock",
+        )
+        for pkg in _EXTERNAL_PACKAGES:
+            self.functions.add(pkg)
+            injected["packages"] += 1
+
+        total = sum(injected.values())
+        logger.info(
+            f"BLOOM V9.0: {total} identifiants systeme injectes "
+            f"(intents={injected['intents']}, modes={injected['modes']}, "
+            f"packages={injected['packages']})"
+        )
+        return total
 
     def extract_references(self, prompt: str) -> Dict[str, List[str]]:
         """Extraction deterministique des entites nommees du prompt."""
@@ -269,16 +383,23 @@ class BloomIndexManager:
             "files": sorted(files),
         }
 
-    def check_prompt(self, agent_name: str, prompt: str) -> Optional[BloomVeto]:
+    def check_prompt(self, agent_name: str, prompt: str,
+                     whitelist: Optional[Set[str]] = None) -> Optional[BloomVeto]:
         """Teste si une reference nommee du prompt est Bloom-negative.
 
         Retourne None si :
           - index pas construit (fallback gracieux)
           - aucune reference nommee dans le prompt
           - toutes les references existent (Bloom positif ou faux positif)
+          - ref est dans la whitelist locale (V9.0)
 
         Retourne BloomVeto si au moins une reference est Bloom-negative
         (certitude absolue d'absence). Seuil STRICT : 1 suffit.
+
+        V9.0 (Phase 12 - 2026-04-21) : argument `whitelist` optionnel
+        pour que l'appelant (Council, etc.) puisse declarer des tokens
+        legitimes du contexte qui echapperont au veto meme si absents
+        de l'index Bloom. Complement a l'injection system_identifiers.
         """
         if not self._built:
             return None
@@ -289,8 +410,13 @@ class BloomIndexManager:
             self._skip_count += 1
             return None
 
+        # V9.0 : normaliser la whitelist pour matchs efficaces
+        wl = whitelist or set()
+
         # Seuil strict : premier faux negatif = veto
         for func in refs["functions"]:
+            if func in wl:
+                continue  # V9.0 whitelist
             if not self.functions.contains(func):
                 self._veto_count += 1
                 return BloomVeto(
@@ -304,6 +430,8 @@ class BloomIndexManager:
                     ref_name=func,
                 )
         for cls in refs["classes"]:
+            if cls in wl:
+                continue  # V9.0 whitelist
             if not self.classes.contains(cls):
                 self._veto_count += 1
                 return BloomVeto(
@@ -316,6 +444,8 @@ class BloomIndexManager:
                     ref_name=cls,
                 )
         for path in refs["files"]:
+            if path in wl:
+                continue  # V9.0 whitelist
             if not self.files.contains(path):
                 self._veto_count += 1
                 return BloomVeto(
