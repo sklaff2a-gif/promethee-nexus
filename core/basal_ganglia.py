@@ -33,6 +33,14 @@ MAX_HABITS = 50
 NOVELTY_BONUS = 0.5
 MIN_HABIT_STRENGTH = 0.01
 
+# V10.1 (Phase 12B - 2026-04-21) : cycle metabolique unifie (Metabolic Wash)
+# Audit runtime : 59071 inhibitions pour 1910 selections (31x), plusieurs
+# intents a NO-GO=-2.0 permanent (COUNCIL_DEBATE inclus) par absence de
+# _decay_habits + absence de decay NO-GO. Catatonie cognitive progressive.
+NO_GO_DECAY_RATE = 0.05                # Remontee |NO-GO| vers 0 par wash
+METABOLIC_WASH_INTERVAL = 100          # 1 wash tous les 100 cardiac_beats
+                                        # ~= 50 min de runtime reel
+
 
 class BasalGanglia:
     """Selection d'actions par apprentissage par renforcement."""
@@ -91,8 +99,57 @@ class BasalGanglia:
             bus.subscribe("DOPAMINE_SURGE", self._on_dopamine_surge)
             bus.subscribe("CINGULATE_CONFLICT", self._on_cingulate_conflict)
             bus.subscribe("THALAMUS_ATTENTION_SHIFT", self._on_thalamus_shift)
+            # V10.1 : declencheur du Metabolic Wash periodique
+            bus.subscribe("CARDIAC_BEAT", self._on_cardiac_beat)
         except Exception as e:
             logger.warning(f"[BASAL_GANGLIA] Souscription echouee: {e}")
+
+    # --- V10.1 : Metabolic Wash ---
+
+    async def _on_cardiac_beat(self, data: dict):
+        """V10.1 : hook cardiaque pour declencher le wash periodique
+        tous les METABOLIC_WASH_INTERVAL beats (~50 min)."""
+        self._cardiac_ticks = getattr(self, '_cardiac_ticks', 0) + 1
+        if self._cardiac_ticks % METABOLIC_WASH_INTERVAL == 0:
+            self.tick_metabolic_wash()
+            logger.info(
+                f"[BASAL_GANGLIA] V10.1 metabolic wash tick #{self._cardiac_ticks} : "
+                f"{len(self.habits)} habits, {len(self.go_nogo_state)} go_nogo actifs"
+            )
+
+    def tick_metabolic_wash(self):
+        """V10.1 : 'lavage chimique' periodique unifie.
+
+        Restaure la symetrie apprentissage/oubli qui manquait pre-V10.1.
+        Audit runtime 21/04 avait revele 59071 inhibitions accumulees
+        et habits plafonnant a 1.0 sans extinction naturelle possible.
+
+        Cycle bidirectionnel :
+        - Decay des habits (appel de _decay_habits, fonction orpheline pre-V10.1)
+        - Decay bidirectionnel du NO-GO / GO vers 0 (NO_GO_DECAY_RATE=0.05)
+        - Nettoyage des entrees a zero (evite accumulation memoire)
+        """
+        # 1) Decay des habits (fonction orpheline reactivee)
+        self._decay_habits()
+
+        # 2) Decay bidirectionnel NO-GO / GO vers 0
+        to_remove = []
+        for intent, val in list(self.go_nogo_state.items()):
+            if val < 0:
+                new_val = min(0.0, val + NO_GO_DECAY_RATE)
+            elif val > 0:
+                new_val = max(0.0, val - NO_GO_DECAY_RATE)
+            else:
+                to_remove.append(intent)
+                continue
+
+            if abs(new_val) < 0.01:
+                to_remove.append(intent)
+            else:
+                self.go_nogo_state[intent] = new_val
+
+        for intent in to_remove:
+            self.go_nogo_state.pop(intent, None)
 
     # --- Handlers bus ---
 
@@ -232,24 +289,47 @@ class BasalGanglia:
     # --- GO/NO-GO ---
 
     def _compute_go_nogo(self, intent: str) -> float:
-        """Equilibre GO/NO-GO pour un intent."""
+        """V10.1 : equilibre GO/NO-GO avec resilience proportionnelle.
+
+        Bug #3 pre-V10.1 : la formule etait `go_signal - |no_go_state|`,
+        erreur dimensionnelle qui ecrasait les routines parfaites sous le
+        NO-GO absolu (routine 100% success, strength=1.0, NO-GO=-2.0 →
+        -1.0 → malus permanent sur une routine ideale).
+
+        V10.1 (validation Gemini) : formule additive a resilience
+        proportionnelle a la qualite de l'habit :
+            go_nogo = go_signal + gng_state × (1.0 - go_signal × 0.5)
+
+        Consequences :
+        - Routine parfaite (go=1.0) + NO-GO=-2.0 → 1.0 + (-2.0)×0.5 = 0.0
+          (preserve, retombe a neutre mais pas en malus)
+        - Routine faible   (go=0.2) + NO-GO=-2.0 → 0.2 + (-2.0)×0.9 = -1.6
+          (punie fortement, le signal de securite est preserve)
+        - Routine moyenne  (go=0.5) + NO-GO=-1.0 → 0.5 + (-1.0)×0.75 = -0.25
+          (punition modulee)
+
+        Le NO-GO punit surtout les routines faibles (correct : les habits
+        solides sont legitimement resistantes a un conflit ponctuel).
+        Le GO favorise surtout les routines naissantes (exploration).
+        """
         habit = self.habits.get(intent)
         if not habit:
             return GO_NOGO_BALANCE
 
-        # GO : strength * success_rate
+        # GO signal : strength × success_rate
         total = habit["successes"] + habit["failures"] + 1
         success_rate = habit["successes"] / total
-        go_signal = habit["strength"] * success_rate
+        go_signal = habit["strength"] * success_rate  # ∈ [0, 1]
 
-        # NO-GO : inhibitions + echecs consecutifs
-        nogo_signal = -self.go_nogo_state.get(intent, 0.0)
-        if self.go_nogo_state.get(intent, 0.0) < 0:
-            nogo_signal = abs(self.go_nogo_state[intent])
-        else:
-            nogo_signal = 0.0
+        gng_state = self.go_nogo_state.get(intent, 0.0)
+        if gng_state == 0.0:
+            return go_signal
 
-        return go_signal - nogo_signal
+        # V10.1 : resilience = 1 - go_signal × 0.5  ∈ [0.5, 1.0]
+        # Une habit parfaite (go_signal=1.0) donne resistance=0.5
+        # Une habit nulle (go_signal=0.0) donne resistance=1.0 (pleine punition)
+        resilience = 1.0 - (go_signal * 0.5)
+        return go_signal + gng_state * resilience
 
     # --- Scoring (Couche 20) ---
 
