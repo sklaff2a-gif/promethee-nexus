@@ -310,6 +310,25 @@ class BloomIndexManager:
             self.classes.add(intent)
             injected["intents"] += 1
 
+        # 1c. Noms d'agents en MAJUSCULES (V9.1 - 2026-04-21)
+        # Les agents se citent nommement dans leurs critiques
+        # ("Comme le disait STRATEGIST...", "EVOLUTION a propose..."). Sans
+        # cette injection, `STRATEGIST` ou `CODER` en majuscules sont traites
+        # comme classes Python absentes -> veto -> agent baillonne.
+        # Observation premier Council V9.0 (09:10, 21/04) : veto 'STRATEGIST'
+        # a coupe la parole de Evolution en plein argument.
+        _AGENT_NAMES_UPPER = (
+            "STRATEGIST", "CODER", "ARCHITECT", "FACTORY", "EVOLUTION",
+            "INFRA", "SECURITY", "WRITER", "RESEARCHER", "FORMATTER",
+            "VISION", "PROFESSOR",
+            # Entites speciales Council / system
+            "PROMETHEE", "PROMETHEUS", "ADVOCAT", "CONSEIL", "COUNCIL",
+            "ETUDIANT", "PRESIDENT", "SYSTEM",
+        )
+        for name in _AGENT_NAMES_UPPER:
+            self.classes.add(name)
+            injected["modes"] += 1
+
         # 2. Modes systeme (strategic, budget, nap) -> classes
         _SYSTEM_MODES = (
             # strategic_mode (self_awareness)

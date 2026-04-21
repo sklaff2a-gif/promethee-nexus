@@ -84,6 +84,28 @@ class TestSystemIdentifiersInjected:
         veto = built_manager.check_prompt("strategist", prompt)
         assert veto is None
 
+    # V9.1 (21/04) : noms d'agents en MAJUSCULES ne doivent plus veto
+    def test_agent_name_strategist_upper_not_veto(self, built_manager):
+        """Critique entre agents : `STRATEGIST a tort`. Reforme V9.1."""
+        prompt = "Comme le disait `STRATEGIST`, il faut consolider."
+        veto = built_manager.check_prompt("evolution", prompt)
+        assert veto is None, f"STRATEGIST toujours veto : {veto}"
+
+    def test_agent_name_evolution_upper_not_veto(self, built_manager):
+        prompt = "`EVOLUTION` a propose une optimisation douteuse."
+        veto = built_manager.check_prompt("strategist", prompt)
+        assert veto is None
+
+    def test_agent_name_architect_upper_not_veto(self, built_manager):
+        prompt = "`ARCHITECT` preside sans participer au debat."
+        veto = built_manager.check_prompt("coder", prompt)
+        assert veto is None
+
+    def test_entity_promethee_upper_not_veto(self, built_manager):
+        prompt = "`PROMETHEE` ressent une insecurite latente."
+        veto = built_manager.check_prompt("strategist", prompt)
+        assert veto is None
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Piste B - Les vraies hallucinations sont toujours veto
