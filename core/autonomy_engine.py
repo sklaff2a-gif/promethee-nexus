@@ -7,6 +7,7 @@ import json
 import os
 import uuid
 from datetime import date, datetime
+from typing import Optional
 from core.orchestrator import orchestrator
 from core.event_bus.bus import bus
 from core.prompt_templates import AUTONOMY_GUARDRAIL
@@ -5165,7 +5166,7 @@ class AutonomyEngine:
     _NAP_MIN_PRODUCTIVE_TASKS = 1  # V8.0 (2026-04-20) : seuil meritocratique
     _nap_refund_used_today: bool = False  # 1 seul refund par jour
 
-    def _nap_was_productive(self) -> bool:
+    def _nap_was_productive(self, tasks_done: Optional[list] = None) -> bool:
         """V8.0 (Phase 11) : Sommeil meritocratique.
 
         Verifie si la sieste a produit au moins _NAP_MIN_PRODUCTIVE_TASKS
@@ -5174,11 +5175,18 @@ class AutonomyEngine:
         circadian task si result.success, LORA si success). Donc len()
         suffit comme proxy de productivite.
 
+        V8.1 (2026-04-21) : argument optionnel `tasks_done` pour que le
+        check soit robuste a l'ordre des operations dans exit_nap (qui
+        vide self._nap_tasks_done avant le check -> 100% siestes classees
+        non-productives avant V8.1). Si tasks_done est fourni, on l'utilise
+        au lieu de self._nap_tasks_done.
+
         Sans ce filtre (pre-V8), le nap_refund etait inconditionnel -> le
         TD-learning aurait pu apprendre "dormir = gagner budget sans
         effort" (narcolepsie apprise).
         """
-        return len(self._nap_tasks_done) >= self._NAP_MIN_PRODUCTIVE_TASKS
+        check_list = tasks_done if tasks_done is not None else self._nap_tasks_done
+        return len(check_list) >= self._NAP_MIN_PRODUCTIVE_TASKS
 
     async def exit_nap(self):
         """Désactive le mode sieste, génère un résumé + restauration énergie."""
@@ -5196,9 +5204,13 @@ class AutonomyEngine:
 
         # 1. Second souffle budget (V8.0 : conditionne a la productivite
         #    de la sieste pour eviter la narcolepsie apprise par TD-learning).
+        # V8.1 (2026-04-21) : on passe `tasks_done` (copie sauvegardee ligne
+        # 5187 avant la remise a zero ligne 5190) au lieu de lire
+        # self._nap_tasks_done qui est deja vide ici. Avant V8.1, 100% des
+        # siestes etaient classifiees non productives meme avec 9+ DREAM.
         if (not self._nap_refund_used_today
                 and hasattr(self, 'daily_budget_used')
-                and self._nap_was_productive()):
+                and self._nap_was_productive(tasks_done=tasks_done)):
             self.daily_budget_used = max(0, self.daily_budget_used - self._NAP_BUDGET_REFUND)
             self._nap_refund_used_today = True
             restored.append(f"budget +{self._NAP_BUDGET_REFUND}pt (merite)")
@@ -5207,7 +5219,7 @@ class AutonomyEngine:
             self._broadcast_budget_restored("nap_productive")
         elif not self._nap_refund_used_today:
             logger.info(
-                f"[AUTONOMY] Sieste non productive ({len(self._nap_tasks_done)} taches) "
+                f"[AUTONOMY] Sieste non productive ({len(tasks_done)} taches) "
                 f"-> refund budget REFUSE. Pas de narcolepsie apprise."
             )
             restored.append("refund refuse (sieste sterile)")

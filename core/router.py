@@ -264,6 +264,18 @@ class RouterAgent:
                 f"{collapsed} doublons collapses -> "
                 f"{len(RouterAgent._learned_rules)} regles uniques."
             )
+            # V8.1 (2026-04-21) : persister immediatement le nettoyage
+            # pour qu'il survive au prochain reboot. Avant V8.1, le
+            # save n'avait lieu qu'a la prochaine on_council_rule_learned,
+            # ce qui pouvait ne jamais arriver (cf. bug observe le
+            # 21/04 : fichier disque non mis a jour 10h apres migration).
+            try:
+                RouterAgent._save_learned_rules()
+                logger.info(
+                    "ROUTER V8.1: migration persistee sur disque."
+                )
+            except Exception as e:
+                logger.warning(f"ROUTER V8.1: persistance migration echouee: {e}")
 
     @staticmethod
     def _save_learned_rules():
