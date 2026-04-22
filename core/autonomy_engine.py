@@ -5513,6 +5513,27 @@ class AutonomyEngine:
         except Exception as e:
             logger.warning(f"[DREAM] Synapse consolidation échouée: {e}")
 
+        # Phase 1.5 — V12.0 Replay hippocampique (MDP, Q-learning séquentiel)
+        # Retropropagation gamma=0.95 sur les transitions (drive, prev, curr)
+        # du TrajectoryBuffer. Clippage failures à -1.0 protege COUNCIL_DEBATE
+        # et consorts d'une phobie algorithmique definitive.
+        try:
+            from core.hippocampus import hippocampus
+            from core.basal_ganglia import ganglia
+            trajectory = hippocampus.get_recent_trajectory()
+            if len(trajectory) >= 2:
+                updates = ganglia.update_sequential(trajectory)
+                if updates > 0:
+                    seq_count = len(ganglia.sequential_habits)
+                    summary = (
+                        f"Replay MDP V12.0: {updates} transitions Q-updatees, "
+                        f"{seq_count} etats memorises"
+                    )
+                    dream_report.append(summary)
+                    logger.info(f"[DREAM] {summary}")
+        except Exception as e:
+            logger.warning(f"[DREAM] Replay MDP V12.0 echoue: {e}")
+
         # Phase 2 — Stimulation tissue (nourriture + créativité boost)
         try:
             from core.neural_tissue import tissue

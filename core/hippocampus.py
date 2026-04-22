@@ -13,6 +13,7 @@ import logging
 import os
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any
 
@@ -35,6 +36,11 @@ PURGE_EPISODES_DAYS = 7
 PURGE_ARCS_DAYS = 30
 AUTOSAVE_INTERVAL = 5
 CONSOLIDATION_INTERVAL = 10
+
+# V12.0 (Phase 13 - 2026-04-22) : buffer de trajectoire pour MDP + replay.
+# Volatile intentionnellement : au reboot, ardoise propre — on evite de
+# retropropager des trajectoires fantomes dont le contexte n'existe plus.
+MAX_TRAJECTORY = 20
 
 # Saillance de base par type d'evenement
 BASE_SALIENCE: Dict[str, float] = {
@@ -135,6 +141,35 @@ class NarrativeArc:
         return cls(**filtered)
 
 
+# ─── V12.0 : Buffer de trajectoire pour replay MDP ───────────────────────────
+
+class TrajectoryBuffer:
+    """Buffer circulaire volatile des N derniers Episodes.
+
+    Utilise par BasalGanglia.update_sequential() durant _execute_dream_routine
+    pour retropropager les rewards sur les transitions (drive, prev, curr).
+
+    Volontairement non persiste : pas de rejeu de fantomes apres reboot.
+    """
+
+    def __init__(self, maxlen: int = MAX_TRAJECTORY):
+        self._buffer: deque = deque(maxlen=maxlen)
+
+    def append(self, episode: "Episode") -> None:
+        self._buffer.append(episode)
+
+    def get_recent(self, n: Optional[int] = None) -> List["Episode"]:
+        if n is None or n >= len(self._buffer):
+            return list(self._buffer)
+        return list(self._buffer)[-n:]
+
+    def clear(self) -> None:
+        self._buffer.clear()
+
+    def __len__(self) -> int:
+        return len(self._buffer)
+
+
 # ─── Singleton Hippocampus ───────────────────────────────────────────────────
 
 class Hippocampus:
@@ -166,6 +201,9 @@ class Hippocampus:
             "episodes_rejected": 0,
             "arcs_created": 0,
         }
+
+        # V12.0 : buffer de trajectoire (volatile, pas charge depuis disque)
+        self.trajectory_buffer: TrajectoryBuffer = TrajectoryBuffer()
 
         self._load()
 
@@ -384,6 +422,9 @@ class Hippocampus:
         self._episodes.append(episode)
         self._stats["episodes_encoded"] += 1
 
+        # V12.0 : push dans le buffer de trajectoire (replay MDP)
+        self.trajectory_buffer.append(episode)
+
         # FIFO : garder MAX_EPISODES
         if len(self._episodes) > MAX_EPISODES:
             self._episodes = self._episodes[-MAX_EPISODES:]
@@ -558,6 +599,15 @@ class Hippocampus:
             chain.append(f"resultat: echec ({reason}, q={quality:.2f})")
 
         return chain
+
+    def get_recent_trajectory(self, n: Optional[int] = None) -> List[Episode]:
+        """V12.0 : retourne les N derniers Episodes du TrajectoryBuffer.
+
+        Consommee par BasalGanglia.update_sequential() dans le hook dream
+        pour retropropagation Q-learning sur les transitions enrichies
+        (drive, prev_intent, curr_intent).
+        """
+        return self.trajectory_buffer.get_recent(n)
 
     def get_causal_context(self, n: int = 3) -> str:
         """Retourne un resume causal des N derniers episodes pour le workspace.

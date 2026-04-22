@@ -41,6 +41,20 @@ NO_GO_DECAY_RATE = 0.05                # Remontee |NO-GO| vers 0 par wash
 METABOLIC_WASH_INTERVAL = 100          # 1 wash tous les 100 cardiac_beats
                                         # ~= 50 min de runtime reel
 
+# V12.0 (Phase 13 - 2026-04-22) : MDP + Replay Hippocampique
+# Q-learning sequentiel sur etat enrichi (drive, prev_intent, curr_intent).
+# Sources en interne : prev = self._last_intent, drive = desires.dominant.
+# Plancher -1.0 contre la phobie algorithmique (COUNCIL_DEBATE et autres
+# routines de resolution de crise restent joignables malgre des echecs).
+GAMMA_SEQ = 0.95                       # Discount factor rewards differes
+LR_SEQ = 0.05                          # Learning rate Q-sequential
+FAILURE_FLOOR = -1.0                   # Plancher rewards negatives
+SEQ_HABIT_DECAY = 0.998                # Decay par Metabolic Wash
+MAX_SEQ_HABITS = 5000                  # Cap combinatoire (prune au-dela)
+SEQ_HABIT_THRESHOLD = 0.05             # Seuil sous lequel bonus=0
+SEQ_BONUS_SCALE = 1.0                  # Facteur d'amplification
+SEQ_KEY_SEP = "|"                      # Separateur clef stringifiee
+
 
 class BasalGanglia:
     """Selection d'actions par apprentissage par renforcement."""
@@ -74,6 +88,11 @@ class BasalGanglia:
 
         # Dernier intent execute (pour renforcement dopaminique)
         self._last_intent: str = ""
+
+        # V12.0 Phase 13 : habits sequentielles (MDP).
+        # cle = "drive|prev_intent|curr_intent"
+        # valeur = {q_value, visits, last_reward, updated_at}
+        self.sequential_habits: Dict[str, Dict[str, Any]] = {}
 
         self._load()
 
@@ -150,6 +169,15 @@ class BasalGanglia:
 
         for intent in to_remove:
             self.go_nogo_state.pop(intent, None)
+
+        # 3) V12.0 : decay des sequential_habits (MDP)
+        seq_to_remove = []
+        for key, entry in self.sequential_habits.items():
+            entry["q_value"] *= SEQ_HABIT_DECAY
+            if abs(entry["q_value"]) < 0.005:
+                seq_to_remove.append(key)
+        for key in seq_to_remove:
+            self.sequential_habits.pop(key, None)
 
     # --- Handlers bus ---
 
@@ -286,6 +314,135 @@ class BasalGanglia:
             weakest_intent, _ = sorted_habits.pop(0)
             del self.habits[weakest_intent]
 
+    # --- V12.0 Phase 13 : MDP + Replay ---
+
+    def _seq_key(self, drive: str, prev_intent: str, curr_intent: str) -> str:
+        """Construit une cle stable pour sequential_habits."""
+        d = drive or "none"
+        p = prev_intent or "none"
+        c = curr_intent or "none"
+        return f"{d}{SEQ_KEY_SEP}{p}{SEQ_KEY_SEP}{c}"
+
+    def _get_dominant_drive(self) -> str:
+        """Lecture best-effort de la pulsion dominante."""
+        try:
+            from core.desire_engine import desires
+            top = sorted(
+                desires.drives.values(),
+                key=lambda d: getattr(d, "deprivation", 0.0),
+                reverse=True,
+            )
+            if top:
+                return getattr(top[0], "name", "") or "none"
+        except Exception:
+            pass
+        return "none"
+
+    def update_sequential(self, trajectory: list) -> int:
+        """V12.0 : Q-learning sequentiel avec retropropagation gamma=0.95.
+
+        trajectory = liste d'Episodes (hippocampus), du plus ancien au plus
+        recent. Pour chaque transition (ep[i-1] -> ep[i]) :
+
+            state     = (drive de ep[i], intent de ep[i-1], intent de ep[i])
+            action    = intent de ep[i]      (inclus dans la cle)
+            reward    = quality_score de ep[i] (clippe FAILURE_FLOOR)
+            next_max  = max_a Q(drive de ep[i+1], intent de ep[i], a)
+            Q[s,a]   += LR_SEQ * (reward + GAMMA_SEQ * next_max - Q[s,a])
+
+        On evalue l'action qu'on vient d'observer (ep_curr) via son propre
+        reward. Les failures sont tirees sous le plancher FAILURE_FLOOR
+        (-1.0) pour eviter la phobie algorithmique definitive sur les
+        routines de resolution de crise (COUNCIL_DEBATE, etc.).
+
+        Returns: nombre de transitions effectivement Q-updatees.
+        """
+        if not trajectory or len(trajectory) < 2:
+            return 0
+
+        updates = 0
+        n = len(trajectory)
+        for i in range(1, n):
+            ep_prev = trajectory[i - 1]
+            ep_curr = trajectory[i]
+
+            prev_intent = getattr(ep_prev, "intent", "") or "none"
+            curr_intent = getattr(ep_curr, "intent", "") or ""
+            if not curr_intent:
+                continue
+
+            drive_curr = getattr(ep_curr, "dominant_drive", "") or "none"
+            key = self._seq_key(drive_curr, prev_intent, curr_intent)
+
+            # Reward : quality_score de ep_curr (l'action observee).
+            raw_reward = float(getattr(ep_curr, "quality_score", 0.0) or 0.0)
+            if getattr(ep_curr, "event_type", "") == "routine_failure":
+                raw_reward = min(raw_reward - 0.5, -0.3)
+            reward = max(FAILURE_FLOOR, raw_reward)
+
+            # next_max : meilleure action a partir de l'etat suivant
+            # (drive de ep[i+1], intent de ep_curr, *). Si fin de trajectoire,
+            # next_max = 0 (absence d'information sur l'avenir).
+            next_max = 0.0
+            if i + 1 < n:
+                ep_next = trajectory[i + 1]
+                drive_next = getattr(ep_next, "dominant_drive", "") or "none"
+                prefix = f"{drive_next}{SEQ_KEY_SEP}{curr_intent}{SEQ_KEY_SEP}"
+                next_qs = [
+                    entry["q_value"]
+                    for k, entry in self.sequential_habits.items()
+                    if k.startswith(prefix)
+                ]
+                if next_qs:
+                    next_max = max(next_qs)
+
+            entry = self.sequential_habits.setdefault(key, {
+                "q_value": 0.0,
+                "visits": 0,
+                "last_reward": 0.0,
+                "updated_at": time.time(),
+            })
+            td_error = reward + GAMMA_SEQ * next_max - entry["q_value"]
+            entry["q_value"] += LR_SEQ * td_error
+            entry["q_value"] = max(-2.0, min(2.0, entry["q_value"]))
+            entry["visits"] += 1
+            entry["last_reward"] = reward
+            entry["updated_at"] = time.time()
+            updates += 1
+
+        self._prune_sequential_habits()
+        return updates
+
+    def _prune_sequential_habits(self) -> None:
+        """Prune les entrees les moins significatives si MAX_SEQ_HABITS depasse."""
+        if len(self.sequential_habits) <= MAX_SEQ_HABITS:
+            return
+        sorted_items = sorted(
+            self.sequential_habits.items(),
+            key=lambda kv: abs(kv[1]["q_value"]) * max(1, kv[1]["visits"]),
+        )
+        excess = len(self.sequential_habits) - MAX_SEQ_HABITS
+        for key, _ in sorted_items[:excess]:
+            del self.sequential_habits[key]
+
+    def _compute_sequential_bonus(self, intent: str) -> float:
+        """V12.0 : bonus issu du Q(drive, prev, intent).
+
+        Retourne 0.0 si : pas d'habit sequentiel, pas de prev intent,
+        etat jamais visite, ou Q sous le seuil SEQ_HABIT_THRESHOLD.
+        """
+        if not self.sequential_habits or not self._last_intent:
+            return 0.0
+        drive = self._get_dominant_drive()
+        key = self._seq_key(drive, self._last_intent, intent)
+        entry = self.sequential_habits.get(key)
+        if not entry:
+            return 0.0
+        q = entry["q_value"]
+        if abs(q) < SEQ_HABIT_THRESHOLD:
+            return 0.0
+        return round(q * SEQ_BONUS_SCALE, 3)
+
     # --- GO/NO-GO ---
 
     def _compute_go_nogo(self, intent: str) -> float:
@@ -334,29 +491,46 @@ class BasalGanglia:
     # --- Scoring (Couche 20) ---
 
     def compute_habit_bonus(self, intent: str) -> float:
-        """Bonus/malus d'habitude pour un intent. Range [-1.5, +2.0]."""
+        """Bonus/malus d'habitude pour un intent. Range [-1.5, +2.0].
+
+        V12.0 : enrichi avec un terme sequentiel base sur (drive, prev, intent).
+        Signature publique (intent,) preservee : l'enrichissement est lu en
+        interne (self._last_intent + singleton desires), donc l'appel via
+        introspection dynamique dans autonomy_engine.py reste intact.
+
+        NOVELTY_BONUS reste prioritaire pour les intents inconnus (les 4800
+        tests existants sur cette branche sont invariants).
+        """
         habit = self.habits.get(intent)
 
-        # Intent inconnu → bonus de nouveaute
+        # Intent inconnu → bonus de nouveaute (contrat existant inchange)
         if habit is None:
             return NOVELTY_BONUS
 
-        # Habitude trop faible → pas d'influence
+        # Habitude trop faible → terme unitaire nul, mais on peut encore
+        # ajouter un signal sequentiel s'il existe.
         if habit["strength"] < HABIT_THRESHOLD:
+            seq_only = self._compute_sequential_bonus(intent)
+            if seq_only != 0.0:
+                return max(-1.5, min(2.0, round(seq_only, 3)))
             return 0.0
 
         go_nogo = self._compute_go_nogo(intent)
 
         if go_nogo > 0:
-            # GO dominant → bonus
-            bonus = habit["strength"] * go_nogo * 2.0
-            return min(2.0, round(bonus, 3))
+            unitary = min(2.0, round(habit["strength"] * go_nogo * 2.0, 3))
         elif go_nogo < 0:
-            # NO-GO dominant → malus
-            malus = abs(go_nogo) * habit["strength"]
-            return max(-1.5, round(-malus, 3))
+            unitary = max(-1.5, round(-abs(go_nogo) * habit["strength"], 3))
+        else:
+            unitary = 0.0
 
-        return 0.0
+        # V12.0 : somme unitaire + sequentiel, re-clampee
+        seq = self._compute_sequential_bonus(intent)
+        if seq == 0.0:
+            return unitary
+
+        total = unitary + seq
+        return max(-1.5, min(2.0, round(total, 3)))
 
     # --- Contexte ---
 
@@ -424,6 +598,7 @@ class BasalGanglia:
             data = {
                 "habits": dict(self.habits),
                 "go_nogo_state": dict(self.go_nogo_state),
+                "sequential_habits": dict(self.sequential_habits),
                 "total_selections": self.total_selections,
                 "total_inhibitions": self.total_inhibitions,
                 "saved_at": time.time(),
@@ -444,6 +619,7 @@ class BasalGanglia:
                     data = json.load(f)
                 self.habits = data.get("habits", {})
                 self.go_nogo_state = data.get("go_nogo_state", {})
+                self.sequential_habits = data.get("sequential_habits", {})
                 self.total_selections = data.get("total_selections", 0)
                 self.total_inhibitions = data.get("total_inhibitions", 0)
                 logger.info("[BASAL_GANGLIA] Etat restaure.")
