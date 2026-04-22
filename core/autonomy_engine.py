@@ -5939,13 +5939,38 @@ class AutonomyEngine:
         except Exception as e:
             return {"status": "error", "result": str(e)}
 
+    @staticmethod
+    def _compute_audit_structure_cap(stab_deprivation: float) -> int:
+        """V11.1 (22/04/2026) : cap adaptatif pour AUDIT_STRUCTURE.
+
+        Cap normal = 3 (garde-fou anti-boucle stérile historique).
+        Cap crise  = 8 si STABILITE.deprivation > 80 → soupape de survie.
+
+        Découvert le 22/04 : Prométhée tournait en boucle d'impuissance
+        homéostatique (50 cycles AUDIT_SURVIE consécutifs sur 9h, goals
+        STABILITE abandonnés par fruitless_cycles) parce que le cap 3
+        n'avait aucune issue de secours en régime critique. Le drive
+        réclamait AUDIT_STRUCTURE à 95/100 de deprivation, le dispatch
+        répondait 'cap atteint, skip' — spirale descendante.
+        """
+        return 8 if stab_deprivation > 80.0 else 3
+
     async def _execute_audit_structure(self) -> dict:
         """Audit structure réel : scanne le filesystem pour fichiers temporaires/orphelins."""
-        # Cap quotidien : max 3 AUDIT_STRUCTURE/jour (était 11+, score 0.67, quasi-identiques)
         audit_today = sum(1 for h in self.routine_history if h.get("intent") == "AUDIT_STRUCTURE")
-        if audit_today >= 3:
-            logger.info(f"[AUTONOMY] AUDIT_STRUCTURE cap atteint ({audit_today}/3 aujourd'hui), skip.")
-            return {"status": "skipped", "result": f"Cap quotidien atteint ({audit_today}/3)."}
+        # V11.1 : cap adaptatif selon la detresse du drive STABILITE
+        try:
+            from core.desire_engine import desires
+            stab_depriv = desires.drives["STABILITE"].deprivation
+        except Exception:
+            stab_depriv = 0.0
+        cap = self._compute_audit_structure_cap(stab_depriv)
+        if audit_today >= cap:
+            logger.info(
+                f"[AUTONOMY] AUDIT_STRUCTURE cap atteint ({audit_today}/{cap}, "
+                f"STABILITE={stab_depriv:.0f}), skip."
+            )
+            return {"status": "skipped", "result": f"Cap quotidien atteint ({audit_today}/{cap})."}
         # Rafraîchir le cache de structure projet (anti-hallucination basé sur des données fraîches)
         try:
             from core.prompt_templates import reset_project_structure_cache
