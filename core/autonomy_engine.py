@@ -8343,6 +8343,28 @@ RAISON: <1 phrase courte>"""
                 professor = orchestrator.agents.get("professor")
                 if professor:
                     eval_result = await professor.evaluate(deliverable, slot, info.get("subject", ""))
+
+                    # Phase 14 (V12.0 sequel) — Sanity Check Local anti-Perroquet
+                    # Applique un multiplicateur gradue (Reward Shaping) sur la
+                    # note locale AVANT scellement. Protege la retropropagation
+                    # V12.0 contre le reward hacking (completude, troncation,
+                    # target drift). 0 LLM, ~5ms.
+                    try:
+                        from core.bullshit_detector import evaluate_deliverable as _sanity
+                        _subj = info.get("subject", "")
+                        if isinstance(_subj, dict):
+                            _subj = _subj.get("topic", str(_subj))
+                        _sanity_result = _sanity(deliverable, str(_subj), slot)
+                        if _sanity_result["multiplier"] < 1.0:
+                            _orig = eval_result["grade"]
+                            eval_result["grade"] = round(_orig * _sanity_result["multiplier"], 2)
+                            eval_result["phase14"] = _sanity_result
+                            print(f"   🛡️  PHASE14: {_sanity_result['n_flags']} defaut(s) "
+                                  f"[{', '.join(_sanity_result['reasons'])}] -> "
+                                  f"grade {_orig:.1f} x {_sanity_result['multiplier']} = {eval_result['grade']:.2f}")
+                    except Exception as e:
+                        logger.debug(f"[PHASE14] Sanity check echoue: {e}")
+
                     schedule.record_deliverable(slot, intent, {
                         "grade": eval_result["grade"],
                         "feedback": eval_result["feedback"],
