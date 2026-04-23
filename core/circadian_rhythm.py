@@ -4,13 +4,18 @@ CircadianRhythm — Cycle Veille/Sommeil de Prométhée.
 Homéostasie et consolidation nocturne. Machine à 4 états :
 ÉVEIL → CRÉPUSCULE → SOMMEIL PROFOND → AUBE → ÉVEIL
 
-Pas d'horloge réelle — les transitions sont basées sur l'état interne
-(budget, CPU/RAM, threat_level), pas sur l'heure du jour.
+V13 (2026-04-23) : ajout du Processus C (horloge biologique Borbély).
+Les transitions sont maintenant basées sur l'état interne ET sur une
+fenêtre horaire de nuit (CIRCADIAN_NIGHT_START-END), pour garantir la
+consolidation nocturne même quand le budget n'est pas épuisé.
+Unification des chemins dream : _task_dream_consolidation inclut
+désormais le replay MDP V12 (transitions Q-updatees + clear buffer).
 
 Le circadien ne pense pas — il rythme. 0 LLM, singleton.
 """
 
 import asyncio
+import datetime
 import json
 import logging
 import os
@@ -48,6 +53,18 @@ MIN_AUBE_DURATION = 180           # 3 min de warmup
 CPU_PRESSURE_THRESHOLD = 85       # %
 RAM_PRESSURE_THRESHOLD = 80       # %
 THREAT_PRESSURE_THRESHOLD = 5.0   # threat_level reptilien
+
+# V13 (2026-04-23) : Processus C (Borbély) — horloge biologique
+# Fenêtre de nuit [23h, 5h[ (heure locale) force la bascule EVEIL→CRÉPUSCULE
+# indépendamment du budget, pour garantir la consolidation même les jours
+# où Prométhée a été économique.
+CIRCADIAN_NIGHT_START = 23        # heure début fenêtre nuit (inclusive)
+CIRCADIAN_NIGHT_END = 5           # heure fin fenêtre nuit (exclusive)
+
+# Période réfractaire : délai minimal entre deux sommeils circadiens.
+# Évite le Calendar Bug (re-déclenchement à 23h après sommeil à 01h du même jour).
+# 12h est un compromis biologique (un humain ne dort pas 2 fois en 12h normalement).
+CIRCADIAN_REFRACTORY_SECONDS = 12 * 3600
 
 # Modulation du sleep entre les routines
 SLEEP_MULTIPLIER = {
@@ -96,6 +113,8 @@ class SleepReport:
     rules_compiled: int = 0
     grimoire_harvested: int = 0
     trigger_reason: str = ""
+    # V13-B (2026-04-23) : nombre de transitions Q-updatees lors du replay MDP
+    mdp_transitions: int = 0
 
 
 # ============================================================
@@ -140,6 +159,11 @@ class CircadianRhythm:
         # Bus
         self._subscribed: bool = False
 
+        # V13 (2026-04-23) : période réfractaire biologique pour le trigger horaire.
+        # Stocke l'instant précis du dernier sommeil déclenché par horloge.
+        # Robuste au Calendar Bug (chevauchement de minuit) et persisté.
+        self._last_circadian_sleep_time: Optional[datetime.datetime] = None
+
         self._load()
 
     @classmethod
@@ -179,6 +203,13 @@ class CircadianRhythm:
                 self._phase_since = float(state.get("phase_since", time.time()))
                 self._total_sleep_cycles = int(state.get("total_sleep_cycles", 0))
                 self._stats = state.get("stats", self._stats)
+                # V13 : restaurer la période réfractaire du trigger horaire
+                lcst = state.get("last_circadian_sleep_time")
+                if lcst:
+                    try:
+                        self._last_circadian_sleep_time = datetime.datetime.fromisoformat(lcst)
+                    except (ValueError, TypeError):
+                        self._last_circadian_sleep_time = None
                 # Restaurer le dernier rapport si présent
                 last_report = state.get("last_sleep_report")
                 if last_report:
@@ -196,6 +227,11 @@ class CircadianRhythm:
                 "total_sleep_cycles": self._total_sleep_cycles,
                 "stats": self._stats,
             }
+            # V13 : sérialiser la période réfractaire du trigger horaire
+            # pour résister aux reboots (sinon Prométhée rendort immédiatement
+            # après un crash-recovery en pleine nuit).
+            if self._last_circadian_sleep_time is not None:
+                state["last_circadian_sleep_time"] = self._last_circadian_sleep_time.isoformat()
             if self._last_sleep_report:
                 state["last_sleep_report"] = asdict(self._last_sleep_report)
             os.makedirs(os.path.dirname(CIRCADIAN_STATE_FILE), exist_ok=True)
@@ -404,7 +440,29 @@ class CircadianRhythm:
         return None
 
     def _eval_eveil_transition(self, budget_status: str, health: Optional[Dict]) -> Optional[str]:
-        """ÉVEIL → CRÉPUSCULE si conditions de pression."""
+        """ÉVEIL → CRÉPUSCULE si conditions de pression.
+
+        V13 (2026-04-23) : ajout du Processus C (horloge biologique Borbély)
+        en tête des checks. Force le crépuscule dans la fenêtre de nuit
+        [CIRCADIAN_NIGHT_START, CIRCADIAN_NIGHT_END[ si la période réfractaire
+        (12h) est écoulée depuis le dernier sommeil circadien.
+        """
+        # V13 — Processus C : horloge biologique prioritaire sur le budget
+        try:
+            now = datetime.datetime.now()
+            in_night_window = (
+                now.hour >= CIRCADIAN_NIGHT_START or now.hour < CIRCADIAN_NIGHT_END
+            )
+            can_sleep_again = (
+                self._last_circadian_sleep_time is None
+                or (now - self._last_circadian_sleep_time).total_seconds()
+                   > CIRCADIAN_REFRACTORY_SECONDS
+            )
+            if in_night_window and can_sleep_again:
+                return PHASE_CREPUSCULE
+        except Exception:
+            pass
+
         # Budget épuisé → crépuscule
         if budget_status == "exhausted":
             return PHASE_CREPUSCULE
@@ -520,6 +578,9 @@ class CircadianRhythm:
             started_at=time.time(),
             trigger_reason=reason,
         )
+        # V13 : marquer le timestamp pour la période réfractaire (évite
+        # ré-endormissement immédiat si re-éveil < 12h après)
+        self._last_circadian_sleep_time = datetime.datetime.now()
         # Stimulus cardiac : sommeil profond
         try:
             from core.cardiac_engine import heart
@@ -563,15 +624,39 @@ class CircadianRhythm:
 # ============================================================
 
 async def _task_dream_consolidation(circ: CircadianRhythm) -> str:
-    """Consolidation synaptique — simule le sommeil REM."""
+    """Consolidation synaptique (REM) + Replay MDP hippocampique (V12).
+
+    V13-B (2026-04-23) : unification des chemins du sommeil. Avant ce fix,
+    le sommeil circadien faisait SEULEMENT le dream synaptique, sans
+    rétropropager les récompenses séquentielles. Prométhée rêvait sans
+    apprendre de ses séquences. Maintenant, toute entrée en phase SOMMEIL
+    (circadienne ou nap forcé) déclenche le replay MDP + clear buffer.
+    """
     from core.synaptic_network import cortex
+    from core.hippocampus import hippocampus
+    from core.basal_ganglia import ganglia
+
+    # REM synaptique (existant)
     report = cortex.dream_consolidation()
     connections = report.get("new_connections", 0)
     pruned = report.get("pruned", 0)
+
+    # V13-B : Replay MDP V12.0 + anti-rumination V12.1b
+    trajectory = hippocampus.get_recent_trajectory()
+    mdp_updates = 0
+    if len(trajectory) >= 2:
+        try:
+            mdp_updates = ganglia.update_sequential(trajectory)
+            hippocampus.trajectory_buffer.clear()
+        except Exception as e:
+            logger.warning(f"CIRCADIEN: Replay MDP échoué: {e}")
+
     if circ._sleep_report:
         circ._sleep_report.dream_connections = connections
         circ._sleep_report.pruned_synapses = pruned
-    return f"{connections} connexions, {pruned} élagués"
+        circ._sleep_report.mdp_transitions = mdp_updates
+
+    return f"{connections} connexions, {pruned} élagués, {mdp_updates} MDP transitions"
 
 
 async def _task_hippocampus_consolidation(circ: CircadianRhythm) -> str:
