@@ -19,6 +19,7 @@ eviter le desert de recompense sur la V12.0 MDP :
 
 0 LLM, 0 GPU, ~5ms / livrable. Deterministe.
 """
+import ast
 import logging
 import re
 from collections import Counter
@@ -36,6 +37,10 @@ HEADER_RE = re.compile(
 
 TARGET_FILE_RE = re.compile(r"(?:core/)?([a-z_]+\.py)", re.IGNORECASE)
 TERMINAL_PUNCT = re.compile(r'[.!?»"\)\]`]\s*$')
+
+# D4a : blocs code Python entre triple-backticks (optionnellement tagges
+# "python"). DOTALL pour capturer les blocs multi-lignes.
+CODE_BLOCK_RE = re.compile(r"```(?:python)?\s*\n(.*?)\n```", re.DOTALL)
 
 # Slots a sujets narratifs (pas d'enumeration explicite dans le sujet)
 D1_SKIP_SLOTS = frozenset({"BULLETIN", "CREATION"})
@@ -150,6 +155,40 @@ def d2_truncation(body: str, min_last_section_words: int = 100) -> bool:
     return False
 
 
+def d4a_syntax_parse(body: str) -> bool:
+    """D4a (Phase 14.1, 23/04/2026) : flag si un bloc ```python du livrable
+    contient une SyntaxError.
+
+    Attrape :
+    - Code tronque par limite de tokens (parentheses non fermees,
+      indentation incomplete, string litteral non termine).
+    - Erreurs grossieres de generation (keyword mal tokenise, operateur
+      invalide).
+
+    Immunite au Goodhart : un LLM ne 'choisit' pas de faire une erreur
+    de syntaxe — c'est un accident de generation. Punir avec un malus
+    (flag) n'incite a aucun comportement strategique d'evitement.
+
+    Ne detecte PAS les bugs semantiques (type mismatch, variable non
+    initialisee, await sur un non-coroutine) : ces cas passent l'AST.
+    La vraie detection de bugs d'execution exigerait une sandbox
+    dynamique (roadmap V15+).
+    """
+    for match in CODE_BLOCK_RE.finditer(body):
+        code = match.group(1)
+        if not code.strip():
+            continue
+        try:
+            ast.parse(code)
+        except SyntaxError:
+            return True
+        except Exception:
+            # Autres erreurs (encoding, recursion depth) → conservateur,
+            # on ne flag pas.
+            pass
+    return False
+
+
 def d3_target_drift(body: str, subject: str, slot: str) -> bool:
     """D3 : flag si CODE_REVIEW/WORKSHOP demande un fichier X.py et :
        - X.py n'est pas cite dans le corps, OU
@@ -178,8 +217,13 @@ def grade_multiplier(n_flags: int) -> float:
     """Reward shaping : multiplicateur gradue.
 
     Evite le desert de recompense (Reward Sparsity) qui aplatirait la
-    fonction Q de la V12.0 sur un systeme en defaillance permanente."""
-    return {0: 1.0, 1: 0.5, 2: 0.25, 3: 0.1}.get(min(3, max(0, n_flags)), 0.1)
+    fonction Q de la V12.0 sur un systeme en defaillance permanente.
+
+    Phase 14.1 : extension a 4 flags (D4a SyntaxError cumule).
+    """
+    return {0: 1.0, 1: 0.5, 2: 0.25, 3: 0.1, 4: 0.05}.get(
+        min(4, max(0, n_flags)), 0.05
+    )
 
 
 def evaluate_deliverable(deliverable: str, subject: str, slot: str) -> dict:
@@ -199,7 +243,8 @@ def evaluate_deliverable(deliverable: str, subject: str, slot: str) -> dict:
     d1 = d1_completeness(body, subject, slot)
     d2 = d2_truncation(body)
     d3 = d3_target_drift(body, subject, slot)
-    n_flags = int(d1) + int(d2) + int(d3)
+    d4a = d4a_syntax_parse(body)
+    n_flags = int(d1) + int(d2) + int(d3) + int(d4a)
     reasons: List[str] = []
     if d1:
         reasons.append("completeness (items promis absents)")
@@ -207,10 +252,13 @@ def evaluate_deliverable(deliverable: str, subject: str, slot: str) -> dict:
         reasons.append("truncation (phrase/section finale coupee)")
     if d3:
         reasons.append("target drift (fichier cible non cite)")
+    if d4a:
+        reasons.append("d4a (SyntaxError dans un bloc code)")
     return {
         "d1_completeness": d1,
         "d2_truncation": d2,
         "d3_target_drift": d3,
+        "d4a_syntax_parse": d4a,
         "n_flags": n_flags,
         "multiplier": grade_multiplier(n_flags),
         "reasons": reasons,

@@ -8381,7 +8381,11 @@ RAISON: <1 phrase courte>"""
                     # Applique un multiplicateur gradue (Reward Shaping) sur la
                     # note locale AVANT scellement. Protege la retropropagation
                     # V12.0 contre le reward hacking (completude, troncation,
-                    # target drift). 0 LLM, ~5ms.
+                    # target drift, syntaxe code cassee). 0 LLM, ~5ms.
+                    #
+                    # Phase 14.1 (23/04) : observabilite elevee — WARNING en cas
+                    # d'exception (evite les bypass silencieux) + INFO sur clean
+                    # pass pour avoir la preuve empirique que le hook s'execute.
                     try:
                         from core.bullshit_detector import evaluate_deliverable as _sanity
                         _subj = info.get("subject", "")
@@ -8395,8 +8399,23 @@ RAISON: <1 phrase courte>"""
                             print(f"   🛡️  PHASE14: {_sanity_result['n_flags']} defaut(s) "
                                   f"[{', '.join(_sanity_result['reasons'])}] -> "
                                   f"grade {_orig:.1f} x {_sanity_result['multiplier']} = {eval_result['grade']:.2f}")
+                            logger.info(
+                                f"[PHASE14] Clip: slot={slot} "
+                                f"flags={_sanity_result['n_flags']} "
+                                f"reasons={_sanity_result['reasons']} "
+                                f"grade={_orig:.1f}->{eval_result['grade']:.2f}"
+                            )
+                        else:
+                            # Trace observabilite (preuve que Phase 14 a tourne sans flagger)
+                            logger.info(
+                                f"[PHASE14] Clean pass: slot={slot} "
+                                f"grade={eval_result['grade']:.1f} mult=1.0"
+                            )
                     except Exception as e:
-                        logger.debug(f"[PHASE14] Sanity check echoue: {e}")
+                        logger.warning(
+                            f"[PHASE14] Sanity check echoue (hook brise): {e}",
+                            exc_info=True,
+                        )
 
                     schedule.record_deliverable(slot, intent, {
                         "grade": eval_result["grade"],

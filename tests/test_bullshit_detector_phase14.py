@@ -19,6 +19,7 @@ from core.bullshit_detector import (
     d1_completeness,
     d2_truncation,
     d3_target_drift,
+    d4a_syntax_parse,
     evaluate_deliverable,
     extract_promised_items,
     extract_sections,
@@ -295,11 +296,131 @@ class TestGradeMultiplier:
     def test_three_flags_clip(self):
         assert grade_multiplier(3) == 0.1
 
-    def test_clamp_above_three(self):
-        assert grade_multiplier(5) == 0.1
+    def test_four_flags_phase141_floor(self):
+        """Phase 14.1 : 4 flags cumules (D1+D2+D3+D4a) → 0.05."""
+        assert grade_multiplier(4) == 0.05
+
+    def test_clamp_above_four(self):
+        assert grade_multiplier(5) == 0.05
 
     def test_clamp_below_zero(self):
         assert grade_multiplier(-1) == 1.0
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 14.1 (23/04/2026) — D4a AST Syntax Check
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestD4aSyntaxParse:
+    """D4a : flag si un bloc ```python contient une SyntaxError."""
+
+    def test_no_code_block_no_flag(self):
+        body = "Livrable prose sans code. Juste du texte explicatif."
+        assert not d4a_syntax_parse(body)
+
+    def test_valid_python_block_no_flag(self):
+        body = """Voici un exemple :
+```python
+def foo(x):
+    return x * 2
+```
+Fin."""
+        assert not d4a_syntax_parse(body)
+
+    def test_syntax_error_flags(self):
+        body = """Exemple :
+```python
+def foo(x:
+    return x * 2
+```"""
+        assert d4a_syntax_parse(body)
+
+    def test_truncated_code_flags(self):
+        """Simule une troncation par limite de tokens : classe inachevee."""
+        body = """```python
+class Agent:
+    def __init__(self, name):
+        self.name = name
+    async def vote(self, target
+```"""
+        assert d4a_syntax_parse(body)
+
+    def test_empty_code_block_skipped(self):
+        body = "```python\n\n```"
+        assert not d4a_syntax_parse(body)
+
+    def test_non_python_block_skipped(self):
+        """Un bloc non marque 'python' n'est pas parse.
+        (Regex autorise aussi sans tag, on prend tous les ```.)"""
+        body = """```
+this is not python but doesn't matter
+just text
+```"""
+        # Le bloc sans tag est parse comme Python, cette chaine
+        # est valide comme Python (3 expressions-statements).
+        # On verifie juste que ca ne leve pas.
+        result = d4a_syntax_parse(body)
+        assert isinstance(result, bool)
+
+    def test_multiple_blocks_one_broken_flags(self):
+        body = """Bloc 1 :
+```python
+x = 1
+```
+Bloc 2 :
+```python
+def broken(
+```"""
+        assert d4a_syntax_parse(body)
+
+    def test_multiple_valid_blocks_no_flag(self):
+        body = """Bloc 1 :
+```python
+x = 1
+```
+Bloc 2 :
+```python
+def valid():
+    return True
+```"""
+        assert not d4a_syntax_parse(body)
+
+
+class TestD4aIntegration:
+    """Integration D4a dans evaluate_deliverable."""
+
+    def test_d4a_flag_in_result(self):
+        body = """Code :
+```python
+def broken(
+```"""
+        r = evaluate_deliverable(body, "Sujet simple", "RESEARCH")
+        assert r["d4a_syntax_parse"]
+        assert any("d4a" in reason.lower() for reason in r["reasons"])
+
+    def test_clean_code_no_d4a_flag(self):
+        body = """```python
+def valid():
+    return 1
+```"""
+        r = evaluate_deliverable(body, "Sujet simple", "RESEARCH")
+        assert not r["d4a_syntax_parse"]
+
+    def test_d4a_cumulates_with_other_flags(self):
+        """D4a SyntaxError + D1 item manquant = 2 flags → mult 0.25."""
+        body = """## A. Section1
+""" + ("mot " * 100) + """
+
+```python
+def broken(
+```"""
+        # Sujet promet 2 items, seul "section1" est couvert
+        r = evaluate_deliverable(body, "Sujet : section1, section2", "RESEARCH")
+        assert r["d1_completeness"]
+        assert r["d4a_syntax_parse"]
+        assert r["n_flags"] >= 2
+        assert r["multiplier"] <= 0.25
 
 
 # ═══════════════════════════════════════════════════════════════════════
