@@ -5531,6 +5531,14 @@ class AutonomyEngine:
                     )
                     dream_report.append(summary)
                     logger.info(f"[DREAM] {summary}")
+            # V12.1b (2026-04-23) : vider le buffer apres replay pour
+            # eviter la rumination (re-jeu des memes transitions sur les
+            # dreams suivants). Observation 22/04 21:07-21:34 : 6 dreams
+            # en sieste qui ont chacun rejoue les memes 18 transitions,
+            # inflant artificiellement les Q-values (+0.29 au lieu de +0.05).
+            # Le buffer est volatile par design : les Episodes restent dans
+            # hippocampus._episodes pour la continuite narrative.
+            hippocampus.trajectory_buffer.clear()
         except Exception as e:
             logger.warning(f"[DREAM] Replay MDP V12.0 echoue: {e}")
 

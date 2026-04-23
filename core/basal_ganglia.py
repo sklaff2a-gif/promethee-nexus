@@ -411,6 +411,15 @@ class BasalGanglia:
             updates += 1
 
         self._prune_sequential_habits()
+
+        # V12.1a (2026-04-23) : filet de securite anti-crash post-dream.
+        # L'autosave /10 routines success suffit en regime normal, mais ce
+        # save immediat garantit la persistance des Q-updates si un crash
+        # intervient avant la prochaine routine success (cas kernel panic
+        # en pleine sieste). Seulement si des changements ont eu lieu.
+        if updates > 0:
+            self._save()
+
         return updates
 
     def _prune_sequential_habits(self) -> None:

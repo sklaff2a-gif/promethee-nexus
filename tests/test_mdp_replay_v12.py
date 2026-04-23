@@ -435,3 +435,84 @@ class TestPruneSequentialHabits:
             }
         fresh_ganglia._prune_sequential_habits()
         assert len(fresh_ganglia.sequential_habits) == MAX_SEQ_HABITS
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V12.1 (2026-04-23) — Fix persistance + anti-rumination
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestV12_1PersistenceAfterUpdate:
+    """V12.1a : update_sequential appelle _save() apres les Q-updates
+    pour garantir la persistance meme en cas de crash avant routine success."""
+
+    def test_no_save_if_trajectory_too_short(self, fresh_ganglia):
+        with patch.object(fresh_ganglia, "_save") as mock_save:
+            fresh_ganglia.update_sequential([])
+            fresh_ganglia.update_sequential([_make_episode("A")])
+        assert mock_save.call_count == 0
+
+    def test_save_called_when_updates_produced(self, fresh_ganglia):
+        traj = [_make_episode("A", 0.0), _make_episode("B", 0.8)]
+        with patch.object(fresh_ganglia, "_save") as mock_save:
+            updates = fresh_ganglia.update_sequential(traj)
+        assert updates >= 1
+        assert mock_save.call_count == 1
+
+    def test_no_save_if_no_updates(self, fresh_ganglia):
+        """Si trajectory a 2+ episodes mais aucun n'a d'intent valide,
+        update_sequential retourne 0 et ne save pas."""
+        traj = [_make_episode(""), _make_episode("")]
+        with patch.object(fresh_ganglia, "_save") as mock_save:
+            updates = fresh_ganglia.update_sequential(traj)
+        assert updates == 0
+        assert mock_save.call_count == 0
+
+
+class TestV12_1AntiRumination:
+    """V12.1b : le buffer doit etre vide entre 2 dreams pour eviter que les
+    memes transitions soient rejouees (observation 22/04 21:07-21:34).
+
+    Note : le clear() effectif est dans autonomy_engine._execute_dream_routine,
+    pas dans basal_ganglia ni hippocampus. Ces tests documentent le contrat
+    et la physique du bug via injection directe (bypass _encode_episode qui
+    depend des singletons desires/heart non mockes en test)."""
+
+    def test_buffer_clear_prevents_replay(self, fresh_hippo, fresh_ganglia):
+        """Avec clear entre 2 dreams, le 2e ne trouve rien a rejouer."""
+        for intent in ["A", "B", "C", "D"]:
+            fresh_hippo.trajectory_buffer.append(_make_episode(intent, 0.8))
+        traj_1 = fresh_hippo.get_recent_trajectory()
+        assert len(traj_1) == 4
+        updates_1 = fresh_ganglia.update_sequential(traj_1)
+        assert updates_1 == 3  # A->B, B->C, C->D
+
+        # Simulation du clear apres replay (comme dans _execute_dream_routine)
+        fresh_hippo.trajectory_buffer.clear()
+
+        traj_2 = fresh_hippo.get_recent_trajectory()
+        assert len(traj_2) == 0
+        updates_2 = fresh_ganglia.update_sequential(traj_2)
+        assert updates_2 == 0
+
+    def test_without_clear_induces_rumination(self, fresh_ganglia):
+        """Contre-test : sans clear, les visits et Q-values s'accumulent.
+        Reproduit en miniature le bug observe 22/04 (6 dreams identiques)."""
+        trajectory = [
+            _make_episode("A", 0.5),
+            _make_episode("B", 0.8),
+            _make_episode("C", 0.9),
+        ]
+        # 3 "dreams" successifs sur la meme trajectory
+        for _ in range(3):
+            fresh_ganglia.update_sequential(trajectory)
+
+        # L'entree (maitrise, A, B) doit avoir 3 visits (1 par dream)
+        key = fresh_ganglia._seq_key("maitrise", "A", "B")
+        assert key in fresh_ganglia.sequential_habits
+        assert fresh_ganglia.sequential_habits[key]["visits"] == 3
+        # Q-value amplifiee par rumination : 3 applications de LR * reward
+        # au lieu d'une seule (= valeur attendue sans rumination)
+        q_with_rumination = fresh_ganglia.sequential_habits[key]["q_value"]
+        single_pass_q = LR_SEQ * 0.8
+        assert q_with_rumination > single_pass_q
