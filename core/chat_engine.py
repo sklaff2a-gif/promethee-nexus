@@ -2586,11 +2586,21 @@ class ChatEngine:
         # lire le VRAI fichier et injecter son contenu dans le contexte
         code_context = self._inject_real_code_context(user_message)
 
+        # V15 (2026-04-23) — Nerf Optique : RAG cible sur le code source via
+        # chunks AST + metadata hierarchiques. Complementaire au
+        # _inject_real_code_context (qui lit un fichier entier si .py mentionne) :
+        # V15 cible les FONCTIONS/CLASSES/INTENTS precis via la collection
+        # source_code peuplee par SourceCodeIndexer. Fix definitif du Perroquet
+        # Architectural observe au Test Y (ex.84 Arrow) du matin.
+        v15_context = self._inject_v15_introspection(user_message)
+
         system_prompt = self._build_system_prompt(memories_text, command_result, visual_context, source=source)
         if code_context:
             system_prompt += f"\n\n[CODE REEL — VERIFIE AVANT DE REPONDRE]\n{code_context}\n" \
                              f"REGLE : ne cite QUE les fonctions/classes listees ci-dessus. " \
                              f"Si une fonction n'est pas dans cette liste, elle N'EXISTE PAS."
+        if v15_context:
+            system_prompt += f"\n\n{v15_context}"
         ollama_messages = [{"role": "system", "content": system_prompt}]
         # Fenetre de contexte adaptative : plus le prompt systeme est long,
         # moins on garde de messages d'historique (pour ne pas depasser num_ctx)
@@ -2995,6 +3005,125 @@ class ChatEngine:
             pass
 
         return ""
+
+    def _inject_v15_introspection(self, user_message: str) -> str:
+        """V15 (2026-04-23) — Nerf Optique : RAG ciblé sur le code source.
+
+        Radar : applique les regex Bloom NUES (sans scope V4.3) au user_message
+        pour détecter les mentions de fonctions / classes / fichiers du projet.
+        Pour chaque reference trouvee, query la collection source_code avec
+        filtre metadata exact. Les chunks retournes sont formates avec
+        autorite pour court-circuiter la confabulation.
+
+        Different de _inject_real_code_context (qui lit un fichier entier
+        si .py detecte) : V15 cible des FONCTIONS precises via RAG semantique
+        + metadata. Les deux sont complementaires.
+
+        Budget : max 4 chunks injectes (~3000 tokens) pour ne pas saturer
+        le contexte Ollama.
+        """
+        try:
+            from core.bloom_filter import (
+                _FUNC_CALL, _BACKTICK_FUNC, _BACKTICK_CLASS,
+                _FILE_PATH, _BUILTIN_FUNCS,
+            )
+            from core.capabilities.source_code_indexer import indexer
+        except Exception:
+            return ""
+
+        # --- Radar : extraction des references dans user_message ---
+        # On applique les regex V4.2 directement (pas le scope V4.3 qui
+        # ne s'applique qu'aux blocs code pour le veto pre-LLM).
+        functions = set()
+        for m in _FUNC_CALL.finditer(user_message):
+            name = m.group(1)
+            if name not in _BUILTIN_FUNCS:
+                functions.add(name)
+        for m in _BACKTICK_FUNC.finditer(user_message):
+            name = m.group(1).split(".")[-1]
+            if name not in _BUILTIN_FUNCS:
+                functions.add(name)
+        classes = {m.group(1) for m in _BACKTICK_CLASS.finditer(user_message)}
+        files = {m.group(1) for m in _FILE_PATH.finditer(user_message)}
+
+        # Noms "intents" en MAJUSCULES (ex: COUNCIL_DEBATE, AUDIT_STRUCTURE)
+        # qui sont des mots-cles strategiques du projet
+        intent_matches = set(re.findall(r"\b([A-Z][A-Z_]{4,}[A-Z])\b", user_message))
+        # On filtre : ne garder que ceux qui ressemblent vraiment a des intents projet
+        intent_keywords = {
+            i for i in intent_matches
+            if "_" in i and not i.startswith(("HTTP", "JSON", "YAML", "CSV", "SQL"))
+        }
+
+        if not (functions or classes or files or intent_keywords):
+            return ""
+
+        # --- Query ciblee par ref trouvee ---
+        chunks: List[Dict] = []
+
+        for func in list(functions)[:3]:
+            hits = indexer.query(func, n_results=1, filter_function=func)
+            if not hits:
+                # Fallback : semantique sans filtre
+                hits = indexer.query(func, n_results=1)
+            chunks.extend(hits)
+
+        for cls in list(classes)[:2]:
+            hits = indexer.query(cls, n_results=1, filter_class=cls)
+            if not hits:
+                hits = indexer.query(cls, n_results=1)
+            chunks.extend(hits)
+
+        for f in list(files)[:2]:
+            hits = indexer.query(f, n_results=2, filter_filepath=f)
+            chunks.extend(hits)
+
+        for intent in list(intent_keywords)[:2]:
+            # Intents = recherche semantique pure (pas de filtre metadata)
+            hits = indexer.query(intent, n_results=2)
+            chunks.extend(hits)
+
+        if not chunks:
+            return ""
+
+        # Deduplication par filepath+function_name (evite les doublons si
+        # la meme fonction apparait pour plusieurs refs)
+        seen = set()
+        unique = []
+        for c in chunks:
+            m = c.get("metadata") or {}
+            key = (m.get("filepath", ""), m.get("class_name", ""), m.get("function_name", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(c)
+            if len(unique) >= 4:
+                break
+
+        if not unique:
+            return ""
+
+        # Format d'autorite indiscutable
+        parts = [
+            "[SYSTEM OVERRIDE : LECTURE DU CODE SOURCE REALISEE]",
+            "L'utilisateur t'interroge sur tes mecanismes internes. Voici le code",
+            "source EXACT de ton architecture correspondant a sa question.",
+            "N'invente aucun mecanisme qui ne figure pas dans ces lignes.",
+            "",
+        ]
+        for c in unique:
+            parts.append(indexer.format_chunk_for_prompt(c))
+            parts.append("")
+
+        try:
+            logger.info(
+                f"V15 : {len(unique)} chunks injectes "
+                f"(refs: {len(functions)}f/{len(classes)}c/{len(files)}p/"
+                f"{len(intent_keywords)}i)"
+            )
+        except Exception:
+            pass
+        return "\n".join(parts)
 
     def _plant_curiosity_seeds(self, user_message: str):
         """Capture les graines de curiosite depuis le message humain."""
