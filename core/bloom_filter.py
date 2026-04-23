@@ -114,6 +114,12 @@ _BACKTICK_CLASS = re.compile(r'`([A-Z][a-zA-Z0-9_]{3,})`')
 # Chemin relatif projet
 _FILE_PATH = re.compile(r'\b((?:core|Agents|tests|config|docs)/[\w/]+\.py)')
 
+# V4.3 (2026-04-23) : blocs de code executable ```python ... ``` ou ``` ... ```.
+# Le Bloom ne scanne que l'interieur de ces blocs (les Actes), pas la prose
+# environnante (les Pensees, souvenirs RAG, reasoning). Fix de la
+# contamination memoire qui re-injectait les vetos passes via le RAG.
+_CODE_BLOCK = re.compile(r'```(?:python|py)?\s*\n?(.*?)\n?```', re.DOTALL)
+
 
 class BloomFilter:
     """Bloom filter avec double-hashing BLAKE2b."""
@@ -376,24 +382,45 @@ class BloomIndexManager:
         return total
 
     def extract_references(self, prompt: str) -> Dict[str, List[str]]:
-        """Extraction deterministique des entites nommees du prompt."""
+        """Extraction deterministique des entites nommees du prompt.
+
+        V4.3 (2026-04-23) : scope restreint aux blocs de code ```...```.
+        Le Bloom s'applique aux Actes (code executable livre), pas aux
+        Pensees (prose narrative, souvenirs RAG, reasoning du LLM). Fix
+        de la contamination memoire auto-renforcee observee 22-23/04 :
+        les vetos passes stockes dans collective_wisdom re-contaminaient
+        le prompt via le recall, creant une boucle de rejet perpetuelle
+        (ex: 'extract_code_snippets' devenu un noeud synaptique permanent).
+
+        Si aucun bloc de code n'est present, aucun acte a valider donc
+        aucun veto possible : retour d'un dict vide (check_prompt verra
+        total=0 et passera).
+        """
+        # V4.3 : extraire uniquement les blocs ```...``` du prompt.
+        code_blocks = _CODE_BLOCK.findall(prompt)
+        scan_text = "\n".join(code_blocks)
+
+        # Si pas d'acte executable, pas de veto possible.
+        if not scan_text.strip():
+            return {"functions": [], "classes": [], "files": []}
+
         functions = set()
-        for m in _FUNC_CALL.finditer(prompt):
+        for m in _FUNC_CALL.finditer(scan_text):
             name = m.group(1)
             if name not in _BUILTIN_FUNCS:
                 functions.add(name)
-        for m in _BACKTICK_FUNC.finditer(prompt):
+        for m in _BACKTICK_FUNC.finditer(scan_text):
             full = m.group(1)
             name = full.split(".")[-1]
             if name not in _BUILTIN_FUNCS:
                 functions.add(name)
 
         classes = set()
-        for m in _BACKTICK_CLASS.finditer(prompt):
+        for m in _BACKTICK_CLASS.finditer(scan_text):
             classes.add(m.group(1))
 
         files = set()
-        for m in _FILE_PATH.finditer(prompt):
+        for m in _FILE_PATH.finditer(scan_text):
             files.add(m.group(1))
 
         return {

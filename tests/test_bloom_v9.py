@@ -127,7 +127,8 @@ class TestGenuineHallucinationsStillCaught:
         vetos = []
         for name in candidates:
             built_manager._veto_count = 0  # reset
-            prompt = f"Appeler {name}() pour resoudre le probleme."
+            # V4.3 : bloc code pour declencher le scan
+            prompt = f"```python\n{name}()\n```"
             veto = built_manager.check_prompt("coder", prompt)
             if veto is not None:
                 vetos.append((name, veto))
@@ -147,7 +148,8 @@ class TestGenuineHallucinationsStillCaught:
         vetos = []
         for name in candidates:
             built_manager._veto_count = 0
-            prompt = f"Utiliser la classe `{name}` pour l'audit."
+            # V4.3 : bloc code pour declencher le scan
+            prompt = f"```python\n# Utiliser la classe `{name}` pour l'audit.\n```"
             veto = built_manager.check_prompt("coder", prompt)
             if veto is not None:
                 vetos.append((name, veto))
@@ -167,15 +169,15 @@ class TestWhitelistParameter:
 
     def _find_veto_name_fn(self, manager, candidates):
         """Helper : trouve un nom de fonction qui produit effectivement
-        un veto (pas un faux positif Bloom)."""
+        un veto (pas un faux positif Bloom). V4.3 : prompt avec bloc code."""
         for name in candidates:
-            prompt = f"Call {name}() here."
+            prompt = f"```python\n{name}()\n```"
             if manager.check_prompt("coder", prompt) is not None:
                 return name
         return None
 
     def test_whitelist_bypasses_veto_function(self, built_manager):
-        """Un ref absent de l'index mais whitelist -> pas de veto."""
+        """V4.3 : ref absent de l'index mais whitelist -> pas de veto."""
         name = self._find_veto_name_fn(built_manager, (
             "xyzabc_nonexistent_fn", "zzz_phantom_method_qwe",
             "qqq_mirage_helper_rst", "impossible_function_vxy",
@@ -183,7 +185,7 @@ class TestWhitelistParameter:
         assert name is not None, "Aucun nom de fonction ne vetoe (pb Bloom)"
 
         built_manager._veto_count = 0
-        prompt = f"Call {name}() here."
+        prompt = f"```python\n{name}()\n```"
         # Avec whitelist : pas de veto
         veto_with = built_manager.check_prompt(
             "coder", prompt, whitelist={name}
@@ -196,12 +198,12 @@ class TestWhitelistParameter:
         """Class whitelist bypass."""
         candidates = ("ZzzPhantomClass", "QqqMirageClass",
                       "XyzNonexistentEntity", "ImpossibleClassName")
-        # Trouver une classe qui veto effectivement sans whitelist
+        # Trouver une classe qui veto effectivement sans whitelist (V4.3 : bloc code)
         chosen = None
         for name in candidates:
             built_manager._veto_count = 0
             if built_manager.check_prompt(
-                "coder", f"Classe `{name}` utilisee."
+                "coder", f"```\nClasse `{name}` utilisee.\n```"
             ) is not None:
                 chosen = name
                 break
@@ -209,7 +211,7 @@ class TestWhitelistParameter:
 
         built_manager._veto_count = 0
         veto = built_manager.check_prompt(
-            "coder", f"Classe `{chosen}` utilisee.",
+            "coder", f"```\nClasse `{chosen}` utilisee.\n```",
             whitelist={chosen}
         )
         assert veto is None
@@ -221,7 +223,7 @@ class TestWhitelistParameter:
             "qqq_mirage_helper_rst", "impossible_function_vxy",
         ))
         assert name is not None
-        prompt = f"Call {name}()."
+        prompt = f"```python\n{name}()\n```"
 
         built_manager._veto_count = 0
         veto1 = built_manager.check_prompt("coder", prompt, whitelist=None)

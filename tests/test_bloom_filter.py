@@ -139,29 +139,35 @@ class TestReferenceExtraction:
         return BloomIndexManager()
 
     def test_extract_function_call(self, manager):
-        refs = manager.extract_references("Utilise ma_fonction(x, y) pour calculer.")
+        """V4.3 : extraction dans bloc code uniquement."""
+        refs = manager.extract_references("```python\nma_fonction(x, y)\n```")
         assert "ma_fonction" in refs["functions"]
 
     def test_extract_backtick_function(self, manager):
-        refs = manager.extract_references("Appelle `validate_factuality`.")
+        """V4.3 : backticks inline dans bloc code."""
+        refs = manager.extract_references("```\nAppelle `validate_factuality`.\n```")
         assert "validate_factuality" in refs["functions"]
 
     def test_extract_module_function_backtick(self, manager):
-        refs = manager.extract_references("Voir `core.prefrontal.compute_causal_drop`")
+        refs = manager.extract_references(
+            "```\nVoir `core.prefrontal.compute_causal_drop`\n```"
+        )
         # La derniere partie est extraite
         assert "compute_causal_drop" in refs["functions"]
 
     def test_extract_class_backtick_only(self, manager):
         """Classes en backticks : extraites. Sans backticks : non."""
         refs = manager.extract_references(
-            "La classe `PrometheusAgent` gere tout. BIOLOGIE est un mot en prose."
+            "```python\n# La classe `PrometheusAgent` gere tout. BIOLOGIE est un mot en prose.\n```"
         )
         assert "PrometheusAgent" in refs["classes"]
         # BIOLOGIE ne doit PAS etre extrait (pas de backticks)
         assert "BIOLOGIE" not in refs["classes"]
 
     def test_extract_file_path(self, manager):
-        refs = manager.extract_references("Modifie core/prefrontal.py ligne 45.")
+        refs = manager.extract_references(
+            "```python\n# Modifie core/prefrontal.py ligne 45.\n```"
+        )
         assert "core/prefrontal.py" in refs["files"]
 
     def test_ignore_builtins(self, manager):
@@ -209,35 +215,39 @@ class TestStrictVeto:
         assert veto is None
 
     def test_invalid_function_triggers_veto(self, built_manager):
-        """Fonction inventee -> veto IMMEDIAT."""
-        veto = built_manager.check_prompt("test", "Appelle fake_function_xyz() maintenant.")
+        """V4.3 : fonction inventee DANS BLOC CODE -> veto IMMEDIAT."""
+        veto = built_manager.check_prompt(
+            "test", "```python\nfake_function_xyz()\n```"
+        )
         assert veto is not None
         assert veto.ref_kind == "function"
         assert veto.ref_name == "fake_function_xyz"
         assert "introuvable" in veto.response.lower()
 
     def test_invalid_class_triggers_veto(self, built_manager):
-        """Classe inventee en backticks -> veto."""
+        """V4.3 : classe inventee en backticks DANS BLOC CODE -> veto."""
         veto = built_manager.check_prompt(
-            "test", "Instancie `FakeAgentClass` pour le test."
+            "test", "```\nInstancie `FakeAgentClass` pour le test.\n```"
         )
         assert veto is not None
         assert veto.ref_kind == "class"
 
     def test_invalid_file_triggers_veto(self, built_manager):
-        """Fichier inventé -> veto."""
+        """V4.3 : fichier inventé DANS BLOC CODE -> veto."""
         veto = built_manager.check_prompt(
-            "test", "Modifie core/nonexistent_module.py ligne 10."
+            "test", "```python\n# Modifie core/nonexistent_module.py ligne 10.\n```"
         )
         assert veto is not None
         assert veto.ref_kind == "file"
 
     def test_one_false_negative_is_enough(self, built_manager):
-        """Meme avec 10 refs valides + 1 fausse, le veto se declenche."""
+        """V4.3 : 10 refs valides + 1 fausse DANS BLOC CODE -> veto."""
         prompt = (
-            "Pour la mission, utilise verify_code_review() et dispatch_task(). "
-            "Instancie `BaseAgent`. Modifie core/base_agent.py. "
-            "Puis appelle fake_invented_fn() a la fin."
+            "```python\n"
+            "# Pour la mission, utilise verify_code_review() et dispatch_task().\n"
+            "# Instancie `BaseAgent`. Modifie core/base_agent.py.\n"
+            "# Puis appelle fake_invented_fn() a la fin.\n"
+            "```"
         )
         veto = built_manager.check_prompt("test", prompt)
         assert veto is not None
@@ -251,10 +261,10 @@ class TestStrictVeto:
         assert veto is None
 
     def test_veto_counter_increments(self, built_manager):
-        """Le compteur de vetos est incremente."""
+        """V4.3 : Le compteur de vetos est incremente (blocs code)."""
         c0 = built_manager._veto_count
-        built_manager.check_prompt("test", "Appelle fake_fn_1() maintenant.")
-        built_manager.check_prompt("test", "Appelle fake_fn_2() maintenant.")
+        built_manager.check_prompt("test", "```python\nfake_fn_1()\n```")
+        built_manager.check_prompt("test", "```python\nfake_fn_2()\n```")
         assert built_manager._veto_count == c0 + 2
 
 
@@ -316,10 +326,10 @@ class TestRealProject:
         assert veto is None
 
     def test_obvious_hallucination_caught(self, real_manager):
-        """Fonction clairement inventee -> veto."""
+        """V4.3 : fonction clairement inventee DANS BLOC CODE -> veto."""
         veto = real_manager.check_prompt(
             "test",
-            "Appelle compute_magic_rainbow_unicorn_v99() pour continuer.",
+            "```python\ncompute_magic_rainbow_unicorn_v99()\n```",
         )
         assert veto is not None
         assert "magic_rainbow_unicorn_v99" in veto.response
@@ -418,17 +428,28 @@ class TestV421FrenchCollisions:
             assert m not in refs["functions"], f"{m} devrait etre en builtin V4.2.1"
 
     def test_real_fake_still_vetoed(self, built_manager):
-        """Regression : les vraies hallucinations sont toujours vetoed."""
+        """V4.3 : hallucinations dans bloc code toujours vetoed."""
         veto = built_manager.check_prompt(
-            "test", "Appelle fabricated_magic_xyz() immediatement."
+            "test", "```python\nfabricated_magic_xyz()\n```"
         )
         assert veto is not None
 
     def test_strict_regex_requires_no_space_before_paren(self, built_manager):
-        """La regex V4.2.1 exige '(' colle au nom (PEP 8 Python)."""
-        # Avec espace : matche pas -> pas extracted
-        refs_space = built_manager.extract_references("ma_fonction (args)")
-        # Sans espace : matche -> extracted (peut veto si absent index)
-        refs_nospace = built_manager.extract_references("ma_fonction(args)")
+        """V4.3 : regex V4.2.1 exige '(' colle au nom, mais scope bloc code.
+
+        En V4.3, l'extraction se fait UNIQUEMENT dans les blocs ```...```.
+        La regex interne reste la meme (pas d'espace avant paren).
+        """
+        # Prose pure : rien n'est extrait meme avec '('
+        refs_prose = built_manager.extract_references("ma_fonction(args) en prose")
+        assert "ma_fonction" not in refs_prose["functions"]
+        # Dans bloc code avec espace : regex ne matche pas
+        refs_space = built_manager.extract_references(
+            "```python\nma_fonction (args)\n```"
+        )
+        # Dans bloc code sans espace : regex matche
+        refs_nospace = built_manager.extract_references(
+            "```python\nma_fonction(args)\n```"
+        )
         assert "ma_fonction" not in refs_space["functions"]
         assert "ma_fonction" in refs_nospace["functions"]
