@@ -445,3 +445,78 @@ class TestExceptionExtractor:
         )
         assert not r.success
         assert r.exception == "AttributeError"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V16.3 Heuristique pseudo-code (is_pseudo_code)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestIsPseudoCode:
+    """V16.3 : detection des blocs illustratifs non-executables.
+
+    Permet au hook _sandbox_correction_loop de skip les CODE_REVIEW dont
+    les blocs contiennent des annotations (Lxx:, ellipsis) typiques des
+    extraits de code commentes dans une revue.
+    """
+
+    def test_real_code_not_pseudo(self):
+        from core.capabilities.code_sandbox import is_pseudo_code
+        code = "def hello(name):\n    return f'hi {name}'"
+        assert is_pseudo_code(code) is False
+
+    def test_line_prefix_lxx_detected(self):
+        from core.capabilities.code_sandbox import is_pseudo_code
+        code = (
+            "L26: def verify_code_review(result: str) -> bool:\n"
+            "L27:     return True\n"
+        )
+        assert is_pseudo_code(code) is True
+
+    def test_ellipsis_solo_line_detected(self):
+        from core.capabilities.code_sandbox import is_pseudo_code
+        code = (
+            "def foo():\n"
+            "    x = 1\n"
+            "    ...\n"
+            "    return x\n"
+        )
+        assert is_pseudo_code(code) is True
+
+    def test_codereview_style_extract(self):
+        # Cas reel observe 07:55 : audit avec extraits annotes
+        from core.capabilities.code_sandbox import is_pseudo_code
+        code = (
+            "L26: def verify_code_review(result: str, target_file: str) -> Tuple[bool, str]:\n"
+            "...\n"
+            "L70: def _extract_real_names(filepath: str) -> List[str]:\n"
+            "L83:     except Exception:\n"
+        )
+        assert is_pseudo_code(code) is True
+
+    def test_empty_string(self):
+        from core.capabilities.code_sandbox import is_pseudo_code
+        assert is_pseudo_code("") is False
+
+    def test_none_input(self):
+        from core.capabilities.code_sandbox import is_pseudo_code
+        assert is_pseudo_code(None) is False
+
+    def test_comment_with_ellipsis_inline_ok(self):
+        # "..." inline dans une string ou un commentaire ne doit pas deceler
+        from core.capabilities.code_sandbox import is_pseudo_code
+        code = "msg = 'processing...'\nprint(msg)"
+        assert is_pseudo_code(code) is False
+
+    def test_ordinary_script_with_comments(self):
+        from core.capabilities.code_sandbox import is_pseudo_code
+        code = (
+            "# Calcule les primes\n"
+            "import math\n"
+            "def is_prime(n):\n"
+            "    if n < 2: return False\n"
+            "    for i in range(2, int(math.isqrt(n))+1):\n"
+            "        if n % i == 0: return False\n"
+            "    return True\n"
+        )
+        assert is_pseudo_code(code) is False

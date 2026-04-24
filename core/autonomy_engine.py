@@ -8384,7 +8384,7 @@ RAISON: <1 phrase courte>"""
         """
         import re as _re
         try:
-            from core.capabilities.code_sandbox import sandbox as _sandbox
+            from core.capabilities.code_sandbox import sandbox as _sandbox, is_pseudo_code as _is_pseudo
         except Exception as exc:
             logger.warning(f"[V16 SANDBOX] module indisponible: {exc}")
             return response
@@ -8402,7 +8402,20 @@ RAISON: <1 phrase courte>"""
                 # etre un markdown pur d'analyse sans code).
                 return response
 
-            code = meaningful[0]
+            # V16.3 (2026-04-24) : skip les blocs pseudo-code (L26:, ...). Un
+            # CODE_REVIEW legitime cite des extraits annotes qui ne compilent
+            # pas. Les sandboxer grille 3 iter LLM sans convergence possible.
+            testable = [b for b in meaningful if not _is_pseudo(b)]
+            if not testable:
+                logger.info(
+                    f"[V16 SANDBOX] {slot} uniquement du pseudo-code "
+                    f"(annotations Lxx:/ellipsis) — skip sandbox, pas testable."
+                )
+                response["sandbox_verified"] = None  # None = non-applicable
+                response["sandbox_skipped_pseudo_code"] = True
+                return response
+
+            code = testable[0]
             sbx_result = _sandbox.run_python(code)
 
             if sbx_result.success:
@@ -8525,13 +8538,20 @@ RAISON: <1 phrase courte>"""
         v15_school_ctx = self._build_v15_school_context(slot, prompt, info)
 
         # Dispatch au vrai agent
+        # V4.4 (2026-04-24) : marqueur explicite du slot scolaire dans la
+        # mission. Permet a base_agent.generate_content de desactiver le
+        # Bloom veto sur CREATION (ou l agent DOIT inventer des fonctions
+        # absentes de l'index, c'est l'intention du cours). Sans ce bypass,
+        # Bloom rejete la generation comme "hallucination" alors qu il s'agit
+        # d'une creation legitime.
+        mission_with_slot_marker = f"[SCHOOL_SLOT: {slot}]\n{prompt}"
         context_str = (
             f"PROTOCOLE_SCOLAIRE\n"
             f"{schedule.get_schedule_context()}"
             f"{salary_ctx}{mentor_ctx}{v15_school_ctx}"
         )
         response = await orchestrator.dispatch_task(agent_name, {
-            "mission": prompt,
+            "mission": mission_with_slot_marker,
             "context": context_str,
             "force_local": True,
             "intent": intent,

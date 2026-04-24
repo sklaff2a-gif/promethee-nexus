@@ -83,6 +83,33 @@ _EXCEPTION_FATAL_LINE = re.compile(
     r"\s*(?::|$)"
 )
 
+# V16.3 (2026-04-24) — Detection de pseudo-code illustratif.
+# Un bloc ```python``` peut etre soit du code executable, soit une
+# illustration annotee (ex: "L26: def foo():", "...") dans un CODE_REVIEW.
+# Le sandbox plante sur pseudo-code avec SyntaxError et la boucle brule
+# 3 iter LLM pour rien. On detecte et on skip.
+_PSEUDO_LINE_PREFIX = re.compile(r"^\s*L\d+\s*:", re.MULTILINE)
+_ELLIPSIS_SOLO_LINE = re.compile(r"^\s*\.\.\.\s*$", re.MULTILINE)
+
+
+def is_pseudo_code(code: str) -> bool:
+    """V16.3 — True si le bloc ressemble a du pseudo-code annote, pas du
+    Python executable.
+
+    Heuristiques :
+      - Presence de "Lxx:" en debut de ligne (numero de ligne typique des
+        CODE_REVIEW Markdown)
+      - Ellipsis seul sur une ligne (illustration tronquee volontairement)
+      - Ratio commentaires/logique > 0.7 (documentation uniquement)
+    """
+    if not code or not isinstance(code, str):
+        return False
+    if _PSEUDO_LINE_PREFIX.search(code):
+        return True
+    if _ELLIPSIS_SOLO_LINE.search(code):
+        return True
+    return False
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Data class resultat

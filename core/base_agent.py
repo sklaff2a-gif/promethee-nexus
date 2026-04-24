@@ -872,23 +872,67 @@ class BaseAgent:
         # Design : Promethee lui-meme ex.80 (m=20000, k=7)
         # Seuil STRICT (Jean-Michel 2026-04-19) : 1 faux negatif Bloom = veto
         # Economie : 100% du budget d'inference sur les rejets certains
-        try:
-            from core.bloom_filter import bloom_pre_llm
-            veto = bloom_pre_llm.check_prompt(self.name, prompt)
-            if veto is not None:
-                self.log_thought(
-                    f"🚫 BLOOM VETO V4.2 : {veto.reason}", type="info"
+        # V4.4 (2026-04-24) : bypass pour les slots generatifs (CREATION,
+        # WORKSHOP si script independant). Le Bloom est un anticorps contre
+        # les references a du code existant qui n existe pas. En CREATION on
+        # demande explicitement au LLM d'inventer de nouvelles fonctions --
+        # le veto serait une reaction auto-immune sur un corps etranger sain.
+        _is_creative_slot = (
+            "[SCHOOL_SLOT: CREATION]" in (prompt or "")
+            or "[SCHOOL_SLOT: WORKSHOP]" in (prompt or "")
+        )
+        if not _is_creative_slot:
+            try:
+                from core.bloom_filter import bloom_pre_llm
+                veto = bloom_pre_llm.check_prompt(self.name, prompt)
+                if veto is not None:
+                    self.log_thought(
+                        f"🚫 BLOOM VETO V4.2 : {veto.reason}", type="info"
+                    )
+                    return veto.response
+            except Exception:
+                pass  # Fallback transparent
+        else:
+            try:
+                logger.info(
+                    f"[V4.4 BLOOM BYPASS] {self.name} en slot generatif — "
+                    f"anticorps Bloom desactive (l'agent peut creer des "
+                    f"fonctions nouvelles sans veto)."
                 )
-                return veto.response
-        except Exception:
-            pass  # Fallback transparent
+            except Exception:
+                pass
 
         # Etape 1 : RAG (Toujours utile)
+        # V15.5 (2026-04-24) : Hierarchie epistemologique RAG > souvenirs.
+        # Diagnostic 24/04 07:55 : l'agent security a prefere un vieux souvenir
+        # (audit reasoning_protocol.py d'hier) au RAG V15.3 frais (prefrontal.py)
+        # qu'on lui mettait sous les yeux via [INJECTION DE CONTEXTE STRICTE].
+        # Faille epistemologique : un agent qui fait plus confiance a ses
+        # souvenirs qu'a une preuve empirique injectee devient dogmatique.
+        # Fix : quand le prompt contient du RAG frais (injection stricte ou
+        # code reel), on etiquette explicitement les souvenirs comme
+        # potentiellement obsoletes et on affirme la priorite absolue du RAG.
         context_memory = ""
         mem1 = self.recall(prompt, collection="collective_wisdom")
         if mem1:
             self.log_thought("🧠 Souvenirs trouvés !", type="info")
-            context_memory = f"\n[SOUVENIRS]:\n{mem1}\n"
+            _has_fresh_rag = (
+                "[INJECTION DE CONTEXTE STRICTE]" in (prompt or "")
+                or "[CODE REEL" in (prompt or "")
+            )
+            if _has_fresh_rag:
+                context_memory = (
+                    f"\n[SOUVENIRS POTENTIELLEMENT OBSOLETES]\n{mem1}\n"
+                    f"\n[HIERARCHIE EPISTEMOLOGIQUE]\n"
+                    f"ATTENTION : les souvenirs ci-dessus peuvent etre obsoletes "
+                    f"ou concerner d'autres fichiers/contextes. Si un souvenir "
+                    f"contredit le [INJECTION DE CONTEXTE STRICTE] ou le [CODE REEL] "
+                    f"fourni plus bas dans ce prompt, LES DONNEES FRAICHES ONT LA "
+                    f"PRIORITE ABSOLUE et annulent le souvenir. Ne confonds pas "
+                    f"un vieil audit avec la realite actuelle du code.\n"
+                )
+            else:
+                context_memory = f"\n[SOUVENIRS]:\n{mem1}\n"
 
         # Intuitions (spreading activation) — lecture cache RAM, 0 requête
         intuition_block = ""
