@@ -8359,6 +8359,105 @@ RAISON: <1 phrase courte>"""
             pass
         return "\n".join(parts)
 
+    async def _sandbox_correction_loop(
+        self,
+        response: dict,
+        agent_name: str,
+        original_prompt: str,
+        context_str: str,
+        intent: str,
+        slot: str,
+        max_iter: int = 2,
+    ) -> dict:
+        """V16 (2026-04-24) — Boucle de correction agentique : Code -> Run -> Traceback -> Fix.
+
+        Extrait les blocs ```python``` du livrable, teste le premier bloc
+        significatif dans le sandbox isole (subprocess + lint AST + tempdir).
+        Si le code crash, re-prompt l'agent avec le traceback EXACT injecte.
+        Apres max_iter corrections sans succes, retourne le dernier livrable
+        avec marqueur sandbox_verified=False (le reasoning_protocol jugera).
+
+        Augmente response avec :
+          sandbox_verified : bool    (False si echec apres max_iter)
+          sandbox_iterations : int   (nombre de corrections tentees)
+          sandbox_last_error : str   (nom exception ou import banni)
+        """
+        import re as _re
+        try:
+            from core.capabilities.code_sandbox import sandbox as _sandbox
+        except Exception as exc:
+            logger.warning(f"[V16 SANDBOX] module indisponible: {exc}")
+            return response
+
+        _CODE_BLOCK = _re.compile(r"```(?:python|py)?\s*\n?(.*?)\n?```", _re.DOTALL)
+        MIN_CODE_CHARS = 60  # sous ce seuil = signature/import, pas testable
+
+        for iteration in range(max_iter + 1):
+            livrable = str(response.get("result", ""))
+            blocks = _CODE_BLOCK.findall(livrable)
+            meaningful = [b.strip() for b in blocks if len(b.strip()) > MIN_CODE_CHARS]
+
+            if not meaningful:
+                # Pas de code testable -> on n intervient pas (le livrable peut
+                # etre un markdown pur d'analyse sans code).
+                return response
+
+            code = meaningful[0]
+            sbx_result = _sandbox.run_python(code)
+
+            if sbx_result.success:
+                response["sandbox_verified"] = True
+                response["sandbox_iterations"] = iteration
+                logger.info(
+                    f"[V16 SANDBOX] {slot} code OK (iter={iteration}, "
+                    f"{sbx_result.duration_ms}ms, {len(code)}c)"
+                )
+                return response
+
+            err_label = sbx_result.exception or sbx_result.banned_import or "unknown"
+            logger.warning(
+                f"[V16 SANDBOX] {slot} crash iter {iteration}/{max_iter}: {err_label}"
+            )
+
+            if iteration >= max_iter:
+                response["sandbox_verified"] = False
+                response["sandbox_iterations"] = iteration + 1
+                response["sandbox_last_error"] = err_label
+                return response
+
+            # Re-prompt avec traceback injecte (exigence Gemini : l'echo de l'erreur)
+            correction_prompt = (
+                f"{original_prompt}\n\n"
+                f"[V16 SANDBOX - ITERATION DE CORRECTION {iteration + 1}/{max_iter}]\n"
+                f"Ton code precedent a ete teste automatiquement dans un subprocess\n"
+                f"Python isole et a echoue. Voici le code teste :\n\n"
+                f"```python\n{code[:1500]}\n```\n\n"
+                f"{sbx_result.format_traceback(max_chars=1500)}\n\n"
+                f"Produis a nouveau le livrable complet avec le code corrige.\n"
+                f"Meme format (markdown + bloc ```python```). Ne repete pas\n"
+                f"l'analyse theorique si elle etait juste, corrige uniquement le code."
+            )
+
+            try:
+                retry = await orchestrator.dispatch_task(agent_name, {
+                    "mission": correction_prompt,
+                    "context": context_str,
+                    "force_local": True,
+                    "intent": intent,
+                })
+                if isinstance(retry, dict) and retry.get("result"):
+                    response = retry
+                elif retry:
+                    response = {"status": "success", "result": str(retry)}
+                else:
+                    # Dispatch muet, on garde le livrable precedent
+                    break
+            except Exception as re_err:
+                logger.warning(f"[V16 SANDBOX] re-dispatch echoue iter {iteration}: {re_err}")
+                break
+
+        return response
+
     async def _execute_school_class(self, routine: dict, intent: str) -> dict:
         """Execute un cours scolaire : dispatch agent + evaluation professeur."""
         try:
@@ -8441,6 +8540,21 @@ RAISON: <1 phrase courte>"""
         # Normaliser response en dict
         if not isinstance(response, dict):
             response = {"status": "success", "result": str(response)} if response else {"status": "error", "result": "Dispatch echoue."}
+
+        # === V16 (2026-04-24) : Boucle de correction Sandbox ===
+        # Si le livrable contient du code Python et le slot est code-centric,
+        # on teste le code en subprocess isole. En cas de crash (SyntaxError,
+        # ImportError, exceptions runtime, import banni), on re-prompt l'agent
+        # avec le traceback exact injecte (exigence Gemini : l'echo d'erreur).
+        # Max 2 iterations de correction (3 appels LLM total). Le livrable
+        # final est ensuite passe au reasoning_protocol comme d'habitude.
+        if slot in ("CREATION", "CODE_REVIEW", "WORKSHOP") and response.get("status") == "success":
+            try:
+                response = await self._sandbox_correction_loop(
+                    response, agent_name, prompt, context_str, intent, slot
+                )
+            except Exception as sbx_err:
+                logger.warning(f"[V16 SANDBOX] boucle correction echoue: {sbx_err}")
 
         # === PROTOCOLE DE RAISONNEMENT : verifier avant d'accepter ===
         if response and response.get("status") == "success":

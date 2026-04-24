@@ -1691,6 +1691,66 @@ async def school_deliverable(filename: str):
     except Exception as e:
         return {"error": str(e)}
 
+
+@app.post("/api/force/school-routine", dependencies=[Depends(verify_token)])
+async def force_school_routine(payload: dict):
+    """V16 (2026-04-24) — Force une routine scolaire hors creneau.
+
+    Outil d'audit : permet de tester V15.3 (RAG ecole) et V16 (sandbox)
+    immediatement au lieu d'attendre le creneau naturel (ecole = minuit).
+
+    Body JSON attendu :
+      {
+        "slot": "CODE_REVIEW" | "WORKSHOP" | "CREATION" | "RESEARCH" | "BULLETIN",
+        "target_file": "core/prefrontal.py",   // optionnel, utilise par RAG
+        "topic": "Revue de code ..."          // optionnel, libelle du cours
+      }
+
+    Reponse : le dict retourne par _execute_school_class, augmente de
+    'duration_s' et (si V16 actif) 'sandbox_verified', 'sandbox_iterations'.
+    """
+    slot = (payload.get("slot") or "").upper()
+    valid_slots = ("CODE_REVIEW", "WORKSHOP", "CREATION", "RESEARCH", "BULLETIN")
+    if slot not in valid_slots:
+        raise HTTPException(
+            status_code=400,
+            detail=f"slot invalide: {slot!r}. Doit etre un de {valid_slots}",
+        )
+    target_file = payload.get("target_file", "")
+    topic = payload.get("topic", f"Cours force: {slot}")
+
+    from core.school_schedule import schedule
+
+    original_get_info = schedule.get_current_slot_info
+
+    def _forced_slot_info():
+        return {
+            "slot": slot,
+            "subject": {"target_file": target_file, "topic": topic},
+            "topic": topic,
+            "is_playground": False,
+        }
+
+    schedule.get_current_slot_info = _forced_slot_info
+
+    import time as _t
+    t0 = _t.time()
+    try:
+        result = await autonomy._execute_school_class({}, f"SCHOOL_{slot}")
+        if isinstance(result, dict):
+            result["duration_s"] = round(_t.time() - t0, 2)
+            result["forced"] = True
+        return result
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": f"{type(exc).__name__}: {exc}",
+            "duration_s": round(_t.time() - t0, 2),
+            "forced": True,
+        }
+    finally:
+        schedule.get_current_slot_info = original_get_info
+
 # ============================================================
 # API Stimulation — Interface externe des organes (Piste 7 bio-inspired)
 # Inspire de Cortical Labs CL1 "Cortical Cloud" API
