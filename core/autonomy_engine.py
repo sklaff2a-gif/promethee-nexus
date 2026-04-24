@@ -8222,6 +8222,134 @@ RAISON: <1 phrase courte>"""
             logger.warning(f"[SCHOOL] Playground echoue: {e}")
             return {"status": "error", "result": f"Playground echoue: {e}"}
 
+    @staticmethod
+    def _build_v15_school_context(slot: str, prompt: str, info: dict) -> str:
+        """V15 Etape 3 (2026-04-23) — Injection RAG source_code dans les prompts
+        ecole. Symetrie avec le nerf optique du ChatEngine
+        (_inject_v15_introspection).
+
+        Sans ce greffon, un CODE_REVIEW post-V4.3 (Bloom ne bloque plus la
+        prose) et post-V15.2 (chat a le RAG) ferait du Perroquet Hallucinatoire
+        dans l'ecole : le LLM inventerait le code de core/prefrontal.py pour
+        pouvoir le critiquer. V15.3 lui donne le vrai code.
+
+        Logique :
+        - CODE_REVIEW : target_file est explicite -> query filter_filepath
+          n_results=6 pour couvrir les fonctions principales du fichier.
+        - RESEARCH / WORKSHOP / CREATION : radar regex Bloom sur le prompt
+          pour detecter fonctions / classes / fichiers / intents mentionnes.
+        - Plafond 6 chunks total pour ne pas saturer le ctx Ollama.
+
+        Retourne "" si aucun chunk pertinent, sinon un bloc formatte avec
+        header d'autorite [SYSTEM OVERRIDE].
+        """
+        import re as _re
+        try:
+            from core.capabilities.source_code_indexer import indexer
+            from core.bloom_filter import (
+                _FUNC_CALL, _BACKTICK_FUNC, _BACKTICK_CLASS,
+                _FILE_PATH, _BUILTIN_FUNCS,
+            )
+        except Exception:
+            return ""
+
+        chunks = []
+        seen = set()
+
+        def _add(chunk_list):
+            for c in (chunk_list or []):
+                m = c.get("metadata") or {}
+                key = (m.get("filepath"), m.get("class_name"), m.get("function_name"))
+                if key not in seen:
+                    seen.add(key)
+                    chunks.append(c)
+
+        def _safe_query(*args, **kwargs):
+            # Resilience ChromaDB : si l'indexer crash (coma boot, corruption,
+            # disque plein), l'ecole tombe en mode V14 silencieusement plutot
+            # que de crasher _execute_school_class. Log warning une fois.
+            try:
+                return indexer.query(*args, **kwargs) or []
+            except Exception as e:
+                try:
+                    logger.warning(
+                        f"[V15.3 ECOLE] indexer.query echoue, greffon desactive pour cette routine: {type(e).__name__}"
+                    )
+                except Exception:
+                    pass
+                return []
+
+        subject_dict = info.get("subject", {}) if isinstance(info.get("subject"), dict) else {}
+        target_file = subject_dict.get("target_file", "")
+
+        # Priorite 1 : CODE_REVIEW avec target_file → injection complete
+        if slot == "CODE_REVIEW" and target_file:
+            _add(_safe_query(target_file, n_results=6, filter_filepath=target_file))
+
+        # Priorite 2 : radar sur prompt+subject pour fonctions / classes / fichiers / intents
+        scan_text = (prompt or "") + " " + str(subject_dict)
+
+        functions = set()
+        for m in _FUNC_CALL.finditer(scan_text):
+            n = m.group(1)
+            if n not in _BUILTIN_FUNCS:
+                functions.add(n)
+        for m in _BACKTICK_FUNC.finditer(scan_text):
+            n = m.group(1).split(".")[-1]
+            if n not in _BUILTIN_FUNCS:
+                functions.add(n)
+        classes = {m.group(1) for m in _BACKTICK_CLASS.finditer(scan_text)}
+        files = {m.group(1) for m in _FILE_PATH.finditer(scan_text)}
+        intent_raw = set(_re.findall(r"\b([A-Z][A-Z_]{4,}[A-Z])\b", scan_text))
+        intents = {
+            i for i in intent_raw
+            if "_" in i and not i.startswith(("HTTP", "JSON", "YAML", "CSV", "SQL"))
+        }
+
+        for fn in list(functions)[:3]:
+            _add(_safe_query(fn, n_results=1, filter_function=fn)
+                 or _safe_query(fn, n_results=1))
+        for cls in list(classes)[:2]:
+            _add(_safe_query(cls, n_results=1, filter_class=cls)
+                 or _safe_query(cls, n_results=1))
+        for f in list(files)[:2]:
+            if f == target_file:
+                continue  # deja couvert
+            _add(_safe_query(f, n_results=2, filter_filepath=f))
+        for intent in list(intents)[:2]:
+            _add(_safe_query(intent, n_results=2))
+
+        if not chunks:
+            return ""
+
+        # Plafond : 6 chunks maximum (budget ctx Ollama)
+        chunks = chunks[:6]
+
+        parts = [
+            "",
+            "[SYSTEM OVERRIDE : LECTURE DU CODE SOURCE REALISEE]",
+            "Voici le code source EXACT de ton architecture pertinent pour ce cours.",
+            "N'invente aucun mecanisme qui ne figure pas dans ces lignes.",
+            "Toute reference a une fonction/classe absente ci-dessous est une",
+            "hallucination que tu dois refuser de produire.",
+            "",
+        ]
+        for c in chunks:
+            try:
+                parts.append(indexer.format_chunk_for_prompt(c))
+                parts.append("")
+            except Exception:
+                continue  # chunk formatte mal = on skip, pas de crash ecole
+        try:
+            logger.info(
+                f"V15.3 ECOLE : {len(chunks)} chunks injectes pour {slot} "
+                f"(target_file={target_file!r}, refs: "
+                f"{len(functions)}f/{len(classes)}c/{len(files)}p/{len(intents)}i)"
+            )
+        except Exception:
+            pass
+        return "\n".join(parts)
+
     async def _execute_school_class(self, routine: dict, intent: str) -> dict:
         """Execute un cours scolaire : dispatch agent + evaluation professeur."""
         try:
@@ -8280,8 +8408,20 @@ RAISON: <1 phrase courte>"""
         except Exception:
             pass
 
+        # V15 Etape 3 : injection RAG source_code dans le contexte ecole
+        # Symetrie avec _inject_v15_introspection du ChatEngine. Fix
+        # definitif du Perroquet Hallucinatoire qui pourrait emerger
+        # apres V4.3 (Bloom ne bloque plus la prose des souvenirs) :
+        # l'agent recoit desormais le VRAI code de son architecture
+        # avant de produire un CODE_REVIEW / RESEARCH / WORKSHOP.
+        v15_school_ctx = self._build_v15_school_context(slot, prompt, info)
+
         # Dispatch au vrai agent
-        context_str = f"PROTOCOLE_SCOLAIRE\n{schedule.get_schedule_context()}{salary_ctx}{mentor_ctx}"
+        context_str = (
+            f"PROTOCOLE_SCOLAIRE\n"
+            f"{schedule.get_schedule_context()}"
+            f"{salary_ctx}{mentor_ctx}{v15_school_ctx}"
+        )
         response = await orchestrator.dispatch_task(agent_name, {
             "mission": prompt,
             "context": context_str,
