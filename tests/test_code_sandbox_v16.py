@@ -321,3 +321,127 @@ class TestStats:
         assert s["runs"] == 3
         assert s["crashes"] == 2
         assert 0.3 < s["success_rate"] < 0.34
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V16.2 Stethoscope — _extract_exception_name avec stderr complexes
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestExceptionExtractor:
+    """V16.2 : tests unitaires du parseur d'exception.
+
+    Injecte des stderr factices complexes pour verifier que la regex
+    trouve bien la racine du mal (derniere ligne de traceback).
+    """
+
+    def test_simple_traceback_attributeerror(self, fresh_sandbox):
+        stderr = (
+            "Traceback (most recent call last):\n"
+            "  File \"<string>\", line 5, in <module>\n"
+            "  File \"<string>\", line 3, in fusionner\n"
+            "AttributeError: 'list' object has no attribute 'update'\n"
+        )
+        assert fresh_sandbox._extract_exception_name(stderr) == "AttributeError"
+
+    def test_keyerror_with_message(self, fresh_sandbox):
+        stderr = (
+            "Traceback (most recent call last):\n"
+            "  File \"<string>\", line 2, in <module>\n"
+            "KeyError: 'missing_key'\n"
+        )
+        assert fresh_sandbox._extract_exception_name(stderr) == "KeyError"
+
+    def test_typeerror_multiline_message(self, fresh_sandbox):
+        stderr = (
+            "Traceback (most recent call last):\n"
+            "  File \"<string>\", line 1, in <module>\n"
+            "TypeError: unsupported operand type(s) for +: 'int' and 'str'\n"
+        )
+        assert fresh_sandbox._extract_exception_name(stderr) == "TypeError"
+
+    def test_chained_exception_returns_last(self, fresh_sandbox):
+        # Python chained exceptions : on veut la DERNIERE visible par le process
+        stderr = (
+            "Traceback (most recent call last):\n"
+            "  File \"<string>\", line 3, in <module>\n"
+            "ValueError: invalid literal\n"
+            "\n"
+            "During handling of the above exception, another exception occurred:\n"
+            "\n"
+            "Traceback (most recent call last):\n"
+            "  File \"<string>\", line 6, in <module>\n"
+            "RuntimeError: could not recover\n"
+        )
+        # La root cause visible = RuntimeError (derniere ligne)
+        assert fresh_sandbox._extract_exception_name(stderr) == "RuntimeError"
+
+    def test_custom_exception(self, fresh_sandbox):
+        stderr = (
+            "Traceback (most recent call last):\n"
+            "  File \"<string>\", line 10, in <module>\n"
+            "MyCustomError: something went wrong\n"
+        )
+        assert fresh_sandbox._extract_exception_name(stderr) == "MyCustomError"
+
+    def test_warning_captured(self, fresh_sandbox):
+        stderr = (
+            "Traceback (most recent call last):\n"
+            "  File \"<string>\", line 2, in <module>\n"
+            "DeprecationWarning: use alternative method\n"
+        )
+        assert fresh_sandbox._extract_exception_name(stderr) == "DeprecationWarning"
+
+    def test_keyboardinterrupt(self, fresh_sandbox):
+        stderr = (
+            "Traceback (most recent call last):\n"
+            "  File \"<string>\", line 3, in <module>\n"
+            "KeyboardInterrupt\n"
+        )
+        assert fresh_sandbox._extract_exception_name(stderr) == "KeyboardInterrupt"
+
+    def test_systemexit_with_message(self, fresh_sandbox):
+        stderr = (
+            "Traceback (most recent call last):\n"
+            "  File \"<string>\", line 2, in <module>\n"
+            "SystemExit: 1\n"
+        )
+        assert fresh_sandbox._extract_exception_name(stderr) == "SystemExit"
+
+    def test_empty_stderr_returns_none(self, fresh_sandbox):
+        assert fresh_sandbox._extract_exception_name("") is None
+        assert fresh_sandbox._extract_exception_name(None) is None
+
+    def test_no_exception_pattern_returns_none(self, fresh_sandbox):
+        # stderr de debug pur sans exception formee
+        stderr = "[DEBUG] some info\n[INFO] another message\n"
+        assert fresh_sandbox._extract_exception_name(stderr) is None
+
+    def test_ignores_narrative_colon_lines(self, fresh_sandbox):
+        # Un traceback File doit etre ignore malgre le ":"
+        stderr = (
+            "Traceback (most recent call last):\n"
+            '  File "<string>", line 1, in <module>\n'
+            "NameError: name 'foo' is not defined\n"
+        )
+        assert fresh_sandbox._extract_exception_name(stderr) == "NameError"
+
+    def test_trailing_whitespace_stripped(self, fresh_sandbox):
+        stderr = "ValueError: bad input   \n\n\n"
+        assert fresh_sandbox._extract_exception_name(stderr) == "ValueError"
+
+    def test_sysexit_produces_systemexit_label(self, fresh_sandbox):
+        # Fallback : sys.exit(N) ne produit pas de traceback sur stderr,
+        # juste un return_code != 0. Doit etre identifie SystemExit.
+        r = fresh_sandbox.run_python("import sys\nsys.exit(1)")
+        assert not r.success
+        assert r.return_code == 1
+        assert r.exception == "SystemExit"
+
+    def test_real_attributeerror_end_to_end(self, fresh_sandbox):
+        # Reproduit le scenario du tir piege de Gemini (10:38)
+        r = fresh_sandbox.run_python(
+            "x = [1, 2, 3]\nx.update({'a': 1})"
+        )
+        assert not r.success
+        assert r.exception == "AttributeError"

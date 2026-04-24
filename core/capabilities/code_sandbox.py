@@ -23,6 +23,7 @@ from __future__ import annotations
 import ast
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -39,9 +40,13 @@ logger = logging.getLogger(__name__)
 
 # Modules bannis (AST lint pre-run). Le subprocess ne pourra pas les
 # importer via `import X` ou `from X import Y`.
+# V16.1 (2026-04-24) : `sys` retire de la liste noire. Les scripts Python
+# normaux utilisent sys.argv / sys.exit / sys.version en permanence ; les
+# risques reels (sys.modules manipulation, sys.setrecursionlimit DoS) sont
+# marginaux et le subprocess isole ne peut pas atteindre le parent via sys.
 _BANNED_MODULES = frozenset({
     # Acces systeme et shell
-    "os", "subprocess", "shutil", "sys",
+    "os", "subprocess", "shutil",
     # Reseau
     "socket", "urllib", "urllib3", "requests", "httpx", "http",
     "ftplib", "telnetlib", "smtplib", "paramiko", "asyncio",
@@ -64,6 +69,19 @@ DEFAULT_TIMEOUT_S = 5
 MAX_TIMEOUT_S = 30
 MAX_CODE_CHARS = 20_000  # protection payload
 _TEMPDIR_PREFIX = "promethee_sandbox_"
+
+# V16.2 (2026-04-24) — Regex du "stethoscope" d'exception.
+# Un traceback Python standard termine toujours par une ligne de la forme :
+#   NomDeLErreur: message optionnel
+# On accepte tout identifiant CamelCase terminant par Error/Exception/Warning
+# ou les 3 cas particuliers pas toujours suffixes : Exit (SystemExit),
+# Interrupt (KeyboardInterrupt), StopIteration, GeneratorExit. Le `^` force
+# le match debut de ligne pour eviter de matcher du texte narratif.
+_EXCEPTION_FATAL_LINE = re.compile(
+    r"^([A-Z][A-Za-z0-9_]*"
+    r"(?:Error|Exception|Warning|Exit|Interrupt|Iteration|SystemExit))"
+    r"\s*(?::|$)"
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -232,16 +250,31 @@ class CodeSandbox:
         return env
 
     def _extract_exception_name(self, stderr: str) -> Optional[str]:
-        """Extrait le nom de l'exception depuis la derniere ligne du traceback."""
+        """V16.2 — Extracteur d'exception ameliore ("stethoscope").
+
+        Un traceback Python standard crache toujours sa ligne fatale en
+        toute derniere position (non vide) sous la forme :
+            NomDeLErreur: message
+        On lit stderr a l'envers et on retourne le PREMIER match de la regex
+        _EXCEPTION_FATAL_LINE. Gere :
+          - Exceptions standards : ValueError, TypeError, AttributeError, ...
+          - Exceptions custom utilisateur qui finissent par Error/Exception
+          - SystemExit, KeyboardInterrupt, StopIteration (pas de suffixe Error)
+          - Traceback chaines (multiple 'During handling...') : seul le
+            dernier match compte = la root cause visible par le process.
+
+        Si aucun match : retourne None (ex: stderr vide, crash via signal OS,
+        stderr de debug pur sans exception formee).
+        """
         if not stderr:
             return None
-        for line in stderr.strip().split("\n")[::-1]:
-            line = line.strip()
-            if ":" in line and not line.startswith((" ", "\t", "File ", "^")):
-                name = line.split(":")[0].strip()
-                # Validation : un nom d'exception contient des lettres et commence par maj
-                if name and name[0].isupper() and all(c.isalnum() or c == "_" for c in name):
-                    return name
+        for line in reversed(stderr.splitlines()):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            m = _EXCEPTION_FATAL_LINE.match(stripped)
+            if m:
+                return m.group(1)
         return None
 
     def run_python(self, code: str, timeout: int = DEFAULT_TIMEOUT_S) -> SandboxResult:
@@ -290,6 +323,15 @@ class CodeSandbox:
             duration_ms = int((time.time() - t0) * 1000)
             success = proc.returncode == 0
             exception_name = None if success else self._extract_exception_name(proc.stderr)
+
+            # V16.2 : fallback sys.exit(N) — le process finit non-zero sans
+            # traceback formate. On infere SystemExit plutot que "unknown".
+            if (
+                not success
+                and exception_name is None
+                and not (proc.stderr or "").strip()
+            ):
+                exception_name = "SystemExit"
 
             self._runs_count += 1
             if not success:
