@@ -2621,12 +2621,40 @@ class ChatEngine:
             "je ne dispose pas", "sans accès direct",
             "limitation technique",
         ]
+        # V15.4b (2026-04-24) : filtre symetrique pour le RAG code source.
+        # Observation : le LLM 9B s'etait pre-ecrit une "regle" hallucinee
+        # "Je n'ai pas d'acces direct a mon code source, mes descriptions
+        # precedentes etaient des deductions probabilistes" et se la citait
+        # verbatim a chaque nouveau chat, ignorant les chunks V15 injectes.
+        # Pattern : contamination auto-referentielle via l'historique.
+        # Fix : si V15 ou _inject_real_code_context a injecte du code dans ce
+        # tour, on skip les anciens messages assistant qui affirmaient ne pas
+        # avoir acces au code.
+        rag_poison = [
+            "n'ai pas d'acces direct",
+            "n ai pas d acces direct",
+            "pas acces direct a mon code",
+            "pas acces a mon code source",
+            "deductions probabilistes",
+            "ne peux pas lire le fichier",
+            "je ne peux pas \"voir\" tes fichiers",
+            "je ne peux pas voir tes fichiers",
+            "ce serait une hallucination",
+            "ce serait une invention",
+            "mon contexte de conversation est limite",
+        ]
+        _rag_active = bool(v15_context or code_context)
         for msg in recent:
             content = msg["content"]
             # Si observation visuelle active, filtrer les reponses qui disent "je ne peux pas voir"
             if visual_context and msg["role"] == "assistant":
                 if any(p in content.lower() for p in vision_poison):
                     continue  # Skip ce message empoisonne
+            # V15.4b : si injection RAG active, filtrer les reponses qui se
+            # citent elles-memes comme "je n'ai pas acces au code".
+            if _rag_active and msg["role"] == "assistant":
+                if any(p in content.lower() for p in rag_poison):
+                    continue  # Skip ce message empoisonne RAG
             ollama_messages.append({
                 "role": msg["role"],
                 "content": content,
