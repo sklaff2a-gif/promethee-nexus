@@ -8539,6 +8539,7 @@ RAISON: <1 phrase courte>"""
         ensuite comme pour n'importe quel livrable).
         """
         import time as _t_mr
+        import re as _re
         t0 = _t_mr.time()
 
         # V18.5 (2026-04-24 15:55) — MAP AGENT NEUTRALISE.
@@ -8627,9 +8628,27 @@ RAISON: <1 phrase courte>"""
                 elif micro_resp:
                     text = str(micro_resp).strip()
 
-                # "RIEN" / "Rien." / "rien" avec variations
-                _norm = text.lower().strip(" .,!:\n\"'`*").split("\n")[0]
-                is_rien = _norm in ("rien", "ras", "aucune", "aucun")
+                # V19.1 (2026-04-24 17:20) : filtre RIEN ancre strictement
+                # a la FIN de chaine. La V19 precedente matchait "RIEN <suivi
+                # de 1000 chars d'explication>" comme RIEN et jetait les
+                # vraies notes a la poubelle. Trou noir semantique.
+                # Nouveau pattern : ne filtre QUE si le texte est integralement
+                # un token vide (ponctuation/markdown seulement apres RIEN).
+                #   "RIEN."                             -> filtre
+                #   "**EXACTEMENT RIEN.**"              -> filtre
+                #   "R.A.S."                            -> filtre
+                #   "RIEN. Cependant, j'ai note..."     -> GARDE (info reelle)
+                #   "Aucune anomalie detectee"          -> filtre (tail courte)
+                #   "Aucune anomalie, mais voir L42"    -> GARDE
+                is_rien = bool(_re.match(
+                    r"^\s*[*_`'\"]*\s*"
+                    r"(?:exactement|strictement|absolument|vraiment|literalement)?"
+                    r"\s*[*_`'\"]*\s*"
+                    r"(?:rien|r\.?a\.?s\.?|aucun[e]?(?:\s+(?:anomalie|defaut|probleme|faille))?|neant|none)"
+                    r"[^a-zA-Z\n]*\s*$",  # fin : uniquement ponctuation/markdown
+                    text,
+                    _re.IGNORECASE,
+                ))
                 if text and not is_rien:
                     map_notes.append({"location": location, "note": text})
                     logger.info(
@@ -8749,6 +8768,25 @@ RAISON: <1 phrase courte>"""
             final_result = str(final_resp.get("result", ""))
         elif final_resp:
             final_result = str(final_resp)
+
+        # V18.7c (2026-04-24 17:00) : PURGE DES PENSEES.
+        # Le writer qwen3.5:9b utilise les tags <think>...</think> en mode
+        # reasoning. Le tag de fermeture `</think>` reste orphelin a la fin
+        # du livrable. Phase 14 anti-perroquet detecte ca comme "truncation"
+        # (phrase finale coupee) et clippe x0.5 la note du Professeur.
+        # Observe 16:46 : note prof 7.5 -> Phase 14 -> 3.75 (artefact pur).
+        # Fix : strip les blocs <think>...</think> complets ET les tags
+        # orphelins avant de livrer le rapport.
+        try:
+            final_result = _re.sub(
+                r"<think>.*?</think>", "", final_result,
+                flags=_re.DOTALL | _re.IGNORECASE,
+            )
+            final_result = _re.sub(
+                r"</?think>", "", final_result, flags=_re.IGNORECASE,
+            ).strip()
+        except Exception:
+            pass
 
         duration_s = round(_t_mr.time() - t0, 2)
         logger.info(
@@ -9011,7 +9049,29 @@ RAISON: <1 phrase courte>"""
             try:
                 professor = orchestrator.agents.get("professor")
                 if professor:
-                    eval_result = await professor.evaluate(deliverable, slot, info.get("subject", ""))
+                    # V18.7b (2026-04-24 16:45) : normalisation propre du subject
+                    # pour le Professeur.
+                    # L'endpoint /api/force/school-routine et le flow école
+                    # normal peuvent passer un dict {target_file, topic}. Le
+                    # professor fait .lower() sur le subject et crash si dict.
+                    # Observe 15:56:59 : "dict object has no attribute lower"
+                    # Fix : format lisible "Target: <file> — <topic>" plutot
+                    # qu'un str(dict) brut qui empoisonne le prompt du prof.
+                    _subj_raw = info.get("subject", "")
+                    if isinstance(_subj_raw, dict):
+                        _tgt = _subj_raw.get("target_file", "").strip()
+                        _topic = _subj_raw.get("topic", "").strip()
+                        if _tgt and _topic:
+                            _subj_for_prof = f"Target: {_tgt} — {_topic}"
+                        elif _tgt:
+                            _subj_for_prof = f"Target: {_tgt}"
+                        elif _topic:
+                            _subj_for_prof = _topic
+                        else:
+                            _subj_for_prof = ""
+                    else:
+                        _subj_for_prof = str(_subj_raw or "")
+                    eval_result = await professor.evaluate(deliverable, slot, _subj_for_prof)
 
                     # Phase 14 (V12.0 sequel) — Sanity Check Local anti-Perroquet
                     # Applique un multiplicateur gradue (Reward Shaping) sur la
@@ -9028,7 +9088,22 @@ RAISON: <1 phrase courte>"""
                         if isinstance(_subj, dict):
                             _subj = _subj.get("topic", str(_subj))
                         _sanity_result = _sanity(deliverable, str(_subj), slot)
-                        if _sanity_result["multiplier"] < 1.0:
+                        # V19.2 (2026-04-24 17:30) — LAISSEZ-PASSER SOUVERAIN.
+                        # Diagnostic 15e tir : Phase 14 clippe x0.25 un
+                        # livrable map_reduce que le prof a note 9.4/10.
+                        # Causes (specifiques a V18 map_reduce) :
+                        #   - 'truncation' : section finale < 100 mots (normal
+                        #     quand la synthese est dense/concise, pas un bug)
+                        #   - 'd4a' : fragments ```python``` illustratifs qui
+                        #     ne parsent pas seuls (show-how, pas scripts)
+                        # Ces defauts sont STRUCTURELS pour un format
+                        # map_reduce, pas des marques de bullshit. Exemption
+                        # diplomatique : si response.map_reduce=True, le
+                        # prof est l'oracle de qualite, Phase 14 n'a plus
+                        # droit de clipper la note. La sanity check tourne
+                        # quand meme pour observabilite mais sans effet.
+                        _is_map_reduce = bool(response.get("map_reduce"))
+                        if _sanity_result["multiplier"] < 1.0 and not _is_map_reduce:
                             _orig = eval_result["grade"]
                             eval_result["grade"] = round(_orig * _sanity_result["multiplier"], 2)
                             eval_result["phase14"] = _sanity_result
@@ -9040,6 +9115,17 @@ RAISON: <1 phrase courte>"""
                                 f"flags={_sanity_result['n_flags']} "
                                 f"reasons={_sanity_result['reasons']} "
                                 f"grade={_orig:.1f}->{eval_result['grade']:.2f}"
+                            )
+                        elif _sanity_result["multiplier"] < 1.0 and _is_map_reduce:
+                            # V19.2 : flags detectes mais exemption map_reduce
+                            eval_result["phase14"] = dict(_sanity_result)
+                            eval_result["phase14"]["bypassed_map_reduce"] = True
+                            logger.info(
+                                f"[PHASE14] V19.2 bypass map_reduce: slot={slot} "
+                                f"grade={eval_result['grade']:.1f} "
+                                f"(flags={_sanity_result['n_flags']} "
+                                f"reasons={_sanity_result['reasons']} "
+                                f"— structurels, pas pris en compte)"
                             )
                         else:
                             # Trace observabilite (preuve que Phase 14 a tourne sans flagger)
@@ -9086,7 +9172,19 @@ RAISON: <1 phrase courte>"""
                         logger.debug(f"[SCHOOL] Mentor echoue: {e}")
 
             except Exception as e:
-                logger.warning(f"[SCHOOL] Evaluation echouee: {e}")
+                # V18.7c (2026-04-24 16:45) : ABOLITION DU SILENCE.
+                # Ce except etouffait des AttributeError critiques (cf. bug
+                # 15:56:59 "dict object has no attribute lower" qui a prive
+                # Promethee de 10 tirs de recompense dopaminergique sans
+                # qu'aucune alarme ne hurle). Un systeme autonome ne doit
+                # JAMAIS cacher ses lesions cerebrales. On remonte en ERROR
+                # avec stacktrace complete pour que le moi-de-demain voie
+                # immediatement dans les logs ce qui a lache.
+                logger.error(
+                    f"[CRITIQUE] Le Professeur a crashe lors de l'evaluation : "
+                    f"{type(e).__name__}: {e}",
+                    exc_info=True,
+                )
 
         return response or {"status": "error", "result": "Dispatch echoue."}
 

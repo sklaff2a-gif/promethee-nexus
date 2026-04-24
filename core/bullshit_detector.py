@@ -134,7 +134,14 @@ def d1_completeness(body: str, subject: str, slot: str,
 
 def d2_truncation(body: str, min_last_section_words: int = 100) -> bool:
     """D2 : flag si phrase finale interrompue OU derniere section (parmi 3+)
-    fait < `min_last_section_words` mots."""
+    fait < `min_last_section_words` mots.
+
+    V19 (2026-04-24 17:15) : exception pour le format V18 map-reduce qui
+    termine les livrables par "Note globale : X/10". Sans cette exception,
+    Phase 14 clippe systematiquement x0.5 un livrable structurellement
+    complet mais dont la derniere ligne ne porte pas de ponctuation
+    terminale au sens strict.
+    """
     lines = [l for l in body.rstrip().split("\n") if l.strip()]
     if not lines:
         return False
@@ -145,7 +152,12 @@ def d2_truncation(body: str, min_last_section_words: int = 100) -> bool:
     ends_terminal = bool(TERMINAL_PUNCT.search(last_line))
     ends_code = last_line.endswith("```")
     ends_bullet = bool(re.match(r"^\s*[-*•]\s+.+\S$", last_line))
-    if not (ends_terminal or ends_code or ends_bullet):
+    # V19 : format map-reduce legitime "Note globale : X/10"
+    ends_note = bool(re.search(
+        r"Note\s+globale\s*:\s*\d+(?:\.\d+)?\s*/\s*10",
+        last_line, re.IGNORECASE,
+    ))
+    if not (ends_terminal or ends_code or ends_bullet or ends_note):
         return True
     # Squelette : derniere section trop courte
     sections = extract_sections(body)
