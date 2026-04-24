@@ -71,6 +71,24 @@ class Config:
         "professor": "qwen3.5:9b",       # Evaluation locale (Cloud en primaire via routing)
     }
 
+    # V17 MoE (2026-04-24) — Mixture of Experts par routine scolaire.
+    # Diagnostic 24/04 matinee : le LLM 9B generique (promethee-security,
+    # writer qwen3.5:9b) est incapable de suivre les chunks AST fournis par
+    # V15.3 RAG sur les CODE_REVIEW. Il genere un audit security "generique"
+    # tire de ses poids parametriques au lieu d analyser le code reel.
+    # Solution MoE : router les slots a forte composante code vers un modele
+    # specialise code (qwen2.5-coder:14b, deja utilise pour coder/evolution).
+    # Prend PRIORITE sur AGENT_SPECIFIC_LOCAL_MODELS quand le marqueur
+    # [SCHOOL_SLOT: XXX] est detecte dans le prompt (injecte par V4.4).
+    # Les slots generatifs (RESEARCH, BULLETIN) restent en 9b pour la
+    # narration/synthese (domaines non-code).
+    ROUTINE_MODELS = {
+        "CODE_REVIEW": "qwen2.5-coder:14b",  # revue AST rigoureuse
+        "CREATION":    "qwen2.5-coder:14b",  # script executable
+        "WORKSHOP":    "qwen2.5-coder:14b",  # prototypage code
+        # RESEARCH / BULLETIN / autres : fallback default (9b generique)
+    }
+
     # Contexte par agent (override le num_ctx du Modelfile si besoin)
     AGENT_NUM_CTX = {
         "coder": 16384,

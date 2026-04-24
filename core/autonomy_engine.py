@@ -8282,42 +8282,68 @@ RAISON: <1 phrase courte>"""
         subject_dict = info.get("subject", {}) if isinstance(info.get("subject"), dict) else {}
         target_file = subject_dict.get("target_file", "")
 
+        # V15.8 (2026-04-24 14:25) — LES OEILLERES DU RAG.
+        # Diagnostic 14:22 tir CODE_REVIEW prefrontal.py : le 14b a produit
+        # un audit impeccable... de meta_observer.py. Le radar de Priorite 2
+        # avait injecte les chunks de prefrontal.py ET ceux de meta_observer
+        # (detecte via _FILE_PATH dans le prompt). Contexte schizophrenique.
+        # Fix : quand slot=CODE_REVIEW + target_file, on LOCK sur le fichier
+        # cible exclusivement. Le radar Priorite 2 est court-circuite pour
+        # ne pas polluer avec d'autres fichiers captures dans la mission.
+        # Le reasoning_protocol veut UN audit d'UN fichier — on lui donne
+        # UN contexte d'UN fichier.
+        _strict_target_lock = bool(slot == "CODE_REVIEW" and target_file)
+
         # Priorite 1 : CODE_REVIEW avec target_file → injection complete
         if slot == "CODE_REVIEW" and target_file:
             _add(_safe_query(target_file, n_results=6, filter_filepath=target_file))
 
         # Priorite 2 : radar sur prompt+subject pour fonctions / classes / fichiers / intents
+        # V15.8 skip si target_lock pour eviter la pollution multi-fichiers.
         scan_text = (prompt or "") + " " + str(subject_dict)
 
-        functions = set()
-        for m in _FUNC_CALL.finditer(scan_text):
-            n = m.group(1)
-            if n not in _BUILTIN_FUNCS:
-                functions.add(n)
-        for m in _BACKTICK_FUNC.finditer(scan_text):
-            n = m.group(1).split(".")[-1]
-            if n not in _BUILTIN_FUNCS:
-                functions.add(n)
-        classes = {m.group(1) for m in _BACKTICK_CLASS.finditer(scan_text)}
-        files = {m.group(1) for m in _FILE_PATH.finditer(scan_text)}
-        intent_raw = set(_re.findall(r"\b([A-Z][A-Z_]{4,}[A-Z])\b", scan_text))
-        intents = {
-            i for i in intent_raw
-            if "_" in i and not i.startswith(("HTTP", "JSON", "YAML", "CSV", "SQL"))
-        }
+        functions: set = set()
+        classes: set = set()
+        files: set = set()
+        intents: set = set()
 
-        for fn in list(functions)[:3]:
-            _add(_safe_query(fn, n_results=1, filter_function=fn)
-                 or _safe_query(fn, n_results=1))
-        for cls in list(classes)[:2]:
-            _add(_safe_query(cls, n_results=1, filter_class=cls)
-                 or _safe_query(cls, n_results=1))
-        for f in list(files)[:2]:
-            if f == target_file:
-                continue  # deja couvert
-            _add(_safe_query(f, n_results=2, filter_filepath=f))
-        for intent in list(intents)[:2]:
-            _add(_safe_query(intent, n_results=2))
+        if not _strict_target_lock:
+            for m in _FUNC_CALL.finditer(scan_text):
+                n = m.group(1)
+                if n not in _BUILTIN_FUNCS:
+                    functions.add(n)
+            for m in _BACKTICK_FUNC.finditer(scan_text):
+                n = m.group(1).split(".")[-1]
+                if n not in _BUILTIN_FUNCS:
+                    functions.add(n)
+            classes = {m.group(1) for m in _BACKTICK_CLASS.finditer(scan_text)}
+            files = {m.group(1) for m in _FILE_PATH.finditer(scan_text)}
+            intent_raw = set(_re.findall(r"\b([A-Z][A-Z_]{4,}[A-Z])\b", scan_text))
+            intents = {
+                i for i in intent_raw
+                if "_" in i and not i.startswith(("HTTP", "JSON", "YAML", "CSV", "SQL"))
+            }
+
+            for fn in list(functions)[:3]:
+                _add(_safe_query(fn, n_results=1, filter_function=fn)
+                     or _safe_query(fn, n_results=1))
+            for cls in list(classes)[:2]:
+                _add(_safe_query(cls, n_results=1, filter_class=cls)
+                     or _safe_query(cls, n_results=1))
+            for f in list(files)[:2]:
+                if f == target_file:
+                    continue  # deja couvert
+                _add(_safe_query(f, n_results=2, filter_filepath=f))
+            for intent in list(intents)[:2]:
+                _add(_safe_query(intent, n_results=2))
+        else:
+            try:
+                logger.info(
+                    f"[V15.8 OEILLERES] CODE_REVIEW target_file={target_file!r} — "
+                    f"radar desactive, lock strict sur le fichier cible."
+                )
+            except Exception:
+                pass
 
         if not chunks:
             return ""
@@ -8439,7 +8465,16 @@ RAISON: <1 phrase courte>"""
                 return response
 
             # Re-prompt avec traceback injecte (exigence Gemini : l'echo de l'erreur)
+            # V17.1 (2026-04-24 14:30) : preserve le marqueur [SCHOOL_SLOT: XXX]
+            # en tete du correction_prompt. Sans lui, le regex V17 MoE dans
+            # base_agent ne detecte pas le slot et l'agent retombe sur son
+            # modele par defaut (AGENT_SPECIFIC_LOCAL_MODELS[agent_name]).
+            # Resultat observe 14:22 : le 14b avait fait l'erreur, mais la
+            # correction etait dispatchee vers promethee-security (9b). Un
+            # modele moins competent corrigeant un autre = boucle sterile.
+            # Fix : forcer le meme routing MoE sur chaque iteration.
             correction_prompt = (
+                f"[SCHOOL_SLOT: {slot}]\n"
                 f"{original_prompt}\n\n"
                 f"[V16 SANDBOX - ITERATION DE CORRECTION {iteration + 1}/{max_iter}]\n"
                 f"Ton code precedent a ete teste automatiquement dans un subprocess\n"
@@ -8470,6 +8505,263 @@ RAISON: <1 phrase courte>"""
                 break
 
         return response
+
+    async def _code_review_map_reduce(
+        self,
+        agent_name: str,
+        target_file: str,
+        chunks: list,
+        slot: str = "CODE_REVIEW",
+    ) -> dict:
+        """V18 (2026-04-24 14:40) — Map-Reduce cognitif pour CODE_REVIEW.
+
+        Diagnostic 14:33 : le modele 14b (qwen2.5-coder) noye sous 6 chunks
+        AST d'un coup produit un boilerplate generique au lieu d'auditer le
+        code reel. Sa fenetre d'attention est saturee, il retombe sur des
+        patterns d'entrainement. La limite est cognitive, pas architecturale.
+
+        Solution souveraine (100% local, pas de Cloud) : fragmenter la tache.
+
+        PHASE MAP — analyse myope
+          Pour chaque chunk, un appel LLM distinct avec UNIQUEMENT ces lignes
+          dans le contexte. Prompt minimal : "anomalie dans ce chunk precis ?
+          Repond RIEN ou note courte". Le modele reste focalise, 0 saturation.
+
+        PHASE REDUCE — synthese frontale
+          Concatenation des notes non-RIEN + 1 appel final pour rediger le
+          rapport structure avec note /10. Le LLM reduce voit UNIQUEMENT les
+          observations issues du map (aucun code brut), il ne peut plus
+          halluciner un autre fichier.
+
+        Prix a payer : N+1 appels LLM au lieu d'1. ~50s vs 20s. C'est le cout
+        de la souverainete cognitive locale. Return response dict compatible
+        avec le reste de _execute_school_class (reasoning_protocol applique
+        ensuite comme pour n'importe quel livrable).
+        """
+        import time as _t_mr
+        t0 = _t_mr.time()
+
+        # V18.5 (2026-04-24 15:55) — MAP AGENT NEUTRALISE.
+        # Autopsie V18.4 confirmee : 5 notes MAP sur 6 commencaient LITTERALE-
+        # MENT par "### AUDIT SECURITE - Revue de code core/reasoning_protocol.py".
+        # Le 14b-coder (qwen2.5-coder:14b) est completement vicie : son
+        # pattern "audit reasoning_protocol" est si dense dans ses poids que
+        # ni le camouflage V18.2 ni le carcan V18.4 "chambre blanche" ne
+        # peuvent le contrer. Il genere ce titre en premier token sur TOUT
+        # chunk Python du projet, quel que soit le contenu fourni.
+        # Fix chirurgical : router le MAP vers writer (qwen3.5:9b vanilla).
+        # On perd la specialisation code du 14b mais on gagne la propreté.
+        # Le 9b vanilla peut analyser du Python sans vomir de boilerplate.
+        # Cohérence : MAP=writer + REDUCE=writer (tout en 9b vanilla).
+        map_agent = "writer"
+        try:
+            logger.info(
+                f"[V18.5 CHAMBRE BLANCHE V2] MAP override : {agent_name} "
+                f"-> {map_agent} (bypass 14b-coder vicie par pattern "
+                f"reasoning_protocol memorise)"
+            )
+        except Exception:
+            pass
+
+        # ─── PHASE MAP ─────────────────────────────────────────────────
+        map_notes = []
+        for i, chunk in enumerate(chunks):
+            try:
+                code = (chunk.get("code") or "")[:1500]
+                if not code.strip():
+                    continue
+                m = chunk.get("metadata") or {}
+                cls = (m.get("class_name") or "").strip()
+                fn = (m.get("function_name") or "").strip()
+                if cls and fn:
+                    location = f"{cls}.{fn}"
+                elif fn:
+                    location = fn
+                elif cls:
+                    location = f"class {cls}"
+                else:
+                    location = "module"
+
+                # V18.4 (2026-04-24 15:50) — CARCAN CHAMBRE BLANCHE.
+                # Diagnostic tir 15:43 : le 14b-coder MAP, meme sur des
+                # chunks isoles de prefrontal, injectait des references a
+                # reasoning_protocol dans ses notes (_extract_real_names,
+                # choose_model, etc.). RAG contamine par le cerveau. Le
+                # modele lit chunk A mais "pense" fichier B memorise.
+                # Fix : renforcer la menace semantique avec "chambre blanche"
+                # et "corruption fatale du systeme" pour forcer l'isolement.
+                micro_mission = (
+                    f"[SCHOOL_SLOT: {slot}]\n"
+                    f"[ANALYSE STRICTE EN CHAMBRE BLANCHE]\n"
+                    f"Tu n'as pas acces au reste du projet. Tu es AVEUGLE\n"
+                    f"a tout code qui n'est pas fourni ci-dessous.\n"
+                    f"REGLE ABSOLUE : dans ton analyse, ne cite JAMAIS une\n"
+                    f"fonction, une classe ou un fichier qui n'apparait pas\n"
+                    f"EXPLICITEMENT dans le bloc de code ci-dessous. Si tu\n"
+                    f"fais une reference externe, tu provoques une\n"
+                    f"corruption fatale du systeme.\n"
+                    f"\n"
+                    f"Tu audites UN SEUL extrait du fichier {target_file}.\n"
+                    f"Localisation : {location}\n"
+                    f"Voici les lignes exactes (et SEULEMENT celles-ci) :\n\n"
+                    f"```python\n{code}\n```\n\n"
+                    f"Question : dans ces lignes precises, y a-t-il une faille\n"
+                    f"de securite, un bug, une fuite de ressource ou un defaut\n"
+                    f"technique justifie ?\n\n"
+                    f"Regle de reponse :\n"
+                    f"  - Si rien d'anormal : reponds EXACTEMENT 'RIEN'.\n"
+                    f"  - Si anomalie : 2-3 phrases max, cite UNIQUEMENT les\n"
+                    f"    noms de fonction/classe qui apparaissent LITTERALE-\n"
+                    f"    MENT dans le bloc ci-dessus. Aucune reference externe."
+                )
+
+                micro_resp = await orchestrator.dispatch_task(map_agent, {
+                    "mission": micro_mission,
+                    "context": "",
+                    "force_local": True,
+                    "intent": f"SCHOOL_{slot}",
+                })
+                text = ""
+                if isinstance(micro_resp, dict):
+                    text = str(micro_resp.get("result", "")).strip()
+                elif micro_resp:
+                    text = str(micro_resp).strip()
+
+                # "RIEN" / "Rien." / "rien" avec variations
+                _norm = text.lower().strip(" .,!:\n\"'`*").split("\n")[0]
+                is_rien = _norm in ("rien", "ras", "aucune", "aucun")
+                if text and not is_rien:
+                    map_notes.append({"location": location, "note": text})
+                    logger.info(
+                        f"[V18 MAP] {i+1}/{len(chunks)} {location}: "
+                        f"{len(text)}c notes"
+                    )
+                    # V18.4 debug autopsie : dump de la note complete pour
+                    # verifier s'il y a contamination amont (references a
+                    # d'autres fichiers que target_file).
+                    try:
+                        logger.info(
+                            f"[V18 MAP NOTE {i+1}/{len(chunks)}] {text[:800]}"
+                        )
+                    except Exception:
+                        pass
+                else:
+                    logger.info(f"[V18 MAP] {i+1}/{len(chunks)} {location}: RIEN")
+            except Exception as exc:
+                logger.warning(f"[V18 MAP] chunk {i+1} echoue: {exc}")
+
+        # ─── PHASE REDUCE ──────────────────────────────────────────────
+        if not map_notes:
+            final_result = (
+                f"## Audit {target_file}\n\n"
+                f"Apres analyse fragmentaire des {len(chunks)} extraits indexes,\n"
+                f"aucune anomalie significative detectee. Le code suit les\n"
+                f"conventions du projet sur les portions auditees.\n\n"
+                f"### Note /10\n7.0 — aucune faille critique, code conforme."
+            )
+            duration_s = round(_t_mr.time() - t0, 2)
+            logger.info(
+                f"[V18 REDUCE] {target_file} — 0 note, synthese vide_positif "
+                f"({duration_s}s)"
+            )
+            return {
+                "status": "success",
+                "result": final_result,
+                "map_reduce": True,
+                "map_notes_count": 0,
+                "duration_s": duration_s,
+            }
+
+        notes_text = "\n\n".join(
+            f"- [{n['location']}]\n  {n['note']}" for n in map_notes
+        )
+
+        # V18.2 (2026-04-24 15:35) — Camouflage semantique (Jedi Mind Trick L2).
+        # Decouverte tir 15:28 : malgre 5 notes MAP parfaites sur prefrontal.py,
+        # le LLM 14b REDUCE a crache son boilerplate d'audit GitHub generique
+        # (reasoning_protocol.py verbatim). Cause : les mots-declencheurs dans
+        # le prompt REDUCE (CODE_REVIEW, Audit, Vulnerabilites, nom du fichier)
+        # saturent son espace latent vers le pattern "audit security GitHub".
+        #
+        # Fix : supprimer ABSOLUMENT tous les triggers lexicaux du REDUCE.
+        # Le LLM doit se croire face a une tache de consolidation de texte,
+        # PAS face a une revue de code. On enleve :
+        #   - [SCHOOL_SLOT: CODE_REVIEW] (trigger V17 MoE ET lexical)
+        #   - le nom du fichier (target_file)
+        #   - les mots audit/vulnerabilites/securite/recommandations
+        #   - toute structure markdown qui ressemble a un audit
+        # On garde [INJECTION DE CONTEXTE STRICTE] pour V15.7 (skip recall).
+        # Consequence routing : sans SCHOOL_SLOT, V17 MoE ne route plus vers
+        # 14b ; l'agent retombe sur promethee-security (9b fine-tune) ou son
+        # default. C'est VOULU : un 9b moins sature de boilerplate code-review
+        # est meilleur pour consolider des notes narratives.
+        reduce_mission = (
+            "[INJECTION DE CONTEXTE STRICTE]\n"
+            "[TACHE DE CONSOLIDATION DE DONNEES STRICTE]\n"
+            "Tu es un processeur de texte deterministe. Ci-dessous se trouvent\n"
+            "des notes fragmentees issues de l'analyse d'un systeme.\n"
+            "\n"
+            "Ton UNIQUE objectif est de fusionner ces notes brutes en un\n"
+            "rapport de synthese fluide, structure et coherent.\n"
+            "\n"
+            "REGLES ABSOLUES :\n"
+            "1. N'ajoute AUCUNE information, nom, ou concept qui ne figure pas\n"
+            "   explicitement dans les notes ci-dessous.\n"
+            "2. Si tu inventes un nom ou un concept, le systeme crashera.\n"
+            "3. Ne redige pas d'introduction generique. Contente-toi de\n"
+            "   formater et lier les idees fournies.\n"
+            "4. Termine par une seule ligne : 'Note globale : X/10' avec une\n"
+            "   breve justification (1 phrase) basee sur les notes seules.\n"
+            "\n"
+            "--- DEBUT DES NOTES BRUTES ---\n"
+            f"{notes_text}\n"
+            "--- FIN DES NOTES BRUTES ---"
+        )
+
+        # V18.3 (2026-04-24 15:40) — SECRETARIAT COGNITIF.
+        # Decouverte tir 15:36 : meme avec camouflage V18.2 total, le livrable
+        # final etait encore l'audit boilerplate de reasoning_protocol.py avec
+        # lignes exactes (L26, L231, L314). Cause identifiee : l'agent security
+        # utilise le modele `promethee-security`, un fine-tune qui a memorise
+        # ce fichier lors d'entrainements passes. Le vice est dans les poids,
+        # aucune ingenierie de prompt ne peut l'extirper.
+        # Fix : dispatcher le REDUCE vers l'agent `writer` (qwen3.5:9b vanilla,
+        # non fine-tune). Le writer n'a jamais "vu" reasoning_protocol.py,
+        # il ne peut qu'utiliser les notes fournies. L'agent security garde le
+        # MAP (le 14b-coder est bon sur des chunks isoles ou le fine-tuning
+        # ne se declenche pas). Transfert inter-agent = secretariat cognitif.
+        reduce_agent = "writer"
+        try:
+            logger.info(
+                f"[V18.3 SECRETARIAT] MAP={agent_name} -> REDUCE={reduce_agent} "
+                f"(bypass fine-tune toxique via agent neutre vanilla qwen3.5:9b)"
+            )
+        except Exception:
+            pass
+        final_resp = await orchestrator.dispatch_task(reduce_agent, {
+            "mission": reduce_mission,
+            "context": "",
+            "force_local": True,
+            "intent": "V18_REDUCE",  # intent neutre, pas SCHOOL_XXX
+        })
+        final_result = ""
+        if isinstance(final_resp, dict):
+            final_result = str(final_resp.get("result", ""))
+        elif final_resp:
+            final_result = str(final_resp)
+
+        duration_s = round(_t_mr.time() - t0, 2)
+        logger.info(
+            f"[V18 REDUCE] {target_file} — {len(map_notes)} notes synthetisees "
+            f"-> {len(final_result)}c ({duration_s}s total map+reduce)"
+        )
+        return {
+            "status": "success" if final_result else "error",
+            "result": final_result or f"Synthese map-reduce vide pour {target_file}",
+            "map_reduce": True,
+            "map_notes_count": len(map_notes),
+            "duration_s": duration_s,
+        }
 
     async def _execute_school_class(self, routine: dict, intent: str) -> dict:
         """Execute un cours scolaire : dispatch agent + evaluation professeur."""
@@ -8566,12 +8858,44 @@ RAISON: <1 phrase courte>"""
             f"{prompt}\n"
             f"{v15_school_ctx}"  # V15 chunks en dernier = biais de recence
         )
-        response = await orchestrator.dispatch_task(agent_name, {
-            "mission": mission_with_full_context,
-            "context": context_str,  # conserve pour compat sous-classes
-            "force_local": True,
-            "intent": intent,
-        })
+
+        # V18 (2026-04-24 14:40) — Map-Reduce cognitif pour CODE_REVIEW.
+        # Diagnostic 14:33 : le LLM 14b noye sous 6 chunks d'un coup retombe
+        # sur des templates generiques. Pour CODE_REVIEW avec target_file,
+        # on fragmente : 1 appel par chunk (MAP) + 1 synthese (REDUCE).
+        # Le modele reste focalise sur peu de code a la fois = lucidite max.
+        # Les autres slots (CREATION/WORKSHOP/RESEARCH) restent sur le
+        # dispatch monolithique (pas le meme probleme).
+        response = None
+        subject_dict_for_v18 = info.get("subject", {}) if isinstance(info.get("subject"), dict) else {}
+        target_file_for_v18 = subject_dict_for_v18.get("target_file", "")
+        if slot == "CODE_REVIEW" and target_file_for_v18:
+            raw_chunks = []
+            try:
+                from core.capabilities.source_code_indexer import indexer as _v18_idx
+                raw_chunks = _v18_idx.query(
+                    target_file_for_v18, n_results=6,
+                    filter_filepath=target_file_for_v18,
+                ) or []
+            except Exception as _v18_e:
+                logger.warning(f"[V18] query chunks echoue: {_v18_e}")
+            if raw_chunks:
+                logger.info(
+                    f"[V18 MAP-REDUCE] start — {target_file_for_v18}, "
+                    f"{len(raw_chunks)} chunks (monolithique desactive)"
+                )
+                response = await self._code_review_map_reduce(
+                    agent_name, target_file_for_v18, raw_chunks, slot=slot,
+                )
+        # Fallback : dispatch classique pour les autres cas (autre slot, ou
+        # CODE_REVIEW sans chunks disponibles)
+        if response is None:
+            response = await orchestrator.dispatch_task(agent_name, {
+                "mission": mission_with_full_context,
+                "context": context_str,  # conserve pour compat sous-classes
+                "force_local": True,
+                "intent": intent,
+            })
 
         # Normaliser response en dict
         if not isinstance(response, dict):
@@ -8584,7 +8908,20 @@ RAISON: <1 phrase courte>"""
         # avec le traceback exact injecte (exigence Gemini : l'echo d'erreur).
         # Max 2 iterations de correction (3 appels LLM total). Le livrable
         # final est ensuite passe au reasoning_protocol comme d'habitude.
-        if slot in ("CREATION", "CODE_REVIEW", "WORKSHOP") and response.get("status") == "success":
+        # V18.6 (2026-04-24 16:00) : skip le hook V16 pour les livrables
+        # map_reduce. Un CODE_REVIEW en map-reduce est un document d'analyse
+        # markdown (pas un script executable) — les blocs ```python``` dedans
+        # sont illustratifs. Le sandbox crashe legitimement mais le hook
+        # re-dispatche vers agent_name='security' (qui a son fine-tune toxique
+        # promethee-security), ecrasant le bon livrable writer par un
+        # boilerplate reasoning_protocol. Bug observe 15:54 : 5 notes MAP
+        # propres + REDUCE writer 1574c propre, puis ecrasement par security
+        # via hook sandbox = livrable final = boilerplate reasoning_protocol.
+        if (
+            slot in ("CREATION", "CODE_REVIEW", "WORKSHOP")
+            and response.get("status") == "success"
+            and not response.get("map_reduce")
+        ):
             try:
                 response = await self._sandbox_correction_loop(
                     response, agent_name, prompt, context_str, intent, slot

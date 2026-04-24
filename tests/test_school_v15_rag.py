@@ -152,3 +152,73 @@ class TestV15SchoolContextBuilder:
                 pytest.fail("La fonction doit etre resiliente aux erreurs indexer")
         # Peut retourner "" ou une chaine vide ; l'important est de ne pas lever
         assert isinstance(out, str)
+
+    def test_v15_8_strict_target_lock_skips_radar(self):
+        """V15.8 : CODE_REVIEW avec target_file DOIT court-circuiter le radar.
+
+        Le prompt contient explicitement une mention de 'core/other_file.py',
+        de `SomeOtherClass` et de `some_function()`. SANS V15.8, le radar
+        Priorite 2 les ajouterait au contexte (pollution multi-fichiers).
+        AVEC V15.8, seul target_file est query, le radar est skippe.
+        """
+        info = {"subject": {"target_file": "core/prefrontal.py"}}
+        prompt = (
+            "Revue de code core/prefrontal.py\n"
+            "Mentionne aussi core/meta_observer.py, core/cingulate.py,\n"
+            "la classe `MetaObserver` et les fonctions `_load_history()` et "
+            "`get_component()`. Intent reference : COUNCIL_DEBATE."
+        )
+        with patch("core.capabilities.source_code_indexer.indexer") as mock:
+            mock.query.return_value = [{
+                "code": "class Prefrontal: pass",
+                "metadata": {
+                    "filepath": "core/prefrontal.py",
+                    "class_name": "Prefrontal",
+                    "function_name": "",
+                    "node_type": "class",
+                },
+            }]
+            mock.format_chunk_for_prompt.return_value = "CHUNK_PREFRONTAL"
+            AutonomyEngine._build_v15_school_context(
+                "CODE_REVIEW", prompt, info
+            )
+
+        # V15.8 : UN SEUL appel query attendu (le filter_filepath sur target)
+        # Pas de query pour MetaObserver, meta_observer.py, cingulate.py, etc.
+        calls = mock.query.call_args_list
+        assert len(calls) == 1, (
+            f"V15.8 lock doit limiter a 1 query (le target_file), "
+            f"obtenu {len(calls)} : {[c.args for c in calls]}"
+        )
+        # L'unique appel doit etre sur le target_file
+        first_call = calls[0]
+        assert first_call.kwargs.get("filter_filepath") == "core/prefrontal.py"
+
+    def test_v15_8_lock_only_for_code_review(self):
+        """V15.8 lock s'applique UNIQUEMENT a CODE_REVIEW + target_file.
+
+        Pour RESEARCH ou WORKSHOP, le radar doit rester actif meme avec un
+        target_file present (ce sont des slots moins contraints).
+        """
+        info = {"subject": {"target_file": "core/prefrontal.py"}}
+        prompt = "analyse `Council` dans core/council.py"
+        with patch("core.capabilities.source_code_indexer.indexer") as mock:
+            mock.query.return_value = [{
+                "code": "class Council: pass",
+                "metadata": {
+                    "filepath": "core/council.py",
+                    "class_name": "Council",
+                    "function_name": "",
+                    "node_type": "class",
+                },
+            }]
+            mock.format_chunk_for_prompt.return_value = "CHUNK"
+            AutonomyEngine._build_v15_school_context(
+                "RESEARCH", prompt, info  # slot RESEARCH, pas CODE_REVIEW
+            )
+        # RESEARCH : le radar doit avoir fait PLUSIEURS queries (Council, council.py, etc.)
+        calls = mock.query.call_args_list
+        assert len(calls) >= 2, (
+            f"RESEARCH ne doit PAS etre locke par V15.8 (radar actif), "
+            f"obtenu {len(calls)} queries"
+        )

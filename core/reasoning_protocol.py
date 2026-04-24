@@ -161,7 +161,18 @@ async def measure_confidence(prompt: str, model: str = "qwen3.5:9b",
 
 
 def _extract_cited_names(result: str) -> List[str]:
-    """Extrait les noms de fonctions/classes cites dans un audit."""
+    """Extrait les noms de fonctions/classes cites dans un audit.
+
+    V24 (2026-04-24) : regex renforcee pour eliminer les faux positifs
+    grammaticaux francais ('soient', 'avec', 'dans'...) qui etaient captures
+    par le pattern `(\\w{3,})`. Nouvelle strategie :
+      1. Regex extrait les candidats
+      2. Filtrage stoplist (anglais + francais courants)
+      3. Heuristique "ressemble a un identifier Python" : un nom legitime
+         contient au moins UN signal typique (underscore, digit, ou CamelCase
+         avec >=2 majuscules). Les mots de langue naturelle (tout minuscules,
+         pas d'underscore) sont ecartes meme s'ils passent la stoplist.
+    """
     import re
     # Chercher les patterns : `nom_func`, nom_func(), class NomClass
     patterns = [
@@ -171,17 +182,53 @@ def _extract_cited_names(result: str) -> List[str]:
         r'def\s+(\w{3,})',                 # def function_name
         r'class\s+(\w{3,})',              # class ClassName
     ]
+    # Stoplist etendue EN + FR (mots courants qu on ne veut pas compter
+    # comme des noms de fonctions meme si ils passent la regex)
+    _STOPLIST = {
+        # Keywords Python / anglais courants
+        "self", "none", "true", "false", "return", "import", "from",
+        "class", "print", "str", "int", "float", "dict", "list", "set",
+        "tuple", "async", "await", "except", "raise", "pass", "try",
+        "the", "and", "for", "with", "not", "any", "all", "def",
+        # V24 Francais : mots grammaticaux les plus frequents dans les audits
+        "soient", "soit", "sont", "est", "etre", "avec", "sans", "dans",
+        "pour", "par", "sur", "sous", "entre", "avant", "apres", "meme",
+        "tous", "toutes", "tout", "cette", "cela", "ces", "son", "sa",
+        "ses", "notre", "votre", "leur", "leurs", "donc", "aussi", "mais",
+        "plus", "moins", "tres", "bien", "fait", "faire", "avoir", "ont",
+        "peut", "peuvent", "doit", "doivent", "lors", "selon", "comme",
+        "pendant", "alors", "ainsi", "puis", "encore", "quand", "car",
+        "ailleurs", "autre", "autres", "chaque", "plusieurs", "aucun",
+        "aucune", "deja", "jamais", "toujours", "souvent", "parfois",
+        "rarement", "certes", "certain", "certaine", "certains", "certaines",
+    }
+
+    def _looks_like_py_identifier(n: str) -> bool:
+        """Heuristique : un vrai identifier Python contient au moins UN
+        signal typique. Les mots de langue naturelle sont tout minuscules
+        sans underscore et sont rejetes ici."""
+        if not n or len(n) < 3:
+            return False
+        if "_" in n:
+            return True  # foo_bar, _private, __dunder__
+        if any(c.isdigit() for c in n):
+            return True  # foo42, v12b
+        if n[0].isupper():
+            # CamelCase reel : au moins 2 majuscules OU tout majuscule (intent like COUNCIL_DEBATE)
+            upper_count = sum(1 for c in n if c.isupper())
+            if upper_count >= 2:
+                return True
+        return False
+
     names = set()
     for pattern in patterns:
         for match in re.finditer(pattern, result, re.IGNORECASE):
             name = match.group(1)
-            # Filtrer les mots generiques
-            if name.lower() not in {"self", "none", "true", "false", "return",
-                                     "import", "from", "class", "print", "str",
-                                     "int", "float", "dict", "list", "async",
-                                     "await", "except", "raise", "pass", "try",
-                                     "the", "and", "for", "with", "not"}:
-                names.add(name)
+            if name.lower() in _STOPLIST:
+                continue
+            if not _looks_like_py_identifier(name):
+                continue
+            names.add(name)
     return list(names)
 
 

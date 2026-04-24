@@ -983,9 +983,36 @@ class BaseAgent:
                 pass
 
         # Modèles Locaux
+        # V17 MoE (2026-04-24) : Mixture of Experts par routine.
+        # Hierarchie de resolution du modele local :
+        #   1. ROUTINE_MODELS[slot] si le marqueur [SCHOOL_SLOT: XXX] est detecte
+        #      (CODE_REVIEW/CREATION/WORKSHOP -> qwen2.5-coder:14b)
+        #   2. AGENT_SPECIFIC_LOCAL_MODELS[agent_name] sinon
+        #   3. DEFAULT_LOCAL_MODEL en dernier recours
         specific_locals = getattr(Config, "AGENT_SPECIFIC_LOCAL_MODELS", {})
         default_local = getattr(Config, "DEFAULT_LOCAL_MODEL", "gemma3:12b")
-        local_model = specific_locals.get(self.name, default_local)
+        routine_models = getattr(Config, "ROUTINE_MODELS", {})
+        local_model = None
+        # Priorite 1 : detection du slot scolaire via le marqueur V4.4
+        try:
+            import re as _re_mox
+            _slot_match = _re_mox.search(r"\[SCHOOL_SLOT:\s*([A-Z_]+)\]", prompt or "")
+            if _slot_match:
+                _slot = _slot_match.group(1).strip()
+                if _slot in routine_models:
+                    local_model = routine_models[_slot]
+                    try:
+                        logger.info(
+                            f"[V17 MoE] slot={_slot} agent={self.name} -> "
+                            f"model={local_model} (override AGENT_SPECIFIC)"
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        # Priorite 2 : routing par agent
+        if local_model is None:
+            local_model = specific_locals.get(self.name, default_local)
 
         # Enforcement MAX_LOCAL_MODEL_SIZE : fallback si le modèle est trop gros pour la VRAM
         max_size = getattr(Config, "MAX_LOCAL_MODEL_SIZE", 0)

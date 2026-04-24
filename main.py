@@ -1718,10 +1718,12 @@ async def force_school_routine(payload: dict):
         )
     target_file = payload.get("target_file", "")
     topic = payload.get("topic", f"Cours force: {slot}")
+    prompt_override = payload.get("prompt")  # si fourni, remplace le prompt du slot
 
     from core.school_schedule import schedule
 
     original_get_info = schedule.get_current_slot_info
+    original_get_prompt = schedule.get_slot_prompt
 
     def _forced_slot_info():
         return {
@@ -1731,7 +1733,15 @@ async def force_school_routine(payload: dict):
             "is_playground": False,
         }
 
+    def _forced_get_prompt(slot_arg):
+        # N override que pour le slot demande ; les autres restent intacts.
+        if prompt_override and slot_arg.upper() == slot:
+            return prompt_override
+        return original_get_prompt(slot_arg)
+
     schedule.get_current_slot_info = _forced_slot_info
+    if prompt_override:
+        schedule.get_slot_prompt = _forced_get_prompt
 
     import time as _t
     t0 = _t.time()
@@ -1750,6 +1760,7 @@ async def force_school_routine(payload: dict):
         }
     finally:
         schedule.get_current_slot_info = original_get_info
+        schedule.get_slot_prompt = original_get_prompt
 
 # ============================================================
 # API Stimulation — Interface externe des organes (Piste 7 bio-inspired)
