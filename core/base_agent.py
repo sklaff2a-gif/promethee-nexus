@@ -902,12 +902,19 @@ class BaseAgent:
 
         # Note: council.py injecte aussi un contexte projet (_COUNCIL_PROJECT_CONTEXT) — garder cohérent
         # Guardrail anti-hallucination 9B (suffixe — biais de recence)
+        # V15.4 (2026-04-24) : si le prompt contient deja une injection RAG
+        # stricte (V15.2 chat ou V15.3 ecole), on DESACTIVE l'anti-hallucination.
+        # Raison : l'anti-halluc dit "n'invente pas de code" pendant que le RAG
+        # dit "cite verbatim le code ci-dessous". Contradiction = torture
+        # cognitive du LLM qui sort en mode "je ne peux pas lire".
         _anti_halluc = ""
-        try:
-            from core.prompt_templates import LLM_9B_ANTI_HALLUCINATION
-            _anti_halluc = LLM_9B_ANTI_HALLUCINATION
-        except ImportError:
-            pass
+        _has_strict_injection = "[INJECTION DE CONTEXTE STRICTE]" in (prompt or "")
+        if not _has_strict_injection:
+            try:
+                from core.prompt_templates import LLM_9B_ANTI_HALLUCINATION
+                _anti_halluc = LLM_9B_ANTI_HALLUCINATION
+            except ImportError:
+                pass
 
         full_prompt = (
             f"\n[SYSTEM: Nexus V20 (Local First) | AGENT: {self.name.upper()}]\n"
@@ -918,6 +925,19 @@ class BaseAgent:
             f"{prompt}"
             f"{_anti_halluc}"
         )
+
+        # V15.4 diagnostic : snapshot du prompt final quand injection stricte
+        # est active, pour verifier que les chunks atteignent Ollama sans
+        # concurrence prompt systeme. Debug level : n'apparait qu'avec --log-level=debug.
+        if _has_strict_injection:
+            try:
+                logger.debug(
+                    f"[V15.4 PROMPT DEBUG] Agent={self.name} prompt_chars={len(full_prompt)} "
+                    f"anti_halluc_suppressed=True"
+                )
+                logger.debug(f"[V15.4 PROMPT CONTENT]\n{full_prompt[:4000]}")
+            except Exception:
+                pass
 
         # Modèles Locaux
         specific_locals = getattr(Config, "AGENT_SPECIFIC_LOCAL_MODELS", {})

@@ -48,7 +48,7 @@ class TestV15SchoolContextBuilder:
             "core/prefrontal.py", n_results=6,
             filter_filepath="core/prefrontal.py",
         )
-        assert "[SYSTEM OVERRIDE" in out
+        assert "[INJECTION DE CONTEXTE STRICTE" in out
         assert "core/prefrontal.py" in out
 
     def test_research_scans_prompt_for_refs(self):
@@ -98,7 +98,7 @@ class TestV15SchoolContextBuilder:
         assert mock.format_chunk_for_prompt.call_count <= 6
 
     def test_header_includes_override_marker(self):
-        """Le header inclut [SYSTEM OVERRIDE] pour l'autorite."""
+        """Le header inclut [INJECTION DE CONTEXTE STRICTE] pour l'autorite."""
         info = {"subject": {"target_file": "core/x.py"}}
         with patch("core.capabilities.source_code_indexer.indexer") as mock:
             mock.query.return_value = [{
@@ -110,8 +110,8 @@ class TestV15SchoolContextBuilder:
             out = AutonomyEngine._build_v15_school_context(
                 "CODE_REVIEW", "audit x", info
             )
-        assert "[SYSTEM OVERRIDE" in out
-        assert "N'invente aucun" in out
+        assert "[INJECTION DE CONTEXTE STRICTE" in out
+        assert "DONNEES D'ENTREE" in out
         assert "hallucination" in out.lower()
 
     def test_deduplication(self):
