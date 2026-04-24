@@ -903,35 +903,34 @@ class BaseAgent:
                 pass
 
         # Etape 1 : RAG (Toujours utile)
-        # V15.5 (2026-04-24) : Hierarchie epistemologique RAG > souvenirs.
-        # Diagnostic 24/04 07:55 : l'agent security a prefere un vieux souvenir
-        # (audit reasoning_protocol.py d'hier) au RAG V15.3 frais (prefrontal.py)
-        # qu'on lui mettait sous les yeux via [INJECTION DE CONTEXTE STRICTE].
-        # Faille epistemologique : un agent qui fait plus confiance a ses
-        # souvenirs qu'a une preuve empirique injectee devient dogmatique.
-        # Fix : quand le prompt contient du RAG frais (injection stricte ou
-        # code reel), on etiquette explicitement les souvenirs comme
-        # potentiellement obsoletes et on affirme la priorite absolue du RAG.
+        # V15.7 (2026-04-24 11:45) : Amnesie ciblee contextuelle.
+        # Evolution de V15.5 (hierarchie epistemologique) qui s'est revelee
+        # insuffisante. Diagnostic 11:36 : le LLM 9B prefere un audit narratif
+        # complet (souvenir collective_wisdom, ex meta_observer.py) aux
+        # chunks AST bruts du RAG V15.3 fresh, meme avec une phrase d'autorite
+        # explicite. C'est le "biais de plausibilite narrative" : le LLM
+        # choisit ce qui ressemble le plus a une "bonne reponse" connue
+        # plutot que de synthetiser des donnees fraiches.
+        # Solution chirurgicale : si le prompt contient deja un RAG fresh
+        # ([INJECTION DE CONTEXTE STRICTE] de V15.3/V15.4 ou [CODE REEL]),
+        # on SKIP TOTALEMENT le recall collective_wisdom. Pas de souvenirs
+        # concurrents = pas de tentation = LLM focalise sur le code fresh.
+        # Si aucun RAG fresh : recall normal pour les routines non-ecole.
         context_memory = ""
-        mem1 = self.recall(prompt, collection="collective_wisdom")
-        if mem1:
-            self.log_thought("🧠 Souvenirs trouvés !", type="info")
-            _has_fresh_rag = (
-                "[INJECTION DE CONTEXTE STRICTE]" in (prompt or "")
-                or "[CODE REEL" in (prompt or "")
+        _has_fresh_rag = (
+            "[INJECTION DE CONTEXTE STRICTE]" in (prompt or "")
+            or "[CODE REEL" in (prompt or "")
+        )
+        if _has_fresh_rag:
+            self.log_thought(
+                "🧬 [V15.7] RAG fresh detecte — recall collective_wisdom skip "
+                "(amnesie ciblee pour empecher le biais narratif).",
+                type="info",
             )
-            if _has_fresh_rag:
-                context_memory = (
-                    f"\n[SOUVENIRS POTENTIELLEMENT OBSOLETES]\n{mem1}\n"
-                    f"\n[HIERARCHIE EPISTEMOLOGIQUE]\n"
-                    f"ATTENTION : les souvenirs ci-dessus peuvent etre obsoletes "
-                    f"ou concerner d'autres fichiers/contextes. Si un souvenir "
-                    f"contredit le [INJECTION DE CONTEXTE STRICTE] ou le [CODE REEL] "
-                    f"fourni plus bas dans ce prompt, LES DONNEES FRAICHES ONT LA "
-                    f"PRIORITE ABSOLUE et annulent le souvenir. Ne confonds pas "
-                    f"un vieil audit avec la realite actuelle du code.\n"
-                )
-            else:
+        else:
+            mem1 = self.recall(prompt, collection="collective_wisdom")
+            if mem1:
+                self.log_thought("🧠 Souvenirs trouvés !", type="info")
                 context_memory = f"\n[SOUVENIRS]:\n{mem1}\n"
 
         # Intuitions (spreading activation) — lecture cache RAM, 0 requête

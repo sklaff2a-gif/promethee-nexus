@@ -1,79 +1,98 @@
-"""Tests V15.5 — Hierarchie epistemologique RAG > Souvenirs.
+"""Tests V15.7 — Amnesie ciblee contextuelle (remplace V15.5).
 
-Diagnostic 24/04 07:55 : l'agent security a prefere un vieux souvenir
-(audit reasoning_protocol.py) au RAG V15.3 frais (prefrontal.py). Faille
-epistemologique. V15.5 ajoute une phrase d'autorite qui force la priorite
-du RAG fresh sur les souvenirs collectifs dans base_agent.generate_content.
+Diagnostic 24/04 11:36 : V15.5 (hierarchie epistemologique) avait essaye
+d'etiqueter les souvenirs comme "potentiellement obsoletes" mais le LLM 9B
+continuait de prefferer un audit narratif complet aux chunks AST bruts du
+RAG fresh. Le "biais de plausibilite narrative" l'emporte sur l'injonction.
 
-On teste ici le source code directement pour verifier que la strategie
-est inscrite (test statique). L'integration runtime sera validee par
-observation d'un vrai cours ecole (tir forcé CODE_REVIEW prefrontal.py).
+V15.7 = chirurgie radicale : si RAG fresh present dans prompt, SKIP TOTAL
+du recall collective_wisdom. Pas de souvenirs concurrents = pas de
+tentation = LLM focalise sur le code fresh exclusivement.
+
+Tests via inspection source (test statique). L'integration runtime est
+validee par observation d'un vrai cours ecole (tir forcé CODE_REVIEW).
 """
 import inspect
-import pytest
 
 from core import base_agent
 
 
-class TestEpistemicHierarchyPresent:
-    """Le patch V15.5 doit etre present dans base_agent.py."""
+class TestV15_7AmnesieCiblee:
+    """Le patch V15.7 doit etre present et bien formule."""
 
-    def test_hierarchie_epistemologique_label_in_source(self):
-        """La balise [HIERARCHIE EPISTEMOLOGIQUE] doit etre injectee."""
+    def test_v15_7_marker_in_source(self):
+        """Le commentaire V15.7 doit etre inscrit pour traceabilite."""
         src = inspect.getsource(base_agent)
-        assert "HIERARCHIE EPISTEMOLOGIQUE" in src
+        assert "V15.7" in src, "Marqueur de version absent"
 
-    def test_priorite_absolue_affirmation(self):
-        """L'autorite explicite du RAG sur les souvenirs est declaree."""
+    def test_skip_message_logged(self):
+        """Quand le skip se produit, un log_thought informe pour observabilite."""
         src = inspect.getsource(base_agent)
-        assert "PRIORITE ABSOLUE" in src
+        assert "RAG fresh detecte" in src
+        assert "amnesie" in src.lower() or "amnésie" in src.lower()
 
-    def test_souvenirs_potentiellement_obsoletes_label(self):
-        """Les souvenirs sont reframer comme potentiellement obsoletes."""
+    def test_recall_inside_else_branch(self):
+        """Le recall collective_wisdom doit etre dans la branche else (pas
+        de RAG fresh) — sinon V15.7 ne sert a rien."""
         src = inspect.getsource(base_agent)
-        assert "SOUVENIRS POTENTIELLEMENT OBSOLETES" in src
-
-    def test_injection_contexte_stricte_detection(self):
-        """Le trigger est bien le marqueur V15.4 [INJECTION DE CONTEXTE STRICTE]."""
-        src = inspect.getsource(base_agent)
-        # Le detecteur cherche ce token dans prompt
-        assert '"[INJECTION DE CONTEXTE STRICTE]" in' in src
-
-    def test_code_reel_detection(self):
-        """L'autre trigger est [CODE REEL — VERIFIE AVANT DE REPONDRE]."""
-        src = inspect.getsource(base_agent)
-        # Forme utilisee dans chat_engine.py / base_agent.py
-        assert '"[CODE REEL' in src
-
-    def test_fallback_legacy_souvenirs_block(self):
-        """Si pas de RAG fresh, l'ancien format [SOUVENIRS]: reste utilise."""
-        src = inspect.getsource(base_agent)
-        assert '"[SOUVENIRS]:' in src or "[SOUVENIRS]:\\n" in src
-
-
-class TestContextMemoryStructure:
-    """Test indirect de l'assemblage : on verifie les elements assembles."""
-
-    def test_hierarchie_only_when_rag_present(self):
-        """La phrase V15.5 n'apparait QUE quand le prompt inclut du RAG."""
-        # Inspection du code : la phrase est dans le bloc if _has_fresh_rag
-        src = inspect.getsource(base_agent)
-        # Approche textuelle : l'affirmation doit venir apres un if sur
-        # _has_fresh_rag ou variable equivalente
+        # Le pattern attendu : "else:" suivi (a quelques lignes) du recall
         idx_flag = src.find("_has_fresh_rag")
-        idx_priorite = src.find("PRIORITE ABSOLUE")
-        assert idx_flag > 0, "flag _has_fresh_rag non trouve"
-        assert idx_priorite > idx_flag, (
-            "La phrase PRIORITE ABSOLUE doit apparaitre APRES la definition du flag"
+        idx_recall = src.find('self.recall(prompt, collection="collective_wisdom"')
+        assert idx_flag > 0, "_has_fresh_rag non trouve"
+        assert idx_recall > 0, "recall collective_wisdom absent"
+        # Le recall doit etre APRES la definition du flag
+        assert idx_recall > idx_flag, (
+            "Le recall doit etre conditionnel sur _has_fresh_rag (apres son test)"
         )
 
-    def test_both_triggers_are_ored(self):
-        """Le flag doit OR-er les 2 triggers (injection stricte + code reel)."""
+    def test_both_triggers_in_flag(self):
+        """Le flag doit OR-er les 2 triggers (V15.4 injection + V15.2 chat)."""
         src = inspect.getsource(base_agent)
-        # Cherche le pattern "or" entre les 2 conditions
         block_start = src.find("_has_fresh_rag = (")
         assert block_start > 0
         block = src[block_start:block_start + 300]
         assert "INJECTION DE CONTEXTE STRICTE" in block
         assert "CODE REEL" in block
         assert " or " in block
+
+    def test_no_souvenirs_block_if_skip(self):
+        """Si on skip recall, mem1 n'existe pas, donc context_memory reste vide.
+        Le bloc [SOUVENIRS]: ne doit PAS etre construit dans la branche
+        skip — sinon il referencerait une variable non definie."""
+        src = inspect.getsource(base_agent)
+        # On verifie qu'au moins le flow est : skip -> log -> rien construit
+        # vs branche else -> recall -> if mem1 -> [SOUVENIRS]
+        # Indices : "[SOUVENIRS]:" doit apparaitre APRES "else:" du flag
+        idx_flag = src.find("_has_fresh_rag = (")
+        idx_else = src.find("else:", idx_flag)
+        idx_souvenirs = src.find("[SOUVENIRS]:", idx_flag)
+        assert idx_else > 0, "branche else manquante"
+        assert idx_souvenirs > 0, "le bloc [SOUVENIRS] doit exister pour le cas non-RAG"
+        assert idx_souvenirs > idx_else, (
+            "[SOUVENIRS] doit etre construit dans la branche else (pas de RAG fresh)"
+        )
+
+
+class TestV15_7Integration:
+    """Verifications structurelles complementaires."""
+
+    def test_legacy_v15_5_hierarchie_phrase_removed(self):
+        """V15.5 'HIERARCHIE EPISTEMOLOGIQUE' n'est plus necessaire avec V15.7
+        (skip total des souvenirs = pas besoin de hierarchiser). On accepte
+        soit l'absence totale soit une mention historique en commentaire."""
+        src = inspect.getsource(base_agent)
+        # Pas de bloc [HIERARCHIE EPISTEMOLOGIQUE] ACTIF dans le code execute.
+        # Si c'est juste dans un commentaire historique, OK.
+        active_lines = [
+            line for line in src.split("\n")
+            if "HIERARCHIE EPISTEMOLOGIQUE" in line and not line.strip().startswith("#")
+        ]
+        assert active_lines == [], (
+            "V15.7 ne doit pas avoir de phrase HIERARCHIE EPISTEMOLOGIQUE active "
+            "(le skip total est plus radical et plus efficace)"
+        )
+
+    def test_v15_5_replaced_not_just_disabled(self):
+        """Le commentaire d'historique doit mentionner V15.5 -> V15.7."""
+        src = inspect.getsource(base_agent)
+        assert "V15.5" in src, "L'historique de V15.5 doit etre conserve en commentaire"

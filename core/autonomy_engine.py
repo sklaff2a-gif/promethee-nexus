@@ -8544,15 +8544,31 @@ RAISON: <1 phrase courte>"""
         # absentes de l'index, c'est l'intention du cours). Sans ce bypass,
         # Bloom rejete la generation comme "hallucination" alors qu il s'agit
         # d'une creation legitime.
-        mission_with_slot_marker = f"[SCHOOL_SLOT: {slot}]\n{prompt}"
+        # V15.6 (2026-04-24 11:35) : BUG STRUCTUREL CORRIGE.
+        # Decouverte : base_agent.process_task IGNORE task_payload['context']
+        # et n'envoie au LLM que la mission. Resultat : depuis V15.3 (hier),
+        # les 6 chunks RAG injectes par _build_v15_school_context n'ont JAMAIS
+        # atteint le LLM. L'agent security continuait a piocher dans ses
+        # souvenirs collective_wisdom (vieux audits) en ignorant le code frais.
+        # Fix : fusionner context_str DANS la mission. V15 chunks sont places
+        # EN DERNIER (biais de recence max). [SCHOOL_SLOT:] reste en tete
+        # pour V4.4. context separe garde sa valeur si une sous-classe
+        # specifique l utilise mais n est plus le seul vecteur du RAG ecole.
         context_str = (
             f"PROTOCOLE_SCOLAIRE\n"
             f"{schedule.get_schedule_context()}"
-            f"{salary_ctx}{mentor_ctx}{v15_school_ctx}"
+            f"{salary_ctx}{mentor_ctx}"
+        )
+        mission_with_full_context = (
+            f"[SCHOOL_SLOT: {slot}]\n"
+            f"{context_str}\n"
+            f"\n=== MISSION SCOLAIRE ===\n"
+            f"{prompt}\n"
+            f"{v15_school_ctx}"  # V15 chunks en dernier = biais de recence
         )
         response = await orchestrator.dispatch_task(agent_name, {
-            "mission": mission_with_slot_marker,
-            "context": context_str,
+            "mission": mission_with_full_context,
+            "context": context_str,  # conserve pour compat sous-classes
             "force_local": True,
             "intent": intent,
         })
