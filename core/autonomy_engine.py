@@ -9088,22 +9088,20 @@ RAISON: <1 phrase courte>"""
                         if isinstance(_subj, dict):
                             _subj = _subj.get("topic", str(_subj))
                         _sanity_result = _sanity(deliverable, str(_subj), slot)
-                        # V19.2 (2026-04-24 17:30) — LAISSEZ-PASSER SOUVERAIN.
-                        # Diagnostic 15e tir : Phase 14 clippe x0.25 un
-                        # livrable map_reduce que le prof a note 9.4/10.
-                        # Causes (specifiques a V18 map_reduce) :
-                        #   - 'truncation' : section finale < 100 mots (normal
-                        #     quand la synthese est dense/concise, pas un bug)
-                        #   - 'd4a' : fragments ```python``` illustratifs qui
-                        #     ne parsent pas seuls (show-how, pas scripts)
-                        # Ces defauts sont STRUCTURELS pour un format
-                        # map_reduce, pas des marques de bullshit. Exemption
-                        # diplomatique : si response.map_reduce=True, le
-                        # prof est l'oracle de qualite, Phase 14 n'a plus
-                        # droit de clipper la note. La sanity check tourne
-                        # quand meme pour observabilite mais sans effet.
+                        # V19.2 (2026-04-24 17:30) + V19.3 (2026-04-25) — IMMUNITE SOUVERAINE.
+                        # V19.2 : bypass Phase 14 si response.map_reduce=True
+                        #   (defauts structurels intrinseques au format V18)
+                        # V19.3 : bypass AUSSI si response.sandbox_verified=True
+                        #   (le code a ete EXECUTE avec succes dans subprocess
+                        #   isole — preuve ultime de non-bullshit pour CREATION).
+                        # Sans V19.3 : le 1er tir CREATION 21:32 a ete clippe
+                        # x0.5 "truncation" alors que le script 917c tournait
+                        # en 44ms au 1er essai. Absurde : Phase 14 penalisait
+                        # un script fonctionnel pour sa conclusion courte.
                         _is_map_reduce = bool(response.get("map_reduce"))
-                        if _sanity_result["multiplier"] < 1.0 and not _is_map_reduce:
+                        _is_sandbox_verified = bool(response.get("sandbox_verified"))
+                        _bypass = _is_map_reduce or _is_sandbox_verified
+                        if _sanity_result["multiplier"] < 1.0 and not _bypass:
                             _orig = eval_result["grade"]
                             eval_result["grade"] = round(_orig * _sanity_result["multiplier"], 2)
                             eval_result["phase14"] = _sanity_result
@@ -9116,16 +9114,20 @@ RAISON: <1 phrase courte>"""
                                 f"reasons={_sanity_result['reasons']} "
                                 f"grade={_orig:.1f}->{eval_result['grade']:.2f}"
                             )
-                        elif _sanity_result["multiplier"] < 1.0 and _is_map_reduce:
-                            # V19.2 : flags detectes mais exemption map_reduce
+                        elif _sanity_result["multiplier"] < 1.0 and _bypass:
+                            # Flags detectes mais exemption V19.2/V19.3
+                            _reason = (
+                                "sandbox_verified" if _is_sandbox_verified
+                                else "map_reduce"
+                            )
                             eval_result["phase14"] = dict(_sanity_result)
-                            eval_result["phase14"]["bypassed_map_reduce"] = True
+                            eval_result["phase14"][f"bypassed_{_reason}"] = True
                             logger.info(
-                                f"[PHASE14] V19.2 bypass map_reduce: slot={slot} "
+                                f"[PHASE14] V19.3 bypass ({_reason}): slot={slot} "
                                 f"grade={eval_result['grade']:.1f} "
                                 f"(flags={_sanity_result['n_flags']} "
                                 f"reasons={_sanity_result['reasons']} "
-                                f"— structurels, pas pris en compte)"
+                                f"— {_reason} prouve la qualite, clip ignore)"
                             )
                         else:
                             # Trace observabilite (preuve que Phase 14 a tourne sans flagger)

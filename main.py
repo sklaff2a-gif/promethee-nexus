@@ -1717,8 +1717,20 @@ async def force_school_routine(payload: dict):
             detail=f"slot invalide: {slot!r}. Doit etre un de {valid_slots}",
         )
     target_file = payload.get("target_file", "")
-    topic = payload.get("topic", f"Cours force: {slot}")
     prompt_override = payload.get("prompt")  # si fourni, remplace le prompt du slot
+    # V19.3 (2026-04-25) : alignement du sujet sur le prompt custom.
+    # Sans ca, le Professeur evaluait le livrable contre le topic default
+    # "Cours force: CREATION" et declarait "Hors sujet" alors qu'il s'agissait
+    # d'une consigne specifique. Fix : si prompt fourni mais pas topic
+    # explicite, prendre les 80 premiers chars du prompt comme topic.
+    explicit_topic = payload.get("topic")
+    if explicit_topic:
+        topic = explicit_topic
+    elif prompt_override:
+        _p = prompt_override.strip()
+        topic = _p[:80].strip() + ("..." if len(_p) > 80 else "")
+    else:
+        topic = f"Cours force: {slot}"
 
     from core.school_schedule import schedule
 
