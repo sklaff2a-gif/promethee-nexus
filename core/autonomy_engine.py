@@ -9531,6 +9531,50 @@ RAISON: <1 phrase courte>"""
             logger.error(f"[V21] Sandbox V21 indisponible: {exc}")
             return None
 
+        # 3.5. V25 (2026-04-25) — Whitelist Bloom session pour le SURGEON.
+        # Sans ca, le Bloom V4.2 vetote les retries sur les arguments de
+        # fonctions cites dans l'audit (cf. bug `min_last_section_words`
+        # observe au tir 15:03:32). Memes regles que V20b dans
+        # _code_review_map_reduce, dupliquees ici pour le hook V21.
+        _v25_session_names: set = set()
+        _v25_bloom_set = False
+        try:
+            import ast as _ast_v25
+            _tree_v25 = _ast_v25.parse(source)
+            for _node in _ast_v25.walk(_tree_v25):
+                if isinstance(_node, (_ast_v25.FunctionDef, _ast_v25.AsyncFunctionDef)):
+                    _v25_session_names.add(_node.name)
+                    _args = _node.args
+                    for _a in (_args.args or []):
+                        _v25_session_names.add(_a.arg)
+                    for _a in (_args.kwonlyargs or []):
+                        _v25_session_names.add(_a.arg)
+                    for _a in (_args.posonlyargs or []):
+                        _v25_session_names.add(_a.arg)
+                    if _args.vararg:
+                        _v25_session_names.add(_args.vararg.arg)
+                    if _args.kwarg:
+                        _v25_session_names.add(_args.kwarg.arg)
+                elif isinstance(_node, _ast_v25.ClassDef):
+                    _v25_session_names.add(_node.name)
+                elif isinstance(_node, _ast_v25.Assign):
+                    for _t in _node.targets:
+                        if isinstance(_t, _ast_v25.Name):
+                            _v25_session_names.add(_t.id)
+            if _v25_session_names:
+                try:
+                    from core.bloom_filter import bloom_pre_llm as _bpl_v25
+                    _bpl_v25.set_session_whitelist(_v25_session_names)
+                    _v25_bloom_set = True
+                    logger.info(
+                        f"[V25] Bloom session whitelist SURGEON: "
+                        f"{len(_v25_session_names)} noms depuis {target_file}"
+                    )
+                except Exception as _e_bloom:
+                    logger.warning(f"[V25] Bloom set_session_whitelist echoue: {_e_bloom}")
+        except Exception as _e_ast:
+            logger.warning(f"[V25] AST extract echoue: {_e_ast}")
+
         # 4. Boucle SURGEON ↔ MEDIC avec retry
         previous_attempts: List[Dict[str, Any]] = []
         last_result = None
@@ -9539,6 +9583,42 @@ RAISON: <1 phrase courte>"""
             f"[V21] HOOK START target={target_file} grade={school_grade:.1f} "
             f"max_iter={self._V21_MAX_ITER}"
         )
+
+        try:  # V25 : enveloppe la boucle pour garantir le clear_session_whitelist
+            return await self._self_healing_run_iterations(
+                audit_report=audit_report,
+                target_file=target_file,
+                school_grade=school_grade,
+                source=source,
+                project_root=project_root,
+                medic_sandbox=medic_sandbox,
+                previous_attempts=previous_attempts,
+                loop_t0=loop_t0,
+            )
+        finally:
+            if _v25_bloom_set:
+                try:
+                    from core.bloom_filter import bloom_pre_llm as _bpl_clr_v25
+                    _bpl_clr_v25.clear_session_whitelist()
+                    logger.info("[V25] Bloom session whitelist clearee")
+                except Exception:
+                    pass
+
+    async def _self_healing_run_iterations(
+        self,
+        audit_report: str,
+        target_file: str,
+        school_grade: float,
+        source: str,
+        project_root: str,
+        medic_sandbox,
+        previous_attempts: list,
+        loop_t0: float,
+    ) -> "Dict[str, Any]":
+        """V25 — boucle interne du _self_healing_hook (extraite pour permettre
+        un finally propre sur la whitelist Bloom).
+        """
+        last_result = None
 
         for iteration in range(self._V21_MAX_ITER):
             # 4a. SURGEON
