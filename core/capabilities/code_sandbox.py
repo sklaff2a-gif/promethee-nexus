@@ -772,12 +772,29 @@ class PatchResult:
         if self.status == "search_not_found":
             snippet = self.failed_block_search[:max_chars]
             return (
-                f"BLOC {self.failed_block_index + 1} : SEARCH introuvable "
-                f"dans le source. Tu dois citer le code VERBATIM, caractère "
-                f"par caractère (indentation, espaces, retours ligne inclus).\n"
-                f"Ton SEARCH était :\n---\n{snippet}\n---\n"
-                f"Re-lis le fichier source et copie une portion qui existe "
-                f"vraiment."
+                f"ECHEC : Bloc {self.failed_block_index + 1} introuvable "
+                f"dans le source.\n\n"
+                f"DIAGNOSTIC PROBABLE (cf. règles V24) :\n"
+                f"  1. Tu as altéré l'INDENTATION (espaces/tabulations)\n"
+                f"     dans une ligne que tu as crue verbatim.\n"
+                f"  2. Tu as oublié les 2 lignes de CONTEXTE D'ANCRAGE\n"
+                f"     avant et après le bloc modifié.\n"
+                f"  3. Ton bloc fait plus de 7 lignes — divise-le en\n"
+                f"     plusieurs petits blocs (règle Micro-Scalpel V24).\n"
+                f"  4. Tu as recopié une approximation de mémoire au lieu\n"
+                f"     du code REEL du source ci-dessus.\n\n"
+                f"PROCEDURE V24 OBLIGATOIRE pour corriger :\n"
+                f"  a. Re-lis le bloc ---SOURCE--- ligne par ligne.\n"
+                f"  b. Identifie les 2 lignes JUSTE AVANT la modification.\n"
+                f"  c. Copie-les caractère par caractère (espaces inclus).\n"
+                f"  d. Identifie les 2 lignes JUSTE APRES la modification.\n"
+                f"  e. Copie-les caractère par caractère.\n"
+                f"  f. Le SEARCH = ancrage_avant + ligne_fautive + ancrage_apres.\n"
+                f"  g. Le REPLACE = ancrage_avant + correction + ancrage_apres.\n\n"
+                f"Ton SEARCH précédent (qui a échoué) :\n"
+                f"---\n{snippet}\n---\n\n"
+                f"Recommence avec un bloc PLUS PETIT et un ancrage VERBATIM. "
+                f"L'indentation est vitale en Python — compte les espaces."
             )
         if self.status == "search_ambiguous":
             snippet = self.failed_block_search[:max_chars]
