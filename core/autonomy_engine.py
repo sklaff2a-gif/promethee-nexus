@@ -53,6 +53,39 @@ AUDIT_SURVIE_FRUITLESS_COUNT = 3          # N occurrences même intent faible qu
 # décharge d'adrénaline = escalade médullaire".
 SURVIVAL_MAX_FORCES_PER_DAY = 3           # Quota quotidien strict (canari SRE)
 
+# ─── V30.2 (2026-04-25) — Vocabulaire Python natif pour Bloom whitelist ──
+# Le filtre Bloom V4.2 vetote sur les noms qu'il ne reconnait pas. Mais
+# les LLMs SURGEON/Nurse citent legitimement des methodes et builtins
+# Python tres communs (parse, split, re, len, etc.) dans leurs patches.
+# Ce vocabulaire generique est ajoute a toute session_whitelist (V25, V28)
+# pour eviter les faux positifs sur le langage natif lui-meme.
+_PYTHON_NATIVE_VOCABULARY = frozenset({
+    # Methodes regex courantes
+    "parse", "split", "re", "findall", "match", "compile", "search",
+    "sub", "fullmatch", "finditer",
+    # Methodes string
+    "format", "join", "strip", "rstrip", "lstrip", "lower", "upper",
+    "replace", "startswith", "endswith", "encode", "decode",
+    # Builtins
+    "len", "str", "int", "float", "bool", "list", "dict", "set", "tuple",
+    "isinstance", "hasattr", "getattr", "setattr", "callable",
+    "range", "enumerate", "zip", "map", "filter", "sorted", "reversed",
+    "min", "max", "sum", "any", "all", "abs", "round",
+    "print", "input", "open", "type", "id", "repr", "hash",
+    # Mots-cles
+    "True", "False", "None", "return", "raise", "yield", "lambda",
+    "import", "from", "as", "with", "try", "except", "finally",
+    "if", "else", "elif", "while", "for", "in", "not", "and", "or",
+    # Exceptions standards
+    "Exception", "ValueError", "TypeError", "KeyError", "IndexError",
+    "AttributeError", "RuntimeError", "StopIteration", "ZeroDivisionError",
+    # Type hints
+    "Optional", "List", "Dict", "Tuple", "Set", "Any", "Union",
+    "Callable", "Iterator", "Iterable",
+    # Self / cls
+    "self", "cls", "args", "kwargs",
+})
+
 # ─── V19.4 (2026-04-25) — Anti-perroquet MAP assoupli ──────────────────
 # Diagnostic 11:15 : V19.1 (regex anchored) a filtre 6/6 chunks de
 # bullshit_detector parce que le 14b-coder cracehe des notes courtes type
@@ -8715,6 +8748,8 @@ RAISON: <1 phrase courte>"""
                     _seg_clean = _seg.replace(".py", "").strip()
                     if _seg_clean:
                         _session_params.add(_seg_clean)
+                # V30.2 — vocabulaire Python natif (parse, split, re, etc.)
+                _session_params.update(_PYTHON_NATIVE_VOCABULARY)
 
                 if _session_params:
                     try:
@@ -9599,6 +9634,8 @@ RAISON: <1 phrase courte>"""
                 _seg_clean = _seg.replace(".py", "").strip()
                 if _seg_clean:
                     _v25_session_names.add(_seg_clean)
+            # V30.2 — vocabulaire Python natif (parse, split, re, etc.)
+            _v25_session_names.update(_PYTHON_NATIVE_VOCABULARY)
 
             if _v25_session_names:
                 try:

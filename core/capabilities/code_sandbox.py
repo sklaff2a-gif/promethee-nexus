@@ -748,6 +748,25 @@ class _ChecklistViolationError(ValueError):
 
 # ─── V30 Parsing & application JSON Exosquelette ──────────────────────
 
+def _v30_clean_llm_json(raw: str) -> str:
+    """V30.1 — Nettoie les coquilles typographiques courantes des LLMs en JSON.
+
+    Le qwen2.5-coder:14b crache parfois du JSON syntaxiquement invalide :
+      - apostrophes echappees facon Python : `n\\'a pas` (invalide en JSON)
+      - virgules trainantes : `[1, 2,]` ou `{"a": 1,}`
+      - quotes simples au lieu de doubles (rare)
+
+    On applique des transformations conservatrices avant de re-tenter
+    json.loads. Si tout echoue, le caller fallback sur ast.literal_eval.
+    """
+    cleaned = raw
+    # Echappement Python `\'` -> `'` (legitime en JSON sans backslash)
+    cleaned = cleaned.replace("\\'", "'")
+    # Virgules trainantes avant `]` ou `}`
+    cleaned = re.sub(r",(\s*[}\]])", r"\1", cleaned)
+    return cleaned
+
+
 def parse_v30_patch(text: str) -> Dict[str, Any]:
     """V30 — Parse la sortie SURGEON au format JSON Exosquelette.
 
@@ -758,11 +777,13 @@ def parse_v30_patch(text: str) -> Dict[str, Any]:
 
     Lève _V30InvalidJSONError, _V30InvalidActionError.
 
-    Strategies de parsing :
+    V30.1 — Strategies de parsing en cascade :
       1. json.loads direct
       2. Strip markdown ```json ... ``` puis json.loads
       3. Extraction du premier {...} via regex puis json.loads
-      4. Echec total -> _V30InvalidJSONError
+      4. Nettoyage coquilles LLM (\\' -> ', virgules trainantes) puis json.loads
+      5. Fallback ast.literal_eval (parse Python plus tolerant)
+      6. Echec total -> _V30InvalidJSONError
     """
     if not text or not isinstance(text, str):
         raise _V30InvalidJSONError("Sortie SURGEON vide ou non-string")
@@ -774,6 +795,8 @@ def parse_v30_patch(text: str) -> Dict[str, Any]:
         raw = re.sub(r"\s*```\s*$", "", raw)
 
     parsed = None
+    candidates: List[str] = []
+
     # Tentative 1 : parse direct
     try:
         parsed = json.loads(raw)
@@ -781,15 +804,41 @@ def parse_v30_patch(text: str) -> Dict[str, Any]:
         # Tentative 2 : extraction du premier bloc {...}
         match = _V30_JSON_BLOCK_RE.search(raw)
         if match:
-            try:
-                parsed = json.loads(match.group(0))
-            except json.JSONDecodeError as exc:
-                raise _V30InvalidJSONError(
-                    f"JSON malforme apres extraction: {exc}"
-                )
+            candidates.append(match.group(0))
         else:
             raise _V30InvalidJSONError(
                 f"Aucun JSON detectable dans la sortie. Preview: {raw[:200]!r}"
+            )
+
+        # Tentatives 3-5 : nettoyage progressif des candidats
+        if parsed is None:
+            for cand in candidates:
+                # Tentative directe sur le candidat extrait
+                try:
+                    parsed = json.loads(cand)
+                    break
+                except json.JSONDecodeError:
+                    pass
+                # V30.1 : nettoyage coquilles LLM
+                cleaned = _v30_clean_llm_json(cand)
+                try:
+                    parsed = json.loads(cleaned)
+                    break
+                except json.JSONDecodeError:
+                    pass
+                # V30.1 : fallback ast.literal_eval (plus tolerant que json)
+                try:
+                    parsed = ast.literal_eval(cleaned)
+                    if isinstance(parsed, dict):
+                        break
+                    parsed = None
+                except (ValueError, SyntaxError):
+                    pass
+
+        if parsed is None:
+            raise _V30InvalidJSONError(
+                f"JSON malforme apres toutes les tentatives de nettoyage. "
+                f"Preview brute: {raw[:200]!r}"
             )
 
     if not isinstance(parsed, dict):
