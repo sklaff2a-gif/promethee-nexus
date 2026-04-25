@@ -8694,18 +8694,40 @@ RAISON: <1 phrase courte>"""
                             _session_params.add(_args_v20b.vararg.arg)
                         if _args_v20b.kwarg:
                             _session_params.add(_args_v20b.kwarg.arg)
+                # V28 (2026-04-25) — IMMUNITE BLOOM REDUCE.
+                # Diagnostic tir 16:27 : le REDUCE V18 a ete vetote par Bloom
+                # V4.2 sur le mot 'bullshit_detector' (basename du fichier
+                # cible) qui apparait dans une note MAP citee en input REDUCE.
+                # V20b extrayait UNIQUEMENT les args de fonctions, pas le nom
+                # du fichier lui-meme.
+                # Fix : ajouter explicitement target_file (complet, basename
+                # avec et sans .py) ET le nom du module Python aux session
+                # whitelist Bloom AVANT le dispatch MAP+REDUCE.
+                _v28_basename = _os_v20b.path.basename(target_file)
+                _v28_stem = _v28_basename
+                if _v28_stem.endswith(".py"):
+                    _v28_stem = _v28_stem[:-3]
+                _session_params.add(target_file)       # ex: 'core/bullshit_detector.py'
+                _session_params.add(_v28_basename)     # ex: 'bullshit_detector.py'
+                _session_params.add(_v28_stem)         # ex: 'bullshit_detector'
+                # Aussi ajouter chaque segment du path (pour les imports)
+                for _seg in target_file.replace("\\", "/").split("/"):
+                    _seg_clean = _seg.replace(".py", "").strip()
+                    if _seg_clean:
+                        _session_params.add(_seg_clean)
+
                 if _session_params:
                     try:
                         from core.bloom_filter import bloom_pre_llm as _bpl
                         _bpl.set_session_whitelist(_session_params)
                         logger.info(
-                            f"[V20b] Bloom session whitelist: {len(_session_params)} "
-                            f"params depuis {target_file}"
+                            f"[V20b+V28] Bloom session whitelist: {len(_session_params)} "
+                            f"noms (params + basename '{_v28_stem}') depuis {target_file}"
                         )
                     except Exception:
                         pass
         except Exception as _e_v20b:
-            logger.warning(f"[V20b] params extraction echoue: {_e_v20b}")
+            logger.warning(f"[V20b+V28] params extraction echoue: {_e_v20b}")
 
         # V18.5 (2026-04-24 15:55) — MAP AGENT NEUTRALISE.
         # Autopsie V18.4 confirmee : 5 notes MAP sur 6 commencaient LITTERALE-
@@ -9561,6 +9583,20 @@ RAISON: <1 phrase courte>"""
                     for _t in _node.targets:
                         if isinstance(_t, _ast_v25.Name):
                             _v25_session_names.add(_t.id)
+            # V28 (2026-04-25) — ajouter aussi le nom du fichier au whitelist
+            # SURGEON pour eviter veto Bloom sur 'bullshit_detector' etc.
+            _v28_basename_v25 = os.path.basename(target_file)
+            _v28_stem_v25 = _v28_basename_v25
+            if _v28_stem_v25.endswith(".py"):
+                _v28_stem_v25 = _v28_stem_v25[:-3]
+            _v25_session_names.add(target_file)
+            _v25_session_names.add(_v28_basename_v25)
+            _v25_session_names.add(_v28_stem_v25)
+            for _seg in target_file.replace("\\", "/").split("/"):
+                _seg_clean = _seg.replace(".py", "").strip()
+                if _seg_clean:
+                    _v25_session_names.add(_seg_clean)
+
             if _v25_session_names:
                 try:
                     from core.bloom_filter import bloom_pre_llm as _bpl_v25
