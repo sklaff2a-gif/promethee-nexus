@@ -526,6 +526,22 @@ class CodeSandbox:
                 error_message=str(exc),
                 duration_s=time.time() - t0,
             )
+        except _SearchReplacedWithoutContextError as exc:
+            # V27 — Guide-Lame : le LLM a réécrit au lieu d'augmenter.
+            # On bloque AVANT l'apply pour économiser le subprocess pytest
+            # et donner un feedback précis au SURGEON.
+            return PatchResult(
+                status="replaced_without_context",
+                surgeon_output=surgeon_output,
+                blocks_applied=exc.applied_count,
+                target_file=target_file,
+                iteration=iteration,
+                failed_block_index=exc.block_index,
+                failed_block_search=exc.search_text,
+                failed_block_replace=exc.replace_text,
+                error_message=str(exc),
+                duration_s=time.time() - t0,
+            )
 
         # 5-8. Sandbox + compile + régression + diff
         tmpdir = tempfile.mkdtemp(prefix=_TEMPDIR_MEDIC_PREFIX)
@@ -686,6 +702,28 @@ class _SearchAmbiguousError(ValueError):
         self.count = count
 
 
+class _SearchReplacedWithoutContextError(ValueError):
+    """V27 — REPLACE n'inclut aucune ligne significative du SEARCH.
+    Le LLM a réécrit au lieu d'augmenter (violation Règle de l'Insertion)."""
+    def __init__(self, message: str, block_index: int, search_text: str,
+                 replace_text: str, applied_count: int):
+        super().__init__(message)
+        self.block_index = block_index
+        self.search_text = search_text
+        self.replace_text = replace_text
+        self.applied_count = applied_count
+
+
+def _v27_is_significant_line(line: str) -> bool:
+    """V27 — Une ligne significative a >=4 caractères alphanumériques.
+    Élimine les `:`, `else:`, `pass`, lignes blanches, etc.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return False
+    return sum(1 for c in stripped if c.isalnum()) >= 4
+
+
 # ─── Parsing & application des blocs SEARCH/REPLACE ───────────────────
 
 def parse_search_replace_blocks(text: str) -> List[Tuple[str, str]]:
@@ -710,7 +748,12 @@ def apply_search_replace(source: str, blocks: List[Tuple[str, str]]) -> str:
 
     Lève _SearchNotFoundError si un SEARCH n'est pas trouvé.
     Lève _SearchAmbiguousError si un SEARCH apparaît plusieurs fois.
-    Garantie chirurgicale : on n'applique JAMAIS un replace ambigu.
+    Lève _SearchReplacedWithoutContextError (V27) si le REPLACE n'inclut
+    aucune ligne significative du SEARCH (le LLM a réécrit au lieu
+    d'augmenter — violation Règle de l'Insertion V26).
+
+    Garantie chirurgicale : on n'applique JAMAIS un replace ambigu ni un
+    replace qui efface tout le SEARCH.
     """
     if not isinstance(source, str):
         raise TypeError("source doit être str")
@@ -736,6 +779,32 @@ def apply_search_replace(source: str, blocks: List[Tuple[str, str]]) -> str:
                 applied_count=applied,
                 count=count,
             )
+        # V27 — Guide-Lame : seuil dynamique de preservation.
+        # Si SEARCH fait N lignes significatives, REPLACE doit en contenir :
+        #   - 1 si N <= 2 (petit bloc : juste l'ancrage minimum)
+        #   - max(2, N//2) si N >= 3 (moitie au moins de l'ancrage)
+        # Sinon le LLM a reecrit au lieu d'augmenter et le code va casser
+        # (IndentationError, NameError, logique perdue). On bloque AVANT
+        # l'apply pour economiser le subprocess pytest et fournir un
+        # feedback cible au SURGEON pour son retry.
+        search_lines = [l for l in search.splitlines() if _v27_is_significant_line(l)]
+        n_lines = len(search_lines)
+        if n_lines >= 2:
+            replace_text = replace or ""
+            overlap = sum(1 for l in search_lines if l in replace_text)
+            required = 1 if n_lines <= 2 else max(2, n_lines // 2)
+            if overlap < required:
+                raise _SearchReplacedWithoutContextError(
+                    f"Bloc {i+1}/{len(blocks)} : REPLACE n'inclut que "
+                    f"{overlap}/{n_lines} lignes significatives du SEARCH "
+                    f"(seuil V27 : {required} requise). Violation de la "
+                    f"Regle de l'Insertion : tu as REECRIT au lieu "
+                    f"d'AUGMENTER.",
+                    block_index=i,
+                    search_text=search,
+                    replace_text=replace,
+                    applied_count=applied,
+                )
         patched = patched.replace(search, replace, 1)
         applied += 1
     return patched
@@ -747,7 +816,8 @@ def apply_search_replace(source: str, blocks: List[Tuple[str, str]]) -> str:
 class PatchResult:
     """V21 — résultat d'un cycle MEDIC complet."""
     status: str  # success / no_blocks / patch_impossible / search_not_found /
-                 # search_ambiguous / syntax_error / test_failed / internal_error
+                 # search_ambiguous / replaced_without_context (V27) /
+                 # syntax_error / test_failed / internal_error
     surgeon_output: str = ""
     blocks_applied: int = 0
     unified_diff: str = ""           # diff git généré post-hoc pour stockage
@@ -755,6 +825,7 @@ class PatchResult:
     iteration: int = 0
     failed_block_index: int = -1
     failed_block_search: str = ""
+    failed_block_replace: str = ""    # V27 : pour replaced_without_context
     compile_stderr: str = ""
     test_output: str = ""
     test_strategy: str = ""           # "testmon" ou "full_suite"
@@ -814,6 +885,26 @@ class PatchResult:
                 f"2-3 lignes de contexte AVANT et/ou APRÈS pour le rendre "
                 f"unique dans le fichier.\n"
                 f"Ton SEARCH était :\n---\n{snippet}\n---"
+            )
+        if self.status == "replaced_without_context":
+            half = max_chars // 2
+            snippet_search = self.failed_block_search[:half]
+            snippet_replace = (self.failed_block_replace or "")[:half]
+            return (
+                f"ECHEC V27 : Ton bloc REPLACE a EFFACE le code d'origine.\n"
+                f"Tu as VIOLE la Regle de l'Insertion V26.\n\n"
+                f"Ton SEARCH etait :\n---\n{snippet_search}\n---\n\n"
+                f"Ton REPLACE etait :\n---\n{snippet_replace}\n---\n\n"
+                f"PROBLEME : aucune ligne du SEARCH n'apparait dans le REPLACE.\n"
+                f"Tu as REECRIT au lieu d'AUGMENTER.\n\n"
+                f"CORRECTION : recopie INTEGRALEMENT les lignes du SEARCH dans\n"
+                f"ton REPLACE, et AJOUTE ton guard/check autour. Le REPLACE\n"
+                f"doit CONTENIR le SEARCH verbatim, pas le remplacer.\n\n"
+                f"Exemple correct :\n"
+                f"  SEARCH : x = compute()\n"
+                f"  REPLACE: x = compute()           # ligne SEARCH GARDEE\n"
+                f"           if x is None:           # ton ajout\n"
+                f"               return False"
             )
         if self.status == "syntax_error":
             err = self.compile_stderr[-max_chars:] if self.compile_stderr else ""
