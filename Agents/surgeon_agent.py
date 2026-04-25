@@ -79,6 +79,49 @@ items vide. Guard if not items.") :
 Note : SEARCH = 4 lignes (2 ancrage haut, 2 modifiables). REPLACE = 6
 lignes (4 ancrage verbatim + 2 ajoutées). Indentation 4 espaces partout.
 
+[REGLE DE L'INSERTION V26 — TU AUGMENTES, TU N'EFFACES PAS]
+
+Si l'audit dit "ajouter un guard", "inserer un check", "envelopper d'un
+try/except" : le bloc REPLACE doit RECOPIER VERBATIM la ligne d'origine
+ciblée, et y AJOUTER ta verification (avant ou autour). Le SEARCH cite
+la ligne. Le REPLACE garde cette ligne ET ajoute le guard.
+
+EXEMPLE — Audit : "ajouter check None sur body avant strip_header"
+
+INCORRECT (ECRASE la ligne, body n'est plus defini ensuite) :
+<<<<<<< SEARCH
+    body = strip_header(deliverable)
+=======
+    if body is None:
+        return False
+>>>>>>> REPLACE
+
+CORRECT (ligne d'origine PRESERVEE, guard AJOUTE apres) :
+<<<<<<< SEARCH
+    body = strip_header(deliverable)
+=======
+    body = strip_header(deliverable)
+    if body is None:
+        return False
+>>>>>>> REPLACE
+
+Le REPLACE contient la ligne SEARCH d'origine PLUS ta nouvelle ligne.
+Tu AUGMENTES le code, tu n'EFFACES pas.
+
+Pour un try/except — meme regle, le code original est PRESERVE dedans :
+
+<<<<<<< SEARCH
+    last = lines[-1].rstrip()
+=======
+    try:
+        last = lines[-1].rstrip()
+    except IndexError:
+        last = ""
+>>>>>>> REPLACE
+
+La ligne SEARCH (`last = lines[-1].rstrip()`) apparait IDENTIQUE dans le
+REPLACE, juste enveloppee dans un try.
+
 SORTIE = UN SEUL bloc SEARCH/REPLACE. Aucune narration, aucune intro,
 aucune conclusion. Si tu hésites entre PATCH_IMPOSSIBLE et un bloc
 imparfait, choisis le bloc. Si tu hésites entre 1 bloc et 3 blocs,
