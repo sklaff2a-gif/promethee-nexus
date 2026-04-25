@@ -5,9 +5,10 @@ import random
 import logging
 import json
 import os
+import re
 import uuid
 from datetime import date, datetime
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from core.orchestrator import orchestrator
 from core.event_bus.bus import bus
 from core.prompt_templates import AUTONOMY_GUARDRAIL
@@ -8542,6 +8543,50 @@ RAISON: <1 phrase courte>"""
         import re as _re
         t0 = _t_mr.time()
 
+        # V20b (2026-04-25) — Bloom whitelist contextuelle.
+        # Lit le target_file via AST pour extraire TOUS les ast.arg
+        # (parametres de fonctions) et les pousse dans la session_whitelist
+        # du Bloom singleton. Ces params sont des ressources legitimes du
+        # fichier (ex: min_last_section_words dans d2_truncation), pas des
+        # hallucinations. Le Bloom les laisse passer pour la duree du tir.
+        # Cleared en finally a la fin du REDUCE.
+        _session_params: set = set()
+        try:
+            import os as _os_v20b, ast as _ast_v20b
+            _proj_root_v20b = _os_v20b.path.dirname(
+                _os_v20b.path.dirname(_os_v20b.path.abspath(__file__))
+            )
+            _tgt_full_v20b = _os_v20b.path.join(_proj_root_v20b, target_file)
+            if _os_v20b.path.exists(_tgt_full_v20b):
+                with open(_tgt_full_v20b, "r", encoding="utf-8", errors="ignore") as _ftgt:
+                    _src_v20b = _ftgt.read()
+                _tree_v20b = _ast_v20b.parse(_src_v20b)
+                for _node_v20b in _ast_v20b.walk(_tree_v20b):
+                    if isinstance(_node_v20b, (_ast_v20b.FunctionDef, _ast_v20b.AsyncFunctionDef)):
+                        _args_v20b = _node_v20b.args
+                        for _a in (_args_v20b.args or []):
+                            _session_params.add(_a.arg)
+                        for _a in (_args_v20b.kwonlyargs or []):
+                            _session_params.add(_a.arg)
+                        for _a in (_args_v20b.posonlyargs or []):
+                            _session_params.add(_a.arg)
+                        if _args_v20b.vararg:
+                            _session_params.add(_args_v20b.vararg.arg)
+                        if _args_v20b.kwarg:
+                            _session_params.add(_args_v20b.kwarg.arg)
+                if _session_params:
+                    try:
+                        from core.bloom_filter import bloom_pre_llm as _bpl
+                        _bpl.set_session_whitelist(_session_params)
+                        logger.info(
+                            f"[V20b] Bloom session whitelist: {len(_session_params)} "
+                            f"params depuis {target_file}"
+                        )
+                    except Exception:
+                        pass
+        except Exception as _e_v20b:
+            logger.warning(f"[V20b] params extraction echoue: {_e_v20b}")
+
         # V18.5 (2026-04-24 15:55) — MAP AGENT NEUTRALISE.
         # Autopsie V18.4 confirmee : 5 notes MAP sur 6 commencaient LITTERALE-
         # MENT par "### AUDIT SECURITE - Revue de code core/reasoning_protocol.py".
@@ -8683,6 +8728,13 @@ RAISON: <1 phrase courte>"""
                 f"[V18 REDUCE] {target_file} — 0 note, synthese vide_positif "
                 f"({duration_s}s)"
             )
+            # V20b cleanup
+            if _session_params:
+                try:
+                    from core.bloom_filter import bloom_pre_llm as _bpl_clr
+                    _bpl_clr.clear_session_whitelist()
+                except Exception:
+                    pass
             return {
                 "status": "success",
                 "result": final_result,
@@ -8793,6 +8845,13 @@ RAISON: <1 phrase courte>"""
             f"[V18 REDUCE] {target_file} — {len(map_notes)} notes synthetisees "
             f"-> {len(final_result)}c ({duration_s}s total map+reduce)"
         )
+        # V20b cleanup : effacer la session whitelist apres le tir
+        if _session_params:
+            try:
+                from core.bloom_filter import bloom_pre_llm as _bpl_clr
+                _bpl_clr.clear_session_whitelist()
+            except Exception:
+                pass
         return {
             "status": "success" if final_result else "error",
             "result": final_result or f"Synthese map-reduce vide pour {target_file}",
@@ -8917,6 +8976,46 @@ RAISON: <1 phrase courte>"""
                 ) or []
             except Exception as _v18_e:
                 logger.warning(f"[V18] query chunks echoue: {_v18_e}")
+            # V19.5 (2026-04-25) — EAGER LOADING ANTI-VIDE.
+            # Diagnostic 06:56 : le RAG indexer V15.1 a renvoye [] sur
+            # bullshit_detector.py (lazy init non termine, ou fichier modifie
+            # hors index). Resultat : map_reduce skip, fallback monolithique
+            # → le 14b hallucine reasoning_protocol.py → REJET target drift.
+            # Fix : si l'indexer est vide, lire le fichier directement sur
+            # disque et le chunker a la volee avec le meme algo AST que
+            # l'indexeur. L'audit ne tombe JAMAIS en mode aveugle.
+            if not raw_chunks:
+                try:
+                    import os as _os_v195
+                    _proj_root = _os_v195.path.dirname(
+                        _os_v195.path.dirname(_os_v195.path.abspath(__file__))
+                    )
+                    _full_path = _os_v195.path.join(_proj_root, target_file_for_v18)
+                    if _os_v195.path.exists(_full_path):
+                        logger.error(
+                            f"[CRITIQUE V19.5] RAG vide pour {target_file_for_v18}. "
+                            f"Eager loading depuis disque pour eviter audit aveugle..."
+                        )
+                        with open(_full_path, "r", encoding="utf-8", errors="ignore") as _f_v195:
+                            _source_v195 = _f_v195.read()
+                        # Reuse de la logique de chunking AST de SourceCodeIndexer
+                        raw_chunks = _v18_idx._chunk_by_ast(
+                            target_file_for_v18, _source_v195
+                        )[:6]
+                        logger.info(
+                            f"[V19.5 EAGER LOAD] {target_file_for_v18} : "
+                            f"{len(raw_chunks)} chunks AST decoupes a la volee "
+                            f"({len(_source_v195)} chars source)"
+                        )
+                    else:
+                        logger.error(
+                            f"[CRITIQUE V19.5] RAG vide ET fichier introuvable: {_full_path}"
+                        )
+                except Exception as _v195_e:
+                    logger.error(
+                        f"[CRITIQUE V19.5] Eager loading echoue: {type(_v195_e).__name__}: {_v195_e}",
+                        exc_info=True,
+                    )
             if raw_chunks:
                 logger.info(
                     f"[V18 MAP-REDUCE] start — {target_file_for_v18}, "
@@ -9173,6 +9272,34 @@ RAISON: <1 phrase courte>"""
                     except Exception as e:
                         logger.debug(f"[SCHOOL] Mentor echoue: {e}")
 
+                    # ─── V21 SELF-HEALING HOOK (synchrone post-REDUCE+Phase14) ───
+                    # Tire UNIQUEMENT si :
+                    #  - slot == "CODE_REVIEW"
+                    #  - target_file extractible du subject
+                    #  - grade >= 6.0 (audit juge exploitable)
+                    # FAIL-SAFE absolu : un crash V21 n'altere JAMAIS la routine
+                    # principale. La note est deja persistee, le livrable
+                    # comptabilise. V21 est experimental — il s'eteint en silence
+                    # si quelque chose tourne mal.
+                    try:
+                        if slot == "CODE_REVIEW" and grade >= 6.0:
+                            _v21_subject = info.get("subject", {})
+                            _v21_target = ""
+                            if isinstance(_v21_subject, dict):
+                                _v21_target = (_v21_subject.get("target_file") or "").strip()
+                            if _v21_target:
+                                await self._self_healing_hook(
+                                    audit_report=deliverable,
+                                    target_file=_v21_target,
+                                    school_grade=grade,
+                                )
+                    except Exception as _e_v21:
+                        logger.error(
+                            f"[V21 SELF-HEALING] Crash isole (n'affecte pas la routine): "
+                            f"{type(_e_v21).__name__}: {_e_v21}",
+                            exc_info=True,
+                        )
+
             except Exception as e:
                 # V18.7c (2026-04-24 16:45) : ABOLITION DU SILENCE.
                 # Ce except etouffait des AttributeError critiques (cf. bug
@@ -9189,6 +9316,249 @@ RAISON: <1 phrase courte>"""
                 )
 
         return response or {"status": "error", "result": "Dispatch echoue."}
+
+    # ───────────────────────────────────────────────────────────────────
+    # V21 (2026-04-25) — Pipeline d'auto-correction synchrone post-REDUCE
+    # ───────────────────────────────────────────────────────────────────
+
+    # Lazy : l'agent SURGEON n'est instancie qu'a la 1ere occurrence de hook.
+    _v21_surgeon = None
+
+    # Garde-fous configurables
+    _V21_MAX_ITER: int = 3
+    _V21_MIN_GRADE: float = 6.0
+    _V21_REGRESSION_TIMEOUT_S: int = 300
+
+    async def _self_healing_hook(
+        self,
+        audit_report: str,
+        target_file: str,
+        school_grade: float,
+    ) -> Optional[Dict[str, Any]]:
+        """V21 — Hook synchrone post-CODE_REVIEW.
+
+        Lance la boucle SURGEON ↔ MEDIC (max 3 iterations). Persiste si
+        succes. JAMAIS d'application sur le projet reel — c'est l'humain
+        qui fait `git apply` apres review.
+
+        Toute exception en interne est attrapee et logguee. Le caller
+        (qui est lui-meme en try/except massif) ne reverra jamais d'erreur.
+        """
+        # 1. Resoudre le project_root et lire le source
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        target_path = os.path.join(project_root, target_file)
+        if not os.path.exists(target_path):
+            logger.warning(
+                f"[V21] target_file introuvable, hook abort: {target_path}"
+            )
+            return None
+        try:
+            with open(target_path, "r", encoding="utf-8") as f:
+                source = f.read()
+        except Exception as exc:
+            logger.warning(f"[V21] Lecture source impossible ({target_file}): {exc}")
+            return None
+
+        # 2. Lazy-init du SURGEON (instancie 1 seule fois par run du process)
+        try:
+            if self._v21_surgeon is None:
+                from Agents.surgeon_agent import SurgeonAgent
+                self.__class__._v21_surgeon = SurgeonAgent()
+                logger.info("[V21] SURGEON instancie (lazy init)")
+        except Exception as exc:
+            logger.error(f"[V21] Impossible d'instancier SURGEON: {exc}")
+            return None
+
+        # 3. Sandbox singleton (deja instancie au top-module de code_sandbox)
+        try:
+            from core.capabilities.code_sandbox import sandbox as medic_sandbox
+        except Exception as exc:
+            logger.error(f"[V21] Sandbox V21 indisponible: {exc}")
+            return None
+
+        # 4. Boucle SURGEON ↔ MEDIC avec retry
+        previous_attempts: List[Dict[str, Any]] = []
+        last_result = None
+        loop_t0 = time.time()
+        logger.info(
+            f"[V21] HOOK START target={target_file} grade={school_grade:.1f} "
+            f"max_iter={self._V21_MAX_ITER}"
+        )
+
+        for iteration in range(self._V21_MAX_ITER):
+            # 4a. SURGEON
+            try:
+                raw_output = await self._v21_surgeon.generate_patch(
+                    audit_report=audit_report,
+                    target_source=source,
+                    previous_attempts=previous_attempts,
+                )
+            except Exception as exc:
+                logger.error(
+                    f"[V21] SURGEON crash iter={iteration}: {type(exc).__name__}: {exc}",
+                    exc_info=True,
+                )
+                return None
+
+            # 4b. MEDIC
+            try:
+                result = medic_sandbox.apply_patch_in_sandbox(
+                    surgeon_output=raw_output,
+                    target_file=target_file,
+                    run_full_tests=True,
+                    project_root=project_root,
+                    regression_timeout_s=self._V21_REGRESSION_TIMEOUT_S,
+                    iteration=iteration,
+                )
+            except Exception as exc:
+                logger.error(
+                    f"[V21] MEDIC crash iter={iteration}: {type(exc).__name__}: {exc}",
+                    exc_info=True,
+                )
+                return None
+
+            last_result = result
+            logger.info(
+                f"[V21] iter={iteration} status={result.status} "
+                f"blocs={result.blocks_applied} tests_ok={result.tests_passed} "
+                f"tests_ko={result.tests_failed} dur={result.duration_s:.1f}s"
+            )
+
+            # 4c. Decision
+            if result.status == "success":
+                self._persist_v21_patch(
+                    result=result,
+                    audit_report=audit_report,
+                    school_grade=school_grade,
+                    project_root=project_root,
+                )
+                self._log_v21_triumph(
+                    target_file=target_file,
+                    iteration=iteration,
+                    result=result,
+                    total_duration_s=time.time() - loop_t0,
+                )
+                return {"status": "success", "iteration": iteration, "result": result}
+
+            if result.status == "patch_impossible":
+                logger.info(
+                    f"[V21] SURGEON declare PATCH_IMPOSSIBLE pour {target_file} "
+                    f"(iter={iteration}). Pas de retry."
+                )
+                return {"status": "impossible", "iteration": iteration, "result": result}
+
+            # 4d. Retry : injecter le traceback pour la prochaine iteration
+            previous_attempts.append({
+                "surgeon_output": raw_output,
+                "failure_reason": result.status,
+                "traceback": result.format_traceback_for_surgeon(),
+            })
+
+        logger.warning(
+            f"[V21] max_iter={self._V21_MAX_ITER} atteint pour {target_file} "
+            f"(last status={last_result.status if last_result else 'unknown'}, "
+            f"duree totale={time.time() - loop_t0:.1f}s)"
+        )
+        return {"status": "max_iter_reached", "iteration": self._V21_MAX_ITER, "result": last_result}
+
+    def _persist_v21_patch(
+        self,
+        result,
+        audit_report: str,
+        school_grade: float,
+        project_root: str,
+    ) -> None:
+        """V21 — Sauvegarde un patch valide dans memory/auto_patches/.
+
+        Trois fichiers ecrits :
+          - patch_<ts>_<basename>.txt   : sortie SEARCH/REPLACE brute du SURGEON
+          - patch_<ts>_<basename>.diff  : unified diff (pret pour `git apply`)
+          - patch_<ts>_<basename>.meta.json : metadonnees (target_file, iteration,
+                                              tests, school_grade, audit excerpt)
+
+        JAMAIS de write sur le projet reel. La boite aux lettres est seulement
+        destinee a la review humaine.
+        """
+        try:
+            patches_dir = os.path.join(project_root, "memory", "auto_patches")
+            os.makedirs(patches_dir, exist_ok=True)
+
+            ts = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+            base = os.path.basename(result.target_file)
+            if base.endswith(".py"):
+                base = base[:-3]
+            base = re.sub(r"[^A-Za-z0-9_-]", "_", base) or "patch"
+            stem = f"patch_{ts}_{base}"
+
+            patch_path = os.path.join(patches_dir, stem + ".txt")
+            diff_path = os.path.join(patches_dir, stem + ".diff")
+            meta_path = os.path.join(patches_dir, stem + ".meta.json")
+
+            with open(patch_path, "w", encoding="utf-8") as f:
+                f.write(result.surgeon_output or "")
+            with open(diff_path, "w", encoding="utf-8") as f:
+                f.write(result.unified_diff or "")
+
+            meta = {
+                "id": stem,
+                "timestamp": ts,
+                "target_file": result.target_file,
+                "iteration": result.iteration,
+                "blocks_applied": result.blocks_applied,
+                "school_grade": school_grade,
+                "tests_passed": result.tests_passed,
+                "tests_failed": result.tests_failed,
+                "test_strategy": result.test_strategy,
+                "duration_s": result.duration_s,
+                "audit_excerpt": (audit_report or "")[:600],
+                "human_review_status": "pending",
+                "merged_at": None,
+                "rejected_at": None,
+            }
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2, ensure_ascii=False)
+
+            logger.info(f"[V21] Patch persiste: {stem}")
+        except Exception as exc:
+            logger.error(f"[V21] Persistance echouee: {type(exc).__name__}: {exc}", exc_info=True)
+
+    def _log_v21_triumph(
+        self,
+        target_file: str,
+        iteration: int,
+        result,
+        total_duration_s: float,
+    ) -> None:
+        """V21 — Log de triomphe absolu en console + logger.
+
+        Seul moment ou Promethee se permet de celebrer : il a diagnostique,
+        propose, valide en sandbox et soumis a review humaine. La machine
+        auto-corrige. Le hook lit ses propres failles.
+        """
+        bar = "=" * 70
+        msg = (
+            "\n" + bar + "\n"
+            "  V21 SELF-HEALING : PATCH CHIRURGICAL VALIDE EN SANDBOX\n"
+            + bar + "\n"
+            f"  Cible           : {target_file}\n"
+            f"  Iterations      : {iteration + 1}/{self._V21_MAX_ITER}\n"
+            f"  Blocs appliques : {result.blocks_applied}\n"
+            f"  Tests passes    : {result.tests_passed}\n"
+            f"  Strategie tests : {result.test_strategy}\n"
+            f"  Duree boucle    : {total_duration_s:.1f}s\n"
+            f"  Diff stocke     : memory/auto_patches/\n"
+            + bar + "\n"
+            "  En attente de review humaine (git apply manuel apres lecture)\n"
+            + bar
+        )
+        try:
+            print(msg)
+        except Exception:
+            pass
+        logger.info(
+            f"[V21 TRIUMPH] target={target_file} iter={iteration + 1} "
+            f"tests_ok={result.tests_passed} dur={total_duration_s:.1f}s"
+        )
 
     # Cooldown introspection vesperale (max 1 par 8h)
     _last_reflection_ts: float = 0.0
