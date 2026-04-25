@@ -79,6 +79,10 @@ _PYTHON_NATIVE_VOCABULARY = frozenset({
     # Exceptions standards
     "Exception", "ValueError", "TypeError", "KeyError", "IndexError",
     "AttributeError", "RuntimeError", "StopIteration", "ZeroDivisionError",
+    "NameError", "ImportError", "ModuleNotFoundError", "FileNotFoundError",
+    "PermissionError", "TimeoutError", "AssertionError", "NotImplementedError",
+    "OSError", "IOError", "UnicodeError", "UnicodeDecodeError", "UnicodeEncodeError",
+    "OverflowError", "ArithmeticError", "LookupError", "BaseException",
     # Type hints
     "Optional", "List", "Dict", "Tuple", "Set", "Any", "Union",
     "Callable", "Iterator", "Iterable",
@@ -9542,7 +9546,12 @@ RAISON: <1 phrase courte>"""
     # Garde-fous configurables
     _V21_MAX_ITER: int = 3
     _V21_MIN_GRADE: float = 6.0
-    _V21_REGRESSION_TIMEOUT_S: int = 300
+    _V21_REGRESSION_TIMEOUT_S: int = 600  # V30.3.2 : passe de 300s a 600s
+                                          # car la regression complete (847+
+                                          # tests) prenait 151s au tir V30.1
+                                          # mais a depasse 300s au tir V30.3.1
+                                          # (fluctuation env, GPU partage avec
+                                          # autres LLMs en cascade).
 
     async def _self_healing_hook(
         self,
