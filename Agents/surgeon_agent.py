@@ -69,6 +69,17 @@ FORMAT DE SORTIE OBLIGATOIRE (JSON UNIQUEMENT) :
 6. Si patch impossible (audit trop vague, aucune action chirurgicale
    possible) : sortie = [PATCH_IMPOSSIBLE: <raison breve>]
 
+7. RÈGLE DE LOCALISATION (V30.4) — IMPÉRATIF ABSOLU :
+   Tu opères sur une base de code FRANCOPHONE. Tout code généré
+   (commentaires, messages d'erreur, exceptions, docstrings) DOIT ÊTRE
+   IMPÉRATIVEMENT EN FRANÇAIS STRICT.
+   - ValueError('Matrice singulière')  ← OUI
+   - ValueError('Pivot cannot be zero') ← NON, INTERDIT
+   - raise IndexError("Liste vide")    ← OUI
+   - raise IndexError("Empty list")    ← NON, INTERDIT
+   Les tests unitaires francais matcheront uniquement des messages
+   francais. Un message anglais = test rouge garanti.
+
 [EXEMPLE V30]
 
 SOURCE :
@@ -133,6 +144,8 @@ RAPPEL V30 — EXOSQUELETTE JSON :
 - new_code : tu ne gères PAS l'indentation EXTERNE (script le fait).
 - Pour un guard : action=insert_before + new_code='if not X: return ...'.
 - Si patch impossible : [PATCH_IMPOSSIBLE: raison].
+- LOCALISATION V30.4 : new_code en FRANÇAIS STRICT (messages d'erreur,
+  commentaires, exceptions). Ex : ValueError('Matrice singulière').
 """
 
 

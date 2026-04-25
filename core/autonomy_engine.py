@@ -8720,6 +8720,12 @@ RAISON: <1 phrase courte>"""
                 _tree_v20b = _ast_v20b.parse(_src_v20b)
                 for _node_v20b in _ast_v20b.walk(_tree_v20b):
                     if isinstance(_node_v20b, (_ast_v20b.FunctionDef, _ast_v20b.AsyncFunctionDef)):
+                        # V30.4 (2026-04-25) — RADAR DU MAP : whitelist le nom
+                        # de la fonction elle-meme. Sinon le writer (REDUCE)
+                        # se prend un Bloom V4.2 sur 'invert_matrix' et
+                        # rapporte 'fonction introuvable' a la place de
+                        # l'audit reel.
+                        _session_params.add(_node_v20b.name)
                         _args_v20b = _node_v20b.args
                         for _a in (_args_v20b.args or []):
                             _session_params.add(_a.arg)
@@ -8731,6 +8737,14 @@ RAISON: <1 phrase courte>"""
                             _session_params.add(_args_v20b.vararg.arg)
                         if _args_v20b.kwarg:
                             _session_params.add(_args_v20b.kwarg.arg)
+                    elif isinstance(_node_v20b, _ast_v20b.ClassDef):
+                        # V30.4 — symetrie avec V25 : ClassDef name aussi.
+                        _session_params.add(_node_v20b.name)
+                    elif isinstance(_node_v20b, _ast_v20b.Assign):
+                        # V30.4 — symetrie avec V25 : Assign targets aussi.
+                        for _t in _node_v20b.targets:
+                            if isinstance(_t, _ast_v20b.Name):
+                                _session_params.add(_t.id)
                 # V28 (2026-04-25) — IMMUNITE BLOOM REDUCE.
                 # Diagnostic tir 16:27 : le REDUCE V18 a ete vetote par Bloom
                 # V4.2 sur le mot 'bullshit_detector' (basename du fichier
@@ -9643,6 +9657,15 @@ RAISON: <1 phrase courte>"""
                 _seg_clean = _seg.replace(".py", "").strip()
                 if _seg_clean:
                     _v25_session_names.add(_seg_clean)
+            # V30.4 (2026-04-25) — IMMUNITE TEST PATH.
+            # Le SURGEON peut citer le path du test cible dans iter+1
+            # (trauma transmission lui montre le traceback). Sans cet
+            # ajout, Bloom V4.2 vetote 'tests/auto/test_<basename>.py'
+            # et casse iter=2 en invalid_json.
+            _v25_session_names.add(f"tests/auto/test_{_v28_stem_v25}.py")
+            _v25_session_names.add(f"test_{_v28_stem_v25}.py")
+            _v25_session_names.add(f"test_{_v28_stem_v25}")
+            _v25_session_names.add(f"tests/test_{_v28_stem_v25}.py")
             # V30.2 — vocabulaire Python natif (parse, split, re, etc.)
             _v25_session_names.update(_PYTHON_NATIVE_VOCABULARY)
 
