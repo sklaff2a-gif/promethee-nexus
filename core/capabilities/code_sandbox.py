@@ -21,6 +21,7 @@ C'est la difference entre un LLM qui genere et un agent qui raisonne.
 from __future__ import annotations
 
 import ast
+import difflib
 import logging
 import os
 import re
@@ -29,8 +30,9 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,11 @@ DEFAULT_TIMEOUT_S = 5
 MAX_TIMEOUT_S = 30
 MAX_CODE_CHARS = 20_000  # protection payload
 _TEMPDIR_PREFIX = "promethee_sandbox_"
+
+# V21 — constantes du pipeline self-healing (référencées dans CodeSandbox)
+_TEMPDIR_MEDIC_PREFIX = "promethee_medic_"
+DEFAULT_REGRESSION_TIMEOUT_S = 300
+DEFAULT_COMPILE_TIMEOUT_S = 30
 
 # V16.2 (2026-04-24) — Regex du "stethoscope" d'exception.
 # Un traceback Python standard termine toujours par une ligne de la forme :
@@ -405,6 +412,604 @@ class CodeSandbox:
                 shutil.rmtree(tmpdir, ignore_errors=True)
             except Exception:
                 pass
+
+    # ───────────────────────────────────────────────────────────────────
+    # V21 — apply_patch_in_sandbox (MEDIC)
+    # ───────────────────────────────────────────────────────────────────
+
+    def apply_patch_in_sandbox(
+        self,
+        surgeon_output: str,
+        target_file: str,
+        run_full_tests: bool = True,
+        project_root: Optional[str] = None,
+        regression_timeout_s: int = DEFAULT_REGRESSION_TIMEOUT_S,
+        iteration: int = 0,
+    ) -> "PatchResult":
+        """V21 — applique des blocs SEARCH/REPLACE en environnement isolé.
+
+        Étapes :
+          1. Détecte [PATCH_IMPOSSIBLE: ...] → return early
+          2. parse_search_replace_blocks(surgeon_output)
+          3. Lit le source réel (project_root / target_file)
+          4. apply_search_replace(source, blocks)
+          5. Construit le sandbox layout (symlinks + copie réelle target_file)
+          6. py_compile <patched_file>
+          7. Régression globale (testmon ou full_suite)
+          8. Génère unified_diff post-hoc
+          9. Cleanup tempdir
+
+        Aucune écriture sur le projet réel. Le caller est responsable de
+        l'éventuel `git apply` après review humaine.
+        """
+        t0 = time.time()
+
+        # Inférer project_root si non fourni : 3 niveaux au-dessus de ce module
+        # (core/capabilities/code_sandbox.py → projet root)
+        if project_root is None:
+            project_root = str(Path(__file__).resolve().parents[2])
+        project_root_p = Path(project_root)
+
+        target_path = project_root_p / target_file
+
+        # 1. PATCH_IMPOSSIBLE
+        m_imp = _PATCH_IMPOSSIBLE_RE.search(surgeon_output or "")
+        if m_imp:
+            return PatchResult(
+                status="patch_impossible",
+                surgeon_output=surgeon_output,
+                target_file=target_file,
+                iteration=iteration,
+                error_message=m_imp.group(1).strip(),
+                duration_s=time.time() - t0,
+            )
+
+        # 2. Parse blocs
+        try:
+            blocks = parse_search_replace_blocks(surgeon_output or "")
+        except ValueError as exc:
+            return PatchResult(
+                status="no_blocks",
+                surgeon_output=surgeon_output,
+                target_file=target_file,
+                iteration=iteration,
+                error_message=str(exc),
+                duration_s=time.time() - t0,
+            )
+
+        # 3. Lecture source
+        if not target_path.exists():
+            return PatchResult(
+                status="internal_error",
+                surgeon_output=surgeon_output,
+                target_file=target_file,
+                iteration=iteration,
+                error_message=f"Target file not found: {target_path}",
+                duration_s=time.time() - t0,
+            )
+        try:
+            original_source = target_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            return PatchResult(
+                status="internal_error",
+                surgeon_output=surgeon_output,
+                target_file=target_file,
+                iteration=iteration,
+                error_message=f"Erreur lecture source: {type(exc).__name__}: {exc}",
+                duration_s=time.time() - t0,
+            )
+
+        # 4. Application des blocs
+        try:
+            patched_source = apply_search_replace(original_source, blocks)
+        except _SearchNotFoundError as exc:
+            return PatchResult(
+                status="search_not_found",
+                surgeon_output=surgeon_output,
+                blocks_applied=exc.applied_count,
+                target_file=target_file,
+                iteration=iteration,
+                failed_block_index=exc.block_index,
+                failed_block_search=exc.search_text,
+                error_message=str(exc),
+                duration_s=time.time() - t0,
+            )
+        except _SearchAmbiguousError as exc:
+            return PatchResult(
+                status="search_ambiguous",
+                surgeon_output=surgeon_output,
+                blocks_applied=exc.applied_count,
+                target_file=target_file,
+                iteration=iteration,
+                failed_block_index=exc.block_index,
+                failed_block_search=exc.search_text,
+                error_message=str(exc),
+                duration_s=time.time() - t0,
+            )
+
+        # 5-8. Sandbox + compile + régression + diff
+        tmpdir = tempfile.mkdtemp(prefix=_TEMPDIR_MEDIC_PREFIX)
+        try:
+            try:
+                _build_sandbox_layout(
+                    project_root_p, Path(tmpdir), target_file, patched_source
+                )
+            except Exception as exc:
+                return PatchResult(
+                    status="internal_error",
+                    surgeon_output=surgeon_output,
+                    blocks_applied=len(blocks),
+                    target_file=target_file,
+                    iteration=iteration,
+                    error_message=f"Erreur layout sandbox: {type(exc).__name__}: {exc}",
+                    duration_s=time.time() - t0,
+                )
+
+            patched_path = Path(tmpdir) / target_file
+
+            # 6. py_compile
+            try:
+                compile_proc = subprocess.run(
+                    [sys.executable, "-m", "py_compile", str(patched_path)],
+                    capture_output=True, text=True,
+                    encoding="utf-8", errors="replace",
+                    timeout=DEFAULT_COMPILE_TIMEOUT_S,
+                )
+            except subprocess.TimeoutExpired:
+                return PatchResult(
+                    status="syntax_error",
+                    surgeon_output=surgeon_output,
+                    blocks_applied=len(blocks),
+                    target_file=target_file,
+                    iteration=iteration,
+                    compile_stderr=f"py_compile timeout après {DEFAULT_COMPILE_TIMEOUT_S}s",
+                    duration_s=time.time() - t0,
+                )
+            if compile_proc.returncode != 0:
+                return PatchResult(
+                    status="syntax_error",
+                    surgeon_output=surgeon_output,
+                    blocks_applied=len(blocks),
+                    target_file=target_file,
+                    iteration=iteration,
+                    compile_stderr=compile_proc.stderr or compile_proc.stdout,
+                    duration_s=time.time() - t0,
+                )
+
+            # 7. Régression globale (testmon si dispo, sinon full suite)
+            #    Si run_full_tests=False : on saute la régression entièrement.
+            if run_full_tests:
+                regression = _run_regression_tests(
+                    sandbox_cwd=tmpdir,
+                    project_root=project_root,
+                    timeout_s=regression_timeout_s,
+                )
+                if regression["timed_out"] or regression["tests_failed"] > 0:
+                    status = "test_failed"
+                elif regression["returncode"] != 0 and regression["tests_passed"] == 0:
+                    # pytest a planté avant de rien collecter
+                    status = "test_failed"
+                else:
+                    status = "success"
+            else:
+                regression = {
+                    "stdout": "[run_full_tests=False — régression skippée]",
+                    "tests_passed": 0,
+                    "tests_failed": 0,
+                    "test_failures": [],
+                    "strategy": "skipped",
+                }
+                status = "success"
+
+            # 8. Unified diff post-hoc
+            unified_diff = ""
+            if status == "success":
+                unified_diff = _generate_unified_diff(
+                    original_source, patched_source, target_file
+                )
+
+            return PatchResult(
+                status=status,
+                surgeon_output=surgeon_output,
+                blocks_applied=len(blocks),
+                unified_diff=unified_diff,
+                target_file=target_file,
+                iteration=iteration,
+                test_output=regression["stdout"][-5000:] if regression.get("stdout") else "",
+                test_strategy=regression.get("strategy", ""),
+                tests_passed=regression.get("tests_passed", 0),
+                tests_failed=regression.get("tests_failed", 0),
+                test_failures=regression.get("test_failures", []),
+                duration_s=time.time() - t0,
+            )
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V21 (2026-04-25) — Pipeline d'auto-correction (Self-Healing)
+# Format SEARCH/REPLACE + régression globale
+# ═══════════════════════════════════════════════════════════════════════
+
+# Format SEARCH/REPLACE (style Aider/Cline). Le LLM 14b cite verbatim le
+# code, le MEDIC fait le str.replace en mémoire et génère le diff post-hoc.
+_SEARCH_REPLACE_RE = re.compile(
+    r"<<<<<<< SEARCH\n(.*?)\n=======\n(.*?)\n>>>>>>> REPLACE",
+    re.DOTALL,
+)
+
+# Marqueur "patch impossible" retourné par le SURGEON si l'audit ne fournit
+# pas assez d'informations pour un patch chirurgical.
+_PATCH_IMPOSSIBLE_RE = re.compile(r"\[PATCH_IMPOSSIBLE:\s*(.+?)\]", re.DOTALL)
+
+# Parsing de la sortie pytest : "X passed, Y failed in 1.23s"
+_PYTEST_COUNT_RE = re.compile(r"(\d+)\s+(passed|failed|error|errors|skipped)")
+
+# Dossiers à exclure du sandbox layout (volumineux ou non pertinents pytest)
+_SANDBOX_EXCLUDE_TOP = frozenset({
+    ".git", ".github", "__pycache__", ".pytest_cache", ".mypy_cache",
+    "BACKUPS", "datasets", "lora_adapters", "unsloth_compiled_cache",
+    "USER_DROPZONE", "USER_KNOWLEDGE", "node_modules", ".venv", "venv",
+    "PROMETHEE_V11_restructuration2026",  # éventuel sous-clone récursif
+})
+
+
+# ─── Exceptions internes V21 ──────────────────────────────────────────
+
+class _SearchNotFoundError(ValueError):
+    """Bloc SEARCH absent du source patché."""
+    def __init__(self, message: str, block_index: int, search_text: str, applied_count: int):
+        super().__init__(message)
+        self.block_index = block_index
+        self.search_text = search_text
+        self.applied_count = applied_count
+
+
+class _SearchAmbiguousError(ValueError):
+    """Bloc SEARCH apparaît plusieurs fois — non unique."""
+    def __init__(self, message: str, block_index: int, search_text: str,
+                 applied_count: int, count: int):
+        super().__init__(message)
+        self.block_index = block_index
+        self.search_text = search_text
+        self.applied_count = applied_count
+        self.count = count
+
+
+# ─── Parsing & application des blocs SEARCH/REPLACE ───────────────────
+
+def parse_search_replace_blocks(text: str) -> List[Tuple[str, str]]:
+    """V21 — Parse les blocs SEARCH/REPLACE depuis la sortie du SURGEON.
+
+    Retourne une liste de (search_text, replace_text). Lève ValueError si
+    aucun bloc valide n'est trouvé (le caller doit gérer ce cas comme
+    `no_blocks` ou laisser l'erreur remonter).
+    """
+    if not text or not isinstance(text, str):
+        raise ValueError("Sortie SURGEON vide ou non-string")
+    blocks = _SEARCH_REPLACE_RE.findall(text)
+    if not blocks:
+        raise ValueError(
+            "Aucun bloc <<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE trouvé"
+        )
+    return blocks
+
+
+def apply_search_replace(source: str, blocks: List[Tuple[str, str]]) -> str:
+    """V21 — Applique les blocs successivement sur source.
+
+    Lève _SearchNotFoundError si un SEARCH n'est pas trouvé.
+    Lève _SearchAmbiguousError si un SEARCH apparaît plusieurs fois.
+    Garantie chirurgicale : on n'applique JAMAIS un replace ambigu.
+    """
+    if not isinstance(source, str):
+        raise TypeError("source doit être str")
+    patched = source
+    applied = 0
+    for i, (search, replace) in enumerate(blocks):
+        count = patched.count(search)
+        if count == 0:
+            raise _SearchNotFoundError(
+                f"Bloc {i+1}/{len(blocks)} : SEARCH introuvable dans le source. "
+                f"Vérifie que tu cites le code VERBATIM (indentation, espaces).",
+                block_index=i,
+                search_text=search,
+                applied_count=applied,
+            )
+        if count > 1:
+            raise _SearchAmbiguousError(
+                f"Bloc {i+1}/{len(blocks)} : SEARCH trouvé à {count} endroits "
+                f"(non unique). Étends ton bloc avec 2-3 lignes de contexte "
+                f"avant/après pour le rendre unique.",
+                block_index=i,
+                search_text=search,
+                applied_count=applied,
+                count=count,
+            )
+        patched = patched.replace(search, replace, 1)
+        applied += 1
+    return patched
+
+
+# ─── PatchResult dataclass ────────────────────────────────────────────
+
+@dataclass
+class PatchResult:
+    """V21 — résultat d'un cycle MEDIC complet."""
+    status: str  # success / no_blocks / patch_impossible / search_not_found /
+                 # search_ambiguous / syntax_error / test_failed / internal_error
+    surgeon_output: str = ""
+    blocks_applied: int = 0
+    unified_diff: str = ""           # diff git généré post-hoc pour stockage
+    target_file: str = ""
+    iteration: int = 0
+    failed_block_index: int = -1
+    failed_block_search: str = ""
+    compile_stderr: str = ""
+    test_output: str = ""
+    test_strategy: str = ""           # "testmon" ou "full_suite"
+    tests_passed: int = 0
+    tests_failed: int = 0
+    test_failures: List[str] = field(default_factory=list)
+    duration_s: float = 0.0
+    error_message: str = ""
+
+    def format_traceback_for_surgeon(self, max_chars: int = 2000) -> str:
+        """Formate l'erreur pour réinjection dans le re-prompt SURGEON.
+
+        Le message doit dire au LLM EXACTEMENT quoi corriger pour la prochaine
+        itération : changer le format, étendre le contexte, fixer la syntaxe,
+        etc. Vide si status == 'success' ou 'patch_impossible'.
+        """
+        if self.status == "success":
+            return ""
+        if self.status == "no_blocks":
+            return (
+                "FORMAT INVALIDE : aucun bloc <<<<<<< SEARCH ... ======= "
+                "... >>>>>>> REPLACE trouvé dans ta sortie. Reformate "
+                "STRICTEMENT selon le format demandé."
+            )
+        if self.status == "search_not_found":
+            snippet = self.failed_block_search[:max_chars]
+            return (
+                f"BLOC {self.failed_block_index + 1} : SEARCH introuvable "
+                f"dans le source. Tu dois citer le code VERBATIM, caractère "
+                f"par caractère (indentation, espaces, retours ligne inclus).\n"
+                f"Ton SEARCH était :\n---\n{snippet}\n---\n"
+                f"Re-lis le fichier source et copie une portion qui existe "
+                f"vraiment."
+            )
+        if self.status == "search_ambiguous":
+            snippet = self.failed_block_search[:max_chars]
+            return (
+                f"BLOC {self.failed_block_index + 1} : SEARCH trouvé à "
+                f"plusieurs endroits (non unique). Étends ton bloc avec "
+                f"2-3 lignes de contexte AVANT et/ou APRÈS pour le rendre "
+                f"unique dans le fichier.\n"
+                f"Ton SEARCH était :\n---\n{snippet}\n---"
+            )
+        if self.status == "syntax_error":
+            err = self.compile_stderr[-max_chars:] if self.compile_stderr else ""
+            return (
+                f"PYTHON SYNTAX ERROR après application du patch :\n{err}\n\n"
+                f"Vérifie l'indentation et les parenthèses du REPLACE."
+            )
+        if self.status == "test_failed":
+            failures = "\n".join(self.test_failures[:5]) if self.test_failures else ""
+            tail = self.test_output[-max_chars:] if self.test_output else ""
+            return (
+                f"REGRESSION TESTS FAILED ({self.tests_failed} échecs sur "
+                f"{self.tests_passed + self.tests_failed} via "
+                f"{self.test_strategy or 'inconnu'}) :\n"
+                f"Failures principaux :\n{failures}\n\n"
+                f"Output (dernier {max_chars}c) :\n{tail}"
+            )
+        if self.status == "internal_error":
+            return f"ERREUR INTERNE SANDBOX : {self.error_message}"
+        if self.status == "patch_impossible":
+            return ""
+        return f"STATUT INCONNU : {self.status}"
+
+
+# ─── Helpers internes V21 ─────────────────────────────────────────────
+
+def _check_pytest_plugin_available(plugin_name: str) -> bool:
+    """V21 — True si le plugin pytest est installé.
+
+    Utilise `pip show <plugin>` qui retourne 0 si trouvé. Plus fiable que
+    l'import direct (testmon a un nom de package distinct du module).
+    """
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pip", "show", plugin_name],
+            capture_output=True, text=True, timeout=10,
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+def _parse_pytest_summary(stdout: str) -> Dict[str, int]:
+    """V21 — extrait passed/failed/error/skipped depuis la sortie pytest."""
+    result = {"passed": 0, "failed": 0, "error": 0, "skipped": 0}
+    if not stdout:
+        return result
+    for match in _PYTEST_COUNT_RE.finditer(stdout):
+        n = int(match.group(1))
+        kind = match.group(2)
+        if kind == "errors":
+            kind = "error"
+        if kind in result:
+            result[kind] += n
+    return result
+
+
+def _extract_test_failures(stdout: str, max_failures: int = 10) -> List[str]:
+    """V21 — extrait les lignes 'FAILED tests/...' depuis pytest --tb=line."""
+    failures: List[str] = []
+    if not stdout:
+        return failures
+    for line in stdout.splitlines():
+        if line.startswith("FAILED ") or line.startswith("ERROR "):
+            failures.append(line.strip())
+            if len(failures) >= max_failures:
+                break
+    return failures
+
+
+def _build_test_env(project_root: str, sandbox_cwd: str) -> dict:
+    """V21 — construit l'env subprocess pour pytest dans le sandbox.
+
+    PYTHONPATH = sandbox d'abord, puis project_root (pour les modules
+    référencés mais non patchés). Préserve PATH, SYSTEMROOT, etc.
+    """
+    env = dict(os.environ)  # héritage complet (pytest a besoin de plein de vars)
+    pythonpath = sandbox_cwd
+    if project_root and project_root != sandbox_cwd:
+        sep = ";" if sys.platform == "win32" else ":"
+        pythonpath = f"{sandbox_cwd}{sep}{project_root}"
+    env["PYTHONPATH"] = pythonpath
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PROMETHEE_TEST_MODE"] = "1"  # cohérent avec les fixtures projet
+    return env
+
+
+def _build_sandbox_layout(
+    project_root: Path,
+    sandbox_root: Path,
+    target_file: str,
+    patched_source: str,
+) -> None:
+    """V21 — construit le sandbox layout.
+
+    Stratégie :
+      - Pour chaque entry top-level de project_root (sauf exclude list) :
+        * Si entry contient le target_file → copytree complet puis écrase
+          target_file avec patched_source.
+        * Sinon → tente os.symlink (rapide), fallback shutil.copytree/copy
+          si OSError (Windows sans Developer Mode/admin).
+      - Si target_file est lui-même top-level (ex: "config.py") :
+        écrit patched_source directement.
+    """
+    target_rel = Path(target_file)
+    target_top = target_rel.parts[0] if len(target_rel.parts) >= 1 else None
+    target_is_top_file = (len(target_rel.parts) == 1)
+
+    sandbox_root.mkdir(parents=True, exist_ok=True)
+    ignore = shutil.ignore_patterns(*_SANDBOX_EXCLUDE_TOP)
+
+    for entry in project_root.iterdir():
+        if entry.name in _SANDBOX_EXCLUDE_TOP:
+            continue
+        dst = sandbox_root / entry.name
+
+        # Cas 1 : top-level qui contient le target → copytree puis overwrite
+        if entry.is_dir() and entry.name == target_top and not target_is_top_file:
+            shutil.copytree(entry, dst, symlinks=False, ignore=ignore)
+            patched_path = sandbox_root / target_rel
+            patched_path.parent.mkdir(parents=True, exist_ok=True)
+            patched_path.write_text(patched_source, encoding="utf-8")
+            continue
+
+        # Cas 2 : target_file est lui-même top-level
+        if target_is_top_file and entry.name == target_top:
+            dst.write_text(patched_source, encoding="utf-8")
+            continue
+
+        # Cas 3 : entry non liée au target → symlink (rapide) ou copy
+        try:
+            if entry.is_dir():
+                os.symlink(entry, dst, target_is_directory=True)
+            else:
+                os.symlink(entry, dst)
+        except (OSError, NotImplementedError):
+            # Fallback Windows sans Developer Mode
+            if entry.is_dir():
+                shutil.copytree(entry, dst, symlinks=False, ignore=ignore)
+            else:
+                shutil.copy2(entry, dst)
+
+
+def _run_regression_tests(
+    sandbox_cwd: str,
+    project_root: str,
+    timeout_s: int = DEFAULT_REGRESSION_TIMEOUT_S,
+    use_testmon: Optional[bool] = None,
+) -> dict:
+    """V21 — exécute la suite régression dans le sandbox.
+
+    Stratégie en cascade :
+      1. Si pytest-testmon est dispo → `pytest --testmon` (impactés seuls)
+      2. Sinon fallback → `pytest tests/ --tb=line --timeout=300 -x`
+         (suite complète, fail-fast au premier échec pour économiser temps)
+
+    `use_testmon=False` force le fallback (utile pour les tests).
+    """
+    if use_testmon is None:
+        use_testmon = _check_pytest_plugin_available("pytest-testmon")
+
+    if use_testmon:
+        cmd = [
+            sys.executable, "-m", "pytest",
+            "--testmon", "--tb=line", "--no-header", "-q",
+        ]
+        strategy = "testmon"
+    else:
+        cmd = [
+            sys.executable, "-m", "pytest",
+            "tests/", "--tb=line", "--no-header", "-q", "-x",
+        ]
+        strategy = "full_suite"
+
+    env = _build_test_env(project_root, sandbox_cwd)
+
+    try:
+        proc = subprocess.run(
+            cmd, cwd=sandbox_cwd, capture_output=True, text=True,
+            timeout=timeout_s, encoding="utf-8", errors="replace", env=env,
+        )
+        summary = _parse_pytest_summary(proc.stdout)
+        failures = _extract_test_failures(proc.stdout)
+        return {
+            "returncode": proc.returncode,
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+            "tests_passed": summary["passed"],
+            "tests_failed": summary["failed"] + summary["error"],
+            "tests_skipped": summary["skipped"],
+            "test_failures": failures,
+            "strategy": strategy,
+            "timed_out": False,
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "returncode": -9,
+            "stdout": exc.stdout if isinstance(exc.stdout, str) else "",
+            "stderr": f"TimeoutExpired: pytest killed après {timeout_s}s",
+            "tests_passed": 0,
+            "tests_failed": 0,
+            "tests_skipped": 0,
+            "test_failures": [f"TIMEOUT après {timeout_s}s"],
+            "strategy": strategy,
+            "timed_out": True,
+        }
+
+
+def _generate_unified_diff(original: str, patched: str, rel_path: str) -> str:
+    """V21 — génère le unified diff post-application via difflib.
+
+    Format compatible `git apply` (préfixe a/ et b/, lignes \\n terminées).
+    Stocké dans PatchResult.unified_diff pour persistance et review humaine.
+    """
+    diff_lines = difflib.unified_diff(
+        original.splitlines(keepends=True),
+        patched.splitlines(keepends=True),
+        fromfile=f"a/{rel_path}",
+        tofile=f"b/{rel_path}",
+        n=3,
+    )
+    return "".join(diff_lines)
 
 
 # ═══════════════════════════════════════════════════════════════════════
