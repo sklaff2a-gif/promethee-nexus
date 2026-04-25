@@ -859,14 +859,24 @@ class BaseAgent:
 
     async def generate_content(self, prompt: str) -> str:
         # ===== NEURAL COMPILER: Tentative réponse compilée =====
-        try:
-            from core.neural_compiler import compiler
-            compiled = compiler.try_intercept(self.name, prompt)
-            if compiled is not None:
-                self.log_thought("⚡ COMPILED: Réponse compilée (0 LLM)", type="info")
-                return self._sanitize_response(self._strip_cot(compiled), self.name)
-        except Exception:
-            pass  # Fallback transparent — ne jamais bloquer le flux
+        # V30.5 (2026-04-26) — BYPASS POUR CODE_REVIEW.
+        # Diagnostic 00:25 : routine SCHOOL_CODE_REVIEW autonome sur
+        # Agents/scrub_nurse_agent.py a servi une réponse compilée 178c
+        # qui parlait de core/reasoning_protocol.py → target drift,
+        # truncation, grade 9.8 -> 2.45. Le Neural Compiler est un cache
+        # déterministe générique inadapté aux audits ciblés sur target_file.
+        # Fix : court-circuiter le compiler pour les CODE_REVIEW scolaires.
+        # Chaque audit doit passer par le LLM avec le RAG du fichier cible.
+        _is_code_review = "[SCHOOL_SLOT: CODE_REVIEW]" in (prompt or "")
+        if not _is_code_review:
+            try:
+                from core.neural_compiler import compiler
+                compiled = compiler.try_intercept(self.name, prompt)
+                if compiled is not None:
+                    self.log_thought("⚡ COMPILED: Réponse compilée (0 LLM)", type="info")
+                    return self._sanitize_response(self._strip_cot(compiled), self.name)
+            except Exception:
+                pass  # Fallback transparent — ne jamais bloquer le flux
 
         # ===== BLOOM FILTER V4.2 : veto pre-LLM anti-hallucination =====
         # Design : Promethee lui-meme ex.80 (m=20000, k=7)

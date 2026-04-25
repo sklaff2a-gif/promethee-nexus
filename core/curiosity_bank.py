@@ -200,8 +200,22 @@ def extract_seeds_from_text(text: str, source: str) -> List[Dict[str, str]]:
                      if len(w) > 3 and w.lower() not in _IGNORE_WORDS]
             if words:
                 topic = " ".join(words[:3])
-                seeds.append({"topic": topic, "context": text[:100]})
-                break  # 1 graine par texte max
+                # V30.5 (2026-04-26) — equilibrage parentheses/crochets.
+                # Diagnostic 00:25 : graine 'extensible type (config.yaml'
+                # plantee 19/04 avec parenthese ouvrante non fermee, source
+                # de courriers laids type "Curiosite exploree : ... (config.yaml".
+                # Fix : retirer les delimiteurs non equilibres pour eviter
+                # graines tronquees mi-mot.
+                for _open, _close in (("(", ")"), ("[", "]"), ("{", "}")):
+                    diff = topic.count(_open) - topic.count(_close)
+                    if diff > 0:
+                        topic = topic.replace(_open, "")
+                    elif diff < 0:
+                        topic = topic.replace(_close, "")
+                topic = topic.strip()
+                if topic and len(topic) >= 4:
+                    seeds.append({"topic": topic, "context": text[:100]})
+                    break  # 1 graine par texte max
 
     # Methode 2 : detecter les noms propres ou sujets specifiques
     # (mots capitalises qui ne sont pas en debut de phrase)
