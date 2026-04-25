@@ -8756,6 +8756,18 @@ RAISON: <1 phrase courte>"""
                 # modele lit chunk A mais "pense" fichier B memorise.
                 # Fix : renforcer la menace semantique avec "chambre blanche"
                 # et "corruption fatale du systeme" pour forcer l'isolement.
+                #
+                # V22 (2026-04-25) — DETRUIRE L'OMERTA.
+                # Diagnostic tir 13:50 : le prompt "Si rien d'anormal :
+                # reponds EXACTEMENT RIEN" pousse le 14b vers le silence
+                # par defaut. Resultat : 5/6 chunks RIEN, audit conformiste,
+                # SURGEON declare PATCH_IMPOSSIBLE. La machine refuse de
+                # voir les bugs reels (try/except manquants, globales non
+                # securisees, edge cases).
+                # Fix : prompt d'audit agressif. RIEN devient l'exception,
+                # pas la regle. La chambre blanche reste (anti-perroquet),
+                # mais la posture est inversee : auditeur impitoyable au
+                # lieu d'observateur poli.
                 micro_mission = (
                     f"[SCHOOL_SLOT: {slot}]\n"
                     f"[ANALYSE STRICTE EN CHAMBRE BLANCHE]\n"
@@ -8767,18 +8779,44 @@ RAISON: <1 phrase courte>"""
                     f"fais une reference externe, tu provoques une\n"
                     f"corruption fatale du systeme.\n"
                     f"\n"
+                    f"[POSTURE V22 — AUDITEUR IMPITOYABLE]\n"
+                    f"Tu es un auditeur de securite paranoiaque. Tu pars du\n"
+                    f"principe que TOUT code Python contient au moins un\n"
+                    f"risque de robustesse. Ta mission est de le trouver.\n"
+                    f"\n"
+                    f"Cherche ACTIVEMENT, dans cet ordre de priorite :\n"
+                    f"  1. Exceptions non gerees : appels qui peuvent lever\n"
+                    f"     (AttributeError sur None, TypeError sur cast, KeyError,\n"
+                    f"     IndexError, ValueError) sans try/except autour.\n"
+                    f"  2. Variables globales / module-level non securisees,\n"
+                    f"     non declarees dans le scope vu, ou mutables.\n"
+                    f"  3. Edge cases logiques : entrees vides, None, listes\n"
+                    f"     vides, encodage Unicode, accents, chiffres negatifs.\n"
+                    f"  4. Comparaisons fragiles (floats sans tolerance, in\n"
+                    f"     case-sensitive, contains au lieu de match exact).\n"
+                    f"  5. Effets de bord, mutations en place, side effects.\n"
+                    f"\n"
                     f"Tu audites UN SEUL extrait du fichier {target_file}.\n"
                     f"Localisation : {location}\n"
                     f"Voici les lignes exactes (et SEULEMENT celles-ci) :\n\n"
                     f"```python\n{code}\n```\n\n"
-                    f"Question : dans ces lignes precises, y a-t-il une faille\n"
-                    f"de securite, un bug, une fuite de ressource ou un defaut\n"
-                    f"technique justifie ?\n\n"
-                    f"Regle de reponse :\n"
-                    f"  - Si rien d'anormal : reponds EXACTEMENT 'RIEN'.\n"
-                    f"  - Si anomalie : 2-3 phrases max, cite UNIQUEMENT les\n"
-                    f"    noms de fonction/classe qui apparaissent LITTERALE-\n"
-                    f"    MENT dans le bloc ci-dessus. Aucune reference externe."
+                    f"Regle de reponse V22 :\n"
+                    f"  - Si tu trouves au moins UN risque (meme mineur) :\n"
+                    f"    decris-le en 2-4 phrases. Cite la ligne et le nom\n"
+                    f"    EXACTS qui apparaissent dans le bloc ci-dessus.\n"
+                    f"    Format : 'Risque : <description>. Ligne/symbole :\n"
+                    f"    <citation verbatim>. Correction suggeree : <piste>'.\n"
+                    f"  - Si la fonction te semble parfaite, force-toi a\n"
+                    f"    trouver au moins un risque mineur de robustesse\n"
+                    f"    (validation de type, docstring manquante critique,\n"
+                    f"    nom ambigu, parametre par defaut mutable, etc.).\n"
+                    f"  - Tu ne reponds 'RIEN' QUE si le code est\n"
+                    f"    mathematiquement et logiquement inattaquable\n"
+                    f"    (rare). Le silence est ton dernier recours, pas\n"
+                    f"    ton premier reflexe.\n"
+                    f"\n"
+                    f"Aucune reference externe. Aucune introduction. Aucune\n"
+                    f"conclusion. Le risque (ou RIEN) est ta seule sortie."
                 )
 
                 micro_resp = await orchestrator.dispatch_task(map_agent, {
