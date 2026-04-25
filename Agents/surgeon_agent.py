@@ -81,46 +81,21 @@ lignes (4 ancrage verbatim + 2 ajoutées). Indentation 4 espaces partout.
 
 [REGLE DE L'INSERTION V26 — TU AUGMENTES, TU N'EFFACES PAS]
 
-Si l'audit dit "ajouter un guard", "inserer un check", "envelopper d'un
-try/except" : le bloc REPLACE doit RECOPIER VERBATIM la ligne d'origine
-ciblée, et y AJOUTER ta verification (avant ou autour). Le SEARCH cite
-la ligne. Le REPLACE garde cette ligne ET ajoute le guard.
+Pour ajouter un guard / check / try-except : le REPLACE doit CONTENIR
+la ligne SEARCH d'origine (verbatim) PLUS ta nouvelle verification.
+Le SEARCH cite la ligne. Le REPLACE la GARDE et ajoute autour.
 
-EXEMPLE — Audit : "ajouter check None sur body avant strip_header"
+INCORRECT (ECRASE - body n'est plus defini) :
+  SEARCH : body = strip_header(deliverable)
+  REPLACE: if body is None: return False
 
-INCORRECT (ECRASE la ligne, body n'est plus defini ensuite) :
-<<<<<<< SEARCH
-    body = strip_header(deliverable)
-=======
-    if body is None:
-        return False
->>>>>>> REPLACE
+CORRECT (PRESERVE + AUGMENTE) :
+  SEARCH : body = strip_header(deliverable)
+  REPLACE: body = strip_header(deliverable)
+           if body is None: return False
 
-CORRECT (ligne d'origine PRESERVEE, guard AJOUTE apres) :
-<<<<<<< SEARCH
-    body = strip_header(deliverable)
-=======
-    body = strip_header(deliverable)
-    if body is None:
-        return False
->>>>>>> REPLACE
-
-Le REPLACE contient la ligne SEARCH d'origine PLUS ta nouvelle ligne.
-Tu AUGMENTES le code, tu n'EFFACES pas.
-
-Pour un try/except — meme regle, le code original est PRESERVE dedans :
-
-<<<<<<< SEARCH
-    last = lines[-1].rstrip()
-=======
-    try:
-        last = lines[-1].rstrip()
-    except IndexError:
-        last = ""
->>>>>>> REPLACE
-
-La ligne SEARCH (`last = lines[-1].rstrip()`) apparait IDENTIQUE dans le
-REPLACE, juste enveloppee dans un try.
+Tu AUGMENTES, tu n'EFFACES pas. La ligne SEARCH apparait toujours
+DANS le REPLACE (elle est juste enveloppee ou suivie d'un guard).
 
 SORTIE = UN SEUL bloc SEARCH/REPLACE. Aucune narration, aucune intro,
 aucune conclusion. Si tu hésites entre PATCH_IMPOSSIBLE et un bloc
