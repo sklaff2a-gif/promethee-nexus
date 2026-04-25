@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import difflib
+import json
 import logging
 import os
 import re
@@ -32,7 +33,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -427,13 +428,13 @@ class CodeSandbox:
         iteration: int = 0,
         checklist: Optional[Dict[str, Any]] = None,  # V29
     ) -> "PatchResult":
-        """V21 — applique des blocs SEARCH/REPLACE en environnement isolé.
+        """V30 — applique un patch JSON Exosquelette en environnement isolé.
 
         Étapes :
           1. Détecte [PATCH_IMPOSSIBLE: ...] → return early
-          2. parse_search_replace_blocks(surgeon_output)
+          2. parse_v30_patch(surgeon_output) → dict {anchor, action, new_code}
           3. Lit le source réel (project_root / target_file)
-          4. apply_search_replace(source, blocks)
+          4. apply_v30_patch(source, patch, checklist) (V29 valide replace_line)
           5. Construit le sandbox layout (symlinks + copie réelle target_file)
           6. py_compile <patched_file>
           7. Régression globale (testmon ou full_suite)
@@ -465,12 +466,21 @@ class CodeSandbox:
                 duration_s=time.time() - t0,
             )
 
-        # 2. Parse blocs
+        # 2. V30 — Parse JSON Exosquelette
         try:
-            blocks = parse_search_replace_blocks(surgeon_output or "")
-        except ValueError as exc:
+            patch = parse_v30_patch(surgeon_output or "")
+        except _V30InvalidJSONError as exc:
             return PatchResult(
-                status="no_blocks",
+                status="invalid_json",
+                surgeon_output=surgeon_output,
+                target_file=target_file,
+                iteration=iteration,
+                error_message=str(exc),
+                duration_s=time.time() - t0,
+            )
+        except _V30InvalidActionError as exc:
+            return PatchResult(
+                status="invalid_action",
                 surgeon_output=surgeon_output,
                 target_file=target_file,
                 iteration=iteration,
@@ -500,58 +510,49 @@ class CodeSandbox:
                 duration_s=time.time() - t0,
             )
 
-        # 4. Application des blocs (avec validation checklist V29 si fournie)
+        # 4. V30 — Application du patch JSON (avec checklist V29)
         try:
-            patched_source = apply_search_replace(
-                original_source, blocks, checklist=checklist
+            patched_source = apply_v30_patch(
+                original_source, patch, checklist=checklist
             )
-        except _SearchNotFoundError as exc:
+        except _V30AnchorNotFoundError as exc:
             return PatchResult(
-                status="search_not_found",
+                status="anchor_not_found",
                 surgeon_output=surgeon_output,
-                blocks_applied=exc.applied_count,
+                blocks_applied=0,
                 target_file=target_file,
                 iteration=iteration,
-                failed_block_index=exc.block_index,
-                failed_block_search=exc.search_text,
+                failed_block_search=exc.anchor_line,
                 error_message=str(exc),
                 duration_s=time.time() - t0,
             )
-        except _SearchAmbiguousError as exc:
+        except _V30AnchorAmbiguousError as exc:
             return PatchResult(
-                status="search_ambiguous",
+                status="anchor_ambiguous",
                 surgeon_output=surgeon_output,
-                blocks_applied=exc.applied_count,
+                blocks_applied=0,
                 target_file=target_file,
                 iteration=iteration,
-                failed_block_index=exc.block_index,
-                failed_block_search=exc.search_text,
+                failed_block_search=exc.anchor_line,
                 error_message=str(exc),
                 duration_s=time.time() - t0,
             )
-        except _SearchReplacedWithoutContextError as exc:
-            # V27 — Guide-Lame : le LLM a réécrit au lieu d'augmenter.
-            # On bloque AVANT l'apply pour économiser le subprocess pytest
-            # et donner un feedback précis au SURGEON.
+        except _V30AnchorFunctionNotFoundError as exc:
             return PatchResult(
-                status="replaced_without_context",
+                status="anchor_function_not_found",
                 surgeon_output=surgeon_output,
-                blocks_applied=exc.applied_count,
+                blocks_applied=0,
                 target_file=target_file,
                 iteration=iteration,
-                failed_block_index=exc.block_index,
-                failed_block_search=exc.search_text,
-                failed_block_replace=exc.replace_text,
                 error_message=str(exc),
                 duration_s=time.time() - t0,
             )
         except _ChecklistViolationError as exc:
-            # V29 — Scrub Nurse a exige des lignes preservees, le SURGEON
-            # les a supprimees. Bloc avant py_compile/pytest.
+            # V29 + V30 : replace_line cible une ligne lines_to_preserve
             return PatchResult(
                 status="checklist_violation",
                 surgeon_output=surgeon_output,
-                blocks_applied=len(blocks),
+                blocks_applied=0,
                 target_file=target_file,
                 iteration=iteration,
                 checklist_violations=exc.violations,
@@ -570,7 +571,7 @@ class CodeSandbox:
                 return PatchResult(
                     status="internal_error",
                     surgeon_output=surgeon_output,
-                    blocks_applied=len(blocks),
+                    blocks_applied=1,
                     target_file=target_file,
                     iteration=iteration,
                     error_message=f"Erreur layout sandbox: {type(exc).__name__}: {exc}",
@@ -591,7 +592,7 @@ class CodeSandbox:
                 return PatchResult(
                     status="syntax_error",
                     surgeon_output=surgeon_output,
-                    blocks_applied=len(blocks),
+                    blocks_applied=1,
                     target_file=target_file,
                     iteration=iteration,
                     compile_stderr=f"py_compile timeout après {DEFAULT_COMPILE_TIMEOUT_S}s",
@@ -601,7 +602,7 @@ class CodeSandbox:
                 return PatchResult(
                     status="syntax_error",
                     surgeon_output=surgeon_output,
-                    blocks_applied=len(blocks),
+                    blocks_applied=1,
                     target_file=target_file,
                     iteration=iteration,
                     compile_stderr=compile_proc.stderr or compile_proc.stdout,
@@ -643,7 +644,7 @@ class CodeSandbox:
             return PatchResult(
                 status=status,
                 surgeon_output=surgeon_output,
-                blocks_applied=len(blocks),
+                blocks_applied=1,
                 unified_diff=unified_diff,
                 target_file=target_file,
                 iteration=iteration,
@@ -659,20 +660,22 @@ class CodeSandbox:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# V21 (2026-04-25) — Pipeline d'auto-correction (Self-Healing)
-# Format SEARCH/REPLACE + régression globale
+# V30 (2026-04-25) — Exosquelette Syntaxique JSON
+# Burn the boats : remplace integralement le format SEARCH/REPLACE V21-V29.
+# Le SURGEON sort un JSON {anchor_line, action, new_code}, le MEDIC calcule
+# l'indentation mathematiquement et applique l'edit (insert/replace).
+# Le 14b ne gere plus la syntaxe — uniquement la cible et l'action.
 # ═══════════════════════════════════════════════════════════════════════
-
-# Format SEARCH/REPLACE (style Aider/Cline). Le LLM 14b cite verbatim le
-# code, le MEDIC fait le str.replace en mémoire et génère le diff post-hoc.
-_SEARCH_REPLACE_RE = re.compile(
-    r"<<<<<<< SEARCH\n(.*?)\n=======\n(.*?)\n>>>>>>> REPLACE",
-    re.DOTALL,
-)
 
 # Marqueur "patch impossible" retourné par le SURGEON si l'audit ne fournit
 # pas assez d'informations pour un patch chirurgical.
 _PATCH_IMPOSSIBLE_RE = re.compile(r"\[PATCH_IMPOSSIBLE:\s*(.+?)\]", re.DOTALL)
+
+# V30 — Actions valides pour l'Exosquelette JSON
+_V30_VALID_ACTIONS = frozenset({"insert_before", "insert_after", "replace_line"})
+
+# V30 — Regex pour extraire le bloc JSON principal d'une sortie LLM
+_V30_JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 # Parsing de la sortie pytest : "X passed, Y failed in 1.23s"
 _PYTEST_COUNT_RE = re.compile(r"(\d+)\s+(passed|failed|error|errors|skipped)")
@@ -696,196 +699,311 @@ _PYTEST_IGNORE_PATHS = (
 )
 
 
-# ─── Exceptions internes V21 ──────────────────────────────────────────
+# ─── Exceptions V30 (Exosquelette JSON) ───────────────────────────────
 
-class _SearchNotFoundError(ValueError):
-    """Bloc SEARCH absent du source patché."""
-    def __init__(self, message: str, block_index: int, search_text: str, applied_count: int):
+class _V30InvalidJSONError(ValueError):
+    """V30 — Sortie SURGEON ne contient pas de JSON parsable."""
+
+
+class _V30InvalidActionError(ValueError):
+    """V30 — Champ 'action' absent ou hors {insert_before, insert_after, replace_line}."""
+
+
+class _V30AnchorNotFoundError(ValueError):
+    """V30 — anchor_line introuvable dans la zone (fonction ou fichier entier)."""
+    def __init__(self, message: str, anchor_line: str, anchor_function: Optional[str]):
         super().__init__(message)
-        self.block_index = block_index
-        self.search_text = search_text
-        self.applied_count = applied_count
+        self.anchor_line = anchor_line
+        self.anchor_function = anchor_function
 
 
-class _SearchAmbiguousError(ValueError):
-    """Bloc SEARCH apparaît plusieurs fois — non unique."""
-    def __init__(self, message: str, block_index: int, search_text: str,
-                 applied_count: int, count: int):
+class _V30AnchorAmbiguousError(ValueError):
+    """V30 — anchor_line apparaît plusieurs fois dans la zone."""
+    def __init__(self, message: str, anchor_line: str, count: int, line_numbers: List[int]):
         super().__init__(message)
-        self.block_index = block_index
-        self.search_text = search_text
-        self.applied_count = applied_count
+        self.anchor_line = anchor_line
         self.count = count
+        self.line_numbers = line_numbers
 
 
-class _SearchReplacedWithoutContextError(ValueError):
-    """V27 — REPLACE n'inclut aucune ligne significative du SEARCH.
-    Le LLM a réécrit au lieu d'augmenter (violation Règle de l'Insertion)."""
-    def __init__(self, message: str, block_index: int, search_text: str,
-                 replace_text: str, applied_count: int):
+class _V30AnchorFunctionNotFoundError(ValueError):
+    """V30 — anchor_function n'existe pas dans le source AST."""
+    def __init__(self, message: str, anchor_function: str):
         super().__init__(message)
-        self.block_index = block_index
-        self.search_text = search_text
-        self.replace_text = replace_text
-        self.applied_count = applied_count
+        self.anchor_function = anchor_function
 
 
 class _ChecklistViolationError(ValueError):
     """V29 — La checklist Scrub Nurse exige qu'une ligne soit présente
     dans le source patché final, mais elle n'y est plus.
-    Le SURGEON a ignoré la consigne de préservation."""
+    Maintenant levee dans V30 quand action=replace_line cible une ligne
+    listee dans lines_to_preserve."""
     def __init__(self, message: str, missing_line: str, reason: str,
                  violations: List[Dict[str, str]]):
         super().__init__(message)
         self.missing_line = missing_line
         self.reason = reason
-        self.violations = violations  # liste complète si plusieurs lignes manquent
+        self.violations = violations
 
 
-def _v27_is_significant_line(line: str) -> bool:
-    """V27 — Une ligne significative a >=4 caractères alphanumériques.
-    Élimine les `:`, `else:`, `pass`, lignes blanches, etc.
-    """
-    stripped = line.strip()
-    if not stripped:
-        return False
-    return sum(1 for c in stripped if c.isalnum()) >= 4
+# ─── V30 Parsing & application JSON Exosquelette ──────────────────────
 
+def parse_v30_patch(text: str) -> Dict[str, Any]:
+    """V30 — Parse la sortie SURGEON au format JSON Exosquelette.
 
-# ─── Parsing & application des blocs SEARCH/REPLACE ───────────────────
+    Retourne un dict avec les clefs :
+      target_bug (str), anchor_function (str | None), anchor_line (str),
+      action (str ∈ {insert_before, insert_after, replace_line}),
+      new_code (str)
 
-def parse_search_replace_blocks(text: str) -> List[Tuple[str, str]]:
-    """V21 — Parse les blocs SEARCH/REPLACE depuis la sortie du SURGEON.
+    Lève _V30InvalidJSONError, _V30InvalidActionError.
 
-    Retourne une liste de (search_text, replace_text). Lève ValueError si
-    aucun bloc valide n'est trouvé (le caller doit gérer ce cas comme
-    `no_blocks` ou laisser l'erreur remonter).
+    Strategies de parsing :
+      1. json.loads direct
+      2. Strip markdown ```json ... ``` puis json.loads
+      3. Extraction du premier {...} via regex puis json.loads
+      4. Echec total -> _V30InvalidJSONError
     """
     if not text or not isinstance(text, str):
-        raise ValueError("Sortie SURGEON vide ou non-string")
-    blocks = _SEARCH_REPLACE_RE.findall(text)
-    if not blocks:
-        raise ValueError(
-            "Aucun bloc <<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE trouvé"
+        raise _V30InvalidJSONError("Sortie SURGEON vide ou non-string")
+
+    raw = text.strip()
+    # Strip markdown code fences si présents
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```\s*$", "", raw)
+
+    parsed = None
+    # Tentative 1 : parse direct
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        # Tentative 2 : extraction du premier bloc {...}
+        match = _V30_JSON_BLOCK_RE.search(raw)
+        if match:
+            try:
+                parsed = json.loads(match.group(0))
+            except json.JSONDecodeError as exc:
+                raise _V30InvalidJSONError(
+                    f"JSON malforme apres extraction: {exc}"
+                )
+        else:
+            raise _V30InvalidJSONError(
+                f"Aucun JSON detectable dans la sortie. Preview: {raw[:200]!r}"
+            )
+
+    if not isinstance(parsed, dict):
+        raise _V30InvalidJSONError(
+            f"JSON parse mais n'est pas un objet (type={type(parsed).__name__})"
         )
-    return blocks
+
+    # Validation des champs requis
+    anchor_line = parsed.get("anchor_line")
+    action = parsed.get("action")
+    new_code = parsed.get("new_code")
+
+    if not anchor_line or not isinstance(anchor_line, str):
+        raise _V30InvalidJSONError("Champ 'anchor_line' manquant ou non-string")
+    if not action or action not in _V30_VALID_ACTIONS:
+        raise _V30InvalidActionError(
+            f"Champ 'action'={action!r} invalide. "
+            f"Valeurs acceptees: {sorted(_V30_VALID_ACTIONS)}"
+        )
+    if new_code is None or not isinstance(new_code, str):
+        raise _V30InvalidJSONError("Champ 'new_code' manquant ou non-string")
+
+    anchor_function = parsed.get("anchor_function")
+    if anchor_function is not None and not isinstance(anchor_function, str):
+        anchor_function = None
+    if not anchor_function:  # filtre vide
+        anchor_function = None
+
+    return {
+        "target_bug": str(parsed.get("target_bug", ""))[:300],
+        "anchor_function": anchor_function,
+        "anchor_line": anchor_line,
+        "action": action,
+        "new_code": new_code,
+    }
 
 
-def apply_search_replace(
+def _v30_extract_function_range(source: str, function_name: str) -> Tuple[int, int]:
+    """V30 — Retourne (start_line_0based, end_line_0based_exclusive) du corps
+    de la fonction dans le source via AST. Raise _V30AnchorFunctionNotFoundError
+    si non trouvee.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        raise _V30AnchorFunctionNotFoundError(
+            f"Source AST parse echoue: {exc}. "
+            f"anchor_function='{function_name}' non resoluable.",
+            anchor_function=function_name,
+        )
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == function_name:
+                start = node.lineno - 1  # 0-based inclusive
+                end = getattr(node, "end_lineno", None)
+                if end is None:
+                    # Fallback : on prend jusqu'a la fin du source (peu de risque)
+                    end = len(source.splitlines())
+                return start, end  # end est inclusive en 1-based, exclusive en 0-based
+    raise _V30AnchorFunctionNotFoundError(
+        f"Fonction '{function_name}' introuvable dans le source",
+        anchor_function=function_name,
+    )
+
+
+def _v30_compute_indent(line: str) -> str:
+    """V30 — Retourne le prefixe d'espaces (ou tabs) de la ligne."""
+    stripped = line.lstrip(" \t")
+    return line[: len(line) - len(stripped)]
+
+
+def _v30_indent_new_code(new_code: str, indent_prefix: str) -> str:
+    """V30 — Applique le prefixe d'indentation a chaque ligne NON VIDE de
+    new_code. Les lignes vides restent vides (convention Python).
+    """
+    if not new_code:
+        return ""
+    out = []
+    for line in new_code.splitlines():
+        if line.strip():
+            out.append(indent_prefix + line)
+        else:
+            out.append("")
+    return "\n".join(out)
+
+
+def apply_v30_patch(
     source: str,
-    blocks: List[Tuple[str, str]],
+    patch: Dict[str, Any],
     checklist: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """V21 — Applique les blocs successivement sur source.
+    """V30 — Applique un patch JSON Exosquelette sur le source.
 
-    Lève _SearchNotFoundError si un SEARCH n'est pas trouvé.
-    Lève _SearchAmbiguousError si un SEARCH apparaît plusieurs fois.
-    Lève _SearchReplacedWithoutContextError (V27) si le REPLACE n'inclut
-    aucune ligne significative du SEARCH (le LLM a réécrit au lieu
-    d'augmenter — violation Règle de l'Insertion V26).
-    Lève _ChecklistViolationError (V29) si la checklist Scrub Nurse exige
-    qu'une ligne soit préservée dans le source patché final mais qu'elle
-    a été supprimée.
+    patch est un dict (cf. parse_v30_patch). Lève les exceptions V30 selon
+    les modes d'echec. Si checklist fournie ET action=replace_line cible
+    une ligne dans lines_to_preserve -> _ChecklistViolationError (V29
+    integre dans la mecanique replace_line).
 
-    V29 — La validation checklist se fait sur le SOURCE PATCHÉ FINAL (pas
-    sur chaque REPLACE). Si le SURGEON ne touche pas une ligne required,
-    elle reste intacte dans le source — pas de violation.
-    Si le SURGEON la supprime, le source patché final ne la contient plus
-    → violation ABSOLUE peu importe ce que le SEARCH/REPLACE a fait.
-
-    Garantie chirurgicale : on n'applique JAMAIS un replace ambigu, ni un
-    replace qui efface tout le SEARCH, ni un patch qui viole la checklist.
+    L'indentation est CALCULEE MATHEMATIQUEMENT cote Python : on lit
+    l'indentation de l'anchor_line et on l'applique a chaque ligne de
+    new_code. Le LLM ne gere plus la syntaxe.
     """
     if not isinstance(source, str):
-        raise TypeError("source doit être str")
-    patched = source
-    applied = 0
-    for i, (search, replace) in enumerate(blocks):
-        count = patched.count(search)
-        if count == 0:
-            raise _SearchNotFoundError(
-                f"Bloc {i+1}/{len(blocks)} : SEARCH introuvable dans le source. "
-                f"Vérifie que tu cites le code VERBATIM (indentation, espaces).",
-                block_index=i,
-                search_text=search,
-                applied_count=applied,
-            )
-        if count > 1:
-            raise _SearchAmbiguousError(
-                f"Bloc {i+1}/{len(blocks)} : SEARCH trouvé à {count} endroits "
-                f"(non unique). Étends ton bloc avec 2-3 lignes de contexte "
-                f"avant/après pour le rendre unique.",
-                block_index=i,
-                search_text=search,
-                applied_count=applied,
-                count=count,
-            )
-        # V27 — Guide-Lame : seuil dynamique de preservation.
-        # Si SEARCH fait N lignes significatives, REPLACE doit en contenir :
-        #   - 1 si N <= 2 (petit bloc : juste l'ancrage minimum)
-        #   - max(2, N//2) si N >= 3 (moitie au moins de l'ancrage)
-        # Sinon le LLM a reecrit au lieu d'augmenter et le code va casser
-        # (IndentationError, NameError, logique perdue). On bloque AVANT
-        # l'apply pour economiser le subprocess pytest et fournir un
-        # feedback cible au SURGEON pour son retry.
-        search_lines = [l for l in search.splitlines() if _v27_is_significant_line(l)]
-        n_lines = len(search_lines)
-        if n_lines >= 2:
-            replace_text = replace or ""
-            overlap = sum(1 for l in search_lines if l in replace_text)
-            required = 1 if n_lines <= 2 else max(2, n_lines // 2)
-            if overlap < required:
-                raise _SearchReplacedWithoutContextError(
-                    f"Bloc {i+1}/{len(blocks)} : REPLACE n'inclut que "
-                    f"{overlap}/{n_lines} lignes significatives du SEARCH "
-                    f"(seuil V27 : {required} requise). Violation de la "
-                    f"Regle de l'Insertion : tu as REECRIT au lieu "
-                    f"d'AUGMENTER.",
-                    block_index=i,
-                    search_text=search,
-                    replace_text=replace,
-                    applied_count=applied,
-                )
-        patched = patched.replace(search, replace, 1)
-        applied += 1
+        raise TypeError("source doit etre str")
 
-    # V29 — Validation checklist Scrub Nurse sur le SOURCE PATCHÉ FINAL.
-    # Vérification ABSOLUE : si la Nurse exige qu'une ligne survive, elle
-    # DOIT être dans le source final, peu importe quel bloc l'a touchée
-    # (ou aucun).
-    if checklist and not checklist.get("fallback") and checklist.get("lines_to_preserve"):
-        violations = []
+    anchor_function = patch.get("anchor_function")
+    anchor_line = patch["anchor_line"]
+    action = patch["action"]
+    new_code = patch["new_code"]
+
+    source_lines = source.splitlines(keepends=True)
+
+    # Etape 1 : determiner la zone de recherche
+    if anchor_function:
+        try:
+            zone_start, zone_end = _v30_extract_function_range(source, anchor_function)
+        except _V30AnchorFunctionNotFoundError:
+            raise
+    else:
+        zone_start = 0
+        zone_end = len(source_lines)
+
+    # Etape 2 : trouver anchor_line dans la zone (matching tolerant aux
+    # espaces de fin de ligne)
+    anchor_clean = anchor_line.rstrip("\r\n")
+    matches: List[int] = []
+    for i in range(zone_start, min(zone_end, len(source_lines))):
+        if source_lines[i].rstrip("\r\n") == anchor_clean:
+            matches.append(i)
+
+    if len(matches) == 0:
+        zone_label = repr(anchor_function) if anchor_function else "all"
+        anchor_preview = repr(anchor_line[:120])
+        raise _V30AnchorNotFoundError(
+            f"anchor_line introuvable dans la zone "
+            f"(function={zone_label}). anchor_line={anchor_preview}",
+            anchor_line=anchor_line,
+            anchor_function=anchor_function,
+        )
+    if len(matches) > 1:
+        raise _V30AnchorAmbiguousError(
+            f"anchor_line trouvee a {len(matches)} endroits dans la zone "
+            f"(lignes {[m + 1 for m in matches]}). "
+            f"Ajoute 'anchor_function' pour restreindre.",
+            anchor_line=anchor_line,
+            count=len(matches),
+            line_numbers=[m + 1 for m in matches],
+        )
+
+    anchor_idx = matches[0]
+    anchor_full_line = source_lines[anchor_idx]
+
+    # V29 + V30 — validation checklist sur replace_line
+    if (checklist and not checklist.get("fallback")
+            and action == "replace_line"
+            and checklist.get("lines_to_preserve")):
         for entry in checklist["lines_to_preserve"]:
             line_text = entry.get("line_text", "") if isinstance(entry, dict) else ""
             if not line_text:
                 continue
-            if line_text not in patched:
-                violations.append({
-                    "line_text": line_text,
-                    "reason": entry.get("reason", "preservation requise par la Nurse"),
-                })
-        if violations:
-            first = violations[0]
-            raise _ChecklistViolationError(
-                f"V29 CHECKLIST VIOLEE : {len(violations)} ligne(s) requise(s) "
-                f"par la Scrub Nurse absente(s) du source patche final. "
-                f"Premiere ligne manquante : {first['line_text'][:80]!r}",
-                missing_line=first["line_text"],
-                reason=first["reason"],
-                violations=violations,
-            )
-    return patched
+            # On compare avec la ligne entiere ou avec son contenu strippe
+            if line_text in anchor_full_line or anchor_clean.strip() == line_text.strip():
+                raise _ChecklistViolationError(
+                    f"V30 + V29 : action=replace_line viserait l'ancre "
+                    f"{anchor_line[:60]!r} qui apparait dans "
+                    f"lines_to_preserve de la Scrub Nurse. Refus.",
+                    missing_line=line_text,
+                    reason=entry.get("reason", "preservation requise"),
+                    violations=[{
+                        "line_text": line_text,
+                        "reason": entry.get("reason", ""),
+                    }],
+                )
+
+    # Etape 3 : calculer l'indentation et indenter new_code
+    indent_prefix = _v30_compute_indent(anchor_full_line)
+    indented = _v30_indent_new_code(new_code, indent_prefix)
+
+    # Garantir une terminaison \n pour pouvoir l'inserer comme ligne
+    if indented and not indented.endswith("\n"):
+        indented += "\n"
+
+    # Etape 4 : appliquer l'action
+    if action == "insert_before":
+        new_lines = (
+            source_lines[:anchor_idx] + [indented] + source_lines[anchor_idx:]
+        )
+    elif action == "insert_after":
+        new_lines = (
+            source_lines[: anchor_idx + 1] + [indented]
+            + source_lines[anchor_idx + 1:]
+        )
+    elif action == "replace_line":
+        new_lines = (
+            source_lines[:anchor_idx] + [indented]
+            + source_lines[anchor_idx + 1:]
+        )
+    else:
+        # Defensif (parse_v30_patch a deja valide)
+        raise _V30InvalidActionError(f"Action inconnue: {action}")
+
+    return "".join(new_lines)
 
 
 # ─── PatchResult dataclass ────────────────────────────────────────────
 
 @dataclass
 class PatchResult:
-    """V21 — résultat d'un cycle MEDIC complet."""
-    status: str  # success / no_blocks / patch_impossible / search_not_found /
-                 # search_ambiguous / replaced_without_context (V27) /
-                 # checklist_violation (V29) / syntax_error / test_failed /
-                 # internal_error
+    """V30 — résultat d'un cycle MEDIC complet (Exosquelette JSON)."""
+    status: str  # V30 statuses :
+                 #   success / patch_impossible / invalid_json / invalid_action /
+                 #   anchor_not_found / anchor_ambiguous / anchor_function_not_found /
+                 #   checklist_violation (V29) / syntax_error / test_failed /
+                 #   internal_error
     surgeon_output: str = ""
     blocks_applied: int = 0
     unified_diff: str = ""           # diff git généré post-hoc pour stockage
@@ -913,47 +1031,53 @@ class PatchResult:
         """
         if self.status == "success":
             return ""
-        if self.status == "no_blocks":
+        if self.status == "invalid_json":
             return (
-                "FORMAT INVALIDE : aucun bloc <<<<<<< SEARCH ... ======= "
-                "... >>>>>>> REPLACE trouvé dans ta sortie. Reformate "
-                "STRICTEMENT selon le format demandé."
+                "ECHEC V30 : Ta sortie n'est PAS du JSON parsable.\n"
+                "Sors UNIQUEMENT un objet JSON avec les clefs :\n"
+                "  target_bug, anchor_line, action, new_code, anchor_function (optionnel)\n"
+                "Pas de markdown, pas de balise ```json, pas de narration.\n"
+                f"Erreur exacte : {self.error_message[:max_chars]}"
             )
-        if self.status == "search_not_found":
+        if self.status == "invalid_action":
+            return (
+                "ECHEC V30 : ton champ 'action' est invalide.\n"
+                "Valeurs ACCEPTEES : 'insert_before', 'insert_after', 'replace_line'.\n"
+                "Pour un guard de validation (le plus frequent), utilise 'insert_before'\n"
+                "avec anchor_line = la premiere ligne de la zone a proteger.\n"
+                f"Erreur exacte : {self.error_message[:max_chars]}"
+            )
+        if self.status == "anchor_not_found":
             snippet = self.failed_block_search[:max_chars]
             return (
-                f"ECHEC : Bloc {self.failed_block_index + 1} introuvable "
+                f"ECHEC V30 : anchor_line introuvable dans le source.\n\n"
+                f"Ton anchor_line :\n  {snippet}\n\n"
+                f"DIAGNOSTIC :\n"
+                f"  1. Tu as approche le texte au lieu de copier verbatim.\n"
+                f"  2. Tu as ajoute/retire des espaces ou modifie l'indentation.\n"
+                f"  3. La ligne n'existe pas dans le source.\n\n"
+                f"CORRECTION : copie INTEGRALEMENT une ligne du source\n"
+                f"caractere par caractere (espaces, tabulations, ponctuation\n"
+                f"identiques). Verifie ton anchor_function si fourni."
+            )
+        if self.status == "anchor_ambiguous":
+            snippet = self.failed_block_search[:max_chars]
+            return (
+                f"ECHEC V30 : anchor_line trouvee a PLUSIEURS endroits\n"
                 f"dans le source.\n\n"
-                f"DIAGNOSTIC PROBABLE (cf. règles V24) :\n"
-                f"  1. Tu as altéré l'INDENTATION (espaces/tabulations)\n"
-                f"     dans une ligne que tu as crue verbatim.\n"
-                f"  2. Tu as oublié les 2 lignes de CONTEXTE D'ANCRAGE\n"
-                f"     avant et après le bloc modifié.\n"
-                f"  3. Ton bloc fait plus de 7 lignes — divise-le en\n"
-                f"     plusieurs petits blocs (règle Micro-Scalpel V24).\n"
-                f"  4. Tu as recopié une approximation de mémoire au lieu\n"
-                f"     du code REEL du source ci-dessus.\n\n"
-                f"PROCEDURE V24 OBLIGATOIRE pour corriger :\n"
-                f"  a. Re-lis le bloc ---SOURCE--- ligne par ligne.\n"
-                f"  b. Identifie les 2 lignes JUSTE AVANT la modification.\n"
-                f"  c. Copie-les caractère par caractère (espaces inclus).\n"
-                f"  d. Identifie les 2 lignes JUSTE APRES la modification.\n"
-                f"  e. Copie-les caractère par caractère.\n"
-                f"  f. Le SEARCH = ancrage_avant + ligne_fautive + ancrage_apres.\n"
-                f"  g. Le REPLACE = ancrage_avant + correction + ancrage_apres.\n\n"
-                f"Ton SEARCH précédent (qui a échoué) :\n"
-                f"---\n{snippet}\n---\n\n"
-                f"Recommence avec un bloc PLUS PETIT et un ancrage VERBATIM. "
-                f"L'indentation est vitale en Python — compte les espaces."
+                f"Ton anchor_line :\n  {snippet}\n\n"
+                f"CORRECTION : ajoute le champ 'anchor_function' au JSON\n"
+                f"avec le nom de la fonction qui contient la ligne ciblee.\n"
+                f"Cela restreindra la recherche au corps de cette fonction.\n"
+                f"Exemple : \"anchor_function\": \"strip_header\""
             )
-        if self.status == "search_ambiguous":
-            snippet = self.failed_block_search[:max_chars]
+        if self.status == "anchor_function_not_found":
             return (
-                f"BLOC {self.failed_block_index + 1} : SEARCH trouvé à "
-                f"plusieurs endroits (non unique). Étends ton bloc avec "
-                f"2-3 lignes de contexte AVANT et/ou APRÈS pour le rendre "
-                f"unique dans le fichier.\n"
-                f"Ton SEARCH était :\n---\n{snippet}\n---"
+                f"ECHEC V30 : anchor_function ne correspond a aucune fonction\n"
+                f"definie dans le source.\n\n"
+                f"CORRECTION : verifie l'orthographe exacte du nom de fonction.\n"
+                f"Le source AST n'a pas trouve de def/async def avec ce nom.\n"
+                f"Erreur exacte : {self.error_message[:max_chars]}"
             )
         if self.status == "checklist_violation":
             lines_block = "\n".join(
@@ -961,43 +1085,22 @@ class PatchResult:
                 for v in (self.checklist_violations or [])[:5]
             )
             return (
-                f"ECHEC V29 CHECKLIST : la Scrub Nurse a EXIGE que certaines\n"
-                f"lignes du source soient PRESERVEES dans le source patche\n"
-                f"final. Ton patch les a SUPPRIMEES.\n\n"
-                f"Lignes manquantes dans le code patche :\n{lines_block}\n\n"
-                f"CORRECTION : ton REPLACE doit RECOPIER VERBATIM ces lignes\n"
-                f"(elles definissent des variables/objets utilises plus loin\n"
-                f"dans le source). Tu peux AJOUTER autour, mais tu n'as PAS\n"
-                f"le droit de les EFFACER.\n\n"
-                f"Pour ton retry : decoupe ton patch en plusieurs blocs\n"
-                f"chirurgicaux qui PRESERVENT chaque ligne required de la\n"
-                f"checklist."
-            )
-        if self.status == "replaced_without_context":
-            half = max_chars // 2
-            snippet_search = self.failed_block_search[:half]
-            snippet_replace = (self.failed_block_replace or "")[:half]
-            return (
-                f"ECHEC V27 : Ton bloc REPLACE a EFFACE le code d'origine.\n"
-                f"Tu as VIOLE la Regle de l'Insertion V26.\n\n"
-                f"Ton SEARCH etait :\n---\n{snippet_search}\n---\n\n"
-                f"Ton REPLACE etait :\n---\n{snippet_replace}\n---\n\n"
-                f"PROBLEME : aucune ligne du SEARCH n'apparait dans le REPLACE.\n"
-                f"Tu as REECRIT au lieu d'AUGMENTER.\n\n"
-                f"CORRECTION : recopie INTEGRALEMENT les lignes du SEARCH dans\n"
-                f"ton REPLACE, et AJOUTE ton guard/check autour. Le REPLACE\n"
-                f"doit CONTENIR le SEARCH verbatim, pas le remplacer.\n\n"
-                f"Exemple correct :\n"
-                f"  SEARCH : x = compute()\n"
-                f"  REPLACE: x = compute()           # ligne SEARCH GARDEE\n"
-                f"           if x is None:           # ton ajout\n"
-                f"               return False"
+                f"ECHEC V29 + V30 CHECKLIST : ton action 'replace_line' viserait\n"
+                f"une ligne EXIGEE en preservation par la Scrub Nurse.\n\n"
+                f"Lignes inviolables :\n{lines_block}\n\n"
+                f"CORRECTION : utilise plutot 'insert_before' ou 'insert_after'\n"
+                f"avec un guard prealable. Exemple :\n"
+                f"  action: insert_before\n"
+                f"  anchor_line: <la ligne risquee>\n"
+                f"  new_code: if not <var>:\\n    return False"
             )
         if self.status == "syntax_error":
             err = self.compile_stderr[-max_chars:] if self.compile_stderr else ""
             return (
-                f"PYTHON SYNTAX ERROR après application du patch :\n{err}\n\n"
-                f"Vérifie l'indentation et les parenthèses du REPLACE."
+                f"PYTHON SYNTAX ERROR après application V30 du patch :\n{err}\n\n"
+                f"V30 calcule l'indentation mathematiquement, donc l'erreur\n"
+                f"vient probablement de la SYNTAXE INTERNE de ton new_code\n"
+                f"(parenthese non fermee, indentation interne, mots-cles)."
             )
         if self.status == "test_failed":
             failures = "\n".join(self.test_failures[:5]) if self.test_failures else ""
