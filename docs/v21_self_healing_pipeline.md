@@ -508,43 +508,96 @@ Action : review et `git apply` ou rejet via /api/patches/<id>/reject
 - `POST /api/patches/<id>/approve` — humain valide → applique sur projet
 - `POST /api/patches/<id>/reject` — humain rejette → archive
 
-## 8. Hook autonome — `EVENING_SELF_HEALING`
+## 8. Déclenchement — Pipeline Synchrone Post-REDUCE (anti code drift)
 
-Nouvelle routine 1×/jour à 22h00 :
+> **Décision architecturale (Jean-Michel, 25/04)** : abandon de l'idée d'une
+> routine nocturne `EVENING_SELF_HEALING`. Un patch basé sur un audit vieux
+> de 6 heures a 80% de chances d'échouer parce que le code a bougé entre
+> temps (rename, refactor, autre patch appliqué). Le Self-Healing doit
+> tirer dans la même milliseconde que la clôture du CODE_REVIEW.
+
+### 8.1 Point d'insertion exact
+
+Le hook `_self_healing_hook` est appelé dans `core/autonomy_engine.py`
+DIRECTEMENT après :
+1. La consolidation REDUCE du Map-Reduce (V18)
+2. Le verdict Phase 14 (réussi OU bypassé via laissez-passer souverain V19.2)
+3. La persistance de la note dans `grades.json`
+
+Et UNIQUEMENT si :
+- La routine est de type `CODE_REVIEW`
+- Le livrable mentionne explicitement un `target_file` extractible
+- Le `school_grade` du livrable est ≥ 6.0 (audit jugé exploitable)
+
+### 8.2 Pseudo-code du hook synchrone
 
 ```python
-async def evening_self_healing():
-    """V21 — boucle nocturne d'auto-guérison.
+# Dans autonomy_engine, juste après publish(grade) du CODE_REVIEW :
+if course_type == "CODE_REVIEW" and target_file and school_grade >= 6.0:
+    try:
+        await self._self_healing_hook(
+            audit_report=reduce_output,
+            target_file=target_file,
+            school_grade=school_grade,
+        )
+    except Exception as exc:
+        # FAIL-SAFE absolu : un crash V21 ne doit JAMAIS faire crasher
+        # la routine CODE_REVIEW. La note est déjà persistée, le livrable
+        # déjà comptabilisé. V21 est expérimental — il s'éteint en
+        # silence si quelque chose tourne mal.
+        logger.error(f"[V21 SELF-HEALING] Crash isolé : {exc}", exc_info=True)
+```
 
-    1. Liste les CODE_REVIEW du jour avec school_grade >= 7.
-    2. Pour chaque, lance self_healing_loop() avec le livrable comme audit.
-    3. Persiste les patches success.
-    4. Mailbox récapitulatif: 'X patches générés, attente review'.
-    """
-    today_audits = schedule.get_today_audits(min_grade=7.0)
-    patches_generated = []
+### 8.3 Boucle interne (max 3 itérations avec retry)
 
-    for audit in today_audits:
-        result = await self_healing_loop(
-            audit_report=audit["full_content"],
-            target_file=audit["target_file"],
+```python
+async def _self_healing_hook(self, audit_report, target_file, school_grade):
+    """V21 — boucle SURGEON ↔ MEDIC, max 3 itérations."""
+    surgeon = get_agent("surgeon")
+    source = read_file(os.path.join(PROJECT_ROOT, target_file))
+    previous_attempts = []
+
+    for iteration in range(3):
+        raw_output = await surgeon.generate_patch(
+            audit_report=audit_report,
+            target_source=source,
+            previous_attempts=previous_attempts,
+        )
+        result = sandbox.apply_patch_in_sandbox(
+            surgeon_output=raw_output,
+            target_file=target_file,
+            run_full_tests=True,
+            iteration=iteration,
         )
         if result.status == "success":
-            persist_patch(result, audit_id=audit["id"])
-            patches_generated.append(result)
-            # SURGE dopaminergique sur self-healing réussi
-            dopamine.publish_reward(
-                intent="SELF_HEALING",
-                rpe=+0.5,
-                reason=f"patch validé pour {audit['target_file']}",
-            )
-
-    if patches_generated:
-        mailbox.send(
-            subject=f"🩹 {len(patches_generated)} patches V21 générés",
-            body=format_patch_summary(patches_generated),
-        )
+            self._persist_patch(result, audit_report, school_grade)
+            self._log_triumph(target_file, iteration, result)
+            # Optionnel : SURGE dopaminergique +0.5 sur intent SELF_HEALING
+            return result
+        if result.status == "patch_impossible":
+            return result  # le SURGEON a déclaré forfait, pas de retry
+        # Sinon : prepare retry
+        previous_attempts.append({
+            "surgeon_output": raw_output,
+            "failure_reason": result.status,
+            "traceback": result.format_traceback_for_surgeon(),
+        })
+    logger.warning(f"[V21] max_iter atteint pour {target_file}")
+    return result
 ```
+
+### 8.4 Persistance — boîte aux lettres
+
+Si `result.status == "success"`, sauvegarde dans :
+```
+memory/auto_patches/patch_<YYYY-MM-DD_HH-MM-SS>_<basename>.txt
+```
+Contenu : sortie SEARCH/REPLACE brute du SURGEON + métadonnées (target_file,
+iteration, school_grade, tests_passed). Le `unified_diff` est aussi sauvegardé
+en `.diff` à côté pour que l'humain puisse `git apply` directement.
+
+Le fichier n'est JAMAIS appliqué automatiquement sur le projet réel
+(cf. §7 — sécurité humaine).
 
 ## 9. Métriques d'observabilité
 
@@ -572,7 +625,7 @@ Le patch peut passer les tests SANS résoudre le bug. Mitigation : V21.1 future 
 
 ### 10.3 Coût LLM
 
-Chaque cycle = 1 SURGEON + 1 MEDIC (qui inclut sandbox subprocess). Estimation 30-60s par patch. Pour `EVENING_SELF_HEALING` avec 5 audits → 5 × 90s ≈ 7-10 min. Acceptable.
+Chaque cycle = 1 SURGEON + 1 MEDIC (qui inclut sandbox subprocess). Estimation 30-60s par patch en mode synchrone post-REDUCE. Le hook s'ajoute à la durée d'une routine CODE_REVIEW déjà longue (Map-Reduce ~80s). Total : ~120-150s par CODE_REVIEW. Acceptable car ≤ 5 CODE_REVIEW/jour.
 
 ### 10.4 Risque cognitif : le SURGEON pourrait reproduire le pattern boilerplate
 
@@ -586,15 +639,15 @@ Le format SEARCH/REPLACE n'embarque pas de chemin — c'est `target_file` (param
 
 | Étape | Fichier | Description | Tests |
 |-------|---------|-------------|-------|
-| 1 | `core/capabilities/code_sandbox.py` | Méthode `apply_patch_in_sandbox` + `PatchResult` dataclass | 8 tests |
-| 2 | `Agents/surgeon_agent.py` (nouveau) | Agent SURGEON avec system prompt V21 | 5 tests |
-| 3 | `config.py` | Ajouter `surgeon` à `AGENT_SPECIFIC_LOCAL_MODELS` (qwen2.5-coder:14b) | - |
-| 4 | `core/autonomy_engine.py` | Méthode `self_healing_loop` + endpoint `/api/force/self-healing` | 5 tests |
-| 5 | `core/autonomy_engine.py` | Routine `EVENING_SELF_HEALING` (cooldown 24h) | 3 tests |
-| 6 | `main.py` | Endpoints API : list/detail/approve/reject patches | 6 tests |
-| 7 | `memory/auto_patches/` | Création du répertoire + .gitignore (les patches ne sont PAS committés automatiquement) | - |
+| 1 ✅ | `core/capabilities/code_sandbox.py` | Méthode `apply_patch_in_sandbox` + `PatchResult` dataclass + helpers SEARCH/REPLACE | 11 tests verts (commit `6fb61db`) |
+| 2 ✅ | `Agents/surgeon_agent.py` + `config.py` | Agent SURGEON avec system prompt V21 + routing `qwen2.5-coder:14b` | 12 tests verts |
+| 3 | `core/autonomy_engine.py` | Hook synchrone `_self_healing_hook` post-REDUCE/Phase14 + boucle retry max 3 + persistance `memory/auto_patches/` | 5 tests |
+| 4 | `main.py` (optionnel) | Endpoints API list/detail/approve/reject patches pour review humaine | 6 tests |
+| 5 | `memory/auto_patches/` | Création du répertoire + `.gitignore` (les patches ne sont PAS committés automatiquement) | - |
 
-**Estimation** : 1.5 journée de codage. ~600 lignes + 30 tests.
+**Estimation restante** (étape 3+) : ~1 journée. ~250 lignes + 11 tests.
+
+> Étape `EVENING_SELF_HEALING` retirée du plan le 25/04 (Jean-Michel) — code drift inacceptable. Remplacée par le hook synchrone décrit en §8.
 
 ## 12. Critère de succès V21
 
