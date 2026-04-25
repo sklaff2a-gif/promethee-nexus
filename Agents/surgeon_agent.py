@@ -161,6 +161,7 @@ class SurgeonAgent(BaseAgent):
         audit_report: str,
         target_source: str,
         previous_attempts: Optional[List[Dict[str, Any]]] = None,
+        checklist: Optional[Dict[str, Any]] = None,
     ) -> str:
         """V21 — Compose le prompt complet envoyé au LLM 14b-coder.
 
@@ -172,6 +173,41 @@ class SurgeonAgent(BaseAgent):
           5. Tail reminder (biais de récence)
         """
         parts: List[str] = [self.system_instructions, ""]
+
+        # V29 — Injection de la checklist Scrub Nurse (si fournie et non-fallback)
+        if checklist and not checklist.get("fallback") and (
+            checklist.get("lines_to_preserve") or checklist.get("target_bug")
+        ):
+            parts.append("---CHECKLIST DE PRESERVATION V29---")
+            target_bug = checklist.get("target_bug", "")
+            if target_bug:
+                parts.append(f"Bug cible : {target_bug}")
+                parts.append("")
+            lines = checklist.get("lines_to_preserve") or []
+            if lines:
+                parts.append("Lignes du source qui DOIVENT etre PRESERVEES")
+                parts.append("dans le code patche final (verbatim, non modifiees) :")
+                for entry in lines:
+                    if isinstance(entry, dict):
+                        line_text = entry.get("line_text", "")
+                        reason = entry.get("reason", "")
+                        if line_text:
+                            parts.append(f"  - {line_text}")
+                            if reason:
+                                parts.append(f"    (raison : {reason})")
+                parts.append("")
+            forbidden = checklist.get("forbidden_actions") or []
+            if forbidden:
+                parts.append("Actions INTERDITES :")
+                for action in forbidden:
+                    parts.append(f"  - {action}")
+                parts.append("")
+            parts.append(
+                "Si tu retires une de ces lignes du code, le systeme "
+                "rejettera ton patch (V29 checklist_violation)."
+            )
+            parts.append("---/CHECKLIST DE PRESERVATION V29---")
+            parts.append("")
 
         parts.append("---SOURCE---")
         parts.append(target_source or "")
@@ -213,6 +249,7 @@ class SurgeonAgent(BaseAgent):
         audit_report: str,
         target_source: str,
         previous_attempts: Optional[List[Dict[str, Any]]] = None,
+        checklist: Optional[Dict[str, Any]] = None,
     ) -> str:
         """V21 — Génère la sortie brute du SURGEON (texte LLM, non parsé).
 
@@ -235,11 +272,16 @@ class SurgeonAgent(BaseAgent):
             audit_report=audit_report,
             target_source=target_source,
             previous_attempts=previous_attempts,
+            checklist=checklist,
         )
 
+        n_preserve = 0
+        if checklist and not checklist.get("fallback"):
+            n_preserve = len(checklist.get("lines_to_preserve") or [])
         self.log_thought(
             f"SURGEON appel (audit={len(audit_report)}c, source={len(target_source)}c, "
-            f"retries={len(previous_attempts) if previous_attempts else 0})",
+            f"retries={len(previous_attempts) if previous_attempts else 0}, "
+            f"checklist={n_preserve} lignes)",
             type="thought",
         )
 

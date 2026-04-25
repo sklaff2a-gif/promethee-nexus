@@ -70,6 +70,7 @@ class Config:
         "evolution": "qwen2.5-coder:14b", # Spécialiste code pour le pipeline evolution
         "professor": "qwen3.5:9b",       # Evaluation locale (Cloud en primaire via routing)
         "surgeon": "qwen2.5-coder:14b",  # V21 — patch SEARCH/REPLACE chirurgical
+        "scrub_nurse": "qwen3.5:9b",     # V29 — checklist preservation (JSON)
     }
 
     # V17 MoE (2026-04-24) — Mixture of Experts par routine scolaire.

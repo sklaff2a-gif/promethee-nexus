@@ -9500,6 +9500,9 @@ RAISON: <1 phrase courte>"""
 
     # Lazy : l'agent SURGEON n'est instancie qu'a la 1ere occurrence de hook.
     _v21_surgeon = None
+    # V29 — Lazy : la Scrub Nurse (qwen3.5:9b) prepare la checklist
+    # de preservation avant chaque cycle SURGEON.
+    _v29_scrub_nurse = None
 
     # Garde-fous configurables
     _V21_MAX_ITER: int = 3
@@ -9620,6 +9623,40 @@ RAISON: <1 phrase courte>"""
             f"max_iter={self._V21_MAX_ITER}"
         )
 
+        # V29 — Phase 0 : preparation checklist par la Scrub Nurse.
+        # Lazy-init de la Nurse (qwen3.5:9b vanilla, JSON-friendly).
+        # Si Nurse crash ou retourne fallback : mode V21-V28 transparent.
+        v29_checklist = None
+        try:
+            if self._v29_scrub_nurse is None:
+                from Agents.scrub_nurse_agent import ScrubNurseAgent
+                self.__class__._v29_scrub_nurse = ScrubNurseAgent()
+                logger.info("[V29] SCRUB_NURSE instanciee (lazy init)")
+            nurse_t0 = time.time()
+            v29_checklist = await self._v29_scrub_nurse.prepare_checklist(
+                audit_report=audit_report,
+                target_source=source,
+            )
+            nurse_dur = time.time() - nurse_t0
+            if v29_checklist.get("fallback"):
+                logger.info(
+                    f"[V29] Nurse fallback (audit non-analysable). "
+                    f"Mode V21-V28 transparent. dur={nurse_dur:.1f}s"
+                )
+                v29_checklist = None
+            else:
+                n_lines = len(v29_checklist.get("lines_to_preserve") or [])
+                logger.info(
+                    f"[V29] Checklist preparee : target='{(v29_checklist.get('target_bug') or '')[:80]}...', "
+                    f"{n_lines} lignes a preserver. dur={nurse_dur:.1f}s"
+                )
+        except Exception as _e_nurse:
+            logger.warning(
+                f"[V29] Nurse crash, fallback V28 transparent: "
+                f"{type(_e_nurse).__name__}: {_e_nurse}"
+            )
+            v29_checklist = None
+
         try:  # V25 : enveloppe la boucle pour garantir le clear_session_whitelist
             return await self._self_healing_run_iterations(
                 audit_report=audit_report,
@@ -9630,6 +9667,7 @@ RAISON: <1 phrase courte>"""
                 medic_sandbox=medic_sandbox,
                 previous_attempts=previous_attempts,
                 loop_t0=loop_t0,
+                checklist=v29_checklist,
             )
         finally:
             if _v25_bloom_set:
@@ -9650,19 +9688,22 @@ RAISON: <1 phrase courte>"""
         medic_sandbox,
         previous_attempts: list,
         loop_t0: float,
+        checklist: Optional[Dict[str, Any]] = None,  # V29
     ) -> "Dict[str, Any]":
         """V25 — boucle interne du _self_healing_hook (extraite pour permettre
         un finally propre sur la whitelist Bloom).
+        V29 — checklist Scrub Nurse propagee au SURGEON et au MEDIC.
         """
         last_result = None
 
         for iteration in range(self._V21_MAX_ITER):
-            # 4a. SURGEON
+            # 4a. SURGEON (avec checklist V29 si disponible)
             try:
                 raw_output = await self._v21_surgeon.generate_patch(
                     audit_report=audit_report,
                     target_source=source,
                     previous_attempts=previous_attempts,
+                    checklist=checklist,
                 )
             except Exception as exc:
                 logger.error(
@@ -9671,7 +9712,7 @@ RAISON: <1 phrase courte>"""
                 )
                 return None
 
-            # 4b. MEDIC
+            # 4b. MEDIC (validation V29 absolue contre la checklist)
             try:
                 result = medic_sandbox.apply_patch_in_sandbox(
                     surgeon_output=raw_output,
@@ -9680,6 +9721,7 @@ RAISON: <1 phrase courte>"""
                     project_root=project_root,
                     regression_timeout_s=self._V21_REGRESSION_TIMEOUT_S,
                     iteration=iteration,
+                    checklist=checklist,
                 )
             except Exception as exc:
                 logger.error(

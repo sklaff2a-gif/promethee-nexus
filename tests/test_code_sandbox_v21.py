@@ -118,6 +118,75 @@ def test_parse_three_sequential_blocks():
 # 4-6. Tests apply_search_replace
 # ═══════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════
+# V29 — Validation checklist Scrub Nurse (absolue sur source patche final)
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_v29_checklist_required_line_kept_in_patched_source():
+    """V29 : la checklist required_line est preservee → no raise."""
+    from core.capabilities.code_sandbox import _ChecklistViolationError
+    source = "    parts = x.split()\n    return parts[1]\n    return text\n"
+    # SEARCH 2 lignes, REPLACE 4 lignes (3 dont 'parts = x.split()' verbatim)
+    search = "    parts = x.split()\n    return parts[1]\n    return text"
+    replace = (
+        "    parts = x.split()\n"
+        "    if not parts:\n"
+        "        return None\n"
+        "    return parts[1]\n"
+        "    return text"
+    )
+    checklist = {
+        "fallback": False,
+        "lines_to_preserve": [
+            {"line_text": "    parts = x.split()", "reason": "definit parts"}
+        ],
+    }
+    res = apply_search_replace(source, [(search, replace)], checklist=checklist)
+    assert "    parts = x.split()" in res
+    assert "if not parts:" in res
+
+
+def test_v29_checklist_violation_raises():
+    """V29 : si une required_line disparait du source patche, raise."""
+    from core.capabilities.code_sandbox import _ChecklistViolationError
+    source = "    parts = x.split()\n    return parts[1]\n    return text\n"
+    # SEARCH = 3 lignes, REPLACE = 3 lignes (perd parts=, garde return parts[1] et return text)
+    # V27 : 2/3 lignes preservees → seuil V27 OK (max(2, 3//2)=2)
+    # V29 : 'parts = x.split()' n'est plus dans le patched final → REJECT
+    search = "    parts = x.split()\n    return parts[1]\n    return text"
+    replace = "    if x:\n        return parts[1]\n    return text"
+    checklist = {
+        "fallback": False,
+        "lines_to_preserve": [
+            {"line_text": "    parts = x.split()", "reason": "definit parts"}
+        ],
+    }
+    with pytest.raises(_ChecklistViolationError) as exc_info:
+        apply_search_replace(source, [(search, replace)], checklist=checklist)
+    err = exc_info.value
+    assert err.missing_line == "    parts = x.split()"
+    assert "definit parts" in err.reason
+    assert len(err.violations) == 1
+
+
+def test_v29_checklist_fallback_skips_validation():
+    """V29 : si checklist.fallback=True, aucune validation, comportement V28."""
+    source = "x = 1\n"
+    blocks = [("x = 1", "y = 2")]
+    checklist = {"fallback": True}
+    # Pas de raise — V29 skip
+    res = apply_search_replace(source, blocks, checklist=checklist)
+    assert res == "y = 2\n"
+
+
+def test_v29_checklist_none_skips_validation():
+    """V29 : checklist=None (pas de Nurse) → comportement V28 transparent."""
+    source = "x = 1\n"
+    blocks = [("x = 1", "y = 2")]
+    res = apply_search_replace(source, blocks, checklist=None)
+    assert res == "y = 2\n"
+
+
 def test_apply_search_replace_unique_success():
     """SEARCH unique → patched contient REPLACE."""
     source = "def foo(x):\n    return x\n\ndef bar(y):\n    return y\n"

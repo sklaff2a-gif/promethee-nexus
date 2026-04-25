@@ -425,6 +425,7 @@ class CodeSandbox:
         project_root: Optional[str] = None,
         regression_timeout_s: int = DEFAULT_REGRESSION_TIMEOUT_S,
         iteration: int = 0,
+        checklist: Optional[Dict[str, Any]] = None,  # V29
     ) -> "PatchResult":
         """V21 — applique des blocs SEARCH/REPLACE en environnement isolé.
 
@@ -499,9 +500,11 @@ class CodeSandbox:
                 duration_s=time.time() - t0,
             )
 
-        # 4. Application des blocs
+        # 4. Application des blocs (avec validation checklist V29 si fournie)
         try:
-            patched_source = apply_search_replace(original_source, blocks)
+            patched_source = apply_search_replace(
+                original_source, blocks, checklist=checklist
+            )
         except _SearchNotFoundError as exc:
             return PatchResult(
                 status="search_not_found",
@@ -539,6 +542,19 @@ class CodeSandbox:
                 failed_block_index=exc.block_index,
                 failed_block_search=exc.search_text,
                 failed_block_replace=exc.replace_text,
+                error_message=str(exc),
+                duration_s=time.time() - t0,
+            )
+        except _ChecklistViolationError as exc:
+            # V29 — Scrub Nurse a exige des lignes preservees, le SURGEON
+            # les a supprimees. Bloc avant py_compile/pytest.
+            return PatchResult(
+                status="checklist_violation",
+                surgeon_output=surgeon_output,
+                blocks_applied=len(blocks),
+                target_file=target_file,
+                iteration=iteration,
+                checklist_violations=exc.violations,
                 error_message=str(exc),
                 duration_s=time.time() - t0,
             )
@@ -714,6 +730,18 @@ class _SearchReplacedWithoutContextError(ValueError):
         self.applied_count = applied_count
 
 
+class _ChecklistViolationError(ValueError):
+    """V29 — La checklist Scrub Nurse exige qu'une ligne soit présente
+    dans le source patché final, mais elle n'y est plus.
+    Le SURGEON a ignoré la consigne de préservation."""
+    def __init__(self, message: str, missing_line: str, reason: str,
+                 violations: List[Dict[str, str]]):
+        super().__init__(message)
+        self.missing_line = missing_line
+        self.reason = reason
+        self.violations = violations  # liste complète si plusieurs lignes manquent
+
+
 def _v27_is_significant_line(line: str) -> bool:
     """V27 — Une ligne significative a >=4 caractères alphanumériques.
     Élimine les `:`, `else:`, `pass`, lignes blanches, etc.
@@ -743,7 +771,11 @@ def parse_search_replace_blocks(text: str) -> List[Tuple[str, str]]:
     return blocks
 
 
-def apply_search_replace(source: str, blocks: List[Tuple[str, str]]) -> str:
+def apply_search_replace(
+    source: str,
+    blocks: List[Tuple[str, str]],
+    checklist: Optional[Dict[str, Any]] = None,
+) -> str:
     """V21 — Applique les blocs successivement sur source.
 
     Lève _SearchNotFoundError si un SEARCH n'est pas trouvé.
@@ -751,9 +783,18 @@ def apply_search_replace(source: str, blocks: List[Tuple[str, str]]) -> str:
     Lève _SearchReplacedWithoutContextError (V27) si le REPLACE n'inclut
     aucune ligne significative du SEARCH (le LLM a réécrit au lieu
     d'augmenter — violation Règle de l'Insertion V26).
+    Lève _ChecklistViolationError (V29) si la checklist Scrub Nurse exige
+    qu'une ligne soit préservée dans le source patché final mais qu'elle
+    a été supprimée.
 
-    Garantie chirurgicale : on n'applique JAMAIS un replace ambigu ni un
-    replace qui efface tout le SEARCH.
+    V29 — La validation checklist se fait sur le SOURCE PATCHÉ FINAL (pas
+    sur chaque REPLACE). Si le SURGEON ne touche pas une ligne required,
+    elle reste intacte dans le source — pas de violation.
+    Si le SURGEON la supprime, le source patché final ne la contient plus
+    → violation ABSOLUE peu importe ce que le SEARCH/REPLACE a fait.
+
+    Garantie chirurgicale : on n'applique JAMAIS un replace ambigu, ni un
+    replace qui efface tout le SEARCH, ni un patch qui viole la checklist.
     """
     if not isinstance(source, str):
         raise TypeError("source doit être str")
@@ -807,6 +848,32 @@ def apply_search_replace(source: str, blocks: List[Tuple[str, str]]) -> str:
                 )
         patched = patched.replace(search, replace, 1)
         applied += 1
+
+    # V29 — Validation checklist Scrub Nurse sur le SOURCE PATCHÉ FINAL.
+    # Vérification ABSOLUE : si la Nurse exige qu'une ligne survive, elle
+    # DOIT être dans le source final, peu importe quel bloc l'a touchée
+    # (ou aucun).
+    if checklist and not checklist.get("fallback") and checklist.get("lines_to_preserve"):
+        violations = []
+        for entry in checklist["lines_to_preserve"]:
+            line_text = entry.get("line_text", "") if isinstance(entry, dict) else ""
+            if not line_text:
+                continue
+            if line_text not in patched:
+                violations.append({
+                    "line_text": line_text,
+                    "reason": entry.get("reason", "preservation requise par la Nurse"),
+                })
+        if violations:
+            first = violations[0]
+            raise _ChecklistViolationError(
+                f"V29 CHECKLIST VIOLEE : {len(violations)} ligne(s) requise(s) "
+                f"par la Scrub Nurse absente(s) du source patche final. "
+                f"Premiere ligne manquante : {first['line_text'][:80]!r}",
+                missing_line=first["line_text"],
+                reason=first["reason"],
+                violations=violations,
+            )
     return patched
 
 
@@ -817,7 +884,8 @@ class PatchResult:
     """V21 — résultat d'un cycle MEDIC complet."""
     status: str  # success / no_blocks / patch_impossible / search_not_found /
                  # search_ambiguous / replaced_without_context (V27) /
-                 # syntax_error / test_failed / internal_error
+                 # checklist_violation (V29) / syntax_error / test_failed /
+                 # internal_error
     surgeon_output: str = ""
     blocks_applied: int = 0
     unified_diff: str = ""           # diff git généré post-hoc pour stockage
@@ -826,6 +894,7 @@ class PatchResult:
     failed_block_index: int = -1
     failed_block_search: str = ""
     failed_block_replace: str = ""    # V27 : pour replaced_without_context
+    checklist_violations: List[Dict[str, str]] = field(default_factory=list)  # V29
     compile_stderr: str = ""
     test_output: str = ""
     test_strategy: str = ""           # "testmon" ou "full_suite"
@@ -885,6 +954,24 @@ class PatchResult:
                 f"2-3 lignes de contexte AVANT et/ou APRÈS pour le rendre "
                 f"unique dans le fichier.\n"
                 f"Ton SEARCH était :\n---\n{snippet}\n---"
+            )
+        if self.status == "checklist_violation":
+            lines_block = "\n".join(
+                f"  - {v['line_text'][:120]}\n    (raison : {v.get('reason','')[:120]})"
+                for v in (self.checklist_violations or [])[:5]
+            )
+            return (
+                f"ECHEC V29 CHECKLIST : la Scrub Nurse a EXIGE que certaines\n"
+                f"lignes du source soient PRESERVEES dans le source patche\n"
+                f"final. Ton patch les a SUPPRIMEES.\n\n"
+                f"Lignes manquantes dans le code patche :\n{lines_block}\n\n"
+                f"CORRECTION : ton REPLACE doit RECOPIER VERBATIM ces lignes\n"
+                f"(elles definissent des variables/objets utilises plus loin\n"
+                f"dans le source). Tu peux AJOUTER autour, mais tu n'as PAS\n"
+                f"le droit de les EFFACER.\n\n"
+                f"Pour ton retry : decoupe ton patch en plusieurs blocs\n"
+                f"chirurgicaux qui PRESERVENT chaque ligne required de la\n"
+                f"checklist."
             )
         if self.status == "replaced_without_context":
             half = max_chars // 2
