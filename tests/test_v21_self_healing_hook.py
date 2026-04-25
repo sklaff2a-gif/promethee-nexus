@@ -201,7 +201,7 @@ async def test_hook_retries_then_succeeds(engine, fake_project, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_hook_max_iter_reached(engine, fake_project, monkeypatch):
-    """3 iters sans succès → return status=max_iter_reached, pas de patch persisté."""
+    """3 iters sans succès → return max_iter_reached + patch persisté dans failed/."""
     fake_surgeon, fake_apply = _patch_module_funcs(
         monkeypatch, engine, str(fake_project),
         surgeon_outputs=["BAD"] * 3,
@@ -213,14 +213,25 @@ async def test_hook_max_iter_reached(engine, fake_project, monkeypatch):
     assert result["status"] == "max_iter_reached"
     assert result["iteration"] == 3
     assert fake_surgeon.generate_patch.await_count == 3
-    # Aucun patch persisté
-    patches_dir = fake_project / "memory" / "auto_patches"
-    assert not patches_dir.exists() or not any(patches_dir.iterdir())
+    # V21.1 : pas de patch SUCCESS dans auto_patches/ racine
+    success_files = list((fake_project / "memory" / "auto_patches").glob("patch_*.txt"))
+    assert len(success_files) == 0
+    # V21.1 : patch ECHEC persisté dans auto_patches/failed/
+    failed_dir = fake_project / "memory" / "auto_patches" / "failed"
+    assert failed_dir.exists()
+    failed_files = list(failed_dir.iterdir())
+    assert len(failed_files) >= 2  # .txt + .meta.json
+    txt_file = next(f for f in failed_files if f.suffix == ".txt")
+    assert "syntax_error" in txt_file.name
+    meta_file = next(f for f in failed_files if f.name.endswith(".meta.json"))
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    assert meta["final_status"] == "syntax_error"
+    assert meta["compile_stderr"] == "oops"
 
 
 @pytest.mark.asyncio
 async def test_hook_patch_impossible_no_retry(engine, fake_project, monkeypatch):
-    """SURGEON déclare PATCH_IMPOSSIBLE → 1 seule iter, pas de retry."""
+    """SURGEON déclare PATCH_IMPOSSIBLE → 1 seule iter, pas de retry, persistance failed/."""
     fake_surgeon, fake_apply = _patch_module_funcs(
         monkeypatch, engine, str(fake_project),
         surgeon_outputs=["[PATCH_IMPOSSIBLE: audit trop vague]"],
@@ -233,6 +244,14 @@ async def test_hook_patch_impossible_no_retry(engine, fake_project, monkeypatch)
     assert result["status"] == "impossible"
     # Une SEULE iteration, pas de retry
     assert fake_surgeon.generate_patch.await_count == 1
+    # V21.1 : meme un patch_impossible doit etre persiste pour analyse
+    failed_dir = fake_project / "memory" / "auto_patches" / "failed"
+    assert failed_dir.exists()
+    meta_files = list(failed_dir.glob("*.meta.json"))
+    assert len(meta_files) == 1
+    meta = json.loads(meta_files[0].read_text(encoding="utf-8"))
+    assert meta["final_status"] == "patch_impossible"
+    assert meta["error_message"] == "audit trop vague"
 
 
 # ═══════════════════════════════════════════════════════════════════════

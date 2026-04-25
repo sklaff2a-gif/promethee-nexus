@@ -52,6 +52,126 @@ AUDIT_SURVIE_FRUITLESS_COUNT = 3          # N occurrences même intent faible qu
 # il escalade au hard force. C'est l'équivalent du principe "ignorer une
 # décharge d'adrénaline = escalade médullaire".
 SURVIVAL_MAX_FORCES_PER_DAY = 3           # Quota quotidien strict (canari SRE)
+
+# ─── V19.4 (2026-04-25) — Anti-perroquet MAP assoupli ──────────────────
+# Diagnostic 11:15 : V19.1 (regex anchored) a filtre 6/6 chunks de
+# bullshit_detector parce que le 14b-coder cracehe des notes courtes type
+# "Aucune anomalie." qui matchent le pattern RIEN. REDUCE vide -> grade
+# 5.6 -> hook V21 court-circuite par garde-fou >= 6.0.
+#
+# Strategie V19.4 :
+#   1. Note >= _V19_4_MIN_CHARS_PASS  -> garder systematiquement (substantielle)
+#   2. Note courte mais avec mot-cle technique -> garder (signal positif)
+#   3. Note courte sans mot-cle ET match regex RIEN -> filtrer (vrai vide)
+#   4. Tout filtrage logge la note brute (preview 200c) pour debug ulterieur.
+_V19_4_MIN_CHARS_PASS = 80
+_V19_4_TECHNICAL_KEYWORDS = frozenset({
+    # Identifiers de code
+    "def ", "class ", "import ", "return ", "raise ", "except ", "yield ",
+    "async ", "await ", "lambda ", "self.",
+    # References ligne / fichier
+    "ligne", "lignes", "line ", "l. ", "l.4", "l.5", "l.6", "l.7", "l.8", "l.9",
+    "l_", "l-", " l1", " l2", " l3", " l4", " l5", " l6", " l7", " l8", " l9",
+    # Mots techniques fr/en
+    "fonction", "method", "methode", "argument", "param", "type ",
+    "validation", "assertion", "exception", "decorator", "fixture",
+    # Defauts identifiables
+    "bug", "faille", "vulnerab", "regression", "missing", "manqu",
+    "absent", "incomplete", "edge case", "race condition", "deadlock",
+    "leak", "overflow", "injection", "xss", "rce", "todo", "fixme",
+    # Patterns de risque
+    "try/except", "globale", "global ", "singleton", "concurrence",
+    "side effect", "side-effect", "mutable default", "broad except",
+})
+_V19_4_RIEN_RE = re.compile(
+    r"^\s*[*_`'\"]*\s*"
+    r"(?:exactement|strictement|absolument|vraiment|literalement)?"
+    r"\s*[*_`'\"]*\s*"
+    r"(?:rien|r\.?a\.?s\.?|aucun[e]?(?:\s+(?:anomalie|defaut|probleme|faille|souci|d[ée]faut))?|n[ée]ant|none|nothing)"
+    r"[^a-zA-Z\n]*\s*$",
+    re.IGNORECASE,
+)
+
+
+_V19_5_MIN_ALNUM = 40        # alphanumeriques minimum apres strip markdown
+_V19_5_MIN_UNIQUE_WORDS = 5  # diversite lexicale minimum
+_V19_5_MARKDOWN_RE = re.compile(r"[\*_`#>~|]+")
+
+
+def _v19_5_alnum_diversity(text: str) -> tuple:
+    """V19.5 — Mesure la richesse semantique reelle d'une note MAP.
+
+    Strip le markdown courant (*, _, `, #, >, ~, |) et compte :
+      - alphanumeriques restants
+      - mots distincts (lowercase)
+
+    Returns (alnum_count, unique_words_count).
+
+    Detecte les notes verbose-mais-vides : "**RIEN**" * 30 -> 120 chars,
+    mais 1 seul mot unique apres strip.
+    """
+    if not text:
+        return 0, 0
+    stripped = _V19_5_MARKDOWN_RE.sub(" ", text)
+    stripped = re.sub(r"\s+", " ", stripped).strip()
+    alnum = sum(1 for c in stripped if c.isalnum())
+    words = [w.lower() for w in stripped.split() if any(c.isalnum() for c in w)]
+    return alnum, len(set(words))
+
+
+def v19_4_filter_rien_note(text: str) -> tuple:
+    """V19.5 (2026-04-25) — decide si une note MAP doit etre filtree.
+
+    Backwards-compat : nom v19_4_filter_rien_note conserve mais logique
+    renforcee V19.5 (anti-markdown-vide + diversite lexicale).
+
+    Returns (should_filter: bool, reason: str).
+
+    Ordre de priorite :
+      1. text vide ou None              -> filter, 'empty'
+      2. match regex RIEN classique     -> filter, 'rien_regex'
+      3. mot-cle technique explicite    -> KEEP, 'keyword:<kw>'
+         (priorite haute pour notes courtes legitimes type "Bug L42")
+      4. signal alphanumerique faible   -> filter, 'low_alnum:<N>'
+         (capture "**RIEN**" markdown verbose)
+      5. diversite lexicale faible      -> filter, 'low_diversity:<N>'
+         (capture repetition "RIEN RIEN RIEN...")
+      6. note substantielle             -> KEEP, 'substantial:<...>'
+      7. note courte neutre             -> KEEP, 'kept_short' (tolerance)
+
+    Le caller doit logger la reason + preview 200c de la note brute.
+    """
+    if not text:
+        return True, "empty"
+
+    # 1. Strict RIEN regex
+    if _V19_4_RIEN_RE.match(text):
+        return True, "rien_regex"
+
+    # 2. Mot-cle technique explicite -> keep IMMEDIAT (priorite haute pour
+    #    notes courtes type "Bug L42" ou "TypeError sur extract_*")
+    text_lower = text.lower()
+    for kw in _V19_4_TECHNICAL_KEYWORDS:
+        if kw in text_lower:
+            return False, f"keyword:{kw.strip()!r}"
+
+    # 3. Mesurer le signal reel apres strip markdown
+    alnum, unique_words = _v19_5_alnum_diversity(text)
+
+    # 4. Trop peu de signal alphanumerique = note vide deguisee en markdown
+    if alnum < _V19_5_MIN_ALNUM:
+        return True, f"low_alnum:{alnum}"
+
+    # 5. Trop peu de mots distincts = repetition pure ("RIEN RIEN RIEN...")
+    if unique_words < _V19_5_MIN_UNIQUE_WORDS:
+        return True, f"low_diversity:{unique_words}_words_alnum={alnum}"
+
+    # 6. Note substantielle ou longue -> keep
+    if len(text) >= _V19_4_MIN_CHARS_PASS or alnum >= 60:
+        return False, f"substantial:alnum={alnum},words={unique_words}"
+
+    # 7. Note courte neutre, tolerance
+    return False, "kept_short"
 SURVIVAL_COOLDOWN_PER_DRIVE_S = 3600.0    # 1 forçage max/heure/drive
 SURVIVAL_REFRACTORY_THRESHOLD = 80.0      # Drive doit redescendre sous ce seuil avant re-forçage
 SURVIVAL_SOFT_BOOST = 3.0                 # Cycle 1 : boost scoring (laisse une chance au scoring)
@@ -8673,32 +8793,21 @@ RAISON: <1 phrase courte>"""
                 elif micro_resp:
                     text = str(micro_resp).strip()
 
-                # V19.1 (2026-04-24 17:20) : filtre RIEN ancre strictement
-                # a la FIN de chaine. La V19 precedente matchait "RIEN <suivi
-                # de 1000 chars d'explication>" comme RIEN et jetait les
-                # vraies notes a la poubelle. Trou noir semantique.
-                # Nouveau pattern : ne filtre QUE si le texte est integralement
-                # un token vide (ponctuation/markdown seulement apres RIEN).
-                #   "RIEN."                             -> filtre
-                #   "**EXACTEMENT RIEN.**"              -> filtre
-                #   "R.A.S."                            -> filtre
-                #   "RIEN. Cependant, j'ai note..."     -> GARDE (info reelle)
-                #   "Aucune anomalie detectee"          -> filtre (tail courte)
-                #   "Aucune anomalie, mais voir L42"    -> GARDE
-                is_rien = bool(_re.match(
-                    r"^\s*[*_`'\"]*\s*"
-                    r"(?:exactement|strictement|absolument|vraiment|literalement)?"
-                    r"\s*[*_`'\"]*\s*"
-                    r"(?:rien|r\.?a\.?s\.?|aucun[e]?(?:\s+(?:anomalie|defaut|probleme|faille))?|neant|none)"
-                    r"[^a-zA-Z\n]*\s*$",  # fin : uniquement ponctuation/markdown
-                    text,
-                    _re.IGNORECASE,
-                ))
-                if text and not is_rien:
+                # V19.4 (2026-04-25) : assouplissement anti-perroquet.
+                # V19.1 (anchored regex strict) filtrait 6/6 chunks au tir
+                # 11:15 parce que le 14b crache des notes courtes type
+                # "Aucune anomalie." qui matchent RIEN. REDUCE vide -> grade
+                # 5.6 -> hook V21 bloque par garde-fou.
+                # V19.4 : seuil de longueur (>=80c GARDER) + mots-cles
+                # techniques (def, ligne, faille, etc.) + regex RIEN reservee
+                # aux notes courtes non techniques. Voir v19_4_filter_rien_note.
+                should_filter, filter_reason = v19_4_filter_rien_note(text)
+
+                if text and not should_filter:
                     map_notes.append({"location": location, "note": text})
                     logger.info(
                         f"[V18 MAP] {i+1}/{len(chunks)} {location}: "
-                        f"{len(text)}c notes"
+                        f"{len(text)}c notes (V19.4 keep: {filter_reason})"
                     )
                     # V18.4 debug autopsie : dump de la note complete pour
                     # verifier s'il y a contamination amont (references a
@@ -8710,7 +8819,15 @@ RAISON: <1 phrase courte>"""
                     except Exception:
                         pass
                 else:
-                    logger.info(f"[V18 MAP] {i+1}/{len(chunks)} {location}: RIEN")
+                    # V19.4 : log la note brute filtree pour observabilite
+                    # (le moi-de-demain doit pouvoir voir CE QU'a craché le
+                    # LLM avant que le filtre l'envoie au RIEN).
+                    preview = (text or "<empty>").replace("\n", " ")[:200]
+                    logger.info(
+                        f"[V18 MAP] {i+1}/{len(chunks)} {location}: RIEN "
+                        f"(V19.4 reason={filter_reason}, len={len(text or '')}c, "
+                        f"preview={preview!r})"
+                    )
             except Exception as exc:
                 logger.warning(f"[V18 MAP] chunk {i+1} echoue: {exc}")
 
@@ -9445,6 +9562,15 @@ RAISON: <1 phrase courte>"""
                     f"[V21] SURGEON declare PATCH_IMPOSSIBLE pour {target_file} "
                     f"(iter={iteration}). Pas de retry."
                 )
+                # V21.1 : persister meme un patch_impossible pour permettre
+                # au moi-de-demain de comprendre pourquoi le LLM a abandonne.
+                self._persist_v21_failure(
+                    result=result,
+                    audit_report=audit_report,
+                    school_grade=school_grade,
+                    project_root=project_root,
+                    previous_attempts=previous_attempts,
+                )
                 return {"status": "impossible", "iteration": iteration, "result": result}
 
             # 4d. Retry : injecter le traceback pour la prochaine iteration
@@ -9459,6 +9585,15 @@ RAISON: <1 phrase courte>"""
             f"(last status={last_result.status if last_result else 'unknown'}, "
             f"duree totale={time.time() - loop_t0:.1f}s)"
         )
+        # V21.1 : persister le dernier echec pour analyse posterieure
+        if last_result is not None:
+            self._persist_v21_failure(
+                result=last_result,
+                audit_report=audit_report,
+                school_grade=school_grade,
+                project_root=project_root,
+                previous_attempts=previous_attempts,
+            )
         return {"status": "max_iter_reached", "iteration": self._V21_MAX_ITER, "result": last_result}
 
     def _persist_v21_patch(
@@ -9521,6 +9656,78 @@ RAISON: <1 phrase courte>"""
             logger.info(f"[V21] Patch persiste: {stem}")
         except Exception as exc:
             logger.error(f"[V21] Persistance echouee: {type(exc).__name__}: {exc}", exc_info=True)
+
+    def _persist_v21_failure(
+        self,
+        result,
+        audit_report: str,
+        school_grade: float,
+        project_root: str,
+        previous_attempts: list,
+    ) -> None:
+        """V21.1 (2026-04-25) — Persiste un patch echoue (test_failed,
+        max_iter_reached, patch_impossible) pour analyse posterieure.
+
+        Sans ca, on perd la trace du test casse et du diff hallucine. Or
+        c'est exactement ce dont on a besoin pour debugger le SURGEON et
+        affiner ses prompts.
+
+        Sauvegarde dans memory/auto_patches/failed/ :
+          - patch_<ts>_<basename>_<status>.txt   : sortie SEARCH/REPLACE brute
+          - patch_<ts>_<basename>_<status>.meta.json : metadata + tracebacks
+
+        JAMAIS d'application sur le projet reel — meme pour les echecs.
+        """
+        try:
+            failed_dir = os.path.join(project_root, "memory", "auto_patches", "failed")
+            os.makedirs(failed_dir, exist_ok=True)
+
+            ts = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+            base = os.path.basename(result.target_file)
+            if base.endswith(".py"):
+                base = base[:-3]
+            base = re.sub(r"[^A-Za-z0-9_-]", "_", base) or "patch"
+            stem = f"patch_{ts}_{base}_{result.status}"
+
+            patch_path = os.path.join(failed_dir, stem + ".txt")
+            meta_path = os.path.join(failed_dir, stem + ".meta.json")
+
+            with open(patch_path, "w", encoding="utf-8") as f:
+                f.write(result.surgeon_output or "")
+
+            meta = {
+                "id": stem,
+                "timestamp": ts,
+                "target_file": result.target_file,
+                "iteration": result.iteration,
+                "blocks_applied": result.blocks_applied,
+                "school_grade": school_grade,
+                "tests_passed": result.tests_passed,
+                "tests_failed": result.tests_failed,
+                "test_strategy": result.test_strategy,
+                "test_failures": result.test_failures,
+                "test_output_tail": (result.test_output or "")[-2000:],
+                "compile_stderr": result.compile_stderr,
+                "duration_s": result.duration_s,
+                "audit_excerpt": (audit_report or "")[:600],
+                "final_status": result.status,
+                "error_message": result.error_message,
+                "all_attempts": previous_attempts,
+                "human_review_status": "post_mortem",
+            }
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2, ensure_ascii=False, default=str)
+
+            logger.info(
+                f"[V21] Failure persiste: failed/{stem} "
+                f"(status={result.status}, blocs={result.blocks_applied}, "
+                f"tests_ko={result.tests_failed})"
+            )
+        except Exception as exc:
+            logger.error(
+                f"[V21] Persistance failure echouee: {type(exc).__name__}: {exc}",
+                exc_info=True,
+            )
 
     def _log_v21_triumph(
         self,

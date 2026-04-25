@@ -275,3 +275,31 @@ async def test_process_task_handles_validation_errors(surgeon):
     assert result["status"] == "error"
     assert result["blocks_count"] == 0
     assert "error_message" in result
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Souverainete locale forcee — _evaluate_complexity override
+# ═══════════════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_surgeon_evaluate_complexity_always_returns_false(surgeon):
+    """V21 souverainete : SurgeonAgent._evaluate_complexity retourne TOUJOURS
+    False, peu importe le contenu du prompt.
+
+    Sans cet override, le BaseAgent._evaluate_complexity escalade en Cloud
+    Gemini sur tous les triggers du prompt SURGEON ('audit', 'revue de code',
+    'securite', 'faille' — tous présents par construction).
+    """
+    # Prompts qui DEVRAIENT trigger Cloud chez BaseAgent
+    triggering_prompts = [
+        "Effectue un audit complet de securite avec analyse de faille",
+        "[ROLE: SURGEON] revue de code architecture securite",
+        "synthese research analyse approfondie",
+        "evening_reflection introspection stefan confrontation",
+        "code_review audit security",
+    ]
+    for p in triggering_prompts:
+        result = await surgeon._evaluate_complexity(p)
+        assert result is False, (
+            f"V21 souverainete violee : SurgeonAgent escalade Cloud sur {p!r}"
+        )

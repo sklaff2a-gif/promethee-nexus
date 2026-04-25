@@ -93,6 +93,25 @@ class SurgeonAgent(BaseAgent):
         )
         self.system_instructions = SURGEON_SYSTEM_PROMPT
 
+    async def _evaluate_complexity(self, prompt: str) -> bool:
+        """V21 — Le SURGEON est SOUVERAIN local. Aucune escalade Cloud, jamais.
+
+        Override BaseAgent._evaluate_complexity (qui escaladait sur les
+        triggers "audit"/"revue de code"/"securite"/"faille" — tous présents
+        dans le prompt SURGEON par construction).
+
+        Justification :
+          1. Le SURGEON cite VERBATIM du code source du projet dans ses blocs.
+             Envoyer ce code à un LLM externe = fuite de propriété intellectuelle.
+          2. Le 14b-coder local est entraîné sur les commits GitHub et maîtrise
+             le format SEARCH/REPLACE (pattern Aider/Cline).
+          3. Le pipeline V21 est un test de la souveraineté de Prométhée.
+             Si le SURGEON appelle Gemini, on ne teste plus l'autonomie locale.
+
+        Retourne TOUJOURS False (force qwen2.5-coder:14b local).
+        """
+        return False
+
     # ─── Construction du prompt (testable indépendamment) ─────────────
 
     def _build_surgeon_prompt(
