@@ -8543,6 +8543,166 @@ RAISON: <1 phrase courte>"""
             pass
         return "\n".join(parts)
 
+    @staticmethod
+    def _build_v31_dependency_context(target_file: str, target_bug_hint: str = "") -> str:
+        """V31 (2026-04-26) — Cortex Epistemique : RAG cross-file + jurisprudence.
+
+        Bouche le trou epistemique radial : V15 injecte les chunks du
+        target_file uniquement, mais le LLM extrapole vers les modules
+        importes dont il ne connait pas le code (perroquet architectural,
+        factualite 0.25 sur scrub_nurse_agent.py au tir 06:55).
+
+        Architecture 3-couches (RFC V31 validee) :
+        - Couche 1 (Cross-file source_code) : pour les 3 imports projet
+          les plus critiques du target_file, query la collection
+          ChromaDB source_code et ramene 2 chunks par dependance.
+        - Couche 3 (Jurisprudence collective_wisdom) : query top-3
+          audits passes similaires au target_bug_hint.
+
+        Couche 2 (Doctrine projet) : differee a Phase 3.
+        Couche 4 (Validation post-LLM AST) : differee a Phase 4.
+
+        Returns : bloc texte formate avec banners ----[CONTEXTE
+        DEPENDANCES]---- et ----[PRECEDENTS AUDITS]----, ou "" si
+        aucun resultat exploitable. Ne crash JAMAIS l'audit (try/except).
+        """
+        if not target_file or not target_file.endswith(".py"):
+            return ""
+
+        import os as _os
+        import ast as _ast
+
+        project_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        full_path = _os.path.join(project_root, target_file)
+        if not _os.path.exists(full_path):
+            return ""
+
+        # Etape 1 : extraire les imports projet du target_file
+        try:
+            with open(full_path, "r", encoding="utf-8", errors="ignore") as _f:
+                _source = _f.read()
+            _tree = _ast.parse(_source)
+        except Exception:
+            return ""
+
+        _PROJECT_PREFIXES = ("core.", "Agents.", "math_core.", "tools.")
+        _imports_seen: set = set()
+        _project_imports: list = []
+        for _node in _ast.walk(_tree):
+            if isinstance(_node, _ast.ImportFrom):
+                _module = _node.module or ""
+                if any(_module.startswith(p) for p in _PROJECT_PREFIXES):
+                    if _module not in _imports_seen:
+                        _imports_seen.add(_module)
+                        _project_imports.append(_module)
+            elif isinstance(_node, _ast.Import):
+                for _alias in _node.names:
+                    if any(_alias.name.startswith(p) for p in _PROJECT_PREFIXES):
+                        if _alias.name not in _imports_seen:
+                            _imports_seen.add(_alias.name)
+                            _project_imports.append(_alias.name)
+
+        # Top 3 imports (ordre d'apparition dans le source)
+        _top_imports = _project_imports[:3]
+
+        # Etape 2 : Couche 1 — RAG source_code cross-file
+        _crossfile_blocks: list = []
+        _chunks_count = 0
+        _eager_count = 0
+        try:
+            from core.capabilities.source_code_indexer import indexer as _idx
+            for _imp in _top_imports:
+                # Convertir module en chemin probable : core.X -> core/X.py
+                _probable_path = _imp.replace(".", "/") + ".py"
+                _imp_full_path = _os.path.join(project_root, _probable_path)
+                # Verifier que le fichier existe avant query
+                if not _os.path.exists(_imp_full_path):
+                    continue
+                _chunks = _idx.query(
+                    _imp, n_results=2,
+                    filter_filepath=_probable_path,
+                ) or []
+                if not _chunks:
+                    # Fallback : query semantique sans filter
+                    _chunks = _idx.query(_imp, n_results=2) or []
+                # V31.1 (2026-04-26) — FALLBACK EAGER-LOAD AST.
+                # Si ChromaDB collection source_code est vide ou
+                # desynchronisee (cas observe au tir 11:27 : batch
+                # indexation peuple instance "default" mais runtime
+                # utilise une autre instance), on fait comme V19.5 sur
+                # le target_file : lire le source de la dependance et
+                # chunker AST a la volee. Garantit que cross-file marche
+                # TOUJOURS, meme sans Chroma.
+                if not _chunks:
+                    try:
+                        with open(_imp_full_path, "r", encoding="utf-8", errors="ignore") as _fimp:
+                            _imp_src = _fimp.read()
+                        _eager_chunks = _idx._chunk_by_ast(_probable_path, _imp_src)[:2]
+                        if _eager_chunks:
+                            _chunks = _eager_chunks
+                            _eager_count += len(_eager_chunks)
+                    except Exception:
+                        pass
+                for _c in _chunks[:2]:
+                    try:
+                        _formatted = _idx.format_chunk_for_prompt(_c)
+                        _crossfile_blocks.append(
+                            f"### Dependance : {_imp}\n{_formatted}"
+                        )
+                        _chunks_count += 1
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        # Etape 3 : Couche 3 — RAG collective_wisdom (audits passes)
+        _wisdom_blocks: list = []
+        if target_bug_hint and len(target_bug_hint.strip()) > 10:
+            try:
+                from core.vector_store import ChromaMemoryManager
+                _mgr = ChromaMemoryManager.get_instance()
+                _col = _mgr._get_collection("collective_wisdom")
+                _res = _col.query(query_texts=[target_bug_hint[:500]], n_results=3)
+                _docs = (_res.get("documents") or [[]])[0] if _res else []
+                _metas = (_res.get("metadatas") or [[]])[0] if _res else []
+                for _i, _d in enumerate(_docs[:3]):
+                    if _d and len(_d) > 50:
+                        _meta = _metas[_i] if _i < len(_metas) else {}
+                        _origin = (_meta or {}).get("agent", "?") if _meta else "?"
+                        _wisdom_blocks.append(
+                            f"### Audit precedent (agent={_origin})\n{_d[:600]}"
+                        )
+            except Exception:
+                pass
+
+        if not _crossfile_blocks and not _wisdom_blocks:
+            return ""
+
+        # Etape 4 : assemblage
+        _output: list = []
+        if _crossfile_blocks:
+            _output.append("\n----[CONTEXTE DEPENDANCES (V31 RAG cross-file)]----")
+            _output.append(
+                f"# Imports projet du target_file : {', '.join(_top_imports) or '(aucun)'}"
+            )
+            _output.append("")
+            _output.extend(_crossfile_blocks)
+        if _wisdom_blocks:
+            _output.append("\n----[PRECEDENTS AUDITS (V31 RAG wisdom)]----")
+            _output.append("")
+            _output.extend(_wisdom_blocks)
+
+        try:
+            _eager_tag = f" (eager={_eager_count})" if _eager_count else ""
+            logger.info(
+                f"[V31 RAG] cross-file: {_chunks_count} chunks{_eager_tag} "
+                f"(imports={','.join(_top_imports) or '-'}), wisdom: "
+                f"{len(_wisdom_blocks)} audits, target={target_file!r}"
+            )
+        except Exception:
+            pass
+        return "\n".join(_output)
+
     async def _sandbox_correction_loop(
         self,
         response: dict,
@@ -9156,6 +9316,18 @@ RAISON: <1 phrase courte>"""
         # avant de produire un CODE_REVIEW / RESEARCH / WORKSHOP.
         v15_school_ctx = self._build_v15_school_context(slot, prompt, info)
 
+        # V31 (2026-04-26) — Cortex Epistemique : RAG cross-file +
+        # jurisprudence. Bouche le trou epistemique radial laisse par
+        # V15 (target_file uniquement). RFC V31 validee par Architecte.
+        _v31_subject = info.get("subject", {}) if isinstance(info.get("subject"), dict) else {}
+        _v31_target = _v31_subject.get("target_file", "") if isinstance(_v31_subject, dict) else ""
+        _v31_bug_hint = ""
+        if isinstance(_v31_subject, dict):
+            _v31_bug_hint = _v31_subject.get("target_bug", "") or _v31_subject.get("topic", "")
+        if not _v31_bug_hint:
+            _v31_bug_hint = (prompt or "")[:300]
+        v31_dep_ctx = self._build_v31_dependency_context(_v31_target, _v31_bug_hint) if _v31_target else ""
+
         # Dispatch au vrai agent
         # V4.4 (2026-04-24) : marqueur explicite du slot scolaire dans la
         # mission. Permet a base_agent.generate_content de desactiver le
@@ -9183,7 +9355,8 @@ RAISON: <1 phrase courte>"""
             f"{context_str}\n"
             f"\n=== MISSION SCOLAIRE ===\n"
             f"{prompt}\n"
-            f"{v15_school_ctx}"  # V15 chunks en dernier = biais de recence
+            f"{v31_dep_ctx}"  # V31 RAG cross-file + wisdom
+            f"{v15_school_ctx}"  # V15 chunks target_file en dernier = biais de recence max
         )
 
         # V18 (2026-04-24 14:40) — Map-Reduce cognitif pour CODE_REVIEW.
