@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, AsyncMock, patch
 # Mock neural_tissue avant import
 mock_tissue_module = MagicMock()
 sys.modules["core.neural_tissue"] = mock_tissue_module
-sys.modules["core.event_bus"] = MagicMock()
-sys.modules["core.event_bus.bus"] = MagicMock()
+# V30.15 ERADICATED: sys.modules["core.event_bus"] = MagicMock()  # polluait test_internal_context_sets_flag (event_bus jamais utilise dans ce fichier)
+# V30.15 ERADICATED: sys.modules["core.event_bus.bus"] = MagicMock()  # idem
 
 
 class FakeCell:

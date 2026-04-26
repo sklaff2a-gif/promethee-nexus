@@ -716,21 +716,24 @@ _PYTEST_DESELECT_TESTS = (
     #   - 20:07:28 : test_on_routine_complete_failure FAILED (autre test
     #                  de la meme classe) -> deselect classe entiere
     "tests/test_cardiac_engine.py::TestBusIntegration",
-    # V30.14 (2026-04-26) — POLLUEUR PARTIEL ELIMINE.
-    # Le pollueur principal de TestOrchestratorForceLocal etait
-    # @patch('core.event_bus.bus.bus', new_callable=MagicMock) dans
-    # tests/auto/test_divine_infra.py (6 occurrences). Identifie via
-    # mock_leak_detector V30.12, corrige via V30.13 multi-ablation
-    # (replace_line_all) en une passe SURGEON 14b LOCAL.
-    # MAIS la bisection (a*+b*+c*+auto = 1682 verts en isolation) montre
-    # qu'un AUTRE pollueur existe dans la suite complete. La chasse
-    # complete demanderait 30+ min de bisection fine. Quarantaine
-    # maintenue jusqu'a la prochaine session "CI Hygiene".
-    # Pollueurs probables non identifies : tests qui patch.dict sur
-    # sys.modules (test_amygdala.py:71, test_inner_voice.py:485+) sans
-    # cleanup parfait, ou tests d* / e* / f* qui modifient le module
-    # event_bus globalement.
-    "tests/test_cloud_routing.py::TestOrchestratorForceLocal",
+    # V30.15 (2026-04-26) — RESOLUE : la quarantaine de
+    # TestOrchestratorForceLocal a ete LEVEE definitivement.
+    # Trace de la chasse :
+    # 1. V30.12 — mock_leak_detector.py (anticorps deterministe AST)
+    #    detecte 584 fuites dans 70 fichiers.
+    # 2. V30.13 — multi-ablation forgee (replace_line_all + format
+    #    {"patches": [...]}). SURGEON 14b LOCAL fixe 6 occurrences de
+    #    @patch(new_callable=MagicMock) -> AsyncMock dans
+    #    tests/auto/test_divine_infra.py en une passe.
+    # 3. V30.14 — tolerance indent gauche pour replace_line_all.
+    # 4. V30.15 — auto_bisect_pytest.py (recherche dichotomique log2(N)
+    #    pytest runs). Identifie le VRAI pollueur :
+    #    tests/test_sauna_mode.py:12-13 — sys.modules["core.event_bus"]
+    #    = MagicMock() au NIVEAU MODULE (s'execute a la collection
+    #    pytest, pollue sys.modules globalement). Eradique via V30.13
+    #    multi-patches (commentaire de tracabilite).
+    # test_internal_context_sets_flag + test_user_mission_no_flag
+    # passent maintenant en suite complete. Quarantaine inutile.
 )
 
 
