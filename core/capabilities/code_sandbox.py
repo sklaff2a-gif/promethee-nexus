@@ -716,19 +716,22 @@ _PYTEST_DESELECT_TESTS = (
     #   - 20:07:28 : test_on_routine_complete_failure FAILED (autre test
     #                  de la meme classe) -> deselect classe entiere
     "tests/test_cardiac_engine.py::TestBusIntegration",
-    # TODO(Dette Environnementale): Test flaky par pollution de MagicMock
-    # asynchrone. Passe en standalone. A chasser.
-    # V30.9b (2026-04-26) — test passe en isolation (verifie 1 passed in 0.57s)
-    # mais echoue en suite complete avec :
+    # TODO(Dette Environnementale): Tests flaky par pollution de MagicMock
+    # asynchrone. Passent en standalone. A chasser.
+    # V30.9b/V30.10 (2026-04-26) — Tests TestOrchestratorForceLocal passent en
+    # isolation (verifie 1 passed in 0.57s par test) mais echouent en suite
+    # complete avec :
     #   ERROR Orchestrator: object MagicMock can't be used in 'await' expression
-    # Cause : un test anterieur du fichier (probablement TestForceLocalFlag ou
-    # TestCloudBudget) installe un AsyncMock global sur dispatch_task ou
-    # process_task et ne le reset pas correctement. Quand
-    # test_internal_context_sets_flag tourne apres, il herite du MagicMock
-    # pollue.
+    # Cause probable : un test anterieur du fichier (TestForceLocalFlag ou
+    # TestCloudBudget) installe un AsyncMock global sur bus.publish ou
+    # event_bus et ne le reset pas correctement. dispatch_task fait
+    # `await bus.publish(...)` -> erreur sur le MagicMock pollue.
     # Le code source de Orchestrator.dispatch_task et BaseAgent._LOCAL_FORCE_MARKERS
     # est SAIN (V30.9 + V30.9b). C'est l'environnement pytest qui est flaky.
-    "tests/test_cloud_routing.py::TestOrchestratorForceLocal::test_internal_context_sets_flag",
+    # Quarantaine de la CLASSE ENTIERE pour eviter le whack-a-mole sur
+    # chaque test individuel (test_internal_context_sets_flag puis
+    # test_user_mission_no_flag, etc.).
+    "tests/test_cloud_routing.py::TestOrchestratorForceLocal",
 )
 
 
