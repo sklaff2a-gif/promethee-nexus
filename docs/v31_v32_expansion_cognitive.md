@@ -199,7 +199,112 @@ Le 14b oscille entre 2 mauvaises regex :
 
 ---
 
-## 6. Citation finale
+## 6. V33 — Mémoire Dynamique et Érosion de la Sagesse (cible long-terme)
+
+> **Statut** : RFC validée 2026-04-26. **Pas implémentée**. Déclencheur : ≥ 15 patterns
+> récurrents identifiés et validés humainement dans `memory/auto_patches/failed/`.
+>
+> *"Nous avons dessiné les plans du silo à grain, mais nous attendons que la
+> récolte soit suffisante pour commencer la construction."* — Jean-Michel
+
+### 6.1 Le piège anticipé
+
+Si on accumule des "leçons" extraites du corpus `failed/` + `created/` (idée empruntée
+au mécanisme GEPA de Hermes Agent, ICLR 2026 Oral), un risque évident :
+**alourdir le prompt système du 14b à chaque itération**. À 3 leçons, c'est trivial.
+À 30, ça gonfle. À 300, le 14b sature avant même de lire la SPEC TDD — et,
+pire, se distrait sur les leçons (catastrophic distraction).
+
+**Principe directeur** : le prompt système reste **IMMUABLE**. Les leçons sont du
+contexte **DYNAMIQUE retrieved-on-demand** dans une section dédiée
+`----[LECONS APPLICABLES]----` du prompt enrichi.
+
+### 6.2 Architecture en 4 piliers
+
+**Pilier 1 — Format compact (≤150 chars/leçon)**
+Pas de prose. Format règle exécutable, ID unique, scope explicite :
+```
+RULE-V32-001 [scope=architect, tags=multi-files] :
+  Si files[] >= 2 et 2e entree manque "action", default="create_file"
+  (le 14b oublie systematiquement le champ sur le 2e fichier)
+```
+
+**Pilier 2 — Storage SQLite + index sémantique**
+Stdlib pure (sqlite3 + FTS5), zéro dépendance nouvelle :
+
+```sql
+CREATE TABLE lessons (
+    id TEXT PRIMARY KEY,
+    rule TEXT NOT NULL,
+    scope TEXT NOT NULL,           -- GLOBAL|SURGEON|ARCHITECT|NURSE|CODE_REVIEW
+    tags TEXT NOT NULL,            -- "multi-files,json,14b-quirk"
+    target_pattern TEXT,           -- regex contexte applicable
+    hit_count INTEGER DEFAULT 0,
+    success_after INTEGER DEFAULT 0,
+    failure_after INTEGER DEFAULT 0,
+    last_used REAL,
+    created_at REAL,
+    source TEXT,                   -- manual|gepa-extracted|audit-failed
+    validated INTEGER DEFAULT 0    -- PR humain validé
+);
+CREATE VIRTUAL TABLE lessons_fts USING fts5(rule, tags);
+```
+
+Optionnellement : index ChromaDB en complément pour retrieval sémantique.
+
+**Pilier 3 — Retrieval limité par budget tokens**
+Hard caps : **5 leçons max, 600 tokens max** (~2400 chars). Filtrage par `scope` +
+`tags` + `validated=1`. Tri par `(success_after - failure_after)` puis `last_used`.
+
+**Pilier 4 — Boucle de feedback auto-élagage**
+Chaque leçon a un score :
+```
+score = (success_after - failure_after) / (total + 1)
+       × decay(now - last_used)
+```
+- Leçon → succès : renforcée
+- Leçon → échec persistant : affaiblie
+- Leçon non-utilisée N jours : decay temporel
+- Score < seuil : archivée (pas supprimée, hors retrieval par défaut)
+
+### 6.3 Garde-fous critiques
+
+| Risque | Mitigation |
+|---|---|
+| Leçons contradictoires | `validated=0` par défaut, PR humain obligatoire |
+| Drift sémantique post-refactor | Champ `target_pattern` + invalidation manuelle |
+| Effet placebo (corrélation ≠ causalité) | Tracking success/failure rigoureux |
+| Pollution cross-scope | Champ `scope` strict, filter SQL |
+| Budget tokens dépassé | Hard cap + warning log |
+
+### 6.4 Graduation des leçons stables
+
+Quand une leçon atteint un seuil de stabilité (ex: 20+ succès, 0 échec sur 30 jours),
+elle peut être **graduée** dans le prompt système immutable lors d'une release
+V32.x. Même logique que les fixes V30.6 → V30.14 qu'on a graduellement intégrés.
+Le SQLite garde la trace de la graduation pour audit.
+
+### 6.5 Seuil de déclenchement et plan
+
+- **Aujourd'hui** : 0 ligne de SQLite codée. Architecture validée comme contrat.
+- **Trigger V33** : `memory/auto_patches/failed/` contient **≥ 15 patterns récurrents
+  validés humainement**.
+- **Effort estimé à l'implémentation** : ~150 LOC Python + tests + un script
+  d'extraction GEPA-like sur le corpus existant.
+
+### 6.6 Doctrine
+
+> Le prompt système est l'ADN — immuable, partagé par tous les tirs.
+> Les leçons sont l'expérience — accumulées, pondérées, parfois graduées.
+> Le RAG est la perception — toujours fraîche, jamais mémorisée.
+
+Trois mémoires séparées, trois cycles de vie séparés. C'est la même rigueur que
+notre séparation NURSE / ARCHITECT / MEDIC : **chaque organe a son rôle, et on
+ne fusionne jamais ce qui doit rester distinct**.
+
+---
+
+## 7. Citation finale
 
 > Le 14b a essayé. Le NURSE a imposé. La SANDBOX a vérifié. Le test rouge a parlé. Le code n'est jamais sorti du tempdir.
 >
