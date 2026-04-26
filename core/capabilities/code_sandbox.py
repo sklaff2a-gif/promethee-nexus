@@ -1080,7 +1080,18 @@ def apply_v30_patch(
     # Fix : normaliser ' -> " sur les deux chaines avant comparaison.
     # L'indentation reste calculee sur la ligne SOURCE originale (pas
     # la ligne normalisee), donc pas de corruption du calcul d'indent.
-    def _v30_norm_for_match(s: str) -> str:
+    # V30.14 (2026-04-26) — TOLERANCE INDENT POUR replace_line_all.
+    # Pour replace_line_all, l'anchor_line peut etre fournie SANS indentation
+    # gauche (le SURGEON ne peut pas connaitre l'indent de N occurrences
+    # potentiellement differentes). Le strip complet permet le match. Pour
+    # les autres actions (insert_*/replace_line single), on garde le match
+    # strict avec indent pour preserver la distinction entre lignes
+    # similaires a des indents differents.
+    _strip_indent = (action == "replace_line_all")
+
+    def _v30_norm_for_match(s: str, strip_all: bool = _strip_indent) -> str:
+        if strip_all:
+            return s.strip().replace("'", '"')
         return s.rstrip("\r\n").replace("'", '"')
 
     anchor_clean_norm = _v30_norm_for_match(anchor_line)
