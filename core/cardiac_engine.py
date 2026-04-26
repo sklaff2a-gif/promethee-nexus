@@ -507,6 +507,19 @@ class CardiacEngine:
             # Moyenne mobile pondérée (les expériences récentes comptent plus)
             weight = min(n, 10)  # Plafonner l'inertie à 10
             marker["valence"] = (marker["valence"] * weight + valence) / (weight + 1)
+            # V30.10 (2026-04-26) — EROSION TEMPORELLE (anti-SPTSA).
+            # Avant : marker["intensity"] += 0.05 monotone, plafonne a 1.0,
+            # jamais relaxe -> signal somatique permanent -> threat_level
+            # chronique 2.36, STABILITE bloque 74+. Le coeur ne savait que
+            # serrer, jamais lacher. Diagnostic introspectif du 14b confirme
+            # par audit manuel.
+            # Fix : decroissance exponentielle demi-vie 1h sur l'intensite
+            # AVANT chaque renforcement. Un marqueur non renforce depuis 1h
+            # voit son intensite divisee par 2. Apres 6h sans renforcement
+            # le marqueur est quasi eteint (1/64).
+            elapsed_since_last = time.time() - marker.get("last_updated", time.time())
+            intensity_decay = 0.5 ** (elapsed_since_last / 3600.0)
+            marker["intensity"] = max(0.0, marker["intensity"] * intensity_decay)
             marker["intensity"] = min(1.0, marker["intensity"] + 0.05)
             marker["bpm_signature"] = (marker["bpm_signature"] * weight + self.bpm) / (weight + 1)
             marker["emotion_at_mark"] = self.current_emotion
