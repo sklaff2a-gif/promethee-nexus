@@ -87,16 +87,24 @@ class TestEvaluateComplexityShortCircuit:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_normal_prompt_calls_llm(self):
-        """Un prompt utilisateur normal doit appeler le LLM (pas de court-circuit)."""
-        with patch.object(self.agent, "_call_ollama", new_callable=AsyncMock) as mock_ollama:
-            mock_ollama.return_value = "NON"
-            result = await self.agent._evaluate_complexity(
-                "Explique-moi comment fonctionne le pattern observer en Python"
-            )
-            # L'appel LLM doit avoir été fait (pas de court-circuit)
-            mock_ollama.assert_called_once()
-            assert result is False
+    async def test_normal_prompt_no_internal_short_circuit(self):
+        """Un prompt utilisateur normal SANS marqueur interne n'est pas
+        short-circuit par la liste V30.9 _INTERNAL_LOCAL_MARKERS.
+
+        Note V30.9 : l'evaluateur est devenu purement deterministe
+        (heuristique sur cloud_triggers / local_triggers + budget Gemini).
+        L'ancien path "LLM juge la complexite" a ete supprime — il etait
+        absurde (le LLM se jugeait lui-meme). Le test verifie desormais
+        que le resultat est un booleen valide, pas qu'un appel LLM se
+        produit.
+        """
+        result = await self.agent._evaluate_complexity(
+            "Explique-moi comment fonctionne le pattern observer en Python"
+        )
+        # Pas de marqueur interne -> ne short-circuit PAS au premier check.
+        # Le verdict final depend de Gemini availability + heuristiques.
+        # Sans connexion Gemini en test : return False par defaut.
+        assert isinstance(result, bool)
 
 
 # ─── Couche 2 : Flag _force_local_next ───

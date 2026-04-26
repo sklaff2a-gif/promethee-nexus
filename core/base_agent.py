@@ -667,6 +667,28 @@ class BaseAgent:
         if self._force_local_next:
             return False
 
+        # V30.9 (2026-04-26) — COURT-CIRCUIT MARQUEURS INTERNES.
+        # Diagnostic : test_mode_veille_returns_false echouait parce que
+        # "research" dans "Researcher" matchait cloud_triggers et l'agent
+        # escaladait vers Gemini sur du flux interne.
+        # Fix : marqueurs internes -> retour LOCAL avant toute heuristique.
+        # Empeche aussi la fuite Cloud sur les routines autonomes du
+        # systeme (PROTOCOLE_AUTONOMIE, COUNCIL_RESEARCH, etc.).
+        _INTERNAL_LOCAL_MARKERS = (
+            "PROTOCOLE_AUTONOMIE",
+            "[MODE VEILLE]",
+            "CONSEIL multi-agents",
+            "YOUTUBE_VEILLE",
+            "DROPZONE_ANALYSIS",
+            "EVOLUTION_PIPELINE",
+            "MEMORY_CLEANUP",
+            "COUNCIL_RESEARCH",
+        )
+        prompt_head = prompt[:500]
+        for _marker in _INTERNAL_LOCAL_MARKERS:
+            if _marker in prompt_head:
+                return False
+
         # Court-circuit : complexité compilée (Neural Compiler, 0 LLM)
         try:
             from core.neural_compiler import compiler
