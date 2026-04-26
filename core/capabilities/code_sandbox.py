@@ -982,11 +982,23 @@ def apply_v30_patch(
         zone_end = len(source_lines)
 
     # Etape 2 : trouver anchor_line dans la zone (matching tolerant aux
-    # espaces de fin de ligne)
-    anchor_clean = anchor_line.rstrip("\r\n")
+    # espaces de fin de ligne et aux quotes simples vs doubles).
+    # V30.6 (2026-04-26) — AGNOSTICISME TYPOGRAPHIQUE.
+    # Diagnostic 07:30 : SURGEON a produit anchor_line avec apostrophes
+    # simples (marker['intensity']) alors que le source utilise des
+    # guillemets doubles (marker["intensity"]). Match strict echouait
+    # alors que la ligne EXISTE bel et bien. Le LLM ne doit pas etre
+    # puni pour un detail typographique sans valeur semantique.
+    # Fix : normaliser ' -> " sur les deux chaines avant comparaison.
+    # L'indentation reste calculee sur la ligne SOURCE originale (pas
+    # la ligne normalisee), donc pas de corruption du calcul d'indent.
+    def _v30_norm_for_match(s: str) -> str:
+        return s.rstrip("\r\n").replace("'", '"')
+
+    anchor_clean_norm = _v30_norm_for_match(anchor_line)
     matches: List[int] = []
     for i in range(zone_start, min(zone_end, len(source_lines))):
-        if source_lines[i].rstrip("\r\n") == anchor_clean:
+        if _v30_norm_for_match(source_lines[i]) == anchor_clean_norm:
             matches.append(i)
 
     if len(matches) == 0:
