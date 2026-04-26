@@ -133,8 +133,11 @@ def _safe_parse_checklist(raw_output: str) -> Dict[str, Any]:
 
     Tente plusieurs strategies, fallback silencieux si echec :
       1. json.loads direct (cas ideal : JSON pur)
-      2. Extraction du premier {...} via regex puis json.loads
-      3. Si tout echoue : retourne {"fallback": True}
+      2. Strip markdown ```json ... ``` puis json.loads
+      3. Extraction du premier {...} via regex puis json.loads
+      4. V32.1 : ast.literal_eval (tolerant aux apostrophes Python)
+      5. V32.1 : Suppression des virgules trainantes puis json.loads
+      6. Si tout echoue : retourne {"fallback": True}
 
     Returns:
         dict avec les champs target_bug, lines_to_preserve, etc.
@@ -161,18 +164,46 @@ def _safe_parse_checklist(raw_output: str) -> Dict[str, Any]:
 
     # Tentative 2 : extraction du premier bloc {...}
     match = _JSON_BLOCK_RE.search(text)
+    candidates = [text]
     if match:
+        candidates.append(match.group(0))
+
+    for cand in candidates:
+        # 2a : json.loads direct sur le candidat
         try:
-            parsed = json.loads(match.group(0))
+            parsed = json.loads(cand)
             if isinstance(parsed, dict):
                 parsed.setdefault("fallback", False)
                 return parsed
         except json.JSONDecodeError:
             pass
+        # V32.1 (2026-04-26) — tolerance virgules trainantes (sortie LLM
+        # frequente : `[1, 2,]` ou `{"a": 1,}` qui casse json strict).
+        cleaned = re.sub(r",(\s*[}\]])", r"\1", cand)
+        try:
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict):
+                parsed.setdefault("fallback", False)
+                return parsed
+        except json.JSONDecodeError:
+            pass
+        # V32.1 — fallback ast.literal_eval (accepte apostrophes Python)
+        try:
+            import ast as _ast
+            parsed = _ast.literal_eval(cleaned)
+            if isinstance(parsed, dict):
+                parsed.setdefault("fallback", False)
+                return parsed
+        except (ValueError, SyntaxError):
+            pass
 
-    # Tentative 3 : fallback silencieux
+    # Tentative finale : fallback. On log le raw COMPLET (pas tronque)
+    # pour diagnostic future. Limite a 1500c pour eviter inonder logs.
     logger.warning(
         f"[V29] Nurse JSON illisible (preview: {text[:200]!r}), fallback active"
+    )
+    logger.debug(
+        f"[V29] Nurse raw complet ({len(text)}c) : {text[:1500]!r}"
     )
     return {"fallback": True}
 

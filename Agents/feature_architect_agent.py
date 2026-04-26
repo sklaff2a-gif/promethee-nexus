@@ -42,7 +42,8 @@ from Agents.surgeon_agent import SurgeonAgent
 logger = logging.getLogger("feature_architect")
 
 
-FEATURE_ARCHITECT_SYSTEM_PROMPT = """[ROLE: V32 FEATURE ARCHITECT — Construction logicielle from-scratch]
+FEATURE_ARCHITECT_SYSTEM_PROMPT = """[V32: FEATURE_BUILDING]
+[ROLE: V32 FEATURE ARCHITECT — Construction logicielle from-scratch]
 
 Tu reçois une SPECIFICATION TDD (entre ---SPEC---) decomposee par la
 ScrubNurse V32 (signature, types, test_cases imposes). Tu dois produire

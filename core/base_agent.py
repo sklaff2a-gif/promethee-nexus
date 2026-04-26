@@ -913,9 +913,16 @@ class BaseAgent:
         # les references a du code existant qui n existe pas. En CREATION on
         # demande explicitement au LLM d'inventer de nouvelles fonctions --
         # le veto serait une reaction auto-immune sur un corps etranger sain.
+        # V32 (2026-04-26) — Le marqueur [V32: FEATURE_BUILDING] est aussi
+        # creatif par nature : l'Architecte cree des fichiers qui n'existent
+        # PAS encore (donc forcement absents de l'index Bloom). Sans ce
+        # bypass, Bloom V4.2 refuse de generer du code pour core/utils/x.py
+        # tant que le fichier n'a jamais ete indexe — anti-doctrine totale
+        # de FEATURE_BUILDING.
         _is_creative_slot = (
             "[SCHOOL_SLOT: CREATION]" in (prompt or "")
             or "[SCHOOL_SLOT: WORKSHOP]" in (prompt or "")
+            or "[V32: FEATURE_BUILDING]" in (prompt or "")
         )
         if not _is_creative_slot:
             try:

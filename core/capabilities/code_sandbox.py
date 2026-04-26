@@ -727,32 +727,39 @@ class CodeSandbox:
             )
 
         # 1. Construire sandbox layout (copie complete du projet)
+        # V32.3 (2026-04-26) — FIX file_exists faux positif.
+        # _build_sandbox_layout pre-creait le first_target en sandbox
+        # avec patched_source="". Quand apply_v32_create_file arrivait
+        # ensuite, le fichier "existait deja" -> _V32FileExistsError.
+        # Fix : utiliser config.py (top-level, existe toujours) comme
+        # proxy pour le layout. Le sandbox copiera tout le projet sans
+        # toucher aux target_file V32. Les create_file s'occupent de
+        # creer les fichiers eux-memes.
         tmpdir = tempfile.mkdtemp(prefix=_TEMPDIR_MEDIC_PREFIX)
         try:
             try:
-                # On utilise un fichier "marqueur" pour le layout helper :
-                # _build_sandbox_layout veut UN target_file. On lui passe
-                # le PREMIER de la liste comme proxy ; les autres seront
-                # crees ensuite par apply_v32_create_file.
-                first_target = files[0]["target_file"]
-                # Pour create_file le fichier n'existe PAS encore : on
-                # passe une chaine vide comme patched_source (le helper
-                # gere ce cas en creant les parents si besoin).
-                first_action = files[0]["action"]
-                _proxy_source = ""
-                if first_action in _V30_VALID_ACTIONS:
-                    # Action V30 : on lit le source existant
-                    _proxy_path = project_root_p / first_target
-                    if _proxy_path.exists():
-                        _proxy_source = _proxy_path.read_text(encoding="utf-8")
+                _proxy_target = "config.py"
+                _proxy_path = project_root_p / _proxy_target
+                if not _proxy_path.exists():
+                    # Fallback : prendre le premier fichier .py top-level
+                    for _entry in project_root_p.iterdir():
+                        if _entry.is_file() and _entry.suffix == ".py":
+                            _proxy_target = _entry.name
+                            _proxy_path = _entry
+                            break
+                _proxy_source = (
+                    _proxy_path.read_text(encoding="utf-8")
+                    if _proxy_path.exists() else ""
+                )
                 _build_sandbox_layout(
-                    project_root_p, Path(tmpdir), first_target, _proxy_source,
+                    project_root_p, Path(tmpdir), _proxy_target, _proxy_source,
                 )
             except Exception as exc:
+                first_target = files[0].get("target_file", "<multi>") if files else "<multi>"
                 return PatchResult(
                     status="internal_error",
                     surgeon_output=surgeon_output,
-                    target_file=first_target if files else "<multi>",
+                    target_file=first_target,
                     iteration=iteration,
                     error_message=f"V32 layout sandbox: {type(exc).__name__}: {exc}",
                     duration_s=time.time() - t0,
@@ -1237,7 +1244,16 @@ def _v32_validate_file_entry(entry: Dict[str, Any], index: int = 0) -> Dict[str,
         raise _V32InvalidMultiFilesError(
             f"files[{index}].target_file manquant ou non-string"
         )
-    if not action or action not in _V30_V32_ALL_ACTIONS:
+    # V32.2 (2026-04-26) — ELASTICITE ACTION DEFAUT.
+    # Le 14b oublie souvent le champ "action" sur le 2eme fichier d'un
+    # multi-files (cas observe au tir 16:41 sur extract_markdown_blocks :
+    # files[0] avait action='create_file', files[1] omettait le champ).
+    # En multi-files, le cas dominant est CREATION, donc default='create_file'.
+    # Le caller peut quand meme expliciter une autre action (replace_line,
+    # append_block) — seule la valeur None / absent declenche le default.
+    if not action:
+        action = "create_file"
+    if action not in _V30_V32_ALL_ACTIONS:
         raise _V30InvalidActionError(
             f"files[{index}].action={action!r} invalide. "
             f"Valeurs acceptees: {sorted(_V30_V32_ALL_ACTIONS)}"

@@ -8322,6 +8322,361 @@ RAISON: <1 phrase courte>"""
             logger.debug(f"[AUTO-EXERCISE] Echec : {e}")
             return None
 
+    async def _execute_feature_building(
+        self,
+        user_story: str,
+        max_iter: int = 3,
+    ) -> Dict[str, Any]:
+        """V32 (2026-04-26) — Pipeline FEATURE_BUILDING : User Story -> code + tests.
+
+        Pipeline triphasique :
+          Phase 0 : ScrubNurse decompose la User Story en SPEC TDD
+                    (function_signature, module_path, test_cases imposes)
+          Phase 1 : V31 RAG cross-file sur les imports candidats du
+                    module_path (si fichier existe deja, ce qui est rare
+                    en creation pure)
+          Phase 2 : Boucle ARCHITECT <-> MEDIC sandbox max_iter fois.
+                    A chaque iteration, l'ARCHITECT genere un JSON
+                    multi-fichiers ; le MEDIC le valide en sandbox
+                    isolee (py_compile + pytest regression complete).
+                    Trauma transmission iter+1 : si test echoue,
+                    pytest stdout est injecte dans le prompt.
+
+        Persistance :
+          - Succes : memory/auto_patches/created/{ts}_{feature_name}/
+          - Echec  : memory/auto_patches/failed_creations/{ts}_{feature}/
+
+        Returns : dict {status, feature_name, iterations, files_created,
+        tests_passed, tests_failed, persisted_path, error_message}
+        """
+        import os as _os
+        import time as _time
+        import json as _json
+
+        if not user_story or len(user_story.strip()) < 30:
+            return {
+                "status": "user_story_too_short",
+                "error_message": "User Story trop courte (min 30c)",
+            }
+
+        t0 = _time.time()
+        result_payload: Dict[str, Any] = {
+            "status": "unknown",
+            "feature_name": "",
+            "iterations": 0,
+            "files_created": [],
+            "tests_passed": 0,
+            "tests_failed": 0,
+            "persisted_path": "",
+            "error_message": "",
+        }
+
+        # Phase 0 : NURSE decomposition TDD
+        try:
+            from Agents.scrub_nurse_agent import ScrubNurseAgent
+            nurse = ScrubNurseAgent()
+            logger.info(f"[V32 FEATURE] Phase 0 NURSE decompose ({len(user_story)}c)")
+            decomposition = await nurse.prepare_user_story_decomposition(user_story)
+        except Exception as e:
+            result_payload["status"] = "nurse_crash"
+            result_payload["error_message"] = f"NURSE crash: {type(e).__name__}: {e}"
+            return result_payload
+
+        if decomposition.get("fallback"):
+            result_payload["status"] = "decomposition_failed"
+            result_payload["error_message"] = (
+                f"NURSE fallback: {decomposition.get('reason', 'inconnu')}"
+            )
+            return result_payload
+
+        feature_name = decomposition.get("feature_name") or self._infer_feature_name(
+            decomposition.get("function_signature", "")
+        )
+        result_payload["feature_name"] = feature_name
+        decomposition.setdefault("feature_name", feature_name)
+        logger.info(
+            f"[V32 FEATURE] NURSE OK : signature={decomposition['function_signature'][:80]!r} "
+            f"module={decomposition['module_path']!r} "
+            f"tests={len(decomposition.get('test_cases') or [])} "
+            f"confidence={decomposition.get('confidence', 0.0)}"
+        )
+
+        # Phase 1 : V31 RAG cross-file (on module_path s'il existe deja)
+        # Note : en creation pure, le fichier n'existe pas encore ; on
+        # injecte alors le RAG sur des modules voisins probables.
+        rag_context = ""
+        try:
+            module_path = decomposition.get("module_path", "")
+            target_bug_hint = (
+                decomposition.get("function_signature", "")
+                + " | " + " ".join(decomposition.get("doctrine_hints", [])[:3])
+            )
+            if module_path:
+                rag_context = self._build_v31_dependency_context(
+                    module_path, target_bug_hint=target_bug_hint
+                )
+        except Exception as e:
+            logger.warning(f"[V32 FEATURE] RAG V31 echoue: {e}")
+            rag_context = ""
+
+        # Phase 2 : Boucle ARCHITECT <-> MEDIC sandbox
+        try:
+            from Agents.feature_architect_agent import FeatureArchitectAgent
+            from core.capabilities.code_sandbox import CodeSandbox, _PATCH_IMPOSSIBLE_RE
+        except Exception as e:
+            result_payload["status"] = "import_crash"
+            result_payload["error_message"] = f"Import V32: {type(e).__name__}: {e}"
+            return result_payload
+
+        architect = FeatureArchitectAgent()
+        sandbox = CodeSandbox()
+        previous_attempts: List[Dict[str, Any]] = []
+        last_result = None
+
+        for iteration in range(max_iter):
+            result_payload["iterations"] = iteration + 1
+            t_iter = _time.time()
+
+            # Construire le prompt avec previous_attempts (trauma transmission)
+            try:
+                rag_with_history = self._v32_inject_previous_attempts(
+                    rag_context, previous_attempts
+                )
+                raw_output = await architect.generate_feature(
+                    decomposition=decomposition,
+                    rag_context=rag_with_history,
+                )
+            except ValueError as ve:
+                result_payload["status"] = "architect_invalid_input"
+                result_payload["error_message"] = str(ve)
+                break
+            except Exception as e:
+                logger.warning(
+                    f"[V32 FEATURE] iter={iteration} ARCHITECT crash: "
+                    f"{type(e).__name__}: {e}"
+                )
+                previous_attempts.append({
+                    "architect_output": "",
+                    "failure_reason": "architect_crash",
+                    "traceback": str(e)[:500],
+                })
+                continue
+
+            # Detection FEATURE_IMPOSSIBLE
+            if "[FEATURE_IMPOSSIBLE" in (raw_output or "") or "[PATCH_IMPOSSIBLE" in (raw_output or ""):
+                result_payload["status"] = "feature_impossible"
+                result_payload["error_message"] = raw_output[:300]
+                last_result = None
+                break
+
+            # Phase 2.b : MEDIC sandbox (detecte multi-files automatiquement)
+            try:
+                # target_file proxy : module_path (le sandbox layout en a besoin)
+                medic_result = sandbox.apply_patch_in_sandbox(
+                    surgeon_output=raw_output,
+                    target_file=decomposition["module_path"],
+                    iteration=iteration,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[V32 FEATURE] iter={iteration} MEDIC crash: "
+                    f"{type(e).__name__}: {e}"
+                )
+                previous_attempts.append({
+                    "architect_output": raw_output,
+                    "failure_reason": "medic_crash",
+                    "traceback": str(e)[:1000],
+                })
+                continue
+
+            iter_dur = _time.time() - t_iter
+            logger.info(
+                f"[V32 FEATURE] iter={iteration} status={medic_result.status} "
+                f"blocs={medic_result.blocks_applied} "
+                f"tests_ok={medic_result.tests_passed} "
+                f"tests_ko={medic_result.tests_failed} dur={iter_dur:.1f}s"
+            )
+
+            last_result = medic_result
+
+            # Si succes
+            if medic_result.status == "patched":
+                result_payload["status"] = "patched"
+                result_payload["files_created"] = (
+                    medic_result.target_file.split(", ") if medic_result.target_file else []
+                )
+                result_payload["tests_passed"] = medic_result.tests_passed
+                result_payload["tests_failed"] = medic_result.tests_failed
+                # Persistance succes
+                try:
+                    persisted = self._persist_v32_creation(
+                        feature_name=feature_name,
+                        user_story=user_story,
+                        decomposition=decomposition,
+                        architect_output=raw_output,
+                        medic_result=medic_result,
+                        iteration=iteration,
+                    )
+                    result_payload["persisted_path"] = persisted
+                except Exception as e:
+                    logger.warning(f"[V32 FEATURE] Persist succes echoue: {e}")
+                break
+
+            # Trauma transmission : preparer le prochain iter
+            failure_reason = medic_result.status
+            traceback_snippet = (
+                medic_result.test_output
+                or medic_result.compile_stderr
+                or medic_result.error_message
+                or ""
+            )[:2500]
+            previous_attempts.append({
+                "architect_output": raw_output,
+                "failure_reason": failure_reason,
+                "traceback": traceback_snippet,
+            })
+
+        # Apres la boucle
+        if result_payload["status"] != "patched":
+            if not result_payload["status"] or result_payload["status"] == "unknown":
+                result_payload["status"] = (
+                    last_result.status if last_result else "max_iter_no_result"
+                )
+            # Persistance echec
+            try:
+                persisted = self._persist_v32_failure(
+                    feature_name=feature_name,
+                    user_story=user_story,
+                    decomposition=decomposition,
+                    last_attempt=previous_attempts[-1] if previous_attempts else None,
+                    medic_result=last_result,
+                    all_attempts=previous_attempts,
+                )
+                result_payload["persisted_path"] = persisted
+            except Exception as e:
+                logger.warning(f"[V32 FEATURE] Persist echec echoue: {e}")
+
+        result_payload["duration_s"] = round(_time.time() - t0, 2)
+        return result_payload
+
+    @staticmethod
+    def _infer_feature_name(signature: str) -> str:
+        """Extrait le nom de fonction depuis une signature Python."""
+        import re as _re
+        m = _re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(", signature or "")
+        return m.group(1) if m else "unnamed_feature"
+
+    @staticmethod
+    def _v32_inject_previous_attempts(
+        rag_context: str,
+        previous_attempts: List[Dict[str, Any]],
+    ) -> str:
+        """Injecte les tentatives precedentes en trauma transmission."""
+        if not previous_attempts:
+            return rag_context
+        parts = [rag_context] if rag_context else []
+        parts.append("")
+        parts.append("---PREVIOUS_ATTEMPTS---")
+        for i, att in enumerate(previous_attempts[-2:]):  # max 2 dernieres
+            parts.append(f"## Tentative {i+1} (echec : {att.get('failure_reason')})")
+            tb = (att.get("traceback") or "")[:1500]
+            if tb:
+                parts.append(f"### Traceback / output :\n{tb}")
+        parts.append("---/PREVIOUS_ATTEMPTS---")
+        parts.append(
+            "\nCorrige les erreurs ci-dessus dans ta nouvelle version. "
+            "Garde la signature et les test_cases EXACTS de la SPEC."
+        )
+        return "\n".join(parts)
+
+    def _persist_v32_creation(
+        self,
+        feature_name: str,
+        user_story: str,
+        decomposition: Dict[str, Any],
+        architect_output: str,
+        medic_result: Any,
+        iteration: int,
+    ) -> str:
+        """V32 — Persiste une feature creee avec succes pour fine-tuning futur."""
+        import os as _os
+        import time as _time
+        import json as _json
+
+        ts = _time.strftime("%Y-%m-%d_%H-%M-%S")
+        proj_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        out_dir = _os.path.join(
+            proj_root, "memory", "auto_patches", "created",
+            f"{ts}_{feature_name}",
+        )
+        _os.makedirs(out_dir, exist_ok=True)
+
+        with open(_os.path.join(out_dir, "user_story.txt"), "w", encoding="utf-8") as f:
+            f.write(user_story)
+        with open(_os.path.join(out_dir, "nurse_decomposition.json"), "w", encoding="utf-8") as f:
+            _json.dump(decomposition, f, ensure_ascii=False, indent=2)
+        with open(_os.path.join(out_dir, "architect_output.json"), "w", encoding="utf-8") as f:
+            f.write(architect_output)
+        with open(_os.path.join(out_dir, "meta.json"), "w", encoding="utf-8") as f:
+            _json.dump({
+                "ts": ts,
+                "feature_name": feature_name,
+                "iteration": iteration,
+                "status": medic_result.status,
+                "tests_passed": medic_result.tests_passed,
+                "tests_failed": medic_result.tests_failed,
+                "test_strategy": medic_result.test_strategy,
+                "duration_s": medic_result.duration_s,
+                "files_created": medic_result.target_file.split(", ") if medic_result.target_file else [],
+            }, f, ensure_ascii=False, indent=2)
+        if medic_result.unified_diff:
+            with open(_os.path.join(out_dir, "feature.diff"), "w", encoding="utf-8") as f:
+                f.write(medic_result.unified_diff)
+        logger.info(f"[V32 FEATURE] Succes persiste: {out_dir}")
+        return out_dir
+
+    def _persist_v32_failure(
+        self,
+        feature_name: str,
+        user_story: str,
+        decomposition: Dict[str, Any],
+        last_attempt: Optional[Dict[str, Any]],
+        medic_result: Any,
+        all_attempts: List[Dict[str, Any]],
+    ) -> str:
+        """V32 — Persiste un echec pour analyse + corpus fine-tuning."""
+        import os as _os
+        import time as _time
+        import json as _json
+
+        ts = _time.strftime("%Y-%m-%d_%H-%M-%S")
+        proj_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        status = (medic_result.status if medic_result else "no_result")
+        out_dir = _os.path.join(
+            proj_root, "memory", "auto_patches", "failed_creations",
+            f"{ts}_{feature_name}_{status}",
+        )
+        _os.makedirs(out_dir, exist_ok=True)
+
+        with open(_os.path.join(out_dir, "user_story.txt"), "w", encoding="utf-8") as f:
+            f.write(user_story)
+        with open(_os.path.join(out_dir, "nurse_decomposition.json"), "w", encoding="utf-8") as f:
+            _json.dump(decomposition, f, ensure_ascii=False, indent=2)
+        with open(_os.path.join(out_dir, "all_attempts.json"), "w", encoding="utf-8") as f:
+            _json.dump(all_attempts, f, ensure_ascii=False, indent=2)
+        with open(_os.path.join(out_dir, "meta.json"), "w", encoding="utf-8") as f:
+            _json.dump({
+                "ts": ts,
+                "feature_name": feature_name,
+                "final_status": status,
+                "iterations": len(all_attempts),
+                "tests_passed": medic_result.tests_passed if medic_result else 0,
+                "tests_failed": medic_result.tests_failed if medic_result else 0,
+                "error_message": medic_result.error_message if medic_result else "",
+            }, f, ensure_ascii=False, indent=2)
+        logger.info(f"[V32 FEATURE] Echec persiste: {out_dir}")
+        return out_dir
+
     async def _execute_school_playground(self) -> dict:
         """Session Physics Playground scolaire — tissu neural ou fallback RuleBased."""
         try:

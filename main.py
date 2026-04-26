@@ -1774,6 +1774,61 @@ async def force_school_routine(payload: dict):
         schedule.get_current_slot_info = original_get_info
         schedule.get_slot_prompt = original_get_prompt
 
+
+@app.post("/api/force/feature-building", dependencies=[Depends(verify_token)])
+async def force_feature_building(payload: dict):
+    """V32 (2026-04-26) — Pipeline FEATURE_BUILDING : User Story -> code + tests.
+
+    Body JSON attendu :
+      {
+        "user_story": "<texte libre decrivant la fonction a creer>",
+        "max_iter": 3   // optionnel, default 3
+      }
+
+    Reponse : dict {status, feature_name, iterations, files_created,
+    tests_passed, tests_failed, persisted_path, duration_s}.
+
+    Pipeline (cf. autonomy_engine._execute_feature_building) :
+      Phase 0 : NURSE V32 decompose la User Story (TDD)
+      Phase 1 : V31 RAG cross-file sur le module_path
+      Phase 2 : Boucle ARCHITECT <-> MEDIC sandbox max_iter fois,
+                trauma transmission iter+1 sur echec.
+      Persistance : memory/auto_patches/created/{ts}_{feature}/
+                    ou failed_creations/{ts}_{feature}_{status}/
+    """
+    user_story = payload.get("user_story") or ""
+    max_iter = int(payload.get("max_iter", 3))
+    if not isinstance(user_story, str) or len(user_story.strip()) < 30:
+        raise HTTPException(
+            status_code=400,
+            detail="user_story manquante ou trop courte (min 30 caracteres)",
+        )
+    if max_iter < 1 or max_iter > 5:
+        raise HTTPException(
+            status_code=400,
+            detail="max_iter doit etre entre 1 et 5",
+        )
+
+    import time as _t
+    t0 = _t.time()
+    try:
+        result = await autonomy._execute_feature_building(
+            user_story=user_story,
+            max_iter=max_iter,
+        )
+        if isinstance(result, dict):
+            result["duration_s_total"] = round(_t.time() - t0, 2)
+            result["forced"] = True
+        return result
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": f"{type(exc).__name__}: {exc}",
+            "duration_s_total": round(_t.time() - t0, 2),
+            "forced": True,
+        }
+
+
 # ============================================================
 # API Stimulation — Interface externe des organes (Piste 7 bio-inspired)
 # Inspire de Cortical Labs CL1 "Cortical Cloud" API
