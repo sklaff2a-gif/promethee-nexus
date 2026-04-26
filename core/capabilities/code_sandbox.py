@@ -672,7 +672,7 @@ class CodeSandbox:
 _PATCH_IMPOSSIBLE_RE = re.compile(r"\[PATCH_IMPOSSIBLE:\s*(.+?)\]", re.DOTALL)
 
 # V30 — Actions valides pour l'Exosquelette JSON
-_V30_VALID_ACTIONS = frozenset({"insert_before", "insert_after", "replace_line"})
+_V30_VALID_ACTIONS = frozenset({"insert_before", "insert_after", "replace_line", "replace_line_all"})
 
 # V30 — Regex pour extraire le bloc JSON principal d'une sortie LLM
 _V30_JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -882,6 +882,41 @@ def parse_v30_patch(text: str) -> Dict[str, Any]:
             f"JSON parse mais n'est pas un objet (type={type(parsed).__name__})"
         )
 
+    # V30.13 (2026-04-26) — FORMAT MULTI-PATCHES.
+    # Le SURGEON peut produire un JSON avec une clef "patches" contenant
+    # un tableau de sous-patches. Permet une intervention multi-ablations
+    # en un seul appel (ex : replace_line sur 6 lignes identiques dans 6
+    # fonctions distinctes). Chaque sous-patch est valide individuellement
+    # avec la meme grammaire (anchor_line / action / new_code / anchor_function).
+    if isinstance(parsed.get("patches"), list):
+        sub_parsed: List[Dict[str, Any]] = []
+        for i, sub in enumerate(parsed["patches"]):
+            if not isinstance(sub, dict):
+                raise _V30InvalidJSONError(
+                    f"patches[{i}] n'est pas un objet (type={type(sub).__name__})"
+                )
+            try:
+                sub_parsed.append(_v30_validate_single(sub, index=i))
+            except (_V30InvalidJSONError, _V30InvalidActionError) as e:
+                raise _V30InvalidJSONError(
+                    f"patches[{i}] invalide : {e}"
+                ) from e
+        if not sub_parsed:
+            raise _V30InvalidJSONError("Champ 'patches' fourni mais vide")
+        return {
+            "is_multi": True,
+            "patches": sub_parsed,
+            "target_bug": str(parsed.get("target_bug", ""))[:300],
+        }
+
+    # Format single (V30 standard)
+    return _v30_validate_single(parsed)
+
+
+def _v30_validate_single(parsed: Dict[str, Any], index: int = 0) -> Dict[str, Any]:
+    """V30.13 — Valide un dict de patch single (extrait de parse_v30_patch
+    pour reutilisation dans le format multi-patches).
+    """
     # Validation des champs requis
     anchor_line = parsed.get("anchor_line")
     action = parsed.get("action")
@@ -1006,6 +1041,17 @@ def apply_v30_patch(
     if not isinstance(source, str):
         raise TypeError("source doit etre str")
 
+    # V30.13 (2026-04-26) — FORMAT MULTI-PATCHES.
+    # Si patch est en format multi (is_multi=True, patches=[...]), itere
+    # sequentiellement chaque sous-patch en accumulant les modifications.
+    # Permet d'appliquer N ablations en un seul appel (ex : 6 lignes
+    # @patch(...) a remplacer dans 6 fonctions test_xxx distinctes).
+    if patch.get("is_multi") and isinstance(patch.get("patches"), list):
+        current_source = source
+        for sub in patch["patches"]:
+            current_source = apply_v30_patch(current_source, sub, checklist=checklist)
+        return current_source
+
     anchor_function = patch.get("anchor_function")
     anchor_line = patch["anchor_line"]
     action = patch["action"]
@@ -1052,11 +1098,13 @@ def apply_v30_patch(
             anchor_line=anchor_line,
             anchor_function=anchor_function,
         )
-    if len(matches) > 1:
+    # V30.13 — replace_line_all accepte plusieurs matches (intentionnel)
+    if len(matches) > 1 and action != "replace_line_all":
         raise _V30AnchorAmbiguousError(
             f"anchor_line trouvee a {len(matches)} endroits dans la zone "
             f"(lignes {[m + 1 for m in matches]}). "
-            f"Ajoute 'anchor_function' pour restreindre.",
+            f"Ajoute 'anchor_function' pour restreindre, ou utilise "
+            f"action='replace_line_all' pour remplacer toutes les occurrences.",
             anchor_line=anchor_line,
             count=len(matches),
             line_numbers=[m + 1 for m in matches],
@@ -1110,6 +1158,19 @@ def apply_v30_patch(
             source_lines[:anchor_idx] + [indented]
             + source_lines[anchor_idx + 1:]
         )
+    elif action == "replace_line_all":
+        # V30.13 — remplace TOUTES les occurrences. Chaque match recoit
+        # son propre indent calcule sur sa ligne d'origine (les anchors
+        # peuvent avoir des indentations differentes meme avec la meme
+        # ligne semantique). On parcourt en arriere pour preserver les
+        # indices apres mutation.
+        new_lines = list(source_lines)
+        for idx in sorted(matches, reverse=True):
+            line_indent = _v30_compute_indent(new_lines[idx])
+            this_indented = _v30_indent_new_code(new_code, line_indent)
+            if this_indented and not this_indented.endswith("\n"):
+                this_indented += "\n"
+            new_lines = new_lines[:idx] + [this_indented] + new_lines[idx + 1:]
     else:
         # Defensif (parse_v30_patch a deja valide)
         raise _V30InvalidActionError(f"Action inconnue: {action}")
