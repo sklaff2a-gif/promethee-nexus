@@ -945,11 +945,25 @@ def _v30_compute_indent(line: str) -> str:
 def _v30_indent_new_code(new_code: str, indent_prefix: str) -> str:
     """V30 — Applique le prefixe d'indentation a chaque ligne NON VIDE de
     new_code. Les lignes vides restent vides (convention Python).
+
+    V30.8 (2026-04-26) — DEDENT PARASITAIRE.
+    Diagnostic 26/04 08h : SURGEON 14b a prefixe son new_code avec 8
+    espaces parasites (croyant peut-etre se placer dans le scope de la
+    methode). _v30_compute_indent ramassait l'indent de l'anchor (12) et
+    on additionnait : 12 + 8 = 20 espaces => IndentationError.
+    Fix : passer le new_code par textwrap.dedent AVANT d'appliquer
+    indent_prefix. Le LLM peut prefixer son code comme il veut (zero ou
+    n espaces communs), Python normalise.
+    L'indentation RELATIVE entre lignes (ex : if x: + return False indente
+    de 4 supplementaires) est preservee parce que dedent ne retire que
+    l'indent commun a toutes les lignes non vides.
     """
+    import textwrap
     if not new_code:
         return ""
+    dedented = textwrap.dedent(new_code)
     out = []
-    for line in new_code.splitlines():
+    for line in dedented.splitlines():
         if line.strip():
             out.append(indent_prefix + line)
         else:
