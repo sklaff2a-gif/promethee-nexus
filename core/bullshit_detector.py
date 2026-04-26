@@ -132,7 +132,11 @@ def d1_completeness(body: str, subject: str, slot: str,
     return (covered / len(items)) < coverage_threshold
 
 
-def d2_truncation(body: str, min_last_section_words: int = 100) -> bool:
+def d2_truncation(
+    body: str,
+    slot: Optional[str] = None,
+    min_last_section_words: int = 100,
+) -> bool:
     """D2 : flag si phrase finale interrompue OU derniere section (parmi 3+)
     fait < `min_last_section_words` mots.
 
@@ -141,6 +145,15 @@ def d2_truncation(body: str, min_last_section_words: int = 100) -> bool:
     Phase 14 clippe systematiquement x0.5 un livrable structurellement
     complet mais dont la derniere ligne ne porte pas de ponctuation
     terminale au sens strict.
+
+    V30.6 (2026-04-26) — OPTION C : ne pas penaliser la concision du
+    BULLETIN. Diagnostic : un BULLETIN narratif quotidien fait typiquement
+    200-400 mots avec 3-5 sections, sa derniere section (conclusion) est
+    courte par nature (~50 mots). La condition "derniere section < 100
+    mots" flag systematiquement BULLETIN -> grade x0.5 chronique.
+    Fix : si slot == "BULLETIN", garder uniquement la detection de phrase
+    finale interrompue (vrai signal de truncation LLM) et ignorer le
+    check de longueur de section.
     """
     lines = [l for l in body.rstrip().split("\n") if l.strip()]
     if not lines:
@@ -159,6 +172,9 @@ def d2_truncation(body: str, min_last_section_words: int = 100) -> bool:
     ))
     if not (ends_terminal or ends_code or ends_bullet or ends_note):
         return True
+    # V30.6 — BULLETIN exemple du check de longueur de section finale.
+    if slot == "BULLETIN":
+        return False
     # Squelette : derniere section trop courte
     sections = extract_sections(body)
     if len(sections) >= 3 and sections[-1][0] != "(full)":
@@ -253,7 +269,7 @@ def evaluate_deliverable(deliverable: str, subject: str, slot: str) -> dict:
     """
     body = strip_header(deliverable)
     d1 = d1_completeness(body, subject, slot)
-    d2 = d2_truncation(body)
+    d2 = d2_truncation(body, slot=slot)
     d3 = d3_target_drift(body, subject, slot)
     d4a = d4a_syntax_parse(body)
     n_flags = int(d1) + int(d2) + int(d3) + int(d4a)
