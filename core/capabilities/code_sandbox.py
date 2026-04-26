@@ -716,21 +716,20 @@ _PYTEST_DESELECT_TESTS = (
     #   - 20:07:28 : test_on_routine_complete_failure FAILED (autre test
     #                  de la meme classe) -> deselect classe entiere
     "tests/test_cardiac_engine.py::TestBusIntegration",
-    # TODO(Dette Environnementale): Tests flaky par pollution de MagicMock
-    # asynchrone. Passent en standalone. A chasser.
-    # V30.9b/V30.10 (2026-04-26) — Tests TestOrchestratorForceLocal passent en
-    # isolation (verifie 1 passed in 0.57s par test) mais echouent en suite
-    # complete avec :
-    #   ERROR Orchestrator: object MagicMock can't be used in 'await' expression
-    # Cause probable : un test anterieur du fichier (TestForceLocalFlag ou
-    # TestCloudBudget) installe un AsyncMock global sur bus.publish ou
-    # event_bus et ne le reset pas correctement. dispatch_task fait
-    # `await bus.publish(...)` -> erreur sur le MagicMock pollue.
-    # Le code source de Orchestrator.dispatch_task et BaseAgent._LOCAL_FORCE_MARKERS
-    # est SAIN (V30.9 + V30.9b). C'est l'environnement pytest qui est flaky.
-    # Quarantaine de la CLASSE ENTIERE pour eviter le whack-a-mole sur
-    # chaque test individuel (test_internal_context_sets_flag puis
-    # test_user_mission_no_flag, etc.).
+    # V30.14 (2026-04-26) — POLLUEUR PARTIEL ELIMINE.
+    # Le pollueur principal de TestOrchestratorForceLocal etait
+    # @patch('core.event_bus.bus.bus', new_callable=MagicMock) dans
+    # tests/auto/test_divine_infra.py (6 occurrences). Identifie via
+    # mock_leak_detector V30.12, corrige via V30.13 multi-ablation
+    # (replace_line_all) en une passe SURGEON 14b LOCAL.
+    # MAIS la bisection (a*+b*+c*+auto = 1682 verts en isolation) montre
+    # qu'un AUTRE pollueur existe dans la suite complete. La chasse
+    # complete demanderait 30+ min de bisection fine. Quarantaine
+    # maintenue jusqu'a la prochaine session "CI Hygiene".
+    # Pollueurs probables non identifies : tests qui patch.dict sur
+    # sys.modules (test_amygdala.py:71, test_inner_voice.py:485+) sans
+    # cleanup parfait, ou tests d* / e* / f* qui modifient le module
+    # event_bus globalement.
     "tests/test_cloud_routing.py::TestOrchestratorForceLocal",
 )
 
