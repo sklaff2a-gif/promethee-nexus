@@ -643,7 +643,21 @@ class BaseAgent:
     # Marqueurs de missions internes → toujours local (économie Cloud)
     # Ancien systeme : forcait TOUT en local. Remplace par le routage intelligent
     # dans _evaluate_complexity() qui decide par type de tache.
-    _LOCAL_FORCE_MARKERS = ()  # Vide — le routage intelligent decide
+    # V30.9 (2026-04-26) — POPULATION DES MARQUEURS INTERNES.
+    # Etait () vide depuis longtemps -> la couche 2 (orchestrator-level
+    # _force_local_next) ne s'activait jamais -> test_internal_context_sets_flag
+    # echouait. Source unique de verite pour les marqueurs qui doivent
+    # rester local : utilisee par dispatch_task ET par _evaluate_complexity.
+    _LOCAL_FORCE_MARKERS = (
+        "PROTOCOLE_AUTONOMIE",
+        "[MODE VEILLE]",
+        "CONSEIL multi-agents",
+        "YOUTUBE_VEILLE",
+        "DROPZONE_ANALYSIS",
+        "EVOLUTION_PIPELINE",
+        "MEMORY_CLEANUP",
+        "COUNCIL_RESEARCH",
+    )
 
     @staticmethod
     def _extract_model_size(model_name: str) -> int:
@@ -672,20 +686,10 @@ class BaseAgent:
         # "research" dans "Researcher" matchait cloud_triggers et l'agent
         # escaladait vers Gemini sur du flux interne.
         # Fix : marqueurs internes -> retour LOCAL avant toute heuristique.
-        # Empeche aussi la fuite Cloud sur les routines autonomes du
-        # systeme (PROTOCOLE_AUTONOMIE, COUNCIL_RESEARCH, etc.).
-        _INTERNAL_LOCAL_MARKERS = (
-            "PROTOCOLE_AUTONOMIE",
-            "[MODE VEILLE]",
-            "CONSEIL multi-agents",
-            "YOUTUBE_VEILLE",
-            "DROPZONE_ANALYSIS",
-            "EVOLUTION_PIPELINE",
-            "MEMORY_CLEANUP",
-            "COUNCIL_RESEARCH",
-        )
+        # Source unique : self._LOCAL_FORCE_MARKERS (partagee avec
+        # Orchestrator.dispatch_task pour la couche 2 _force_local_next).
         prompt_head = prompt[:500]
-        for _marker in _INTERNAL_LOCAL_MARKERS:
+        for _marker in self._LOCAL_FORCE_MARKERS:
             if _marker in prompt_head:
                 return False
 
