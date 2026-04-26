@@ -878,6 +878,18 @@ def parse_v30_patch(text: str) -> Dict[str, Any]:
             f"Champ 'action'={action!r} invalide. "
             f"Valeurs acceptees: {sorted(_V30_VALID_ACTIONS)}"
         )
+    # V30.7 (2026-04-26) — ELASTICITE NEW_CODE.
+    # Diagnostic : SURGEON 14b a produit new_code comme array de strings
+    # (une ligne par element) au lieu d'une string avec \n. Semantiquement
+    # equivalent, syntaxiquement rejete avant V30.7. Meme philosophie que
+    # V30.6 (agnosticisme quotes) : le script absorbe la variation
+    # stylistique du LLM.
+    if isinstance(new_code, list):
+        if not all(isinstance(item, str) for item in new_code):
+            raise _V30InvalidJSONError(
+                "Champ 'new_code' est une liste mais contient des elements non-string"
+            )
+        new_code = "\n".join(new_code)
     if new_code is None or not isinstance(new_code, str):
         raise _V30InvalidJSONError("Champ 'new_code' manquant ou non-string")
 
