@@ -713,8 +713,19 @@ class SchoolSchedule:
             try:
                 if slot in (SLOT_CODE_REVIEW, SLOT_WORKSHOP):
                     from core.factuality_verifier import compute_factuality_score
-                    subject = self.get_subject_for_slot(slot)
-                    target = subject.get("target_file", "")
+                    # V31.2 (2026-04-26) — priorite au target_file_override
+                    # passe explicitement (force-routine via /api/force/school-routine).
+                    # Fix du bug "thermometre cassé" : avant V31.2, on lisait
+                    # toujours subject = self.get_subject_for_slot(slot) qui
+                    # retournait le target en cache du SchoolSchedule
+                    # (Agents/scrub_nurse_agent.py par defaut). Resultat :
+                    # on calculait la factualite d'un audit cardiac contre
+                    # les fonctions de scrub_nurse -> ratio 0.11 par
+                    # construction, mesure indecidable.
+                    target = result.get("target_file_override", "") or ""
+                    if not target:
+                        subject = self.get_subject_for_slot(slot)
+                        target = subject.get("target_file", "")
                     if target:
                         factuality_score, factuality_total_refs, fact_details = \
                             compute_factuality_score(full_content, target, _PROJECT_ROOT)

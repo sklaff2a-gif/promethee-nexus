@@ -9643,12 +9643,24 @@ RAISON: <1 phrase courte>"""
                             exc_info=True,
                         )
 
+                    # V31.2 (2026-04-26) — propage le target_file actuel
+                    # vers record_deliverable pour que le FACTUALITY check
+                    # mesure contre la BONNE cible (pas le cache du
+                    # SchoolSchedule qui peut etre obsolete en force-routine).
+                    _v31_target_for_factuality = ""
+                    try:
+                        _v31_subject_rec = info.get("subject", {})
+                        if isinstance(_v31_subject_rec, dict):
+                            _v31_target_for_factuality = _v31_subject_rec.get("target_file", "") or ""
+                    except Exception:
+                        pass
                     schedule.record_deliverable(slot, intent, {
                         "grade": eval_result["grade"],
                         "feedback": eval_result["feedback"],
                         "challenge": eval_result.get("challenge", ""),
                         "full_content": deliverable,
                         "result_preview": deliverable[:200],
+                        "target_file_override": _v31_target_for_factuality,
                     })
                     grade = eval_result["grade"]
                     # Injecter la note dans la response pour que _score_result_quality la voie
