@@ -488,6 +488,22 @@ class CodeSandbox:
                 duration_s=time.time() - t0,
             )
 
+        # V32 (2026-04-26) — DETECTION FORMAT MULTI-FICHIERS.
+        # Si le patch est au format {"files": [...]}, deleguer a la
+        # methode dediee (orchestre N create_file/append_block en
+        # transactionnel : si un seul fichier echoue, tous sont
+        # rollbacked).
+        if patch.get("is_multi_files"):
+            return self.apply_multi_files_in_sandbox(
+                surgeon_output=surgeon_output,
+                parsed_patch=patch,
+                run_full_tests=run_full_tests,
+                project_root=project_root,
+                regression_timeout_s=regression_timeout_s,
+                iteration=iteration,
+                t0=t0,
+            )
+
         # 3. Lecture source
         if not target_path.exists():
             return PatchResult(
@@ -658,6 +674,233 @@ class CodeSandbox:
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
+    def apply_multi_files_in_sandbox(
+        self,
+        surgeon_output: str,
+        parsed_patch: Dict[str, Any],
+        run_full_tests: bool = True,
+        project_root: Optional[str] = None,
+        regression_timeout_s: int = DEFAULT_REGRESSION_TIMEOUT_S,
+        iteration: int = 0,
+        t0: Optional[float] = None,
+    ) -> "PatchResult":
+        """V32 (2026-04-26) — Applique un patch multi-fichiers en sandbox.
+
+        Format JSON attendu (deja parse par parse_v30_patch) :
+            {"is_multi_files": True,
+             "files": [
+                {"target_file": "core/utils/x.py",
+                 "action": "create_file" | "append_block" | <V30 action>,
+                 "new_code": "...",
+                 "anchor_line": "..." (si action V30)},
+                ...
+             ]}
+
+        Pipeline :
+          1. Build sandbox layout standard (copie complete du projet)
+          2. Pour chaque entry :
+             - create_file : apply_v32_create_file (echoue si existe)
+             - append_block : apply_v32_append_block (echoue si manquant)
+             - action V30 : apply_v30_patch sur le source existant
+          3. py_compile sur chaque fichier touche
+          4. pytest regression complete (catch les regressions latentes)
+
+        Atomicite : la sandbox est un tempdir isole, donc echec d'un
+        fichier laisse le projet reel intact. Si un fichier echoue, on
+        retourne PatchResult avec error sans toucher au projet.
+        """
+        if t0 is None:
+            t0 = time.time()
+        if project_root is None:
+            project_root = str(Path(__file__).resolve().parents[2])
+        project_root_p = Path(project_root)
+
+        files = parsed_patch.get("files", [])
+        if not files:
+            return PatchResult(
+                status="invalid_json",
+                surgeon_output=surgeon_output,
+                target_file="<multi>",
+                iteration=iteration,
+                error_message="V32 multi-files : tableau 'files' vide",
+                duration_s=time.time() - t0,
+            )
+
+        # 1. Construire sandbox layout (copie complete du projet)
+        tmpdir = tempfile.mkdtemp(prefix=_TEMPDIR_MEDIC_PREFIX)
+        try:
+            try:
+                # On utilise un fichier "marqueur" pour le layout helper :
+                # _build_sandbox_layout veut UN target_file. On lui passe
+                # le PREMIER de la liste comme proxy ; les autres seront
+                # crees ensuite par apply_v32_create_file.
+                first_target = files[0]["target_file"]
+                # Pour create_file le fichier n'existe PAS encore : on
+                # passe une chaine vide comme patched_source (le helper
+                # gere ce cas en creant les parents si besoin).
+                first_action = files[0]["action"]
+                _proxy_source = ""
+                if first_action in _V30_VALID_ACTIONS:
+                    # Action V30 : on lit le source existant
+                    _proxy_path = project_root_p / first_target
+                    if _proxy_path.exists():
+                        _proxy_source = _proxy_path.read_text(encoding="utf-8")
+                _build_sandbox_layout(
+                    project_root_p, Path(tmpdir), first_target, _proxy_source,
+                )
+            except Exception as exc:
+                return PatchResult(
+                    status="internal_error",
+                    surgeon_output=surgeon_output,
+                    target_file=first_target if files else "<multi>",
+                    iteration=iteration,
+                    error_message=f"V32 layout sandbox: {type(exc).__name__}: {exc}",
+                    duration_s=time.time() - t0,
+                )
+
+            # 2. Appliquer chaque fichier dans la sandbox
+            applied_files: List[str] = []
+            for i, entry in enumerate(files):
+                tgt = entry["target_file"]
+                act = entry["action"]
+                code = entry["new_code"]
+                try:
+                    if act == "create_file":
+                        apply_v32_create_file(tgt, code, str(tmpdir))
+                    elif act == "append_block":
+                        apply_v32_append_block(tgt, code, str(tmpdir))
+                    elif act in _V30_VALID_ACTIONS:
+                        # Action V30 : lire le source existant en sandbox,
+                        # apply_v30_patch, ecrire.
+                        sandbox_path = Path(tmpdir) / tgt
+                        if not sandbox_path.exists():
+                            return PatchResult(
+                                status="internal_error",
+                                surgeon_output=surgeon_output,
+                                target_file=tgt,
+                                iteration=iteration,
+                                error_message=(
+                                    f"V32 files[{i}] action={act} mais "
+                                    f"target_file={tgt} introuvable en sandbox"
+                                ),
+                                duration_s=time.time() - t0,
+                            )
+                        sub_source = sandbox_path.read_text(encoding="utf-8")
+                        sub_patched = apply_v30_patch(sub_source, entry)
+                        sandbox_path.write_text(sub_patched, encoding="utf-8")
+                    else:
+                        return PatchResult(
+                            status="invalid_action",
+                            surgeon_output=surgeon_output,
+                            target_file=tgt,
+                            iteration=iteration,
+                            error_message=f"V32 files[{i}] action={act!r} inconnue",
+                            duration_s=time.time() - t0,
+                        )
+                    applied_files.append(tgt)
+                except _V32FileExistsError as exc:
+                    return PatchResult(
+                        status="file_exists",
+                        surgeon_output=surgeon_output,
+                        target_file=tgt,
+                        iteration=iteration,
+                        error_message=str(exc),
+                        duration_s=time.time() - t0,
+                    )
+                except FileNotFoundError as exc:
+                    return PatchResult(
+                        status="file_not_found",
+                        surgeon_output=surgeon_output,
+                        target_file=tgt,
+                        iteration=iteration,
+                        error_message=str(exc),
+                        duration_s=time.time() - t0,
+                    )
+                except Exception as exc:
+                    return PatchResult(
+                        status="internal_error",
+                        surgeon_output=surgeon_output,
+                        target_file=tgt,
+                        iteration=iteration,
+                        error_message=(
+                            f"V32 files[{i}] {act} sur {tgt} echoue: "
+                            f"{type(exc).__name__}: {exc}"
+                        ),
+                        duration_s=time.time() - t0,
+                    )
+
+            # 3. py_compile sur chaque fichier touche
+            for tgt in applied_files:
+                if not tgt.endswith(".py"):
+                    continue
+                full = Path(tmpdir) / tgt
+                if not full.exists():
+                    continue
+                try:
+                    proc = subprocess.run(
+                        [sys.executable, "-m", "py_compile", str(full)],
+                        capture_output=True, text=True,
+                        encoding="utf-8", errors="replace",
+                        timeout=DEFAULT_COMPILE_TIMEOUT_S,
+                    )
+                except subprocess.TimeoutExpired:
+                    return PatchResult(
+                        status="syntax_error",
+                        surgeon_output=surgeon_output,
+                        target_file=tgt,
+                        iteration=iteration,
+                        compile_stderr=f"py_compile timeout sur {tgt}",
+                        duration_s=time.time() - t0,
+                    )
+                if proc.returncode != 0:
+                    return PatchResult(
+                        status="syntax_error",
+                        surgeon_output=surgeon_output,
+                        target_file=tgt,
+                        iteration=iteration,
+                        compile_stderr=proc.stderr or proc.stdout,
+                        duration_s=time.time() - t0,
+                    )
+
+            # 4. pytest regression complete
+            if run_full_tests:
+                regression = _run_regression_tests(
+                    sandbox_cwd=tmpdir,
+                    project_root=project_root,
+                    timeout_s=regression_timeout_s,
+                )
+                if regression["timed_out"] or regression["tests_failed"] > 0:
+                    status = "test_failed"
+                elif regression["returncode"] != 0 and regression["tests_passed"] == 0:
+                    status = "test_failed"
+                else:
+                    status = "patched"
+            else:
+                regression = {
+                    "stdout": "[run_full_tests=False]",
+                    "tests_passed": 0,
+                    "tests_failed": 0,
+                    "test_failures": [],
+                    "strategy": "skipped",
+                }
+                status = "patched"
+
+            return PatchResult(
+                status=status,
+                surgeon_output=surgeon_output,
+                blocks_applied=len(applied_files),
+                target_file=", ".join(applied_files),
+                iteration=iteration,
+                test_output=regression["stdout"][-5000:] if regression.get("stdout") else "",
+                test_strategy=regression.get("strategy", ""),
+                tests_passed=regression.get("tests_passed", 0),
+                tests_failed=regression.get("tests_failed", 0),
+                test_failures=regression.get("test_failures", []),
+                duration_s=time.time() - t0,
+            )
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # V30 (2026-04-25) — Exosquelette Syntaxique JSON
@@ -673,6 +916,13 @@ _PATCH_IMPOSSIBLE_RE = re.compile(r"\[PATCH_IMPOSSIBLE:\s*(.+?)\]", re.DOTALL)
 
 # V30 — Actions valides pour l'Exosquelette JSON
 _V30_VALID_ACTIONS = frozenset({"insert_before", "insert_after", "replace_line", "replace_line_all"})
+
+# V32 (2026-04-26) — Actions de creation/expansion. Differencient le
+# patching (V30 chirurgical) de la creation (V32 architectural).
+_V32_VALID_ACTIONS = frozenset({"create_file", "append_block"})
+
+# Tous les actions valides (V30 + V32)
+_V30_V32_ALL_ACTIONS = _V30_VALID_ACTIONS | _V32_VALID_ACTIONS
 
 # V30 — Regex pour extraire le bloc JSON principal d'une sortie LLM
 _V30_JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -745,6 +995,22 @@ class _V30InvalidJSONError(ValueError):
 
 class _V30InvalidActionError(ValueError):
     """V30 — Champ 'action' absent ou hors {insert_before, insert_after, replace_line}."""
+
+
+class _V32FileExistsError(ValueError):
+    """V32 — action='create_file' refuse car le fichier existe deja.
+
+    Securite vitale : on ne permet jamais a un script de creation
+    d'ecraser silencieusement un fichier existant. Le caller doit
+    utiliser action='append_block' ou un patch V30 (Surgeon) a la place.
+    """
+    def __init__(self, message: str, target_file: str):
+        super().__init__(message)
+        self.target_file = target_file
+
+
+class _V32InvalidMultiFilesError(ValueError):
+    """V32 — Format {"files": [...]} malforme (champ manquant, type invalide)."""
 
 
 class _V30AnchorNotFoundError(ValueError):
@@ -884,6 +1150,42 @@ def parse_v30_patch(text: str) -> Dict[str, Any]:
             f"JSON parse mais n'est pas un objet (type={type(parsed).__name__})"
         )
 
+    # V32 (2026-04-26) — FORMAT MULTI-FICHIERS.
+    # L'Architecte (V32) produit du code from-scratch ET des tests
+    # associes en une seule reponse atomique. Le format :
+    #   {"files": [
+    #     {"target_file": "core/utils/x.py", "action": "create_file",
+    #      "new_code": "..."},
+    #     {"target_file": "tests/auto/test_x.py", "action": "create_file",
+    #      "new_code": "..."},
+    #   ]}
+    # Difference avec le format multi-patches V30.13 (clef "patches") :
+    # ici chaque entree cible un FICHIER different et utilise les actions
+    # V32 (create_file / append_block) en plus des actions V30.
+    # Sandbox MEDIC l'applique de maniere atomique : si un seul fichier
+    # echoue, on rollback les autres.
+    if isinstance(parsed.get("files"), list):
+        sub_files: List[Dict[str, Any]] = []
+        for i, entry in enumerate(parsed["files"]):
+            if not isinstance(entry, dict):
+                raise _V32InvalidMultiFilesError(
+                    f"files[{i}] n'est pas un objet (type={type(entry).__name__})"
+                )
+            try:
+                sub_files.append(_v32_validate_file_entry(entry, index=i))
+            except (_V30InvalidJSONError, _V30InvalidActionError, _V32InvalidMultiFilesError) as e:
+                raise _V32InvalidMultiFilesError(
+                    f"files[{i}] invalide : {e}"
+                ) from e
+        if not sub_files:
+            raise _V32InvalidMultiFilesError("Champ 'files' fourni mais vide")
+        return {
+            "is_multi_files": True,
+            "files": sub_files,
+            "target_bug": str(parsed.get("target_bug", ""))[:300],
+            "feature_name": str(parsed.get("feature_name", ""))[:120],
+        }
+
     # V30.13 (2026-04-26) — FORMAT MULTI-PATCHES.
     # Le SURGEON peut produire un JSON avec une clef "patches" contenant
     # un tableau de sous-patches. Permet une intervention multi-ablations
@@ -913,6 +1215,122 @@ def parse_v30_patch(text: str) -> Dict[str, Any]:
 
     # Format single (V30 standard)
     return _v30_validate_single(parsed)
+
+
+def _v32_validate_file_entry(entry: Dict[str, Any], index: int = 0) -> Dict[str, Any]:
+    """V32 — Valide une entree du tableau "files" du format multi-fichiers.
+
+    Champs obligatoires :
+      target_file : str (chemin relatif au project_root)
+      action      : str (parmi V30+V32 actions valides)
+      new_code    : str ou list[str] (le contenu)
+
+    Champs optionnels selon l'action :
+      anchor_line, anchor_function : pour insert_before/insert_after/replace_line
+      (ignores si action in {create_file, append_block})
+    """
+    target_file = entry.get("target_file")
+    action = entry.get("action")
+    new_code = entry.get("new_code")
+
+    if not target_file or not isinstance(target_file, str):
+        raise _V32InvalidMultiFilesError(
+            f"files[{index}].target_file manquant ou non-string"
+        )
+    if not action or action not in _V30_V32_ALL_ACTIONS:
+        raise _V30InvalidActionError(
+            f"files[{index}].action={action!r} invalide. "
+            f"Valeurs acceptees: {sorted(_V30_V32_ALL_ACTIONS)}"
+        )
+    # V30.7 elasticite : new_code peut etre liste ou string
+    if isinstance(new_code, list):
+        if not all(isinstance(item, str) for item in new_code):
+            raise _V30InvalidJSONError(
+                f"files[{index}].new_code liste contient non-string"
+            )
+        new_code = "\n".join(new_code)
+    if new_code is None or not isinstance(new_code, str):
+        raise _V30InvalidJSONError(
+            f"files[{index}].new_code manquant ou non-string"
+        )
+
+    out = {
+        "target_file": target_file,
+        "action": action,
+        "new_code": new_code,
+    }
+    # Champs optionnels pour actions V30 (anchor)
+    if action in _V30_VALID_ACTIONS:
+        anchor_line = entry.get("anchor_line")
+        if not anchor_line or not isinstance(anchor_line, str):
+            raise _V30InvalidJSONError(
+                f"files[{index}].anchor_line requis pour action={action}"
+            )
+        out["anchor_line"] = anchor_line
+        anchor_function = entry.get("anchor_function")
+        if anchor_function and isinstance(anchor_function, str):
+            out["anchor_function"] = anchor_function
+    return out
+
+
+def apply_v32_create_file(
+    target_file: str,
+    new_code: str,
+    project_root: str,
+) -> str:
+    """V32 — Cree un fichier neuf. Echoue si le fichier existe deja
+    (securite vitale : pas d'ecrasement silencieux).
+
+    Returns : chemin absolu du fichier cree.
+    Raises  : _V32FileExistsError si target_file existe deja.
+    """
+    import os as _os
+    full_path = _os.path.join(project_root, target_file)
+    if _os.path.exists(full_path):
+        raise _V32FileExistsError(
+            f"V32 create_file refuse : {target_file} existe deja. "
+            f"Utilise action='append_block' ou un patch V30 a la place.",
+            target_file=target_file,
+        )
+    # Cree les repertoires intermediaires si necessaire
+    parent = _os.path.dirname(full_path)
+    if parent and not _os.path.isdir(parent):
+        _os.makedirs(parent, exist_ok=True)
+    # Garantir une terminaison \n
+    content = new_code if new_code.endswith("\n") else new_code + "\n"
+    with open(full_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return full_path
+
+
+def apply_v32_append_block(
+    target_file: str,
+    new_code: str,
+    project_root: str,
+) -> str:
+    """V32 — Ajoute un bloc a la fin d'un fichier existant. Pas d'anchor
+    requis. Si le fichier n'existe pas, leve FileNotFoundError (le caller
+    doit utiliser create_file a la place).
+
+    Garantit une separation \n\n avant le bloc ajoute pour respecter
+    la convention Python (PEP 8 : 2 lignes blanches entre top-level
+    definitions).
+    """
+    import os as _os
+    full_path = _os.path.join(project_root, target_file)
+    if not _os.path.exists(full_path):
+        raise FileNotFoundError(
+            f"V32 append_block : {target_file} n'existe pas. "
+            f"Utilise action='create_file' a la place."
+        )
+    with open(full_path, "r", encoding="utf-8") as f:
+        existing = f.read()
+    # Separation propre
+    sep = "\n\n" if existing and not existing.endswith("\n\n") else ""
+    suffix = "\n" if not new_code.endswith("\n") else ""
+    with open(full_path, "w", encoding="utf-8") as f:
+        f.write(existing + sep + new_code + suffix)
+    return full_path
 
 
 def _v30_validate_single(parsed: Dict[str, Any], index: int = 0) -> Dict[str, Any]:

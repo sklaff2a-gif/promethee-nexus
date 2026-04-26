@@ -76,6 +76,53 @@ Aucune introduction, aucune conclusion, aucun ```json``` markdown.
 """
 
 
+# V32 (2026-04-26) — Mode TDD : la Nurse joue Product Owner.
+NURSE_V32_TDD_PROMPT = """[ROLE: V32 PRODUCT OWNER — Decomposition TDD d'une User Story]
+
+Tu reçois une User Story (entre ---USER_STORY---) et eventuellement des
+hints de doctrine projet. Tu produis UNIQUEMENT du JSON valide selon
+ce schema EXACT :
+
+{
+  "function_signature": "<signature Python complete avec types, ex: 'extract_markdown_blocks(text: str, language: str = \\"python\\") -> list[str]'>",
+  "module_path": "<chemin relatif du fichier a creer, ex: 'core/utils/text_parser.py'>",
+  "test_module_path": "<chemin relatif du test, ex: 'tests/auto/test_text_parser.py'>",
+  "test_cases": [
+    {"description": "happy path basique",
+     "input_repr": "<repr Python des arguments, ex: 'text=\\\"```python\\\\nx=1\\\\n```\\\", language=\\\"python\\\"'>",
+     "expected_repr": "<repr Python du resultat attendu, ex: '[\\\"x=1\\\"]'>"},
+    {"description": "edge case empty",
+     "input_repr": "...",
+     "expected_repr": "..."}
+  ],
+  "edge_cases": ["empty string", "nested fences", "missing closing fence"],
+  "doctrine_hints": ["return list not iterator", "preserve newlines inside blocks"],
+  "forbidden_imports": ["bs4", "lxml"],
+  "confidence": 0.85,
+  "fallback": false
+}
+
+REGLES TDD STRICTES :
+1. function_signature : Python valide avec annotations de types completes.
+2. test_cases : EXIGE au moins 3 entrees (happy path + 1 edge case + 1 cas
+   d'erreur). C'est le contrat que l'Architecte devra honorer.
+3. test_cases utilise input_repr / expected_repr en STRING (le code de
+   test fera eval() ou reproduira manuellement les valeurs).
+4. confidence : 0.0 si User Story ambigue, 1.0 si parfaitement specifiable.
+   Si confidence < 0.5, mets "fallback": true et "reason" pour expliquer.
+5. forbidden_imports : libs externes que tu refuses au LLM (typiquement
+   les libs lourdes quand stdlib suffit : re, ast, json, pathlib, etc.).
+6. Aucune narration. Sortie = JSON UNIQUEMENT entre accolades.
+7. Tout texte FRANCAIS strict avec accents (description, doctrine_hints).
+
+Si la User Story est trop ambigue ou trop large pour une decomposition
+claire :
+{"fallback": true, "reason": "<explication breve en francais>"}
+
+Aucune introduction, aucune conclusion, aucun ```json``` markdown.
+"""
+
+
 # Regex pour extraire le bloc JSON principal d'une sortie LLM (au cas
 # où le 9b inclut du markdown ou des wrappers malgré la consigne).
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -171,6 +218,66 @@ def _normalize_checklist(parsed: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _normalize_v32_decomposition(parsed: Dict[str, Any]) -> Dict[str, Any]:
+    """V32 — Normalise la decomposition TDD parsee.
+
+    Garantit le schema attendu meme si la Nurse retourne du JSON
+    incomplet. fallback=True si invariants critiques manquent.
+    """
+    if parsed.get("fallback") is True:
+        return {"fallback": True, "reason": parsed.get("reason", "")}
+
+    sig = parsed.get("function_signature", "")
+    module = parsed.get("module_path", "")
+    test_module = parsed.get("test_module_path", "")
+    test_cases = parsed.get("test_cases") or []
+
+    # Invariants critiques : signature + module + au moins 1 test_case
+    if not isinstance(sig, str) or not sig.strip():
+        return {"fallback": True, "reason": "function_signature manquante"}
+    if not isinstance(module, str) or not module.endswith(".py"):
+        return {"fallback": True, "reason": "module_path invalide"}
+    if not isinstance(test_cases, list) or len(test_cases) < 1:
+        return {"fallback": True, "reason": "test_cases vide"}
+
+    # Inferer test_module_path si manquant
+    if not isinstance(test_module, str) or not test_module:
+        # core/utils/text_parser.py -> tests/auto/test_text_parser.py
+        import os as _os
+        basename = _os.path.basename(module).replace(".py", "")
+        test_module = f"tests/auto/test_{basename}.py"
+
+    # Filtrer les test_cases malformes
+    clean_cases = []
+    for tc in test_cases[:8]:  # max 8
+        if not isinstance(tc, dict):
+            continue
+        desc = str(tc.get("description", ""))[:200]
+        ipr = tc.get("input_repr", "")
+        epr = tc.get("expected_repr", "")
+        if isinstance(ipr, str) and isinstance(epr, str) and ipr and epr:
+            clean_cases.append({
+                "description": desc or "test_case",
+                "input_repr": ipr[:500],
+                "expected_repr": epr[:500],
+            })
+
+    if len(clean_cases) < 1:
+        return {"fallback": True, "reason": "aucun test_case exploitable"}
+
+    return {
+        "function_signature": sig.strip()[:300],
+        "module_path": module,
+        "test_module_path": test_module,
+        "test_cases": clean_cases,
+        "edge_cases": [str(e)[:150] for e in (parsed.get("edge_cases") or [])[:5]],
+        "doctrine_hints": [str(d)[:200] for d in (parsed.get("doctrine_hints") or [])[:5]],
+        "forbidden_imports": [str(f)[:50] for f in (parsed.get("forbidden_imports") or [])[:8]],
+        "confidence": float(parsed.get("confidence", 0.5)) if isinstance(parsed.get("confidence"), (int, float)) else 0.5,
+        "fallback": False,
+    }
+
+
 class ScrubNurseAgent(BaseAgent):
     """V29 — Préparateur de checklist de préservation pour le SURGEON.
 
@@ -249,6 +356,70 @@ class ScrubNurseAgent(BaseAgent):
         # mais checklist "vide" — le SURGEON tournera sans contrainte
         # de préservation, ce qui est ok.
         return normalized
+
+    async def prepare_user_story_decomposition(
+        self, user_story: str, project_doctrine_hints: str = ""
+    ) -> Dict[str, Any]:
+        """V32 (2026-04-26) — Decompose une User Story en spec TDD.
+
+        Mode 'Product Owner' : la Nurse fixe la signature, les types,
+        les test_cases AVANT que l'Architecte ne code. L'Architecte
+        n'a plus qu'a resoudre l'equation imposee. Empeche le 14b de
+        tricher en ecrivant des tests triviaux qui passent toujours.
+
+        Returns dict format JSON strict :
+          function_signature : str (ex: 'foo(x: int) -> str')
+          module_path : str (ex: 'core/utils/text_parser.py')
+          test_module_path : str (ex: 'tests/auto/test_text_parser.py')
+          test_cases : list of {input, expected, description}
+          edge_cases : list of str (situations a tester)
+          doctrine_hints : list of str (contraintes projet)
+          forbidden_imports : list of str (libs a eviter)
+          confidence : float [0, 1]
+          fallback : bool (True si decomposition impossible)
+        """
+        if not user_story or len(user_story.strip()) < 20:
+            return {"fallback": True, "reason": "user_story trop courte"}
+
+        prompt = self._build_v32_decomp_prompt(user_story, project_doctrine_hints)
+        self.log_thought(
+            f"V32 NURSE decompose User Story ({len(user_story)}c)",
+            type="thought",
+        )
+
+        try:
+            raw_output = await self.generate_content(prompt)
+        except Exception as exc:
+            logger.warning(f"[V32] Nurse decomposition crash: {exc}")
+            return {"fallback": True, "reason": str(exc)[:200]}
+
+        parsed = _safe_parse_checklist(raw_output or "")
+        if parsed.get("fallback"):
+            return {"fallback": True, "reason": "JSON illisible"}
+        return _normalize_v32_decomposition(parsed)
+
+    def _build_v32_decomp_prompt(
+        self, user_story: str, project_doctrine_hints: str = ""
+    ) -> str:
+        parts = [
+            NURSE_V32_TDD_PROMPT,
+            "",
+            "---USER_STORY---",
+            user_story,
+            "---/USER_STORY---",
+        ]
+        if project_doctrine_hints:
+            parts.extend([
+                "",
+                "---DOCTRINE_PROJET---",
+                project_doctrine_hints[:2000],
+                "---/DOCTRINE_PROJET---",
+            ])
+        parts.extend([
+            "",
+            "Produis maintenant le JSON de decomposition TDD, RIEN d'autre.",
+        ])
+        return "\n".join(parts)
 
     async def process_task(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
         """V29 — Point d'entrée standard BaseAgent.
