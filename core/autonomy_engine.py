@@ -2685,8 +2685,65 @@ class AutonomyEngine:
             },
         }
 
+    def _apply_v34_motivational_override(self) -> None:
+        """V34 (2026-04-27) — Hook Motivational Router.
+
+        Verifie si une pulsion depasse son seuil critique. Si oui, set
+        self._forced_next_intent pour preempter le scoring normal.
+        Plug-and-Play : ne crash JAMAIS le caller (try/except total).
+
+        Garde-fous V34 (refractory period, variety penalty) sont
+        appliques cote core.motivational_router. Cette methode est
+        seulement le pont autonomy_engine <-> router.
+        """
+        # V34 — Bypass en mode test (le hook lit desires.drives runtime,
+        # qui n'est pas mocke dans la plupart des tests autonomy_engine
+        # et provoque des preempt indesirables). Les tests V34 dedies
+        # appellent directement core.motivational_router.check_drive_override.
+        import os as _os
+        if _os.environ.get("PROMETHEE_TEST_MODE") == "1":
+            return
+        # Ne jamais ecraser un intent deja force (ex: SELF_ANALYSIS, eureka)
+        if self._forced_next_intent:
+            return
+        try:
+            from core.motivational_router import check_drive_override
+            from core.desire_engine import desires
+
+            drives_state = getattr(desires, "drives", None) or {}
+            if not drives_state:
+                return
+
+            available_intents = [r["intent"] for r in self._get_routines()]
+            override = check_drive_override(
+                drives_state, available_intents=available_intents,
+            )
+            if override:
+                self._forced_next_intent = override.intent
+                logger.info(
+                    f"[V34 MOTIVATIONAL] Override -> {override.intent} "
+                    f"(drive={override.triggering_drive} "
+                    f"depriv={override.deprivation:.2f}/{override.threshold})"
+                )
+                try:
+                    print(
+                        f"   🧭 V34 MOTIVATIONAL: pulsion {override.triggering_drive} "
+                        f"({override.deprivation:.1f}) preempte -> {override.intent}"
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug(f"[V34 MOTIVATIONAL] router crash silencieux: {e}")
+
     async def _execute_scored_routine(self, health: dict, budget_status: str = "full"):
         """Scoring → dispatch → record → persist."""
+        # V34 (2026-04-27) — MOTIVATIONAL OVERRIDE (Plug-and-Play).
+        # Si une pulsion depasse son seuil critique, pre-empter le cron
+        # en setting _forced_next_intent. Le flow existant (loop breaker
+        # ci-dessous) prendra le relais. Pour DESACTIVER : commenter
+        # la ligne suivante.
+        self._apply_v34_motivational_override()
+
         # Loop breaker : si un intent est force, bypass le scoring
         if self._forced_next_intent:
             forced = self._forced_next_intent
