@@ -938,6 +938,9 @@ class AutonomyEngine:
         self._temp_blacklist: set = set()
         # Loop breaker : intent force par le loop_breaker (bypass scoring)
         self._forced_next_intent: str = ""
+        # V34.1 : drive a notifier (mark_drive_satisfied) apres execution reussie
+        # de la routine forcee par le motivational_router. Reset apres usage.
+        self._v34_pending_drive: str = ""
         # Anti-gaspillage : compteur d'échecs consécutifs par intent FORCED
         # {intent: count} — après FORCED_FAILURE_THRESHOLD échecs, intent blacklisté pour la session
         self._forced_failure_counts: dict = persisted.get("forced_failure_counts", {})
@@ -2685,6 +2688,42 @@ class AutonomyEngine:
             },
         }
 
+    def _get_cap_blocked_intents(self) -> set:
+        """V34.2 (2026-04-27) — Retourne les intents dont le cap quotidien
+        est deja atteint, pour que le motivational_router puisse glisser
+        sur un candidat de fallback au lieu de frapper une porte verrouillee.
+
+        Couvre les caps connus :
+          - AUDIT_STRUCTURE : 3/jour (8 si STABILITE > 80)
+          - SELF_ANALYSIS   : 2/jour
+        """
+        blocked: set = set()
+        # AUDIT_STRUCTURE
+        try:
+            audit_today = sum(
+                1 for h in self.routine_history if h.get("intent") == "AUDIT_STRUCTURE"
+            )
+            try:
+                from core.desire_engine import desires
+                stab_depriv = desires.drives["STABILITE"].deprivation
+            except Exception:
+                stab_depriv = 0.0
+            audit_cap = self._compute_audit_structure_cap(stab_depriv)
+            if audit_today >= audit_cap:
+                blocked.add("AUDIT_STRUCTURE")
+        except Exception:
+            pass
+        # SELF_ANALYSIS
+        try:
+            analysis_today = sum(
+                1 for h in self.routine_history if h.get("intent") == "SELF_ANALYSIS"
+            )
+            if analysis_today >= 2:
+                blocked.add("SELF_ANALYSIS")
+        except Exception:
+            pass
+        return blocked
+
     def _apply_v34_motivational_override(self) -> None:
         """V34 (2026-04-27) — Hook Motivational Router.
 
@@ -2715,11 +2754,19 @@ class AutonomyEngine:
                 return
 
             available_intents = [r["intent"] for r in self._get_routines()]
+            # V34.2 : exclure les intents dont le cap quotidien est atteint,
+            # pour que le router glisse sur le candidat n+1 du mapping
+            # (ex: AUDIT_STRUCTURE bloque -> CODE_REVIEW).
+            cap_blocked = self._get_cap_blocked_intents()
+            if cap_blocked:
+                available_intents = [i for i in available_intents if i not in cap_blocked]
             override = check_drive_override(
                 drives_state, available_intents=available_intents,
             )
             if override:
                 self._forced_next_intent = override.intent
+                # V34.1 : memoriser le drive pour rappel post-execution
+                self._v34_pending_drive = override.triggering_drive
                 logger.info(
                     f"[V34 MOTIVATIONAL] Override -> {override.intent} "
                     f"(drive={override.triggering_drive} "
@@ -4149,6 +4196,20 @@ class AutonomyEngine:
             self.error_streak = 0
             # Anti-gaspillage : reset compteur échecs FORCED sur succès
             self._forced_failure_counts.pop(intent, None)
+            # V34.1 : si la routine forcee provient d'un override motivationnel,
+            # notifier le router que la pulsion est assouvie (active refractory 60min).
+            if self._v34_pending_drive:
+                try:
+                    from core.motivational_router import mark_drive_satisfied
+                    mark_drive_satisfied(self._v34_pending_drive)
+                    logger.info(
+                        f"[V34 MOTIVATIONAL] drive {self._v34_pending_drive} "
+                        f"marque assouvi via {intent} (succes)"
+                    )
+                except Exception as _e:
+                    logger.debug(f"[V34 MOTIVATIONAL] mark_satisfied crash silencieux: {_e}")
+                finally:
+                    self._v34_pending_drive = ""
         else:
             self.error_streak += 1
             # Anti-gaspillage : incrémenter compteur échecs FORCED
@@ -4156,6 +4217,10 @@ class AutonomyEngine:
             fail_count = self._forced_failure_counts[intent]
             if fail_count >= FORCED_FAILURE_THRESHOLD:
                 logger.warning(f"[AUTONOMY] Intent FORCED '{intent}' blacklisté — {fail_count} échecs consécutifs, ne sera plus forcé cette session.")
+            # V34.1 : echec -> ne pas activer le refractory, mais reset le pending
+            # pour eviter qu'un succes ulterieur sur autre intent crediter ce drive.
+            if self._v34_pending_drive:
+                self._v34_pending_drive = ""
         self.daily_count += 1
         self.total_routines_executed += 1
         self.daily_budget_used += routine_cost
