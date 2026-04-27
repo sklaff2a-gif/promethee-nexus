@@ -26,6 +26,30 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MENTOR_STATE_FILE = os.path.join(_PROJECT_ROOT, "memory", "mentor_state.json")
 NIGHTLY_BUDGET = 5  # Max 5 appels Claude par nuit
 
+# V32.4 (2026-04-27) — Source unique des mots-cles d'hallucination.
+# Avant V32.4 : _inject_into_tissue utilisait 5 mots-cles, mais la condition
+# d'ecriture journal Claude n'en utilisait que 2 ("hallucin", "n'existe pas").
+# Asymetrie : le tissu drainait sur "fabrique"/"invente"/"imaginaire" mais
+# le journal Claude restait silencieux. Resultat : reveil aveugle sur les
+# notes [5, 9[ avec hallucination detectee tissu mais pas journalisee.
+# Fix : meme liste partagee entre les deux mecanismes.
+_HALLUCINATION_KEYWORDS = (
+    "n'existe pas",
+    "hallucin",
+    "fabrique",
+    "invente",
+    "imaginaire",
+)
+
+
+def _detect_hallucination(response_text: str) -> bool:
+    """V32.4 — detection unifiee. True si l'un des mots-cles
+    apparait dans la reponse mentor (case insensitive)."""
+    if not response_text:
+        return False
+    lower = response_text.lower()
+    return any(kw in lower for kw in _HALLUCINATION_KEYWORDS)
+
 
 class Mentor:
     """Claude comme mentor nocturne — singleton."""
@@ -145,9 +169,18 @@ class Mentor:
         self._inject_into_tissue(response, local_grade)
 
         # Journal de Claude : ecrire ma reflexion sur ce cours
+        # V32.4 (2026-04-27) — Couverture elargie + liste partagee.
+        # Avant : seuls les extremes (mots-cles "hallucin"/"n'existe pas" ou
+        # grade >= 9) etaient journalises. La zone [5, 9[ restait silencieuse
+        # MEME si le tissu detectait une hallucination (asymetrie corrigee).
+        # Maintenant :
+        #   - hallucination detectee (5 mots-cles) -> "critique"
+        #   - grade >= 9                            -> "satisfaction"
+        #   - grade < 6 (sans mot-cle hallucination) -> "moyen" (note basse
+        #     legitime, pas hallucinee mais quand meme notable au reveil)
         try:
             from core.claude_journal import write_entry
-            hallucinated = "hallucin" in response.lower() or "n'existe pas" in response.lower()
+            hallucinated = _detect_hallucination(response)
             if hallucinated:
                 write_entry(
                     f"Cours {slot} : encore des hallucinations. Note locale {local_grade}/10 "
@@ -160,6 +193,12 @@ class Mentor:
                     f"Cours {slot} : excellent travail ({local_grade}/10). "
                     f"Sujet : {subject[:80]}. Promethee progresse.",
                     category="satisfaction"
+                )
+            elif local_grade < 6:
+                write_entry(
+                    f"Cours {slot} : note basse ({local_grade}/10) sans hallucination "
+                    f"detectee. Sujet : {subject[:80]}. A surveiller.",
+                    category="moyen"
                 )
         except Exception:
             pass
@@ -370,7 +409,8 @@ class Mentor:
             feedback_lower = feedback.lower()
 
             # Hallucination detectee → drainer cognition, baisser confiance
-            if any(kw in feedback_lower for kw in ["n'existe pas", "hallucin", "fabrique", "invente", "imaginaire"]):
+            # V32.4 : utilise la liste partagee _HALLUCINATION_KEYWORDS
+            if _detect_hallucination(feedback):
                 cs["cognition_level"] = max(0.1, cs.get("cognition_level", 0.5) - 0.15)
                 cs["stability"] = max(0.1, cs.get("stability", 0.5) - 0.1)
                 logger.info("MENTOR: Injection tissu — drain cognition (hallucination detectee)")
