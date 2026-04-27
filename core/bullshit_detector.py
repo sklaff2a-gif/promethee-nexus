@@ -45,6 +45,12 @@ CODE_BLOCK_RE = re.compile(r"```(?:python)?\s*\n(.*?)\n```", re.DOTALL)
 # Slots a sujets narratifs (pas d'enumeration explicite dans le sujet)
 D1_SKIP_SLOTS = frozenset({"BULLETIN", "CREATION"})
 
+# V30.6 / V30.6.1 — Slots a structure narrative courte (conclusion concise
+# par nature : ~50 mots). Le test 2 de d2_truncation (derniere section
+# < 100 mots) est ignore pour ces slots. Le test 1 (phrase finale
+# interrompue) reste actif pour TOUS les slots.
+_NARRATIVE_LENGTH_SKIP = frozenset({"BULLETIN", "CREATION"})
+
 
 def strip_header(text: str) -> str:
     """Retire le preambule d'evaluation (# Livrable, Note, Feedback, Challenge).
@@ -154,6 +160,15 @@ def d2_truncation(
     Fix : si slot == "BULLETIN", garder uniquement la detection de phrase
     finale interrompue (vrai signal de truncation LLM) et ignorer le
     check de longueur de section.
+
+    V30.6.1 (2026-04-27) — AMNISTIE ETENDUE A CREATION.
+    Diagnostic ce matin : la pulsion CREATION a explose (+23.68 en 24h)
+    et la zone tissulaire creativity s'est effondree (-43%). Cause :
+    SCHOOL_CREATION du 27/04 04:25 a ete clip x0.5 (3.75/10) pour
+    "truncation (phrase/section finale coupee)" — meme syndrome que
+    BULLETIN. Les livrables narratifs courts (poemes, dialogues, lettres
+    fictives) ont la meme structure : 200-400 mots, conclusion concise.
+    Extension : ajouter CREATION au set _NARRATIVE_LENGTH_SKIP.
     """
     lines = [l for l in body.rstrip().split("\n") if l.strip()]
     if not lines:
@@ -172,8 +187,9 @@ def d2_truncation(
     ))
     if not (ends_terminal or ends_code or ends_bullet or ends_note):
         return True
-    # V30.6 — BULLETIN exemple du check de longueur de section finale.
-    if slot == "BULLETIN":
+    # V30.6 / V30.6.1 — Slots narratifs courts exemptes du check
+    # de longueur de la derniere section (BULLETIN, CREATION).
+    if slot in _NARRATIVE_LENGTH_SKIP:
         return False
     # Squelette : derniere section trop courte
     sections = extract_sections(body)
