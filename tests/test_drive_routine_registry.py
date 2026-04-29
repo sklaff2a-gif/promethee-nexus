@@ -683,15 +683,18 @@ class TestGetRoutinesTemperatureStochastic:
         """Test statistique : sur 300 tirages top_k=1, un poids 2x plus eleve
         doit etre choisi ~2x plus souvent.
 
-        Drive CONNEXION a :
-          - COUNCIL_DEBATE      : 0.9
-          - SOLILOQUE_INTERNE   : 0.8
-          - STEFAN_CONFRONTATION: 0.4
-        P(COUNCIL) ≈ 0.9/2.1 ≈ 0.43
-        P(STEFAN)  ≈ 0.4/2.1 ≈ 0.19
+        V34.6 : drive CONNEXION refondu — COFFEE_BREAK (Alfred) prime.
+          - COFFEE_BREAK         : 0.9
+          - COUNCIL_DEBATE       : 0.6
+          - SOLILOQUE_INTERNE    : 0.5
+          - STEFAN_CONFRONTATION : 0.4
+        P(COFFEE) ≈ 0.9/2.4 ≈ 0.375
+        P(STEFAN) ≈ 0.4/2.4 ≈ 0.167
         Ratio attendu ≈ 2.25 — robuste sur 300 tirages.
+        Test symbolique de la doctrine CONNEXION : Alfred (alterite reelle)
+        domine Stefan (rival) en frequence d'apparition.
         """
-        council_wins = 0
+        coffee_wins = 0
         stefan_wins = 0
         for seed in range(300):
             rng = random.Random(seed)
@@ -700,15 +703,15 @@ class TestGetRoutinesTemperatureStochastic:
                 temperature=1.0, top_k=1, rng=rng,
             )
             first = result[0][0]
-            if first == "COUNCIL_DEBATE":
-                council_wins += 1
+            if first == "COFFEE_BREAK":
+                coffee_wins += 1
             elif first == "STEFAN_CONFRONTATION":
                 stefan_wins += 1
-        assert council_wins > stefan_wins
+        assert coffee_wins > stefan_wins
         # Ratio attendu ≈ 2.25, on accepte marge pour variance d'echantillon
-        assert council_wins >= stefan_wins * 1.5, (
-            f"COUNCIL={council_wins}, STEFAN={stefan_wins}, "
-            f"ratio={council_wins/max(1,stefan_wins):.2f}"
+        assert coffee_wins >= stefan_wins * 1.5, (
+            f"COFFEE_BREAK={coffee_wins}, STEFAN={stefan_wins}, "
+            f"ratio={coffee_wins/max(1,stefan_wins):.2f}"
         )
 
     def test_zero_total_weight_returns_empty(self):

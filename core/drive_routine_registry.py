@@ -51,12 +51,22 @@ FLOOR_OF_THE_FLOOR: float       = 0.05     # Plancher absolu (souvenir lointain)
 # - COURS_SOUTIEN dans COMPREHENSION (0.8) — reflex pedagogique
 # - REFACTORING_AUDIT dans MAITRISE (0.9) — victoire de la Phase B
 # - CI_PIPELINE_RUN dans STABILITE (0.5) — overlap naturel code/stabilite
+#
+# V34.6 (2026-04-29) — Reconciliation SSOT post-V32/V34 :
+# - CREATION : FEATURE_BUILDING 0.85 (V32 baptisee 26/04), CREATIVE_PLAY 0.5
+# - CURIOSITE : CURIOSITY_DEEP_DIVE 0.6 (entre DROPZONE_SCAN et SELF_INSPECT)
+# - MAITRISE : AUDIT_STRUCTURE 0.7, CODE_REVIEW 0.6
+# - STABILITE : SECURITY_AUDIT 0.7
+# - CONNEXION refondue : COFFEE_BREAK (Alfred) 0.9 promu en tete — l'alterite
+#   reelle prime sur la synchronisation interne. COUNCIL_DEBATE retrograde
+#   a 0.6 (pair interne), SOLILOQUE_INTERNE a 0.5, STEFAN_CONFRONTATION 0.4.
 
 DRIVE_GENOME: Dict[str, Dict[str, float]] = {
     "CURIOSITE": {
         "VEILLE_SILENCIEUSE":   0.9,
         "DROPZONE_SCAN":        0.7,
         "ROADMAP_RESEARCH":     0.7,
+        "CURIOSITY_DEEP_DIVE":  0.6,
         "SELF_INSPECT":         0.6,
         "GRIMOIRE_INVOKE":      0.5,
     },
@@ -65,13 +75,16 @@ DRIVE_GENOME: Dict[str, Dict[str, float]] = {
         "CI_PIPELINE_RUN":      0.8,
         "AUDIT_SURVIE":         0.8,
         "SECURITY_AUDIT":       0.7,
+        "AUDIT_STRUCTURE":      0.7,
         "SELF_ANALYSIS":        0.7,
+        "CODE_REVIEW":          0.6,
         "PARAM_EXPERIMENT":     0.5,
     },
     "STABILITE": {
         "MEMORY_CONSOLIDATION": 0.9,
         "AUDIT_SURVIE":         0.9,
         "AUDIT_STRUCTURE":      0.8,
+        "SECURITY_AUDIT":       0.7,
         "MEMORY_CLEANUP":       0.6,
         "CI_PIPELINE_RUN":      0.5,
     },
@@ -83,8 +96,9 @@ DRIVE_GENOME: Dict[str, Dict[str, float]] = {
         "SELF_ANALYSIS":        0.6,
     },
     "CONNEXION": {
-        "COUNCIL_DEBATE":       0.9,
-        "SOLILOQUE_INTERNE":    0.8,
+        "COFFEE_BREAK":         0.9,
+        "COUNCIL_DEBATE":       0.6,
+        "SOLILOQUE_INTERNE":    0.5,
         "STEFAN_CONFRONTATION": 0.4,
     },
     "CROISSANCE": {
@@ -95,7 +109,9 @@ DRIVE_GENOME: Dict[str, Dict[str, float]] = {
     },
     "CREATION": {
         "EXPANSION_CODE":       0.9,
+        "FEATURE_BUILDING":     0.85,
         "ARTIFACT_CREATION":    0.8,
+        "CREATIVE_PLAY":        0.5,
         "FREE_EXPLORATION":     0.4,
     },
 }

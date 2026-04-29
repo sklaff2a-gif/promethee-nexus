@@ -1,12 +1,14 @@
 """V34 (2026-04-27) — Tests Motivational Router.
+V34.6 (2026-04-29) — Tri par urgence + lecture SSOT genome unifie.
 
 Couvre :
-  - Mapping pulsion -> routine (CONNEXION = COFFEE_BREAK Alfred)
-  - Seuils différenciés (STABILITE plus haut, CONNEXION plus bas)
+  - Mapping pulsion -> routine (lu depuis DRIVE_GENOME, plus en dur)
+  - Seuils differencies (STABILITE plus haut, CONNEXION plus bas)
+  - V34.6 : tri par urgence (% marge consommee), pas first-eligible
   - Refractory period (cooldown post-assouvissement)
   - Variety penalty (anti-addiction)
-  - Filter par available_intents (intent réellement disponible)
-  - Compatibilité format Drive (objet vs dict)
+  - Filter par available_intents (intent reellement disponible)
+  - Compatibilite format Drive (objet vs dict)
   - Pas de crash si drives vides
 """
 from __future__ import annotations
@@ -24,11 +26,13 @@ if str(_PROJECT_ROOT) not in sys.path:
 from core.motivational_router import (
     check_drive_override,
     mark_drive_satisfied,
+    mark_intent_skipped,
     get_router_state,
+    get_candidate_routines,
     reset_router_state,
     DRIVE_THRESHOLDS,
-    PULSION_TO_ROUTINES,
     REFRACTORY_PERIOD_S,
+    SKIP_COOLDOWN_S,
     VARIETY_THRESHOLD_CONSECUTIVE,
     VARIETY_PENALTY_FACTOR,
     RoutineOverride,
@@ -79,19 +83,21 @@ def test_override_creation_above_threshold():
     assert result is not None
     assert isinstance(result, RoutineOverride)
     assert result.triggering_drive == "CREATION"
-    assert result.intent in PULSION_TO_ROUTINES["CREATION"]
+    # V34.6 : intent doit venir du SSOT (DRIVE_GENOME["CREATION"])
+    assert result.intent in get_candidate_routines("CREATION")
     assert result.deprivation == 28.5
     assert result.threshold == DRIVE_THRESHOLDS["CREATION"]
 
 
 def test_connexion_threshold_lower():
-    """CONNEXION a un seuil plus bas (20) — déclenche plus vite."""
+    """CONNEXION a un seuil plus bas (20) — déclenche plus vite.
+    V34.6 : COFFEE_BREAK (Alfred 0.9) gagne contre COUNCIL_DEBATE/STEFAN."""
     drives = {"CONNEXION": {"deprivation": 21.0}}
     result = check_drive_override(drives)
     assert result is not None
     assert result.triggering_drive == "CONNEXION"
-    # Mapping CONNEXION = Alfred (COFFEE_BREAK) ou Stefan
-    assert result.intent in ("COFFEE_BREAK", "STEFAN_CONFRONTATION")
+    # V34.6 : Alfred (COFFEE_BREAK) prime — alterite reelle > synchro interne
+    assert result.intent == "COFFEE_BREAK"
 
 
 def test_stabilite_threshold_higher():
@@ -145,15 +151,17 @@ def test_drive_lowercase_normalized():
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_filter_by_available_intents():
-    """Si la routine candidate n'est PAS dans available_intents, skip."""
+    """Si AUCUNE routine candidate n'est dans available_intents, skip.
+    V34.6 : CONNEXION = [COFFEE_BREAK, COUNCIL_DEBATE, SOLILOQUE_INTERNE,
+    STEFAN_CONFRONTATION]. Aucun de ces 4 dans la liste fournie."""
     drives = {"CONNEXION": {"deprivation": 25.0}}
-    # COFFEE_BREAK et STEFAN_CONFRONTATION non dispo
     result = check_drive_override(drives, available_intents=["AUDIT_STRUCTURE"])
     assert result is None
 
 
 def test_filter_keeps_first_available():
-    """Si seul STEFAN_CONFRONTATION dispo, c'est lui qui est choisi."""
+    """Si seul STEFAN_CONFRONTATION dispo, c'est lui qui est choisi
+    (meme s'il n'est pas le 1er candidat genome)."""
     drives = {"CONNEXION": {"deprivation": 25.0}}
     result = check_drive_override(
         drives, available_intents=["STEFAN_CONFRONTATION"],
@@ -232,25 +240,31 @@ def test_variety_threshold_constants():
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_connexion_maps_to_alfred_and_stefan():
-    """CONNEXION doit mapper sur les 2 entités sociales : Alfred (COFFEE_BREAK)
-    et Stefan (STEFAN_CONFRONTATION). Ordre de préférence : Alfred d'abord."""
-    routines = PULSION_TO_ROUTINES["CONNEXION"]
+    """V34.6 : CONNEXION dans le SSOT contient Alfred (COFFEE_BREAK 0.9)
+    en tete, suivi du council interne et de Stefan. L'alterite reelle
+    prime sur la synchronisation interne."""
+    routines = get_candidate_routines("CONNEXION", top_k=10)
     assert "COFFEE_BREAK" in routines
     assert "STEFAN_CONFRONTATION" in routines
-    # Alfred (pair) avant Stefan (rival) dans l'ordre de préférence
+    # Alfred (alterite reelle) en tete absolue
+    assert routines[0] == "COFFEE_BREAK"
+    # Stefan present mais derriere Alfred
     assert routines.index("COFFEE_BREAK") < routines.index("STEFAN_CONFRONTATION")
 
 
 def test_creation_maps_to_feature_building():
-    routines = PULSION_TO_ROUTINES["CREATION"]
+    """V34.6 : FEATURE_BUILDING (V32) est officiellement dans le genome
+    CREATION avec poids 0.85, juste sous EXPANSION_CODE 0.9."""
+    routines = get_candidate_routines("CREATION", top_k=10)
     assert "FEATURE_BUILDING" in routines
 
 
 def test_all_drives_have_mapping():
-    """Toutes les pulsions définies dans DRIVE_THRESHOLDS ont un mapping."""
+    """Toutes les pulsions definies dans DRIVE_THRESHOLDS ont au moins
+    une routine candidate dans le SSOT (DRIVE_GENOME)."""
     for drive in DRIVE_THRESHOLDS.keys():
-        assert drive in PULSION_TO_ROUTINES
-        assert len(PULSION_TO_ROUTINES[drive]) >= 1
+        routines = get_candidate_routines(drive, top_k=10)
+        assert len(routines) >= 1, f"{drive} n'a aucune routine dans le genome"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -281,8 +295,15 @@ def test_history_recorded():
 # 9. Ordre stable des pulsions (déterminisme)
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_priority_order_is_stable():
-    """Si plusieurs pulsions au-dessus du seuil, ordre stable."""
+def test_urgency_sort_picks_highest_relative_pain():
+    """V34.6 : avec depriv egale, la pulsion qui a consomme le plus de
+    pourcentage de marge au-dessus de son seuil personnel gagne.
+
+    Calcul urgency = (depriv - threshold) / (100 - threshold) :
+      CREATION  depriv=30 thr=25 -> (5/75)  = 0.067
+      MAITRISE  depriv=30 thr=25 -> (5/75)  = 0.067
+      CONNEXION depriv=30 thr=20 -> (10/80) = 0.125  ← gagne
+    """
     drives = {
         "CREATION": {"deprivation": 30.0},
         "MAITRISE": {"deprivation": 30.0},
@@ -290,5 +311,119 @@ def test_priority_order_is_stable():
     }
     r = check_drive_override(drives)
     assert r is not None
-    # CREATION vient avant MAITRISE et CONNEXION dans DRIVE_THRESHOLDS keys
+    assert r.triggering_drive == "CONNEXION"
+
+
+def test_urgency_sort_stabilite_beats_curiosite():
+    """V34.6 : cas reel observe la nuit du 28-29/04. STABILITE chronique
+    (92.6) doit doubler CURIOSITE (46) malgre depriv absolue plus basse :
+      STABILITE 92.6 thr=80 -> ratio 0.63
+      CURIOSITE 46.0 thr=25 -> ratio 0.28
+    Sans V34.6, CURIOSITE gagnait par first-eligible et STABILITE n'etait
+    jamais nourrie. C'est le test qui prouve la fin de la cage de terreur.
+    """
+    drives = {
+        "CURIOSITE": {"deprivation": 46.0},
+        "STABILITE": {"deprivation": 92.6},
+    }
+    r = check_drive_override(drives)
+    assert r is not None
+    assert r.triggering_drive == "STABILITE"
+
+
+def test_tiebreak_is_alphabetical_drive_name():
+    """V34.6 : a urgency egale, ordre stable par nom de drive."""
+    drives = {
+        "CREATION": {"deprivation": 30.0},  # urgency 0.067
+        "MAITRISE": {"deprivation": 30.0},  # urgency 0.067
+    }
+    r = check_drive_override(drives)
+    assert r is not None
+    # Tie-break alphabetique : CREATION avant MAITRISE
     assert r.triggering_drive == "CREATION"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 10. V34.4 — Rebond Neutre : recently_skipped + glissade au candidat n+1
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_skip_cooldown_constant():
+    """Cooldown skip = 5 minutes (300s)."""
+    assert SKIP_COOLDOWN_S == 300
+
+
+def test_mark_intent_skipped_records_state():
+    """mark_intent_skipped place l'intent dans recently_skipped avec timestamp."""
+    mark_intent_skipped("ROADMAP_RESEARCH")
+    state = get_router_state()
+    assert "ROADMAP_RESEARCH" in state["current_state"]["recently_skipped"]
+    # L'âge du skip est très récent (< 1s)
+    age = state["current_state"]["recently_skipped"]["ROADMAP_RESEARCH"]
+    assert 0 <= age < 1.0
+
+
+def test_skipped_intent_glisse_au_candidat_suivant():
+    """V34.6 : si le 1er candidat (VEILLE_SILENCIEUSE 0.9 dans le SSOT)
+    est en cooldown skip, CURIOSITE glisse vers le candidat n+1 trie
+    par poids genome (DROPZONE_SCAN 0.7 ou ROADMAP_RESEARCH 0.7)."""
+    # Pre-condition : VEILLE_SILENCIEUSE est le 1er candidat genome CURIOSITE
+    candidates = get_candidate_routines("CURIOSITE", top_k=10)
+    assert candidates[0] == "VEILLE_SILENCIEUSE"
+
+    # Marquer le 1er candidat comme skipped recent
+    mark_intent_skipped("VEILLE_SILENCIEUSE")
+
+    # CURIOSITE declenche : on doit glisser vers le candidat n+1
+    drives = {"CURIOSITE": {"deprivation": 30.0}}
+    r = check_drive_override(drives)
+    assert r is not None
+    assert r.triggering_drive == "CURIOSITE"
+    assert r.intent != "VEILLE_SILENCIEUSE"
+    # Le candidat retenu doit etre le suivant dans l'ordre genome desc
+    assert r.intent == candidates[1]
+
+
+def test_skipped_intent_all_candidates_blocked_returns_none():
+    """Si TOUS les candidats du SSOT pour CURIOSITE sont en cooldown skip,
+    check_drive_override retourne None (pas d'override possible)."""
+    for intent in get_candidate_routines("CURIOSITE", top_k=20):
+        mark_intent_skipped(intent)
+
+    drives = {"CURIOSITE": {"deprivation": 30.0}}
+    r = check_drive_override(drives)
+    assert r is None
+
+
+def test_skip_cooldown_expires_after_period():
+    """Apres expiration de SKIP_COOLDOWN_S, l'intent redevient eligible."""
+    # NOTE : on accede a _state via le module (import direct) pour eviter
+    # le piege classique `from X import _state` qui fige la reference avant
+    # tout reset_router_state() effectue par la fixture.
+    import core.motivational_router as _mr
+
+    # V34.6 : on skip le 1er candidat genome CURIOSITE = VEILLE_SILENCIEUSE
+    first_candidate = _mr.get_candidate_routines("CURIOSITE", top_k=1)[0]
+    _mr.mark_intent_skipped(first_candidate)
+    # Backdate : le skip date de SKIP_COOLDOWN_S + 10s dans le passe
+    _mr._state.recently_skipped[first_candidate] = (
+        time.time() - SKIP_COOLDOWN_S - 10
+    )
+
+    drives = {"CURIOSITE": {"deprivation": 30.0}}
+    r = _mr.check_drive_override(drives)
+    assert r is not None
+    # Le 1er candidat redevient eligible apres expiration du cooldown
+    assert r.intent == first_candidate
+
+
+def test_skipped_intent_does_not_block_other_drive():
+    """V34.6 : un skip sur le 1er candidat de CURIOSITE ne bloque pas
+    CREATION (mapping different dans le genome)."""
+    mark_intent_skipped("VEILLE_SILENCIEUSE")
+    drives = {"CREATION": {"deprivation": 30.0}}
+    r = check_drive_override(drives)
+    assert r is not None
+    assert r.triggering_drive == "CREATION"
+    # CREATION mappe sur EXPANSION_CODE (0.9) en tete, non affecte par le skip
+    expected = get_candidate_routines("CREATION", top_k=1)[0]
+    assert r.intent == expected

@@ -1,4 +1,5 @@
 """V34 (2026-04-27) — Motivational Router : du protocole à la volonté.
+V34.6 (2026-04-29) — Tri par urgence + Branchement SSOT (genome unifié).
 
 Pont direct entre desire_engine (sensation) et autonomy_engine (action).
 Permet à Prométhée de PRÉEMPTER son emploi du temps quand une pulsion
@@ -7,19 +8,24 @@ dépasse un seuil critique, au lieu de subir le cron school.
 Plug-and-Play : un seul hook dans autonomy_engine._score_routines.
 Désactivation = commenter la ligne `motivational_router.check_drive_override(...)`.
 
-Architecture (RFC V34 validée) :
+Architecture (RFC V34 + V34.6 reconciliation SSOT) :
 
   desire_engine.drives  →  check_drive_override()
                               │
-                              ├─→ pulsion > THRESHOLD ?
-                              │   │
-                              │   ├─ NON → return None (scoring normal)
-                              │   │
-                              │   └─ OUI → routines candidates pour cette pulsion
-                              │           │
-                              │           ├─ refractory period actif → skip
-                              │           ├─ variety penalty → score réduit
-                              │           └─ choix pondéré → return RoutineOverride
+                              ├─→ pour chaque pulsion > THRESHOLD :
+                              │     calcule urgency = (depriv-thr)/(100-thr)
+                              │
+                              ├─→ trie pulsions par urgency décroissant
+                              │   (la plus douloureuse en proportion gagne)
+                              │
+                              └─→ pour chaque pulsion (ordre urgency) :
+                                    │
+                                    ├─ refractory actif → skip
+                                    ├─ candidats lus depuis DRIVE_GENOME via
+                                    │   drive_routine_registry (SSOT unique)
+                                    ├─ filtre available_intents
+                                    ├─ filtre recently_skipped (V34.4)
+                                    └─ premier candidat éligible → override
 
 Garde-fous anti-Goodhart :
   - REFRACTORY_PERIOD_S : après assouvissement, cooldown 60 min sur la
@@ -29,18 +35,25 @@ Garde-fous anti-Goodhart :
   - OBSERVATION_ADDICTION : tracker les boucles potentielles dans
     l'historique pour détection rétrospective.
 
-Mappings (PULSION_TO_ROUTINES) :
-  CREATION      → FEATURE_BUILDING, CREATIVE_PLAY
-  CURIOSITE     → ROADMAP_RESEARCH, VEILLE_SILENCIEUSE, CURIOSITY_DEEP_DIVE
-  MAITRISE      → AUDIT_STRUCTURE, CODE_REVIEW
-  STABILITE     → SECURITY_AUDIT, AUDIT_SURVIE
-  CONNEXION     → COFFEE_BREAK (Alfred), STEFAN_CONFRONTATION (rival)
-  CROISSANCE    → EXPANSION_CODE
-  COMPREHENSION → MEMORY_CONSOLIDATION, SELF_ANALYSIS
+V34.6 — Pourquoi le ratio normalisé plutôt que la différence absolue :
+  La diff (depriv - threshold) sous-pondère les pulsions à seuil élevé
+  (STABILITE seuil 80) car leur marge restante au-dessus du seuil est
+  plus courte. Le ratio (depriv-thr)/(100-thr) mesure le pourcentage
+  de marge consommée — c'est la souffrance relative, pas absolue.
+  Exemple : STABILITE 92 → ratio 0.60 ; CURIOSITE 46 → ratio 0.28.
+  STABILITE crie effectivement plus fort en proportion.
 
-Note CONNEXION : Alfred (core/ami.py) et Stefan (core/rival.py) sont des
-entités sociales codées. CONNEXION = altérité réelle, pas synchronisation
-interne. L'IA se connecte en parlant avec quelqu'un qui n'est PAS elle.
+V34.6 — Mapping pulsion → routines : déplacé dans DRIVE_GENOME du
+registre (drive_routine_registry.DRIVE_GENOME), source de vérité unique.
+Les candidats sont obtenus via get_routines_for_drive_live(drive),
+triés par poids décroissant (synaptic + genome floor + multiplicateurs).
+
+Doctrine CONNEXION (gravée dans le genome V34.6) :
+  COFFEE_BREAK (Alfred) 0.9 > COUNCIL_DEBATE 0.6 > SOLILOQUE_INTERNE 0.5
+  > STEFAN_CONFRONTATION 0.4. Alfred (core/ami.py) et Stefan (core/rival.py)
+  sont les deux entités d'altérité réelle ; le council et le soliloque
+  restent des synchronisations internes (pair, monologue) — utiles mais
+  pas de la vraie connexion.
 """
 from __future__ import annotations
 
@@ -68,17 +81,9 @@ DRIVE_THRESHOLDS: Dict[str, float] = {
     "COMPREHENSION": 25.0,
 }
 
-# Mapping pulsion → routines candidates (en ordre de préférence).
-# La première routine non-cooldownée est choisie en priorité.
-PULSION_TO_ROUTINES: Dict[str, List[str]] = {
-    "CREATION":      ["FEATURE_BUILDING", "CREATIVE_PLAY"],
-    "CURIOSITE":     ["ROADMAP_RESEARCH", "VEILLE_SILENCIEUSE", "CURIOSITY_DEEP_DIVE"],
-    "MAITRISE":      ["AUDIT_STRUCTURE", "CODE_REVIEW"],
-    "STABILITE":     ["SECURITY_AUDIT", "AUDIT_SURVIE"],
-    "CONNEXION":     ["COFFEE_BREAK", "STEFAN_CONFRONTATION"],
-    "CROISSANCE":    ["EXPANSION_CODE"],
-    "COMPREHENSION": ["MEMORY_CONSOLIDATION", "SELF_ANALYSIS"],
-}
+# V34.6 : suppression de PULSION_TO_ROUTINES en dur. Les candidats sont
+# desormais lus depuis DRIVE_GENOME (drive_routine_registry) — source de
+# verite unique. Voir get_candidate_routines() ci-dessous.
 
 # Refractory period : cooldown post-assouvissement (sec).
 # Une pulsion ne peut pas re-déclencher d'override pendant N min après
@@ -89,6 +94,14 @@ REFRACTORY_PERIOD_S = 60 * 60  # 60 minutes
 # prochaine victoire est pénalisée (force diversité).
 VARIETY_THRESHOLD_CONSECUTIVE = 3
 VARIETY_PENALTY_FACTOR = 0.5  # halve le score si dépassement
+
+# V34.4 (Rebond Neutre) : cooldown éphémère après qu'une routine a retourné
+# status=skipped. Tant que ce cooldown court, le router exclut cet intent du
+# mapping pulsion → glisse au candidat n+1 (CURIOSITE: ROADMAP_RESEARCH skip
+# → VEILLE_SILENCIEUSE). Volontairement non-persisté : 5 min suffit pour qu'un
+# refus légitime ne re-bloque pas la pulsion immédiatement, mais on retente
+# au reboot ou après expiration.
+SKIP_COOLDOWN_S = 5 * 60  # 5 minutes
 
 
 # ─── Structures de données ─────────────────────────────────────────────
@@ -139,6 +152,8 @@ class _RouterState:
         # history : liste des N derniers overrides (pour audit / addiction)
         self.history: List[Dict[str, Any]] = []
         self.MAX_HISTORY = 100
+        # V34.4 : recently_skipped[intent] = timestamp du dernier skip
+        self.recently_skipped: Dict[str, float] = {}
 
     def is_in_refractory(self, drive: str, now: Optional[float] = None) -> bool:
         """True si la pulsion est en cooldown post-assouvissement."""
@@ -177,40 +192,113 @@ class _RouterState:
         if self.last_override_drive == drive:
             self.consecutive_wins[drive] = 0
 
+    # V34.4 — Rebond Neutre
+
+    def is_intent_skipped_recently(
+        self, intent: str, now: Optional[float] = None
+    ) -> bool:
+        """True si l'intent a retourné skipped dans les SKIP_COOLDOWN_S secondes."""
+        now = now if now is not None else time.time()
+        last = self.recently_skipped.get(intent)
+        if last is None:
+            return False
+        return (now - last) < SKIP_COOLDOWN_S
+
+    def mark_intent_skipped(self, intent: str) -> None:
+        """Mémorise qu'un intent vient de retourner skipped (cooldown 5 min)."""
+        self.recently_skipped[intent] = time.time()
+
 
 _state = _RouterState()
 
 
 # ─── API publique ──────────────────────────────────────────────────────
 
+def _urgency_ratio(depriv: float, threshold: float) -> float:
+    """V34.6 — Souffrance relative au-dessus du seuil de tolerance.
+
+    Returns le pourcentage de marge consommee entre threshold et 100.
+      depriv = threshold      -> 0.0 (juste au seuil)
+      depriv = (threshold+100)/2 -> 0.5 (mi-marge)
+      depriv = 100            -> 1.0 (saturation)
+
+    Formule retenue plutot que (depriv - threshold) brut :
+    une pulsion a seuil 80 (STABILITE chronique) et depriv 92 a consomme
+    60% de sa marge = souffre proportionnellement plus qu'une pulsion a
+    seuil 25 et depriv 46 (qui n'a consomme que 28% de sa marge).
+    """
+    margin = max(1.0, 100.0 - threshold)
+    return (depriv - threshold) / margin
+
+
+def get_candidate_routines(drive: str, top_k: int = 5) -> List[str]:
+    """V34.6 — Lit les candidats du SSOT (DRIVE_GENOME via registre).
+
+    Retourne la liste des intents candidats triee par poids decroissant
+    (genome floor fusionne avec graphe synaptique appris si provider branche).
+    Filet de securite : si registre indisponible ou drive vide, retourne [].
+    Le routeur traduit alors en absence d'override (pas de fallback hardcode).
+
+    Args:
+        drive: nom upper-case du drive (CREATION, CURIOSITE, etc.)
+        top_k: nombre max de candidats retournes.
+
+    Returns:
+        List[str] : intents tries du plus pertinent au moins pertinent.
+        Liste vide si registre absent, drive inconnu, ou genome vide.
+    """
+    try:
+        from core.drive_routine_registry import get_routines_for_drive_live
+        ranked = get_routines_for_drive_live(
+            drive=drive,
+            temperature=0.0,    # mode greedy : ordre strict par poids
+            top_k=top_k,
+            use_context_multipliers=False,  # le router gere ses propres filtres
+        )
+        # ranked est List[Tuple[intent, weight]] triee desc
+        return [intent for intent, _w in ranked]
+    except Exception as e:
+        try:
+            logger.warning(f"[V34.6] get_candidate_routines({drive}) failed: {e}")
+        except Exception:
+            pass
+        return []
+
+
 def check_drive_override(
     drives_state: Dict[str, Any],
     available_intents: Optional[List[str]] = None,
 ) -> Optional[RoutineOverride]:
-    """V34 — Vérifie si une pulsion doit préempter le scoring normal.
+    """V34.6 — Verifie si une pulsion doit preempter le scoring normal.
+
+    Refonte V34.6 :
+    - Tri par urgence relative (% de marge consommee au-dessus du seuil)
+      au lieu du first-eligible naif sur l'ordre du dict. STABILITE 92
+      passe enfin devant CURIOSITE 46.
+    - Candidats lus depuis le SSOT (DRIVE_GENOME via registre) au lieu
+      de la table heretique PULSION_TO_ROUTINES en dur.
 
     Args:
-        drives_state: dict de l'état des pulsions, format desire_engine :
+        drives_state: dict de l'etat des pulsions, format desire_engine :
             {"CREATION": Drive(deprivation=28.45, ...), ...}
             OU {"CREATION": {"deprivation": 28.45, ...}, ...} (dict-like)
         available_intents: liste optionnelle des intents disponibles dans
             le pool de routines actuel. Si fournie, on filtre les
-            candidats pour ne garder que ceux qui sont déclenchables.
+            candidats pour ne garder que ceux qui sont declenchables.
 
     Returns:
-        RoutineOverride si une pulsion dépasse son seuil ET a une routine
-        candidate disponible non-cooldownée. None sinon (scoring normal).
+        RoutineOverride si une pulsion depasse son seuil ET a une routine
+        candidate disponible non-cooldownee. None sinon (scoring normal).
 
-    Garde-fous appliqués (anti-Goodhart) :
-      - refractory period : pulsion en cooldown ignorée
-      - variety penalty : score divisé par 2 si même pulsion 3x consécutifs
-      - first-eligible : on prend la 1ère pulsion qui passe les filtres
-        (ordre stable selon DRIVE_THRESHOLDS)
+    Garde-fous appliques (anti-Goodhart) :
+      - urgency-sorted : la pulsion qui hurle le plus fort en proportion
+      - refractory period : pulsion en cooldown ignoree
+      - variety penalty : score divise par 2 si meme pulsion 3x consecutifs
+      - SSOT-only : aucun mapping en dur, lecture du genome unifie
     """
-    # Étape 1 : extraire les déprivations
+    # Etape 1 : extraire les deprivations
     deprivations: Dict[str, float] = {}
     for name, drive_obj in drives_state.items():
-        # Compatibilité dataclass / dict / objet libre
         depriv = _extract_deprivation(drive_obj)
         if depriv is not None:
             deprivations[name.upper()] = depriv
@@ -218,28 +306,41 @@ def check_drive_override(
     if not deprivations:
         return None
 
-    # Étape 2 : pour chaque pulsion (ordre stable), tester les conditions
-    candidates_log: List[str] = []
-    for drive_name in DRIVE_THRESHOLDS.keys():
-        depriv = deprivations.get(drive_name, 0.0)
+    # Etape 2 : V34.6 — tri par urgence relative.
+    # Pour chaque pulsion qui depasse son seuil, calcule le ratio de
+    # souffrance, puis trie decroissant. La plus douloureuse en proportion
+    # gagne le droit de tenter l'override en premier.
+    eligible: List[Tuple[str, float, float, float]] = []
+    # tuple (drive_name, depriv, threshold, urgency_ratio)
+    for drive_name, depriv in deprivations.items():
         threshold = DRIVE_THRESHOLDS.get(drive_name, DEFAULT_DRIVE_THRESHOLD)
-
-        # Filtre 1 : seuil
         if depriv < threshold:
             continue
+        urgency = _urgency_ratio(depriv, threshold)
+        eligible.append((drive_name, depriv, threshold, urgency))
 
-        # Filtre 2 : refractory
+    if not eligible:
+        return None
+
+    # Tri stable : urgence decroissante, puis ordre alphabetique du drive
+    # (tie-break deterministe pour les tests).
+    eligible.sort(key=lambda x: (-x[3], x[0]))
+
+    # Etape 3 : pour chaque pulsion (ordre urgency desc), tester les filtres
+    candidates_log: List[str] = []
+    for drive_name, depriv, threshold, urgency in eligible:
+        # Filtre 1 : refractory
         if _state.is_in_refractory(drive_name):
             candidates_log.append(f"{drive_name}=refractory")
             continue
 
-        # Filtre 3 : routines mappées
-        candidate_routines = PULSION_TO_ROUTINES.get(drive_name, [])
+        # Filtre 2 : routines candidates depuis le SSOT (genome unifie)
+        candidate_routines = get_candidate_routines(drive_name, top_k=10)
         if not candidate_routines:
             candidates_log.append(f"{drive_name}=no_mapping")
             continue
 
-        # Filtre 4 : routines disponibles (si liste fournie)
+        # Filtre 3 : routines disponibles (si liste fournie)
         if available_intents is not None:
             available_set = set(available_intents)
             candidate_routines = [
@@ -249,12 +350,21 @@ def check_drive_override(
                 candidates_log.append(f"{drive_name}=no_intent_available")
                 continue
 
-        # Filtre 5 : variety (juste log, pas de skip absolu)
+        # V34.4 — Filtre skipped recent : glisse au candidat n+1
+        candidate_routines = [
+            r for r in candidate_routines
+            if not _state.is_intent_skipped_recently(r)
+        ]
+        if not candidate_routines:
+            candidates_log.append(f"{drive_name}=all_recently_skipped")
+            continue
+
+        # Filtre 4 : variety (log seulement, pas de skip absolu)
         variety = _state.variety_factor(drive_name)
         if variety < 1.0:
             candidates_log.append(f"{drive_name}=variety_penalty")
 
-        # Choix de la routine : 1ère candidate (ordre de préférence dans le mapping)
+        # Choix : 1er candidat eligible (ordre genome desc, deja trie)
         chosen_intent = candidate_routines[0]
 
         override = RoutineOverride(
@@ -263,24 +373,27 @@ def check_drive_override(
             deprivation=depriv,
             threshold=threshold,
             candidates_considered=list(candidate_routines),
-            reason=f"deprivation={depriv:.2f} > threshold={threshold} (variety={variety:.2f})",
+            reason=(
+                f"deprivation={depriv:.2f} > threshold={threshold} "
+                f"(urgency={urgency:.2f}, variety={variety:.2f})"
+            ),
         )
         _state.record_override(override)
         try:
             logger.info(
-                f"[V34 MOTIVATIONAL] OVERRIDE: drive={drive_name} "
-                f"depriv={depriv:.2f} > {threshold} → intent={chosen_intent} "
-                f"(variety_factor={variety:.2f})"
+                f"[V34.6 MOTIVATIONAL] OVERRIDE: drive={drive_name} "
+                f"depriv={depriv:.2f} > {threshold} urgency={urgency:.2f} "
+                f"→ intent={chosen_intent} (variety={variety:.2f})"
             )
         except Exception:
             pass
         return override
 
-    # Aucune pulsion n'a déclenché : log debug optionnel
+    # Aucune pulsion n'a passe les filtres
     if candidates_log:
         try:
             logger.debug(
-                f"[V34 MOTIVATIONAL] no override: {', '.join(candidates_log)}"
+                f"[V34.6 MOTIVATIONAL] no override: {', '.join(candidates_log)}"
             )
         except Exception:
             pass
@@ -305,12 +418,40 @@ def mark_drive_satisfied(drive_name: str) -> None:
         pass
 
 
+def mark_intent_skipped(intent: str) -> None:
+    """V34.4 — Notifie le router qu'un intent vient de retourner skipped.
+
+    Active un cooldown SKIP_COOLDOWN_S sur cet intent : le prochain
+    check_drive_override l'exclura du mapping pulsion et glissera
+    automatiquement vers le candidat n+1.
+
+    À appeler depuis autonomy_engine quand une routine FORCED retourne
+    status=skipped (refus légitime, frigo vide).
+    """
+    _state.mark_intent_skipped(intent)
+    try:
+        logger.info(
+            f"[V34.4 REBOND NEUTRE] intent={intent} skipped — "
+            f"cooldown {SKIP_COOLDOWN_S//60}min, glissade au candidat suivant"
+        )
+    except Exception:
+        pass
+
+
 def get_router_state() -> Dict[str, Any]:
-    """V34 — Retourne un snapshot de l'état du router (debug / API)."""
+    """V34 — Retourne un snapshot de l'état du router (debug / API).
+
+    V34.6 : 'mappings' lit desormais le SSOT (DRIVE_GENOME via registre)
+    au lieu de la table heretique. Reflet vivant du genome unifie.
+    """
     now = time.time()
+    # V34.6 : derive les mappings du SSOT
+    mappings: Dict[str, List[str]] = {}
+    for drive in DRIVE_THRESHOLDS.keys():
+        mappings[drive] = get_candidate_routines(drive, top_k=10)
     return {
         "thresholds": dict(DRIVE_THRESHOLDS),
-        "mappings": {k: list(v) for k, v in PULSION_TO_ROUTINES.items()},
+        "mappings": mappings,
         "refractory_period_s": REFRACTORY_PERIOD_S,
         "variety_threshold_consecutive": VARIETY_THRESHOLD_CONSECUTIVE,
         "variety_penalty_factor": VARIETY_PENALTY_FACTOR,
@@ -321,6 +462,9 @@ def get_router_state() -> Dict[str, Any]:
             "consecutive_wins": dict(_state.consecutive_wins),
             "last_override_drive": _state.last_override_drive,
             "history_size": len(_state.history),
+            "recently_skipped": {
+                k: round(now - v, 1) for k, v in _state.recently_skipped.items()
+            },
         },
         "history_tail": _state.history[-10:],
     }
