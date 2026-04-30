@@ -1530,6 +1530,58 @@ async def debug_inject_drive(request: Request):
     return {"status": "ok", "drive": drive_name, "deprivation": deprivation}
 
 
+@app.get("/api/_debug/v36/last_run", dependencies=[Depends(verify_token)])
+async def debug_v36_last_run():
+    """V36.1.3 — Retourne le dernier run de la TaskForce (blackboard + trace).
+    Permet de lire les outputs textuels reels de architect/coder/critic."""
+    from core.task_force_orchestrator import orchestrator as _tf_orch
+    last = _tf_orch.get_last_run()
+    if last is None:
+        return {"status": "empty", "message": "Aucun run V36 enregistre"}
+    return {"status": "ok", "last_run": last}
+
+
+@app.get("/api/_debug/v36/history", dependencies=[Depends(verify_token)])
+async def debug_v36_history(n: int = Query(default=10, ge=1, le=100)):
+    """V36.1.3 — Retourne les N derniers runs (resumes uniquement)."""
+    from core.task_force_orchestrator import orchestrator as _tf_orch
+    h = _tf_orch.get_history()
+    if not h:
+        return {"status": "empty", "history": []}
+    summaries = [
+        {
+            "intent": r["intent"],
+            "taskforce": r["taskforce"],
+            "started_at": r["started_at"],
+            "duration_s": r["duration_s"],
+            "status": r["status"],
+            "quality_score": r["quality_score"],
+            "n_agents": r["n_agents"],
+            "n_iterations": r["n_iterations"],
+        }
+        for r in h[-n:]
+    ]
+    return {"status": "ok", "count": len(summaries), "history": summaries}
+
+
+@app.post("/api/_debug/v36/test_run", dependencies=[Depends(verify_token)])
+async def debug_v36_test_run(request: Request):
+    """V36.1.3 — Declenche manuellement orchestrator.execute() pour test.
+    Court-circuite le router (pas d'attente du cycle scoring 25min).
+    Payload : {"intent": "EXPANSION_CODE", "mission": "..."}.
+    """
+    data = await request.json()
+    intent = data.get("intent", "EXPANSION_CODE").upper()
+    mission = data.get("mission", "Genere un module Python pour test V36.1.3.")
+    from core.task_force_orchestrator import orchestrator as _tf_orch
+    response = await _tf_orch.execute(
+        intent=intent,
+        mission=mission,
+        context={"force_local": True, "agent_hint": "evolution"},
+    )
+    return {"status": "ok", "v36_response": response}
+
+
 @app.post("/api/_debug/simulate_routine", dependencies=[Depends(verify_token)])
 async def debug_simulate_routine(request: Request):
     """V35.1.4 (debug only) — Publie un AUTONOMY_ROUTINE_COMPLETE simulé.

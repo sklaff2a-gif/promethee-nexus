@@ -340,6 +340,8 @@ class TaskForceOrchestrator:
         # Historique succinct (pour observabilite)
         self._history: List[Dict[str, Any]] = []
         self.MAX_HISTORY = 100
+        # V36.1.3 — Charge history persiste au boot
+        self._load_history()
 
     def reset(self) -> None:
         """Reset complet (tests)."""
@@ -624,21 +626,65 @@ class TaskForceOrchestrator:
         self, tf: TaskForce, state: TaskForceState,
         status: str, quality: float,
     ) -> None:
-        self._history.append({
+        """V36.1.3 — Enregistre + persiste l'execution complete.
+        Le blackboard et la trace sont stockes pour observabilite."""
+        entry = {
             "intent": state.intent,
             "taskforce": tf.name,
+            "mission": state.mission,
             "started_at": state.started_at,
+            "ended_at": time.time(),
             "duration_s": round(time.time() - state.started_at, 2),
             "status": status,
             "quality_score": quality,
             "n_agents": len(tf.agents),
             "n_iterations": state.iteration + 1,
-        })
+            # V36.1.3 — outputs reels
+            "blackboard": dict(state.blackboard),  # role -> output complet
+            "trace": list(state.trace),            # par-agent : duration, preview
+        }
+        self._history.append(entry)
         if len(self._history) > self.MAX_HISTORY:
             self._history = self._history[-self.MAX_HISTORY:]
+        self._save_history()
 
     def get_history(self) -> List[Dict[str, Any]]:
         return list(self._history)
+
+    def get_last_run(self) -> Optional[Dict[str, Any]]:
+        """V36.1.3 — Retourne le dernier run complet (avec blackboard)."""
+        if not self._history:
+            return None
+        return dict(self._history[-1])
+
+    # ─── Persistance V36.1.3 ───────────────────────────────────────────
+
+    def _save_history(self) -> None:
+        """Sauvegarde atomique (tmp + os.replace) du history complet."""
+        try:
+            os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+            data = {
+                "version": "1.0",
+                "saved_at": time.time(),
+                "history": self._history,
+            }
+            tmp = STATE_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            os.replace(tmp, STATE_FILE)
+        except Exception as e:
+            logger.warning(f"V36.1.3: save_history failed: {e}")
+
+    def _load_history(self) -> None:
+        """Restaure le history persiste au boot. Tolerant a l'absence."""
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self._history = data.get("history", [])
+            if len(self._history) > self.MAX_HISTORY:
+                self._history = self._history[-self.MAX_HISTORY:]
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._history = []
 
     def get_state(self) -> Dict[str, Any]:
         """Snapshot pour /api/v36/state (V36.1+) ou debug."""

@@ -65,8 +65,13 @@ from core.task_force_orchestrator import (
 # ═══════════════════════════════════════════════════════════════════════
 
 @pytest.fixture
-def fresh_orch():
-    """Reset complet du singleton avant chaque test."""
+def fresh_orch(tmp_path, monkeypatch):
+    """Reset complet du singleton avant chaque test.
+    V36.1.3 : redirige STATE_FILE vers tmp pour ne pas polluer le history
+    persiste entre tests ou avec le runtime production."""
+    import core.task_force_orchestrator as mod
+    state_file = tmp_path / "task_force_history.json"
+    monkeypatch.setattr(mod, "STATE_FILE", str(state_file))
     TaskForceOrchestrator.reset_singleton()
     orch = TaskForceOrchestrator()
     yield orch
@@ -493,3 +498,92 @@ def test_v36_1_max_prompt_chars_constant_exists():
     import core.task_force_orchestrator as mod
     assert mod.MAX_PROMPT_CHARS >= 8000   # au moins ~2k tokens
     assert mod.MAX_PROMPT_CHARS <= 100000  # pas absurde non plus
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V36.1.3 — Persistance + observabilite (history avec blackboard)
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_v36_1_3_get_last_run_empty_when_no_history(fresh_orch):
+    """get_last_run() retourne None quand aucun run enregistre."""
+    assert fresh_orch.get_last_run() is None
+
+
+def test_v36_1_3_history_persists_blackboard_and_trace(fresh_orch, tmp_path, monkeypatch):
+    """Apres un execute() reussi, get_last_run() doit contenir le
+    blackboard complet et la trace par-agent."""
+    import core.task_force_orchestrator as mod
+    state_file = tmp_path / "task_force_history.json"
+    monkeypatch.setattr(mod, "STATE_FILE", str(state_file))
+
+    _enable_intent("FEATURE_BUILDING")
+    outputs = {
+        "architect": "Architecture: A->B->C avec interface I",
+        "coder":     "def main(): pass",
+        "tester":    "def test_main(): assert True",
+    }
+    runner, _calls = _make_runner_record(outputs)
+    fresh_orch.set_agent_runner(runner)
+
+    asyncio.run(fresh_orch.execute(
+        "FEATURE_BUILDING", "Test mission V36.1.3", {}
+    ))
+
+    last = fresh_orch.get_last_run()
+    assert last is not None
+    assert last["intent"] == "FEATURE_BUILDING"
+    assert last["status"] == "success"
+    # Blackboard complet expose
+    assert "blackboard" in last
+    assert last["blackboard"]["architect"] == outputs["architect"]
+    assert last["blackboard"]["coder"] == outputs["coder"]
+    assert last["blackboard"]["tester"] == outputs["tester"]
+    # Trace par-agent
+    assert len(last["trace"]) == 3
+    # Mission preservee
+    assert last["mission"] == "Test mission V36.1.3"
+
+
+def test_v36_1_3_save_load_roundtrip(fresh_orch, tmp_path, monkeypatch):
+    """Le history est persiste sur disque et restaure au reload."""
+    import core.task_force_orchestrator as mod
+    state_file = tmp_path / "task_force_history.json"
+    monkeypatch.setattr(mod, "STATE_FILE", str(state_file))
+
+    _enable_intent("FEATURE_BUILDING")
+    outputs = {"architect": "A", "coder": "C", "tester": "T"}
+    runner, _calls = _make_runner_record(outputs)
+    fresh_orch.set_agent_runner(runner)
+
+    asyncio.run(fresh_orch.execute("FEATURE_BUILDING", "M", {}))
+
+    # Verifier qu'un fichier existe
+    assert state_file.exists()
+
+    # Reset le singleton et re-instantier (simule un reboot)
+    mod.TaskForceOrchestrator.reset_singleton()
+    fresh2 = mod.TaskForceOrchestrator()
+    # Le history doit etre charge au boot
+    last = fresh2.get_last_run()
+    assert last is not None
+    assert last["intent"] == "FEATURE_BUILDING"
+    assert last["blackboard"]["architect"] == "A"
+
+
+def test_v36_1_3_history_skipped_run_also_recorded(fresh_orch, tmp_path, monkeypatch):
+    """Note : V36.0 ne record que les success. V36.1.3 le confirme :
+    les fallback (skipped) ne pollluent pas le history. Garde-fou
+    architectural — un skip ne represente pas un travail multi-agent."""
+    import core.task_force_orchestrator as mod
+    state_file = tmp_path / "task_force_history.json"
+    monkeypatch.setattr(mod, "STATE_FILE", str(state_file))
+
+    # Pas de flag active -> fallback skipped
+    runner, _ = _make_runner_record({})
+    fresh_orch.set_agent_runner(runner)
+
+    result = asyncio.run(fresh_orch.execute("EXPANSION_CODE", "M", {}))
+    assert result["status"] == "skipped"
+
+    # History doit rester vide (pas d'entree pour un skip)
+    assert fresh_orch.get_last_run() is None
