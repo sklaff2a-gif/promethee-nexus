@@ -294,10 +294,10 @@ INTENT_TO_TASKFORCE: Dict[str, TaskForce] = {
 TASKFORCE_GLOBAL_ENABLED: bool = True  # V36.1.1 : activation runtime
 
 TASKFORCE_INTENT_ENABLED: Dict[str, bool] = {
-    "EXPANSION_CODE":   True,   # V36.1.1 : 1er intent active en sandbox
-    "FEATURE_BUILDING": False,
-    "CODE_REVIEW":      False,
-    "COUNCIL_DEBATE":   False,
+    "EXPANSION_CODE":   True,   # V36.1.1 : valide in-vivo le 30/04 17:05
+    "FEATURE_BUILDING": True,   # V36.2 : architect/coder/tester SEQUENTIAL
+    "CODE_REVIEW":      True,   # V36.2 : critic/security/synthesizer PARALLEL_THEN_SYNTH
+    "COUNCIL_DEBATE":   True,   # V36.2 : strategist/evolution/synthesizer (think:false ok)
 }
 
 

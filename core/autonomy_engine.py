@@ -4091,8 +4091,39 @@ class AutonomyEngine:
         except Exception:
             pass
 
-        # Reutiliser la logique standard de dispatch
-        if intent == "COUNCIL_DEBATE":
+        # V36.2 — Hook Task Force Orchestrator (interception en amont)
+        # Si V36 est ON pour cet intent, l'orchestrator prend la main avec
+        # son pipeline multi-agents (architect/coder/critic etc.) au lieu
+        # du dispatch solo legacy. Sinon le code tombe dans la chaine
+        # d'elif classique en aval.
+        _v36_taken = False
+        try:
+            from core.task_force_orchestrator import (
+                orchestrator as _tf_orch,
+                TASKFORCE_GLOBAL_ENABLED as _tf_global,
+                TASKFORCE_INTENT_ENABLED as _tf_intent_enabled,
+                INTENT_TO_TASKFORCE as _tf_intents_map,
+            )
+            if (
+                _tf_global
+                and intent in _tf_intents_map
+                and _tf_intent_enabled.get(intent, False)
+            ):
+                roles = [a.role for a in _tf_intents_map[intent].agents]
+                print(f"   🎭 V36 TASKFORCE: {intent} -> {'|'.join(roles)}")
+                response = await _tf_orch.execute(
+                    intent=intent,
+                    mission=routine.get("mission", ""),
+                    context={"force_local": True, "agent_hint": agent},
+                )
+                _v36_taken = True
+        except ImportError:
+            pass
+
+        # Reutiliser la logique standard de dispatch (si V36 n'a pas pris la main)
+        if _v36_taken:
+            pass  # response deja remplie par l'orchestrator
+        elif intent == "COUNCIL_DEBATE":
             response = await self._execute_council_debate()
         elif intent == "GRIMOIRE_INVOKE":
             response = await self._execute_grimoire_routine()
@@ -4180,35 +4211,6 @@ class AutonomyEngine:
                     ),
                     "force_local": True,
                     "intent": "YOUTUBE_VEILLE",
-                })
-        elif intent == "EXPANSION_CODE":
-            # V36.1.1 — Aiguillage Task Force Orchestrator (V36)
-            # Si flags V36 OFF -> chemin legacy (orchestrator.dispatch_task evolution)
-            # Si flags V36 ON  -> orchestrator.execute (architect/coder/critic)
-            try:
-                from core.task_force_orchestrator import (
-                    orchestrator as _tf_orch,
-                    TASKFORCE_GLOBAL_ENABLED as _tf_global,
-                    TASKFORCE_INTENT_ENABLED as _tf_intent_enabled,
-                )
-                _v36_active = _tf_global and _tf_intent_enabled.get(intent, False)
-            except ImportError:
-                _v36_active = False
-
-            if _v36_active:
-                print(f"   🎭 V36 TASKFORCE: {intent} -> architect|coder|critic")
-                response = await _tf_orch.execute(
-                    intent=intent,
-                    mission=routine.get("mission", ""),
-                    context={"force_local": True, "agent_hint": agent},
-                )
-            else:
-                # Path legacy V35.x : orchestrator agent generic
-                response = await orchestrator.dispatch_task(agent, {
-                    "mission": f"[MODE VEILLE] {routine['mission']}",
-                    "context": f"PROTOCOLE_AUTONOMIE\n{AUTONOMY_GUARDRAIL}",
-                    "force_local": True,
-                    "intent": intent,
                 })
         else:
             response = await orchestrator.dispatch_task(agent, {

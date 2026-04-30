@@ -393,28 +393,27 @@ def test_topology_enum_has_three_values():
     assert values == {"sequential", "sequential_feedback", "parallel_then_synth"}
 
 
-def test_v36_1_1_default_flags_per_release_intent():
-    """V36.1.1 — Etat doctrinal des flags au chargement du module :
-    - global_enabled : True (V36 actif au boot)
-    - EXPANSION_CODE : True (1er intent active en sandbox)
-    - FEATURE_BUILDING / CODE_REVIEW / COUNCIL_DEBATE : False (a venir)
-
-    Test base sur reload du module pour echapper au reset autouse."""
+def test_v36_2_default_flags_all_intents_active():
+    """V36.2 (2026-04-30 pm) — Apres validation runtime de EXPANSION_CODE
+    (cascade architect/coder/critic 73s, blackboard verifie, critic iter 2
+    a identifie une regression du coder iter 2 = preuve formelle de
+    chaine de pensee), les 3 autres intents sont actives :
+      EXPANSION_CODE   : True (V36.1.1)
+      FEATURE_BUILDING : True (V36.2)
+      CODE_REVIEW      : True (V36.2)
+      COUNCIL_DEBATE   : True (V36.2 — strategist teste avec think:false OK)
+    """
     import importlib
     import core.task_force_orchestrator as mod
     importlib.reload(mod)
     try:
-        assert mod.TASKFORCE_GLOBAL_ENABLED is True, "V36.1.1 : global ON au boot"
-        assert mod.TASKFORCE_INTENT_ENABLED["EXPANSION_CODE"] is True, (
-            "V36.1.1 : EXPANSION_CODE active en sandbox"
-        )
-        # Les autres intents restent dormants jusqu'a leur propre validation
-        for intent in ("FEATURE_BUILDING", "CODE_REVIEW", "COUNCIL_DEBATE"):
-            assert mod.TASKFORCE_INTENT_ENABLED[intent] is False, (
-                f"{intent} doit rester OFF — pas encore valide en runtime"
+        assert mod.TASKFORCE_GLOBAL_ENABLED is True, "V36.2 : global ON"
+        for intent in ("EXPANSION_CODE", "FEATURE_BUILDING",
+                       "CODE_REVIEW", "COUNCIL_DEBATE"):
+            assert mod.TASKFORCE_INTENT_ENABLED[intent] is True, (
+                f"V36.2 : {intent} doit etre actif"
             )
     finally:
-        # Reset apres le test pour restaurer l'isolation
         _reset_flags()
 
 
