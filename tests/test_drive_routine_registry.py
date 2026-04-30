@@ -41,19 +41,24 @@ from core.drive_routine_registry import (
 class TestDriveGenomeStructure:
     """Valide la structure et les valeurs du DRIVE_GENOME natal."""
 
-    def test_seven_drives_present(self):
+    def test_eight_drives_present(self):
+        """V35.1 : 8 drives — les 7 canoniques + REPOS (externally-driven)."""
         expected = {
             "CURIOSITE", "MAITRISE", "STABILITE", "CONNEXION",
             "CROISSANCE", "CREATION", "COMPREHENSION",
+            "REPOS",   # V35.1 — pulsion thermique
         }
         assert set(DRIVE_GENOME.keys()) == expected
 
     def test_all_weights_in_sane_range(self):
-        """Tous les planchers genomiques dans [0.4, 0.9]."""
+        """Tous les planchers genomiques dans [0.05, 0.95].
+        V35.1 elargit la borne haute a 0.95 pour COFFEE_BREAK (Alfred,
+        premier recours canonique de REPOS) et la borne basse a 0.05
+        pour SAUNA_MODE (filet ultime, dernier recours)."""
         for drive, intents in DRIVE_GENOME.items():
             for intent, weight in intents.items():
-                assert 0.4 <= weight <= 0.9, (
-                    f"{drive}.{intent}={weight} hors [0.4, 0.9]"
+                assert 0.05 <= weight <= 0.95, (
+                    f"{drive}.{intent}={weight} hors [0.05, 0.95]"
                 )
 
     def test_maitrise_has_refactoring_audit_at_nine(self):

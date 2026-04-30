@@ -33,13 +33,20 @@ def engine():
 
 class TestDriveBasics:
     def test_initial_deprivation(self, engine):
-        """Toutes les pulsions demarrent a 40."""
+        """Les pulsions canoniques demarrent a 40, les externally-driven a 0.
+        V35.1 : REPOS (pilotee par thermal_homeostasis) demarre a 0."""
+        from core.desire_engine import EXTERNALLY_DRIVEN_DRIVES
         for drive in engine.drives.values():
-            assert drive.deprivation == 40.0
+            if drive.name in EXTERNALLY_DRIVEN_DRIVES:
+                assert drive.deprivation == 0.0, (
+                    f"{drive.name} (externally-driven) doit demarrer a 0"
+                )
+            else:
+                assert drive.deprivation == 40.0
 
     def test_drive_names_complete(self, engine):
-        """Les 7 pulsions sont presentes."""
-        assert len(engine.drives) == 7
+        """V35.1 : 8 pulsions — 7 canoniques + REPOS."""
+        assert len(engine.drives) == 8
         for name in DRIVE_NAMES:
             assert name in engine.drives
 
@@ -299,7 +306,7 @@ class TestDriveSummary:
         assert "urgent" in summary
         assert "narrative" in summary
         assert "total_satisfactions" in summary
-        assert len(summary["drives"]) == 7
+        assert len(summary["drives"]) == 8   # V35.1 : 7 canoniques + REPOS
 
     def test_dominant_is_highest_deprivation(self, engine):
         """Le dominant est la pulsion avec la plus haute deprivation."""

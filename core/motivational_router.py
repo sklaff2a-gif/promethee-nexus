@@ -79,6 +79,9 @@ DRIVE_THRESHOLDS: Dict[str, float] = {
     "CONNEXION": 20.0,   # plus bas : besoin social rare, à entendre vite
     "CROISSANCE": 25.0,
     "COMPREHENSION": 25.0,
+    # V35.1 — REPOS : seuil 50, sous l'embrasement thermal_homeostasis (0.70).
+    # Reveil dès heat>=0.5, mais préemption réelle vers heat>=0.7 (urgency 0.4+).
+    "REPOS": 50.0,
 }
 
 # V34.6 : suppression de PULSION_TO_ROUTINES en dur. Les candidats sont

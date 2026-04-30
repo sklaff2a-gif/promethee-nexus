@@ -178,6 +178,14 @@ class BrainVM:
         # 3c. CODELETS — deleguees au module attention_codelets.py
         #     (s'executent via BRAIN_TICK handler, apres publication)
 
+        # 3d. METABOLISME THERMIQUE (V35.1) — respiration passive +
+        #     synchro pulsion REPOS depuis cognitive_heat.
+        try:
+            from core.thermal_homeostasis import thermal
+            thermal.tick()
+        except Exception as e:
+            logger.debug(f"BRAIN_VM: thermal tick skip: {e}")
+
         # 4. PUBLIER — BRAIN_TICK
         self.current_state = state
         self.state_history.append({

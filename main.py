@@ -36,11 +36,21 @@ class _DailyFileHandler(logging.FileHandler):
     Contourne le bug Windows où _TeeStream empêchait la rotation.
     Nettoyage automatique des fichiers > keep_days jours."""
 
+    # H4 fix (2026-04-28) : fsync périodique toutes les 30s pour forcer NTFS
+    # à synchroniser la taille et le mtime du fichier. Sans ça, un handle
+    # Python long-vivant (Prométhée tourne 24/7) laisse les métadonnées
+    # gelées au moment de la création — le fichier semble à 0 octets dans
+    # l'explorateur/Get-ChildItem alors qu'il se remplit normalement.
+    # Compromis perf/visibilité : 30s = ~1 fsync toutes les ~600 lignes
+    # de log en régime normal, négligeable côté I/O.
+    _FSYNC_INTERVAL_S = 30.0
+
     def __init__(self, logs_dir: str, prefix: str = "promethee", keep_days: int = 14):
         self._logs_dir = logs_dir
         self._prefix = prefix
         self._keep_days = keep_days
         self._current_date = self._today()
+        self._last_fsync_at = time.time()
         filepath = os.path.join(logs_dir, f"{prefix}_{self._current_date}.log")
         super().__init__(filepath, mode="a", encoding="utf-8")
         self._cleanup_old_files()
@@ -54,6 +64,18 @@ class _DailyFileHandler(logging.FileHandler):
         if today != self._current_date:
             self._rotate_to_new_day(today)
         super().emit(record)
+        # H4 fix : fsync périodique pour rafraîchir les métadonnées NTFS
+        now = time.time()
+        if now - self._last_fsync_at >= self._FSYNC_INTERVAL_S:
+            try:
+                if self.stream is not None:
+                    self.stream.flush()
+                    os.fsync(self.stream.fileno())
+                self._last_fsync_at = now
+            except (OSError, ValueError):
+                # Stream fermé ou descripteur invalide : silencieux,
+                # le prochain emit retentera.
+                pass
 
     def _rotate_to_new_day(self, new_date: str):
         """Ferme le fichier actuel et ouvre celui du nouveau jour."""
@@ -65,6 +87,9 @@ class _DailyFileHandler(logging.FileHandler):
                 os.path.join(self._logs_dir, f"{self._prefix}_{new_date}.log")
             )
             self.stream = self._open()
+            # H4 fix : reset du compteur fsync pour que le nouveau fichier
+            # reçoive aussi un fsync rapide après son premier emit.
+            self._last_fsync_at = 0.0
             self._cleanup_old_files()
         except Exception:
             pass
@@ -332,6 +357,11 @@ async def lifespan(app: FastAPI):
     # --- PULSIONS PRIMORDIALES ---
     desires.init()
     print("   💓 DESIRS: Moteur de pulsions primordiales actif.")
+
+    # --- METABOLISME THERMIQUE (V35.1) ---
+    from core.thermal_homeostasis import thermal
+    thermal.init()
+    print(f"   🔥 THERMAL: Metabolisme actif (heat={thermal.cognitive_heat:.3f}).")
 
     # --- SIGNAL BUS (Bus de Signaux Neuraux) ---
     from core.signal_bus import signal_bus

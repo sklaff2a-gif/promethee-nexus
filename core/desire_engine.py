@@ -40,6 +40,7 @@ DRIVE_METABOLIC_TEMPO: Dict[str, str] = {
     "MAITRISE":      "slow",   # chantier code — refactoring/security
     "STABILITE":     "slow",   # mémoire & audit — consolidation
     "CROISSANCE":    "slow",   # roadmap/expansion — routines lourdes
+    "REPOS":         "fast",   # V35.1 — dissipation thermique rapide
 }
 
 _MAX_FRUITLESS_BY_TEMPO: Dict[str, int] = {
@@ -59,7 +60,14 @@ def get_max_fruitless_for_drive(drive_name: str) -> int:
 
 
 DRIVE_NAMES = ("CURIOSITE", "MAITRISE", "STABILITE", "CONNEXION",
-               "CROISSANCE", "CREATION", "COMPREHENSION")
+               "CROISSANCE", "CREATION", "COMPREHENSION", "REPOS")
+
+# V35.1 (2026-04-30) — Drives pilotes depuis l'exterieur (pas de croissance
+# naturelle ni de resonance PSYCHE). Leur deprivation est ecrite par un
+# organe specialise qui dicte sa propre loi.
+#   REPOS : pilotee par thermal_homeostasis depuis cognitive_heat.
+# Si on ajoute d'autres drives externally-driven plus tard, c'est ici.
+EXTERNALLY_DRIVEN_DRIVES: frozenset = frozenset({"REPOS"})
 
 STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -104,6 +112,18 @@ class Drive:
     total_satisfied: int = 0       # Compteur historique
     frustration_streak: int = 0    # Echecs consecutifs
     tolerance_accumulator: float = 0.0  # Habituation (monte aux satisfactions, descend au repos)
+
+
+def _make_drive(name: str) -> "Drive":
+    """V35.1 — Construit un Drive avec sa deprivation initiale appropriee.
+
+    Les drives canoniques demarrent a 40 (leger manque). Les drives pilotes
+    depuis l'exterieur (REPOS) demarrent a 0.0 — leur valeur sera ecrite
+    par leur organe regulateur (thermal_homeostasis pour REPOS).
+    """
+    if name in EXTERNALLY_DRIVEN_DRIVES:
+        return Drive(name=name, deprivation=0.0)
+    return Drive(name=name)
 
 
 # --- Resonance PSYCHE-Pulsions ---
@@ -236,7 +256,9 @@ class DesireEngine:
         if self._initialized:
             return
         self._initialized = True
-        self.drives: Dict[str, Drive] = {name: Drive(name=name) for name in DRIVE_NAMES}
+        self.drives: Dict[str, Drive] = {
+            name: _make_drive(name) for name in DRIVE_NAMES
+        }
         self._last_tick: float = time.time()
         self._subscribed = False
         self._load()
@@ -250,7 +272,7 @@ class DesireEngine:
 
     def reset(self):
         """Reset complet (utilise par les tests)."""
-        self.drives = {name: Drive(name=name) for name in DRIVE_NAMES}
+        self.drives = {name: _make_drive(name) for name in DRIVE_NAMES}
         self._last_tick = time.time()
         self._subscribed = False
         self._initialized = False
@@ -394,6 +416,18 @@ class DesireEngine:
         traits_avg = self._get_traits_avg()
 
         for drive in self.drives.values():
+            # V35.1 — Drives pilotes depuis l'exterieur : pas de croissance
+            # naturelle, pas de resonance PSYCHE. Leur loi vient d'ailleurs
+            # (thermal_homeostasis pour REPOS). On laisse quand meme la
+            # tolerance_accumulator decroitre pour ne pas avoir d'asymetrie
+            # bizarre si elle a ete ecrite par satisfy().
+            if drive.name in EXTERNALLY_DRIVEN_DRIVES:
+                if drive.tolerance_accumulator > 0:
+                    recovery = TOLERANCE_RECOVERY_PER_HOUR * elapsed_hours
+                    drive.tolerance_accumulator = max(0.0,
+                        drive.tolerance_accumulator - recovery)
+                continue
+
             rise = base_rise
 
             # Amplification par resonance PSYCHE
@@ -436,7 +470,13 @@ class DesireEngine:
 
         Sert de baseline counterfactual : sans aucune action, la deprivation
         montera de ce taux par heure.
+
+        V35.1 — Drives pilotes depuis l'exterieur (REPOS) ont un rise rate
+        naturel de 0 : leur deprivation ne croit pas avec le temps.
         """
+        if drive_name in EXTERNALLY_DRIVEN_DRIVES:
+            return 0.0
+
         drive = self.drives.get(drive_name)
         if not drive:
             return NATURAL_RISE_PER_HOUR
@@ -705,12 +745,22 @@ class DesireEngine:
     # --- Persistance ---
 
     def _load(self):
-        """Charge l'etat depuis le fichier JSON."""
+        """Charge l'etat depuis le fichier JSON.
+
+        V35.1 — Les drives externally-driven (REPOS) ne sont JAMAIS
+        restaures depuis le fichier : leur etat persiste dans leur propre
+        fichier d'organe (thermal_state.json pour REPOS), pas ici. On
+        garde l'instance fraiche creee par _make_drive (deprivation=0.0),
+        que l'organe regulateur ecrira au boot.
+        """
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             drives_data = data.get("drives", {})
             for name in DRIVE_NAMES:
+                if name in EXTERNALLY_DRIVEN_DRIVES:
+                    # Skip : etat reste celui de _make_drive (depriv=0.0)
+                    continue
                 if name in drives_data:
                     d = drives_data[name]
                     self.drives[name] = Drive(
