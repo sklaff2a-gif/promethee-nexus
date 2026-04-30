@@ -136,7 +136,16 @@ class AlfredEngine:
     # ─── COFFEE BREAK PRINCIPAL ─────────────────────────────────────────
 
     async def coffee_break(self) -> Dict[str, Any]:
-        """Lance une conversation amicale. Retourne le résultat."""
+        """Lance une conversation amicale. Retourne le résultat.
+
+        V35.1.3 (2026-04-30) — Pause silencieuse autonome :
+        Si _find_recent_text() retourne None (Promethee n'a rien ecrit
+        recemment qui puisse amorcer un dialogue), Alfred ne skip plus
+        mais offre une PAUSE SILENCIEUSE de 30s. Doctrine : l'alterite
+        n'a pas besoin de paroles pour reposer. Une presence silencieuse
+        partagee reste un repos valide. Permet a la pulsion REPOS V35
+        d'etre reellement assouvie meme sans matiere a lire.
+        """
         start_time = time.time()
 
         # Cooldown
@@ -148,7 +157,33 @@ class AlfredEngine:
             # Trouver un texte récent de Prométhée
             text_source = self._find_recent_text()
             if not text_source:
-                return {"status": "skipped", "result": "Rien de nouveau à lire. On se voit plus tard."}
+                # V35.1.3 — Pause silencieuse autonome (30s)
+                import asyncio
+                logger.info(
+                    "ALFRED: Pause silencieuse autonome (rien a lire) — 30s"
+                )
+                await asyncio.sleep(30)
+                self.last_coffee = time.time()
+                self.session_count += 1
+                self._save()
+                duration = time.time() - start_time
+                try:
+                    from core.event_bus.bus import bus
+                    await bus.publish("COFFEE_BREAK_COMPLETE", {
+                        "exchanges": 0,
+                        "subject": "pause silencieuse",
+                        "duration_s": round(duration, 1),
+                        "mode": "silent_autonomous",
+                    })
+                except Exception:
+                    pass
+                return {
+                    "status": "success",
+                    "result": (
+                        "Pause silencieuse partagee avec Alfred (30s "
+                        "sans paroles). L'alterite repose meme dans le silence."
+                    ),
+                }
 
             # Construire l'accroche d'Alfred
             opening = self._build_opening(text_source)
