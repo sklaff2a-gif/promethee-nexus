@@ -1,4 +1,5 @@
 """V36.0 (2026-04-30) — Task Force Orchestrator (skeleton).
+V36.1 (2026-04-30 pm) — Implementation Ollama + semaphore VRAM + garde-fou prompt.
 
 Couche d'execution interposee entre le motivational_router (qui choisit
 QUEL intent executer) et autonomy_engine (qui dispatchait jusqu'ici en
@@ -16,14 +17,18 @@ Doctrine V36 (validee Jean-Michel 2026-04-30) :
     de tout refractory de pulsion ou de heat globale.
   - Feature flag par intent + global. Desactivable a tout moment.
 
-Etat V36.0 : SKELETON. Le code est present mais TASKFORCE_GLOBAL_ENABLED
-est False par defaut. Tout intent passe en fallback solo legacy. La
-phase V36.1 implementera _run_agent() avec Ollama + semaphore VRAM
-(eviter OOM sur LLMs paralleles).
+V36.1 — runtime Ollama :
+  - _default_agent_runner() appelle Ollama via httpx (POST /api/generate)
+  - Semaphore VRAM (asyncio.Semaphore(1)) garantit max 1 LLM concurrent
+    sur le GPU local. La topologie PARALLEL devient logique uniquement,
+    physiquement sequentielle. Evite OOM sur RTX 5070 Ti 16GB.
+  - Garde-fou prompt : MAX_PROMPT_CHARS = 24000 (~6k tokens). Au-dela,
+    troncature FIFO des outputs blackboard les plus anciens (V36.1 simple).
+    V36.2+ pourra raffiner avec resume LLM des outputs anciens.
 
-Transmission inter-agents (V36.0) : Blackboard partage. Chaque agent
-recoit un prompt qui inclut tous les outputs precedents (formates par
-role). Cf TaskForceState.build_prompt_for_agent.
+Transmission inter-agents : Blackboard partage. Chaque agent recoit un
+prompt qui inclut tous les outputs precedents (formates par role).
+Cf TaskForceState.build_prompt_for_agent.
 """
 from __future__ import annotations
 
@@ -42,6 +47,25 @@ STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "memory", "task_force_state.json"
 )
+
+# V36.1 — Constantes runtime
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+MAX_PROMPT_CHARS = 24000   # ~6000 tokens (heuristique 4 chars/token)
+DEFAULT_TEMPERATURE = 0.5
+
+# Semaphore VRAM : max 1 LLM concurrent sur le GPU local.
+# Garantit que la topologie PARALLEL_THEN_SYNTH ne crashe pas l'Ollama
+# sur LLMs 9b/14b (RTX 5070 Ti 16GB partagee). Le parallele devient
+# logique cote orchestrator, sequentiel physique cote API.
+_VRAM_SEMAPHORE: Optional[asyncio.Semaphore] = None  # cree au premier usage
+
+
+def _get_vram_semaphore() -> asyncio.Semaphore:
+    """Lazy init du semaphore (necessite un event loop actif)."""
+    global _VRAM_SEMAPHORE
+    if _VRAM_SEMAPHORE is None:
+        _VRAM_SEMAPHORE = asyncio.Semaphore(1)
+    return _VRAM_SEMAPHORE
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -103,7 +127,9 @@ class TaskForceState:
     iteration: int = 0
     started_at: float = field(default_factory=time.time)
 
-    def build_prompt_for_agent(self, agent: AgentRole) -> str:
+    def build_prompt_for_agent(
+        self, agent: AgentRole, max_chars: int = MAX_PROMPT_CHARS,
+    ) -> str:
         """Construit le prompt complet d'un agent en exposant le blackboard.
 
         Le prompt inclut :
@@ -112,17 +138,57 @@ class TaskForceState:
           3. CONTRIBUTIONS PRECEDENTES (tous les outputs accumules)
           4. Marqueur "[role] A toi."
 
-        Chaque agent decide quoi consommer dans ce qu'il recoit.
-        Pas de handoff function par paire — la transmission est uniforme.
+        V36.1 — Garde-fou taille : si prompt > max_chars, on tronque FIFO
+        les outputs les plus anciens du blackboard jusqu'a passer sous
+        le seuil. Les contributions recentes sont preservees (le critic
+        veut surtout voir le coder qui vient de repondre).
+        Logge en INFO si troncature appliquee — donne les donnees
+        empiriques pour V36.2+ (resume LLM sophistique si necessaire).
         """
+        # Construction blackboard ordonnee (insertion order Python 3.7+)
+        blackboard_items = list(self.blackboard.items())
+
+        prompt = self._compose_prompt(agent, blackboard_items)
+        truncated_count = 0
+
+        while len(prompt) > max_chars and len(blackboard_items) > 1:
+            # Retire le plus ancien output (FIFO, preserve les recents)
+            blackboard_items.pop(0)
+            truncated_count += 1
+            prompt = self._compose_prompt(
+                agent, blackboard_items, was_truncated=truncated_count
+            )
+
+        if truncated_count > 0:
+            logger.info(
+                f"V36.1: prompt [{agent.role}] tronque ({truncated_count} "
+                f"output(s) ancien(s) retire(s), len={len(prompt)})"
+            )
+
+        return prompt
+
+    def _compose_prompt(
+        self, agent: AgentRole,
+        blackboard_items: List[tuple],
+        was_truncated: int = 0,
+    ) -> str:
+        """Helper interne : compose le prompt a partir d'items ordonnes."""
         parts = [agent.system_prompt.strip()]
         parts.append(f"\nMISSION:\n{self.mission.strip()}")
-        if self.blackboard:
+        if blackboard_items:
             parts.append("\nCONTRIBUTIONS PRECEDENTES:")
-            for prev_role, prev_output in self.blackboard.items():
+            if was_truncated > 0:
+                parts.append(
+                    f"\n(Note: {was_truncated} contribution(s) ancienne(s) "
+                    f"ont ete elaguees pour respecter la fenetre de contexte.)"
+                )
+            for prev_role, prev_output in blackboard_items:
                 parts.append(f"\n[{prev_role}]\n{prev_output.strip()}")
         if self.iteration > 0:
-            parts.append(f"\n(Iteration {self.iteration + 1} — tu peux amender ta contribution precedente.)")
+            parts.append(
+                f"\n(Iteration {self.iteration + 1} — tu peux amender ta "
+                f"contribution precedente.)"
+            )
         parts.append(f"\n[{agent.role}] A toi.")
         return "\n".join(parts)
 
@@ -288,10 +354,18 @@ class TaskForceOrchestrator:
     def set_agent_runner(self, fn: Optional[AgentRunnerFn]) -> None:
         """Enregistre la fonction d'execution d'agent.
 
-        En V36.1+ runtime : Ollama + semaphore VRAM.
-        En tests : mock async qui retourne des outputs predetermines.
+        En runtime production : laisse a None — _resolve_runner() utilisera
+        le default_agent_runner V36.1 (Ollama + semaphore VRAM).
+        En tests : injecter un mock async qui retourne des outputs predetermines.
         """
         self._agent_runner = fn
+
+    def use_default_ollama_runner(self) -> None:
+        """V36.1 — Branche le runner Ollama par defaut (httpx + semaphore VRAM).
+        A appeler explicitement au boot par main.py si on veut activer V36.
+        En tests, on prefere injecter un mock via set_agent_runner().
+        """
+        self._agent_runner = _default_agent_runner
 
     # ─── API publique : CONTRAT D'INTERFACE ────────────────────────────
 
@@ -341,11 +415,10 @@ class TaskForceOrchestrator:
                 "task_force_trace": [],
             }
 
-        # 4. Verifier qu'un agent_runner est branche (V36.0 = stub)
+        # 4. Verifier qu'un agent_runner est branche
+        # En runtime : appeler use_default_ollama_runner() au boot
+        # En tests : injecter un mock via set_agent_runner()
         if self._agent_runner is None:
-            logger.warning(
-                f"V36: agent_runner non branche, fallback solo pour {intent}"
-            )
             return await self._fallback_solo(intent, mission, ctx,
                                               reason="no_agent_runner")
 
@@ -588,6 +661,55 @@ class TaskForceOrchestrator:
                 if agent.role == role and agent.refractory_seconds > max_r:
                     max_r = agent.refractory_seconds
         return max_r
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V36.1 — Default agent runner (Ollama + semaphore VRAM)
+# ═══════════════════════════════════════════════════════════════════════
+
+async def _default_agent_runner(agent: AgentRole, prompt: str) -> str:
+    """V36.1 — Execute un agent via Ollama local (httpx).
+
+    Acquiert le semaphore VRAM avant l'appel — garantit max 1 LLM
+    concurrent sur le GPU local. Le parallele logique d'orchestrator
+    devient sequentiel physique a ce niveau, evitant OOM.
+
+    Le timeout est gere a un niveau plus haut (asyncio.wait_for dans
+    _run_one_agent), donc ici on appelle httpx avec un timeout aligne.
+
+    Retourne le texte genere brut. En cas d'erreur Ollama, raise
+    l'exception — _run_one_agent l'attrapera et marquera la trace.
+    """
+    sem = _get_vram_semaphore()
+    async with sem:
+        try:
+            import httpx  # lazy import (pas une dep dure du module)
+        except ImportError as e:
+            raise RuntimeError(f"V36.1 requiert httpx: {e}")
+
+        payload = {
+            "model": agent.llm_model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": DEFAULT_TEMPERATURE,
+                "num_predict": 1024,  # ~750 mots, suffisant V36.1
+            },
+        }
+
+        # Timeout client httpx aligne sur le timeout agent (avec marge 5s)
+        client_timeout = max(30, agent.timeout_seconds + 5)
+
+        async with httpx.AsyncClient(timeout=client_timeout) as client:
+            response = await client.post(OLLAMA_URL, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            output = data.get("response", "").strip()
+            if not output:
+                raise RuntimeError(
+                    f"Ollama a retourne une reponse vide pour {agent.role}"
+                )
+            return output
 
 
 # Singleton global

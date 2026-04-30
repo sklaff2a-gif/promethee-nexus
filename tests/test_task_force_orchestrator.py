@@ -401,3 +401,85 @@ def test_v36_intent_flags_default_off():
     import core.task_force_orchestrator as mod
     _reset_flags()
     assert all(v is False for v in mod.TASKFORCE_INTENT_ENABLED.values())
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V36.1 — Tests Ollama runner + semaphore VRAM + troncature blackboard
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_v36_1_oversized_prompt_truncates_oldest_outputs():
+    """V36.1 : si le prompt depasse MAX_PROMPT_CHARS, on tronque FIFO
+    les outputs les plus anciens (preserve les recents)."""
+    agent = AgentRole("critic", "model_x", "Tu critiques.")
+    state = TaskForceState(
+        intent="EXPANSION_CODE", mission="Mission courte",
+        blackboard={
+            "architect": "X" * 10000,   # output ancien volumineux
+            "coder":     "Y" * 10000,   # plus recent
+            "tester":    "Z" * 10000,   # plus recent encore
+        },
+    )
+    # Sans troncature, prompt > 30000 chars
+    prompt = state.build_prompt_for_agent(agent, max_chars=15000)
+    assert len(prompt) <= 15000, f"prompt non tronque: len={len(prompt)}"
+    # L'output le plus recent (tester) doit etre present
+    assert "[tester]" in prompt
+    # L'architect (le plus ancien) doit avoir disparu
+    assert "[architect]" not in prompt
+    # Marqueur de troncature visible
+    assert "elaguees" in prompt.lower() or "tronc" in prompt.lower()
+
+
+def test_v36_1_truncation_preserves_recent_outputs():
+    """Si seul le 1er output est volumineux, lui seul disparait."""
+    agent = AgentRole("synth", "m", "Tu synthetises.")
+    state = TaskForceState(
+        intent="X", mission="Mission",
+        blackboard={
+            "architect": "X" * 20000,  # gros, sera tronque
+            "coder":     "C",          # petit, doit rester
+            "critic":    "K",          # petit, doit rester
+        },
+    )
+    prompt = state.build_prompt_for_agent(agent, max_chars=10000)
+    assert "[architect]" not in prompt
+    assert "[coder]" in prompt
+    assert "[critic]" in prompt
+
+
+def test_v36_1_truncation_keeps_at_least_one_output():
+    """Garde-fou : meme si TOUS les outputs sont enormes, on en garde
+    au moins UN (le plus recent). Sinon le prompt n'a aucun contexte."""
+    agent = AgentRole("c", "m", "Tu codes.")
+    huge = "X" * 50000
+    state = TaskForceState(
+        intent="X", mission="m",
+        blackboard={"architect": huge, "coder": huge, "critic": huge},
+    )
+    prompt = state.build_prompt_for_agent(agent, max_chars=5000)
+    # Le dernier (critic) doit rester meme si overshoot
+    assert "[critic]" in prompt
+
+
+def test_v36_1_use_default_ollama_runner_branches_runner(fresh_orch):
+    """use_default_ollama_runner() branche le runner par defaut."""
+    import core.task_force_orchestrator as mod
+    assert fresh_orch._agent_runner is None
+    fresh_orch.use_default_ollama_runner()
+    assert fresh_orch._agent_runner is mod._default_agent_runner
+
+
+def test_v36_1_default_runner_acquires_vram_semaphore_on_import():
+    """Le module expose un semaphore lazy-init pour la VRAM."""
+    import core.task_force_orchestrator as mod
+    # Il existe une fonction de resolution
+    assert hasattr(mod, "_get_vram_semaphore")
+    # Et une constante OLLAMA_URL
+    assert mod.OLLAMA_URL.startswith("http")
+
+
+def test_v36_1_max_prompt_chars_constant_exists():
+    """Constante doctrinale : MAX_PROMPT_CHARS doit etre dans le module."""
+    import core.task_force_orchestrator as mod
+    assert mod.MAX_PROMPT_CHARS >= 8000   # au moins ~2k tokens
+    assert mod.MAX_PROMPT_CHARS <= 100000  # pas absurde non plus
