@@ -217,19 +217,45 @@ _state = _RouterState()
 
 # ─── API publique ──────────────────────────────────────────────────────
 
-def _urgency_ratio(depriv: float, threshold: float) -> float:
+def _urgency_ratio(depriv: float, threshold: float, drive_name: Optional[str] = None) -> float:
     """V34.6 — Souffrance relative au-dessus du seuil de tolerance.
+    V35.2 — Bypass non-lineaire pour REPOS (alerte physiologique).
 
-    Returns le pourcentage de marge consommee entre threshold et 100.
+    Pour les pulsions de croissance standard, formule normalisee :
       depriv = threshold      -> 0.0 (juste au seuil)
-      depriv = (threshold+100)/2 -> 0.5 (mi-marge)
       depriv = 100            -> 1.0 (saturation)
+      margin = max(1, 100 - threshold)
+      urgency = (depriv - threshold) / margin
 
-    Formule retenue plutot que (depriv - threshold) brut :
-    une pulsion a seuil 80 (STABILITE chronique) et depriv 92 a consomme
-    60% de sa marge = souffre proportionnellement plus qu'une pulsion a
-    seuil 25 et depriv 46 (qui n'a consomme que 28% de sa marge).
+    Pour REPOS (V35.2 — observation runtime 2026-04-30) : formule non-lineaire
+    qui corrige le biais systemique de la "course entre declin et croissance".
+    Le decay thermique de cognitive_heat fait decroitre REPOS naturellement
+    pendant que les autres pulsions montent — REPOS perdait la course meme
+    en post-embrasement. La formule ci-dessous garantit que l'embrasement
+    cognitif (heat >= 0.70 -> depriv >= 80 via embrasement_min_deprivation)
+    domine mecaniquement n'importe quelle pulsion de croissance, sauf une
+    STABILITE en panique extreme (depriv > 95).
+
+    Profil non-lineaire REPOS :
+      depriv < 50            -> 0.0     (sous le seuil de reveil)
+      depriv ∈ [50, 80[      -> linear de 0.0 a 0.85 (zone d'eveil progressive)
+      depriv ∈ [80, 100]     -> 0.85 a 1.0 (zone d'embrasement, alerte garantie)
+
+    Le saut a 0.85 a depriv=80 reflete la doctrine V35.2 : l'embrasement
+    n'est pas un desir comme un autre, c'est une defaillance physique
+    imminente qui justifie une priorite absolue sur les pulsions montantes.
     """
+    # V35.2 — REPOS : alerte physiologique non-lineaire
+    if drive_name == "REPOS":
+        if depriv < 50:
+            return 0.0
+        if depriv >= 80:
+            # Zone d'embrasement : urgency garantie >= 0.85, monte vers 1.0
+            return min(1.0, 0.85 + (depriv - 80) * 0.0075)
+        # Zone d'eveil 50-80 : montee lineaire vers le seuil d'embrasement
+        return (depriv - 50) / 30.0 * 0.85
+
+    # Pulsions de croissance standard : formule normalisee V34.6
     margin = max(1.0, 100.0 - threshold)
     return (depriv - threshold) / margin
 
@@ -319,7 +345,7 @@ def check_drive_override(
         threshold = DRIVE_THRESHOLDS.get(drive_name, DEFAULT_DRIVE_THRESHOLD)
         if depriv < threshold:
             continue
-        urgency = _urgency_ratio(depriv, threshold)
+        urgency = _urgency_ratio(depriv, threshold, drive_name=drive_name)
         eligible.append((drive_name, depriv, threshold, urgency))
 
     if not eligible:

@@ -117,21 +117,25 @@ DRIVE_GENOME: Dict[str, Dict[str, float]] = {
     # V35.1 (2026-04-30) — Pulsion REPOS : pilotee par thermal_homeostasis
     # depuis cognitive_heat. Tous les candidats sont des dissipateurs
     # thermiques (delta < 0 dans THERMAL_SIGNATURES). L'ordre privilegie
-    # l'alterite reelle (COFFEE_BREAK / Alfred) sur le sommeil profond
-    # (NAP_MODE / SAUNA_MODE), conformement a la doctrine CONNEXION.
+    # l'alterite reelle (COFFEE_BREAK / Alfred) sur le sommeil profond,
+    # conformement a la doctrine CONNEXION.
+    #
+    # V35.2 (2026-04-30 pm) — Nettoyage : NAP_MODE et SAUNA_MODE retires.
+    # Ce sont des MODES SYSTEME (NAP_MODE_NORMAL/DEEP/HIBERNATION,
+    # sauna_mode auto-trigger), pas des intents dispatchables par le router.
+    # Garder des routines fictives dans le genome creait une cascade morte.
+    # Les vrais dissipateurs operent maintenant sur les routines reelles.
     "REPOS": {
         "COFFEE_BREAK":         0.95,   # Alfred — premier recours canonique
         "MEMORY_CONSOLIDATION": 0.85,   # vrai metabolisme nocturne
         "VEILLE_SILENCIEUSE":   0.70,   # lecture calme, dissipation douce
         "CREATIVE_PLAY":        0.60,
         "MEMORY_CLEANUP":       0.50,
-        "NAP_MODE":             0.40,   # sieste programmee
         "FREE_EXPLORATION":     0.30,
         "GRIMOIRE_INVOKE":      0.20,
-        "STEFAN_CONFRONTATION": 0.15,   # rival : catharsis, dissipation cathartique
+        "STEFAN_CONFRONTATION": 0.15,   # rival : catharsis cathartique
         "SOLILOQUE_INTERNE":    0.10,
         "CURIOSITY_DEEP_DIVE":  0.10,
-        "SAUNA_MODE":           0.05,   # filet de securite ultime
     },
 }
 

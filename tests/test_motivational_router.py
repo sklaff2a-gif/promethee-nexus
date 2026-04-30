@@ -427,3 +427,101 @@ def test_skipped_intent_does_not_block_other_drive():
     # CREATION mappe sur EXPANSION_CODE (0.9) en tete, non affecte par le skip
     expected = get_candidate_routines("CREATION", top_k=1)[0]
     assert r.intent == expected
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 11. V35.2 — Urgence non-lineaire pour REPOS (alerte physiologique)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Doctrine V35.2 : la formule normalisee V34.6 cree un biais systemique
+# pour REPOS — sa deprivation decroit naturellement (decay thermique)
+# pendant que les autres pulsions montent (croissance), donc REPOS perdait
+# la course en post-embrasement. La nouvelle formule garantit qu'au-dela
+# du seuil d'embrasement (depriv >= 80), REPOS a une urgency >= 0.85
+# qui ecrase mecaniquement les pulsions de croissance.
+
+from core.motivational_router import _urgency_ratio
+
+
+class TestUrgencyReposNonLinear:
+    """V35.2 — Tests de la formule non-lineaire pour REPOS."""
+
+    def test_repos_urgency_below_50_is_zero(self):
+        """Sous le seuil de reveil (50), REPOS reste silencieuse."""
+        assert _urgency_ratio(0.0, 50.0, drive_name="REPOS") == 0.0
+        assert _urgency_ratio(30.0, 50.0, drive_name="REPOS") == 0.0
+        assert _urgency_ratio(49.99, 50.0, drive_name="REPOS") == 0.0
+
+    def test_repos_urgency_at_50_is_zero(self):
+        """A depriv exactement 50 (seuil), urgency = 0 (pas declenche)."""
+        assert _urgency_ratio(50.0, 50.0, drive_name="REPOS") == 0.0
+
+    def test_repos_urgency_progressive_in_eveil_zone(self):
+        """Zone 50-80 : montee lineaire de 0.0 a 0.85."""
+        # Mi-zone : depriv=65 -> urgency=(65-50)/30*0.85 = 0.425
+        assert abs(_urgency_ratio(65.0, 50.0, drive_name="REPOS") - 0.425) < 0.001
+        # Quart-zone : depriv=57.5 -> urgency=0.2125
+        assert abs(_urgency_ratio(57.5, 50.0, drive_name="REPOS") - 0.2125) < 0.001
+
+    def test_repos_urgency_jump_at_embrasement_threshold(self):
+        """A depriv=80 (seuil embrasement), urgency saute a 0.85.
+        C'est la doctrine V35.2 : alerte physiologique imminente."""
+        assert _urgency_ratio(80.0, 50.0, drive_name="REPOS") == 0.85
+
+    def test_repos_urgency_above_embrasement_climbs_to_one(self):
+        """Au-dela de 80, urgency monte de 0.85 a 1.0 lineairement."""
+        # depriv=80 -> 0.85
+        assert _urgency_ratio(80.0, 50.0, drive_name="REPOS") == 0.85
+        # depriv=90 -> 0.85 + 10*0.0075 = 0.925
+        assert abs(_urgency_ratio(90.0, 50.0, drive_name="REPOS") - 0.925) < 0.001
+        # depriv=100 -> 0.85 + 20*0.0075 = 1.0 (clamp)
+        assert _urgency_ratio(100.0, 50.0, drive_name="REPOS") == 1.0
+
+    def test_repos_urgency_clamped_at_one(self):
+        """Au-dela de 100 (impossible mais defensive), clamp a 1.0."""
+        assert _urgency_ratio(150.0, 50.0, drive_name="REPOS") == 1.0
+
+    def test_repos_post_embrasement_beats_growing_drive(self):
+        """Cas reel observe le 30/04 : REPOS doit ecraser les pulsions
+        de croissance qui montaient au-dessus de leur seuil.
+        Avant V35.2 : COMPREHENSION 73 (0.64) battait REPOS 75 (0.50).
+        Apres V35.2 : REPOS 85 a urgency 0.89 ecrase tout."""
+        drives = {
+            "REPOS": {"deprivation": 85.0},          # urgency 0.89 (V35.2)
+            "COMPREHENSION": {"deprivation": 73.0},  # urgency 0.64
+            "MAITRISE": {"deprivation": 90.0},       # urgency 0.87
+        }
+        r = check_drive_override(drives)
+        assert r is not None
+        assert r.triggering_drive == "REPOS"
+
+    def test_stabilite_critique_still_beats_repos_embrasement(self):
+        """Doctrine V35.2 : seule la STABILITE critique (depriv >= 95)
+        peut ecraser REPOS en embrasement.
+        STABILITE 100 (urgency 1.0) > REPOS 80 (urgency 0.85)."""
+        drives = {
+            "REPOS": {"deprivation": 80.0},        # urgency 0.85
+            "STABILITE": {"deprivation": 100.0},    # urgency (100-80)/20 = 1.0
+        }
+        r = check_drive_override(drives)
+        assert r is not None
+        assert r.triggering_drive == "STABILITE"
+
+    def test_other_drives_unchanged_by_v35_2(self):
+        """V35.2 : la formule normalisee reste inchangee pour les autres
+        drives. Pas de regression sur le comportement V34.6."""
+        # CREATION depriv 50, threshold 25 -> (25/75) = 0.333
+        assert abs(_urgency_ratio(50.0, 25.0, drive_name="CREATION") - 0.333) < 0.01
+        # Sans drive_name -> formule normalisee (default)
+        assert abs(_urgency_ratio(50.0, 25.0) - 0.333) < 0.01
+
+    def test_repos_silent_when_machine_cool(self):
+        """V35.2 : si heat=0 (depriv REPOS=0), le router ne preempte pas
+        REPOS meme face a CREATION basse."""
+        drives = {
+            "REPOS": {"deprivation": 0.0},          # urgency 0
+            "CREATION": {"deprivation": 30.0},       # urgency 0.067
+        }
+        r = check_drive_override(drives)
+        assert r is not None
+        assert r.triggering_drive == "CREATION"
