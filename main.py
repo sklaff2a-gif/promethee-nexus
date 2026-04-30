@@ -1491,6 +1491,31 @@ async def api_reboot(request: Request):
     _emergency_save()
     os._exit(65)
 
+
+@app.post("/api/_debug/inject_drive", dependencies=[Depends(verify_token)])
+async def debug_inject_drive(request: Request):
+    """V35.1.2 (debug only) — Force une deprivation sur un drive donne.
+
+    Permet de tester le mecanisme d'embrasement thermique V35 sans attendre
+    l'evolution naturelle des pulsions. Endpoint reserve aux tests internes
+    et au harness d'observation. A retirer/proteger en production publique.
+
+    Payload: {"drive": "CREATION", "deprivation": 95.0}
+    """
+    data = await request.json()
+    drive_name = data.get("drive", "").upper()
+    deprivation = float(data.get("deprivation", 0))
+    if not drive_name or not (0 <= deprivation <= 100):
+        raise HTTPException(400, "drive name + deprivation in [0,100] requis")
+    from core.desire_engine import desires
+    if drive_name not in desires.drives:
+        raise HTTPException(404, f"drive {drive_name} inconnu")
+    desires.drives[drive_name].deprivation = deprivation
+    logger.warning(
+        f"[DEBUG] Injection forcee : drive={drive_name} deprivation={deprivation}"
+    )
+    return {"status": "ok", "drive": drive_name, "deprivation": deprivation}
+
 async def strategic_feedback_loop(agent_name: str, mission: str, result: str):
     if agent_name in ["strategist", "architect", "factory"]: return
     await bus.publish("THOUGHT_STREAM", {
