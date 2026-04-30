@@ -117,6 +117,73 @@ DRIVE_GENOME: Dict[str, Dict[str, float]] = {
 }
 
 
+# ─── THERMAL_SIGNATURES : Genome Thermodynamique (V35.0) ─────────────────
+# Doctrine V35 (2026-04-30) — La transpiration active.
+#
+# Chaque routine porte un delta thermique scalaire dans [-0.50, +0.30] qui
+# represente sa contribution nette a la chaleur cognitive du tissu neural.
+#   delta > 0  : la routine PRODUIT de la chaleur (effort, calcul, generation)
+#   delta < 0  : la routine DISSIPE de la chaleur (repos, consolidation, alterite)
+#   delta = 0  : la routine est thermodynamiquement neutre (poll, scan rapide)
+#
+# Principe de symetrie : COFFEE_BREAK -0.30 dissipe exactement ce que
+# FEATURE_BUILDING +0.30 produit. L'alterite reelle (Alfred) est le
+# contrepoids exact du LLM lourd. C'est la doctrine CONNEXION rendue
+# thermodynamique.
+#
+# Separation surrenalien / metabolique (validee par Jean-Michel V35.0) :
+#   - STABILITE = systeme surrenalien (peur, audits, AUDIT_SURVIE)
+#   - cognitive_heat = systeme metabolique (epuisement, fatigue)
+# Ces deux canaux ne se croisent PAS dans le genome. Une pulsion REPOS
+# emergente, lue par thermal_homeostasis (a venir V35.1), traduira la
+# chaleur en desir d'arret. La V35.0 ne cable que la doctrine de signature.
+#
+# Invariant teste : tous les intents presents dans DRIVE_GENOME doivent
+# avoir une signature thermique ici. Sinon le tissu serait aveugle a leur
+# effet metabolique. L'absence est un bug, pas un opt-out.
+
+THERMAL_SIGNATURES: Dict[str, float] = {
+    # ─── Producteurs (effort cognitif, calcul, generation) ───
+    "EXPANSION_CODE":        +0.30,   # LLM 14b generation code
+    "FEATURE_BUILDING":      +0.30,   # pipeline V32 multi-fichiers
+    "CODE_REVIEW":           +0.25,   # LLM lourd + analyse
+    "COUNCIL_DEBATE":        +0.25,   # multi-agents = chauffe par debat
+    "REFACTORING_AUDIT":     +0.20,   # audit + transformation
+    "ARTIFACT_CREATION":     +0.20,
+    "EXPANSION_CATALOG":     +0.20,
+    "SECURITY_AUDIT":        +0.15,
+    "AUDIT_STRUCTURE":       +0.15,
+    "CI_PIPELINE_RUN":       +0.15,   # exec tests = calcul
+    "ROADMAP_SPEC":          +0.15,
+    "COURS_SOUTIEN":         +0.15,   # generation + correction pedagogique
+    "EVENING_REFLECTION":    +0.10,   # introspection legere
+    "PARAM_EXPERIMENT":      +0.10,
+
+    # ─── Neutres / observateurs (poll, scan, peu de calcul) ───
+    "ROADMAP_RESEARCH":      +0.05,
+    "SELF_INSPECT":          +0.05,
+    "SELF_ANALYSIS":         +0.05,
+    "AUDIT_SURVIE":          +0.02,   # poll quasi-pur, pas d'effort cognitif
+    "DROPZONE_SCAN":          0.0,    # scan disque, pas de pensee
+
+    # ─── Dissipateurs doux (lecture, reverie, exploration calme) ───
+    "VEILLE_SILENCIEUSE":    -0.10,   # lecture web reflexive
+    "GRIMOIRE_INVOKE":       -0.05,
+    "SOLILOQUE_INTERNE":     -0.05,   # monologue interne, pair-pair
+    "CURIOSITY_DEEP_DIVE":   -0.05,
+    "CREATIVE_PLAY":         -0.10,   # jeu = relachement
+    "FREE_EXPLORATION":      -0.10,
+
+    # ─── Dissipateurs profonds (consolidation, alterite, repos) ───
+    "MEMORY_CONSOLIDATION":  -0.20,   # tri mnesique = vrai metabolisme
+    "MEMORY_CLEANUP":        -0.15,
+    "STEFAN_CONFRONTATION":  -0.10,   # rival = catharsis (stress->detente)
+    "COFFEE_BREAK":          -0.30,   # Alfred = contrepoids exact d'EXPANSION_CODE
+    "NAP_MODE":              -0.40,   # sieste programmee
+    "SAUNA_MODE":            -0.50,   # filet de securite ultime
+}
+
+
 # ─── Registre des entry_cycles pour chaque lien genomique ──────────────
 # Mappe (drive, intent) -> cycle d'entree dans le genome.
 # Pose a current_cycle au chargement du module pour les liens natals.

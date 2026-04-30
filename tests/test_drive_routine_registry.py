@@ -25,6 +25,7 @@ from unittest.mock import patch
 from core import drive_routine_registry as registry
 from core.drive_routine_registry import (
     DRIVE_GENOME,
+    THERMAL_SIGNATURES,
     GENOME_GRACE_CYCLES,
     GENOME_DEPRECIATION_CYCLES,
     FLOOR_OF_THE_FLOOR,
@@ -760,3 +761,88 @@ class TestGetRoutinesInjectionDiscipline:
         )
         # En grace period, les deux doivent etre identiques
         assert r_protected == r_stubbed
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V35.0 — THERMAL_SIGNATURES (Genome Thermodynamique)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Doctrine V35 : chaque routine connue du genome doit avoir une signature
+# thermique scalaire dans [-0.50, +0.30]. Pas d'orphelin, pas d'amplitude
+# aberrante. Les tests ci-dessous gravent cet invariant pour empecher
+# qu'une future addition au DRIVE_GENOME ne se fasse sans signature.
+
+class TestThermalSignatures:
+    """V35.0 — Gravure de l'invariant doctrinal des signatures thermiques."""
+
+    def test_thermal_signatures_is_dict_of_floats(self):
+        """Format attendu : Dict[str, float]. Pas de tuples, pas de None."""
+        assert isinstance(THERMAL_SIGNATURES, dict)
+        for intent, delta in THERMAL_SIGNATURES.items():
+            assert isinstance(intent, str), f"intent non-str: {intent!r}"
+            assert isinstance(delta, (int, float)), (
+                f"signature non-numerique pour {intent}: {delta!r}"
+            )
+
+    def test_amplitudes_within_doctrinal_range(self):
+        """V35.0 : amplitudes bornees dans [-0.50, +0.30].
+        Au-dela, c'est probablement une erreur de saisie."""
+        for intent, delta in THERMAL_SIGNATURES.items():
+            assert -0.50 <= delta <= 0.30, (
+                f"{intent} hors plage [-0.50, +0.30]: {delta}"
+            )
+
+    def test_every_genome_intent_has_thermal_signature(self):
+        """Invariant fondamental V35 : aucun intent du DRIVE_GENOME ne doit
+        rester sans signature thermique. L'absence rendrait le tissu aveugle
+        a son effet metabolique. C'est exactement le piege de la table
+        heretique V34 — eviter qu'il ne se reproduise sur la dimension
+        thermique."""
+        genome_intents = set()
+        for drive, intents in DRIVE_GENOME.items():
+            genome_intents.update(intents.keys())
+
+        thermal_intents = set(THERMAL_SIGNATURES.keys())
+        missing = genome_intents - thermal_intents
+        assert not missing, (
+            f"Intents du genome sans signature thermique: {sorted(missing)}. "
+            f"Ajoute-les a THERMAL_SIGNATURES dans drive_routine_registry."
+        )
+
+    def test_doctrine_alfred_is_exact_counterweight_of_expansion_code(self):
+        """Doctrine CONNEXION rendue thermodynamique : COFFEE_BREAK (Alfred)
+        dissipe exactement ce qu'EXPANSION_CODE produit. Cette symetrie est
+        intentionnelle — on grave la doctrine 'l'alterite reelle est le
+        contrepoids exact du LLM lourd' dans la physique du systeme."""
+        assert THERMAL_SIGNATURES["EXPANSION_CODE"] == 0.30
+        assert THERMAL_SIGNATURES["COFFEE_BREAK"] == -0.30
+        assert (
+            THERMAL_SIGNATURES["EXPANSION_CODE"]
+            + THERMAL_SIGNATURES["COFFEE_BREAK"]
+            == 0.0
+        )
+
+    def test_audit_survie_is_thermally_neutral(self):
+        """V35.0 : AUDIT_SURVIE reste un poll surrenalien, pas un effort
+        cognitif. Sa signature doit rester quasi-nulle (<= 0.05) pour que
+        le canal STABILITE (peur) ne soit pas confondu avec le canal
+        cognitive_heat (fatigue). Veto Jean-Michel V35.0."""
+        assert THERMAL_SIGNATURES["AUDIT_SURVIE"] <= 0.05
+
+    def test_repos_routines_are_strict_dissipators(self):
+        """Toutes les routines de repos doivent dissiper (delta < 0).
+        Sinon le mecanisme V35.1 (pulsion REPOS emergente) ne pourra pas
+        leur faire confiance pour faire baisser la chaleur."""
+        for repos_intent in ("COFFEE_BREAK", "NAP_MODE", "SAUNA_MODE",
+                             "MEMORY_CONSOLIDATION", "MEMORY_CLEANUP"):
+            assert THERMAL_SIGNATURES[repos_intent] < 0, (
+                f"{repos_intent} devrait dissiper mais delta={THERMAL_SIGNATURES[repos_intent]}"
+            )
+
+    def test_heavy_llm_routines_are_strict_producers(self):
+        """Les routines a LLM lourd doivent produire (delta > 0)."""
+        for llm_intent in ("EXPANSION_CODE", "FEATURE_BUILDING",
+                           "CODE_REVIEW", "COUNCIL_DEBATE"):
+            assert THERMAL_SIGNATURES[llm_intent] > 0, (
+                f"{llm_intent} devrait chauffer mais delta={THERMAL_SIGNATURES[llm_intent]}"
+            )
