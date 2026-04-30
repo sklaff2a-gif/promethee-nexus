@@ -695,9 +695,15 @@ async def _default_agent_runner(agent: AgentRole, prompt: str) -> str:
             "model": agent.llm_model,
             "prompt": prompt,
             "stream": False,
+            # V36.1.2 — think=False au NIVEAU RACINE (pas dans options).
+            # qwen3.5:9b est un modele "thinking" qui sinon consomme tout
+            # son budget num_predict en raisonnement avant de produire
+            # le moindre output. Diagnostique runtime le 30/04 : retour
+            # vide systematique avec done_reason=length sans output.
+            "think": False,
             "options": {
                 "temperature": DEFAULT_TEMPERATURE,
-                "num_predict": 1024,  # ~750 mots, suffisant V36.1
+                "num_predict": 2048,  # V36.1.2 : 1024 -> 2048 pour outputs riches
             },
         }
 
