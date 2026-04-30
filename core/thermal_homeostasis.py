@@ -136,6 +136,15 @@ class ThermalHomeostasis:
                 f"[THERMAL] {intent} delta={delta:+.2f}  "
                 f"heat: {old:.3f} -> {self.cognitive_heat:.3f}"
             )
+        # V35.1.1 — Marqueur narratif du moment fatidique : franchissement
+        # du seuil d'embrasement. WARNING level pour se distinguer dans les
+        # logs. C'est l'instant ou l'homeostasie prend le pas sur la volonte.
+        if old < self.REPOS_EMBRASEMENT_THRESHOLD <= self.cognitive_heat:
+            logger.warning(
+                f"[THERMAL] EMBRASEMENT — heat franchit "
+                f"{self.REPOS_EMBRASEMENT_THRESHOLD} ({old:.3f} -> "
+                f"{self.cognitive_heat:.3f}). REPOS va prendre la parole."
+            )
         self._publish_repos()
         self._save()
 
