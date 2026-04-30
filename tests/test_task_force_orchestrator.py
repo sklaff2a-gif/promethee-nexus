@@ -388,19 +388,29 @@ def test_topology_enum_has_three_values():
     assert values == {"sequential", "sequential_feedback", "parallel_then_synth"}
 
 
-def test_v36_global_flag_default_off():
-    """Garde-fou : V36.0 livre avec global_enabled=False (code dormant)."""
-    import core.task_force_orchestrator as mod
-    # On reset les flags au cas ou ils auraient ete touches
-    _reset_flags()
-    assert mod.TASKFORCE_GLOBAL_ENABLED is False
+def test_v36_1_1_default_flags_per_release_intent():
+    """V36.1.1 — Etat doctrinal des flags au chargement du module :
+    - global_enabled : True (V36 actif au boot)
+    - EXPANSION_CODE : True (1er intent active en sandbox)
+    - FEATURE_BUILDING / CODE_REVIEW / COUNCIL_DEBATE : False (a venir)
 
-
-def test_v36_intent_flags_default_off():
-    """Tous les intents commencent OFF."""
+    Test base sur reload du module pour echapper au reset autouse."""
+    import importlib
     import core.task_force_orchestrator as mod
-    _reset_flags()
-    assert all(v is False for v in mod.TASKFORCE_INTENT_ENABLED.values())
+    importlib.reload(mod)
+    try:
+        assert mod.TASKFORCE_GLOBAL_ENABLED is True, "V36.1.1 : global ON au boot"
+        assert mod.TASKFORCE_INTENT_ENABLED["EXPANSION_CODE"] is True, (
+            "V36.1.1 : EXPANSION_CODE active en sandbox"
+        )
+        # Les autres intents restent dormants jusqu'a leur propre validation
+        for intent in ("FEATURE_BUILDING", "CODE_REVIEW", "COUNCIL_DEBATE"):
+            assert mod.TASKFORCE_INTENT_ENABLED[intent] is False, (
+                f"{intent} doit rester OFF — pas encore valide en runtime"
+            )
+    finally:
+        # Reset apres le test pour restaurer l'isolation
+        _reset_flags()
 
 
 # ═══════════════════════════════════════════════════════════════════════

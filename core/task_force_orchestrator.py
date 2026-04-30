@@ -284,13 +284,17 @@ INTENT_TO_TASKFORCE: Dict[str, TaskForce] = {
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Feature flags (V36.0 : tout OFF par defaut)
+# Feature flags
 # ═══════════════════════════════════════════════════════════════════════
+# V36.0 : tout OFF (skeleton dormant)
+# V36.1.1 (2026-04-30 pm) : activation EXPANSION_CODE en sandbox
+# Les autres intents restent OFF tant qu'ils ne sont pas valides en runtime.
+# Coupure d'urgence : remettre TASKFORCE_GLOBAL_ENABLED = False et reboot.
 
-TASKFORCE_GLOBAL_ENABLED: bool = False  # OFF par defaut V36.0
+TASKFORCE_GLOBAL_ENABLED: bool = True  # V36.1.1 : activation runtime
 
 TASKFORCE_INTENT_ENABLED: Dict[str, bool] = {
-    "EXPANSION_CODE":   False,
+    "EXPANSION_CODE":   True,   # V36.1.1 : 1er intent active en sandbox
     "FEATURE_BUILDING": False,
     "CODE_REVIEW":      False,
     "COUNCIL_DEBATE":   False,

@@ -363,6 +363,19 @@ async def lifespan(app: FastAPI):
     thermal.init()
     print(f"   🔥 THERMAL: Metabolisme actif (heat={thermal.cognitive_heat:.3f}).")
 
+    # --- TASK FORCE ORCHESTRATOR (V36.1.1) ---
+    from core.task_force_orchestrator import (
+        orchestrator as _tf_orchestrator,
+        TASKFORCE_GLOBAL_ENABLED as _tf_global,
+        TASKFORCE_INTENT_ENABLED as _tf_intent_enabled,
+    )
+    _tf_orchestrator.use_default_ollama_runner()
+    _active_intents = [k for k, v in _tf_intent_enabled.items() if v]
+    print(
+        f"   🎭 V36 TASKFORCE: orchestrator actif "
+        f"(global={_tf_global}, intents actifs={_active_intents})"
+    )
+
     # --- SIGNAL BUS (Bus de Signaux Neuraux) ---
     from core.signal_bus import signal_bus
     signal_bus.init()
@@ -1515,6 +1528,34 @@ async def debug_inject_drive(request: Request):
         f"[DEBUG] Injection forcee : drive={drive_name} deprivation={deprivation}"
     )
     return {"status": "ok", "drive": drive_name, "deprivation": deprivation}
+
+
+@app.post("/api/_debug/simulate_routine", dependencies=[Depends(verify_token)])
+async def debug_simulate_routine(request: Request):
+    """V35.1.4 (debug only) — Publie un AUTONOMY_ROUTINE_COMPLETE simulé.
+
+    Court-circuite le routeur pour que thermal_homeostasis applique
+    immediatement la signature thermique de l'intent. Permet de forcer
+    l'embrasement sans attendre les cycles de scoring naturel.
+
+    Payload: {"intent": "EXPANSION_CODE", "status": "success"}
+    """
+    data = await request.json()
+    intent = data.get("intent", "").upper()
+    status = data.get("status", "success")
+    if not intent:
+        raise HTTPException(400, "intent requis")
+    await bus.publish("AUTONOMY_ROUTINE_COMPLETE", {
+        "intent": intent,
+        "agent": "_debug_simulator",
+        "status": status,
+        "quality_score": 1.0 if status == "success" else 0.0,
+        "data": {"intent": intent, "status": status, "success": status == "success"},
+    })
+    logger.warning(
+        f"[DEBUG] Simulated AUTONOMY_ROUTINE_COMPLETE : intent={intent} status={status}"
+    )
+    return {"status": "ok", "intent": intent, "simulated_status": status}
 
 async def strategic_feedback_loop(agent_name: str, mission: str, result: str):
     if agent_name in ["strategist", "architect", "factory"]: return

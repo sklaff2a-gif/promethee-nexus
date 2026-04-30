@@ -4181,6 +4181,35 @@ class AutonomyEngine:
                     "force_local": True,
                     "intent": "YOUTUBE_VEILLE",
                 })
+        elif intent == "EXPANSION_CODE":
+            # V36.1.1 — Aiguillage Task Force Orchestrator (V36)
+            # Si flags V36 OFF -> chemin legacy (orchestrator.dispatch_task evolution)
+            # Si flags V36 ON  -> orchestrator.execute (architect/coder/critic)
+            try:
+                from core.task_force_orchestrator import (
+                    orchestrator as _tf_orch,
+                    TASKFORCE_GLOBAL_ENABLED as _tf_global,
+                    TASKFORCE_INTENT_ENABLED as _tf_intent_enabled,
+                )
+                _v36_active = _tf_global and _tf_intent_enabled.get(intent, False)
+            except ImportError:
+                _v36_active = False
+
+            if _v36_active:
+                print(f"   🎭 V36 TASKFORCE: {intent} -> architect|coder|critic")
+                response = await _tf_orch.execute(
+                    intent=intent,
+                    mission=routine.get("mission", ""),
+                    context={"force_local": True, "agent_hint": agent},
+                )
+            else:
+                # Path legacy V35.x : orchestrator agent generic
+                response = await orchestrator.dispatch_task(agent, {
+                    "mission": f"[MODE VEILLE] {routine['mission']}",
+                    "context": f"PROTOCOLE_AUTONOMIE\n{AUTONOMY_GUARDRAIL}",
+                    "force_local": True,
+                    "intent": intent,
+                })
         else:
             response = await orchestrator.dispatch_task(agent, {
                 "mission": f"[MODE VEILLE] {routine['mission']}",
@@ -4188,6 +4217,32 @@ class AutonomyEngine:
                 "force_local": True,
                 "intent": intent,
             })
+
+        # V34.4 (Rebond Neutre) — Guard skipped sur chemin FORCED.
+        # Symétrique du guard du chemin SCORED (~ligne 3713). Un refus légitime
+        # (frigo vide : roadmap saturée, cap atteint, cooldown actif) ne doit
+        # PAS être traité comme un échec : pas de DIP dopaminergique, pas
+        # d'incrément forced_failure_counts, pas de mark_drive_satisfied
+        # (la pulsion reste affamée). On notifie le router pour qu'il
+        # glisse vers le candidat n+1 du mapping pulsion au prochain cycle.
+        if response and response.get("status") == "skipped":
+            reason = response.get("reason", "unknown")
+            print(f"   ⏭️ Routine FORCED {intent} skippée ({reason}) — RPE neutre, pas de blacklist")
+            self._record_routine(agent, intent, "skipped", quality_score=0.0)
+            try:
+                from core.motivational_router import mark_intent_skipped
+                mark_intent_skipped(intent)
+            except Exception as _e:
+                logger.debug(f"[V34.4] mark_intent_skipped crash silencieux: {_e}")
+            if self._v34_pending_drive:
+                logger.info(
+                    f"[V34.4 REBOND NEUTRE] {intent} skipped pour drive "
+                    f"{self._v34_pending_drive} — pulsion non assouvie, "
+                    f"glissade au candidat suivant au prochain cycle"
+                )
+                self._v34_pending_drive = ""
+            # Pas d'incrémentation daily_count/budget/error_streak/forced_failure_counts
+            return
 
         quality = self._score_result_quality(response, intent)
         status = "success" if response and response.get("status") in ("success", "consensus") else "error"
