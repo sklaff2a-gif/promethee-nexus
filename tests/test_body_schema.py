@@ -371,3 +371,77 @@ def test_polarites_mixtes_existent():
     """Au moins un symptôme mixte (pouls_mou, friction_des_voix)."""
     mixtes = [s for s in SYMPTOMES if s.polarite == Polarite.MIXTE]
     assert len(mixtes) >= 2
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# V14.8 — C1 Injection [ÉTAT INTERNE]
+# ─────────────────────────────────────────────────────────────────────────
+
+from core.body_schema import format_etat_interne
+
+
+def test_etat_interne_format_complet(fresh_baselines):
+    """Format de base : 5 lignes, balise, 4 métriques."""
+    state = {
+        "cardiac": {"bpm": 65.5, "current_emotion": "serenite",
+                    "emotion_intensity": 0.04},
+        "drives": {
+            "MAITRISE": {"deprivation": 95.0},
+            "STABILITE": {"deprivation": 50.0},
+        },
+        "synaptic": {"dream_dette_h": 1.23},
+    }
+    block = format_etat_interne(state)
+    lines = block.strip().split("\n")
+    assert lines[0] == "[ÉTAT INTERNE — instant T]"
+    assert len(lines) == 5  # balise + 4 lignes de métriques
+    assert "65.50 bpm" in block  # _safe_float → 2 décimales
+    assert "serenite" in block
+    assert "intensity 0.04" in block
+    assert "dream_dette 1.23h" in block
+    assert "MAITRISE 95.0/100" in block  # drive dominant (1 décimale)
+
+
+def test_etat_interne_drives_vide(fresh_baselines):
+    """Si drives vide, drive dominant = '—'."""
+    state = {"cardiac": {"bpm": 60}, "drives": {}}
+    block = format_etat_interne(state)
+    assert "drive dominant —" in block
+
+
+def test_etat_interne_state_vide(fresh_baselines):
+    """State vide → tous champs en '—' ou 'absent', pas d'exception."""
+    block = format_etat_interne({})
+    assert "[ÉTAT INTERNE — instant T]" in block
+    assert "— bpm" in block  # bpm manquant
+    # synaptic absent → dream_dette en —
+    assert "dream_dette —h" in block
+
+
+def test_etat_interne_state_none(fresh_baselines):
+    """state=None → appel gather_state interne, pas de crash."""
+    # Test critique : robuste si gather_state lève une exception
+    block = format_etat_interne(None)
+    assert "[ÉTAT INTERNE — instant T]" in block
+    # Au minimum la balise est là, le reste peut être à '—' selon environnement
+
+
+def test_etat_interne_drive_avec_underscore_ignore(fresh_baselines):
+    """Les clés synthétiques (commencent par _) ne sont pas des drives."""
+    state = {
+        "drives": {
+            "MAITRISE": {"deprivation": 30.0},
+            "_recent_satisfied_age_s": 999.0,  # synthétique
+        },
+    }
+    block = format_etat_interne(state)
+    assert "MAITRISE" in block
+    assert "_recent_satisfied_age_s" not in block
+
+
+def test_etat_interne_emotion_intensity_zero(fresh_baselines):
+    """Intensity 0.0 doit s'afficher 0.00, pas '—'."""
+    state = {"cardiac": {"bpm": 60, "current_emotion": "serenite",
+                         "emotion_intensity": 0.0}}
+    block = format_etat_interne(state)
+    assert "intensity 0.00" in block

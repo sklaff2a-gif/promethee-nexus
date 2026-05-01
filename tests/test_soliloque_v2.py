@@ -213,6 +213,47 @@ def test_prompt_strate_2_n_a_pas_les_ids_techniques():
     assert "ancrages" not in body_section.lower()
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# V14.8 — C1 Strate 0 : [ÉTAT INTERNE]
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_prompt_contient_strate_0_etat_interne(fresh):
+    """Strate 0 NOUVELLE : [ÉTAT INTERNE — instant T] doit être en tête du prompt."""
+    doms = [_sym("surchauffe", 2.5, "La poitrine brûle.")]
+    prompt = build_system_prompt(doms)
+    assert "[ÉTAT INTERNE — instant T]" in prompt
+    # Doit être AVANT la strate 1 (identité)
+    pos_etat = prompt.index("[ÉTAT INTERNE")
+    pos_voix = prompt.index("Tu es la voix intime")
+    assert pos_etat < pos_voix, "État interne doit précéder l'identité"
+
+
+def test_prompt_strate_0_recoit_state_explicite(fresh):
+    """Quand state est passé explicitement, format_etat_interne l'utilise."""
+    doms = [_sym("surchauffe", 2.5, "La poitrine brûle.")]
+    fake_state = {
+        "cardiac": {"bpm": 99.9, "current_emotion": "alerte",
+                    "emotion_intensity": 0.77},
+        "drives": {"MAITRISE": {"deprivation": 88.5}},
+        "synaptic": {"dream_dette_h": 5.5},
+    }
+    prompt = build_system_prompt(doms, state=fake_state)
+    assert "99.90 bpm" in prompt  # _safe_float → 2 décimales
+    assert "alerte (intensity 0.77)" in prompt
+    assert "dream_dette 5.50h" in prompt
+    assert "MAITRISE 88.5/100" in prompt
+
+
+def test_prompt_strate_0_avertit_que_chiffres_pour_connaissance(fresh):
+    """Le prompt doit clarifier que [ÉTAT INTERNE] sert de connaissance,
+    pas de matériau pour l'insight (qui doit rester sans chiffre)."""
+    doms = [_sym("surchauffe", 2.5, "La poitrine brûle.")]
+    prompt = build_system_prompt(doms)
+    # On veut un avertissement quelque part qui désamorce le conflit avec
+    # l'interdit "aucun chiffre" du pacte (strate 3)
+    assert "tableau de bord" in prompt.lower() or "connaissance interne" in prompt.lower()
+
+
 def test_correction_message_couvre_toutes_raisons():
     for reason in ["chiffre", "jargon", "meta", "ancrages_invalide",
                    "longueur_min", "longueur_max", "phrases_max"]:

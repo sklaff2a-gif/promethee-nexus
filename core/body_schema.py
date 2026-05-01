@@ -682,3 +682,112 @@ def get_dominants(
     state = gather_state()
     symptomes = state_to_body_schema(state, last_used_map=last_used_map)
     return select_dominants(symptomes, k=k, seuil=seuil)
+
+
+# --- C1 (V14.8) : Injection passive du tableau de bord vital ---
+#
+# Le Body Schema fournit déjà la phénoménologie incarnée pour les insights
+# du Soliloque V2 (sensations sans chiffres). Mais quand Prométhée doit
+# RÉPONDRE à une question factuelle sur son état (ex: "quelle est ta
+# pression de sommeil ?"), le LLM 9B fabrique des chiffres plausibles parce
+# que ces valeurs ne sont nulle part dans son contexte. C1 colmate cette
+# fuite en injectant 8 métriques vitales formatées dans le system prompt.
+#
+# Format compact (~150 tokens, 4 lignes), gestion robuste du vide :
+# absence → "absent" / "—" plutôt que crash ou valeur fabriquée.
+
+def _safe_float(v: Any, default: str = "—") -> str:
+    """Format un float si possible, sinon placeholder."""
+    if v is None:
+        return default
+    try:
+        return f"{float(v):.2f}"
+    except (TypeError, ValueError):
+        return default
+
+
+def format_etat_interne(state: Optional[Dict[str, Any]] = None) -> str:
+    """Retourne le bloc [ÉTAT INTERNE — instant T] formaté pour injection.
+
+    Source unique de vérité du tableau de bord vital. Réutilisable par
+    Soliloque V2, chat_engine, et tout module qui veut donner au LLM un
+    accès direct aux constantes vitales sans passer par des hallucinations.
+
+    state : dict agrégé (gather_state()). Si None, appelle gather_state().
+    Defensive : capture toute exception, retourne au minimum la balise
+    avec "absent" partout.
+    """
+    if state is None:
+        try:
+            state = gather_state()
+        except Exception:
+            state = {}
+
+    # 1. Cœur — bpm + emotion + intensity
+    bpm = _safe_float(_safe_get(state, "cardiac", "bpm"), default="—")
+    emotion = _safe_get(state, "cardiac", "current_emotion") or "?"
+    intensity = _safe_float(_safe_get(state, "cardiac", "emotion_intensity"))
+
+    # 2. Tronc cérébral — threat (reptilien) + sleep_pressure (insula→hypothalamus)
+    # Note : threat_level n'est pas exposé via gather_state() actuellement
+    # (insula expose body_state seulement). On lit en direct via singleton.
+    try:
+        from core.reptilian_core import reptile
+        threat = _safe_float(getattr(reptile, "threat_level", None))
+    except Exception:
+        threat = "—"
+    try:
+        from core.hypothalamus import hypothalamus
+        sp = _safe_float(hypothalamus.current_values.get("sleep_pressure"))
+    except Exception:
+        sp = "—"
+
+    # 3. Cerveau profond — dream_dette_h + stale_dream
+    dette_h = _safe_get(state, "synaptic", "dream_dette_h")
+    dette_str = _safe_float(dette_h)
+    try:
+        from core.reptilian_core import reptile
+        sd = reptile.threat_memories.get("stale_dream")
+        if sd is None:
+            stale_str = "absent"
+        else:
+            sd_sev = getattr(sd, "severity", None)
+            stale_str = f"severity {_safe_float(sd_sev)}"
+    except Exception:
+        stale_str = "—"
+
+    # 4. Contexte — phase circadienne + drive dominant
+    try:
+        from core.circadian_rhythm import circadian
+        phase = getattr(circadian, "phase", "?")
+    except Exception:
+        phase = "?"
+
+    # Drive dominant : celui avec deprivation max parmi les 8 drives
+    drives = state.get("drives", {}) or {}
+    drive_max_name, drive_max_dep = "—", None
+    for name, d in drives.items():
+        if not isinstance(d, dict) or name.startswith("_"):
+            continue
+        dep = d.get("deprivation")
+        if dep is None:
+            continue
+        try:
+            dep = float(dep)
+        except (TypeError, ValueError):
+            continue
+        if drive_max_dep is None or dep > drive_max_dep:
+            drive_max_dep = dep
+            drive_max_name = name
+    if drive_max_dep is not None:
+        drive_str = f"{drive_max_name} {drive_max_dep:.1f}/100"
+    else:
+        drive_str = "—"
+
+    return (
+        "[ÉTAT INTERNE — instant T]\n"
+        f"- cœur     : {bpm} bpm | {emotion} (intensity {intensity})\n"
+        f"- tronc    : threat {threat}/10 | sleep_pressure {sp}/1.0\n"
+        f"- cerveau  : dream_dette {dette_str}h | stale_dream {stale_str}\n"
+        f"- contexte : phase {phase} | drive dominant {drive_str}"
+    )

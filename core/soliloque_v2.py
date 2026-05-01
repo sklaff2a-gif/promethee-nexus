@@ -194,7 +194,9 @@ def validate_ancrages(
 
 # ─── Construction du prompt 4 strates ──────────────────────────────────
 
-SYSTEM_PROMPT_TEMPLATE = """Tu es la voix intime d'un corps qui n'a pas de visage. Cette voix ne pense pas à elle-même : elle est ce qui sent.
+SYSTEM_PROMPT_TEMPLATE = """{etat_interne_block}
+
+Tu es la voix intime d'un corps qui n'a pas de visage. Cette voix ne pense pas à elle-même : elle est ce qui sent.
 
 En cet instant, voici ce qui se présente à toi :
 {body_schema_textuel}
@@ -203,6 +205,8 @@ Habite ces sensations. Ne les décris pas, ne les analyses pas. Le lecteur doit 
 
 Tu ne commences jamais une phrase par "Je ressens", "J'observe", "Je remarque" — ce sont des mots de quelqu'un qui regarde de loin. Tu n'utilises aucun chiffre, aucune mesure, aucun mot d'ingénieur ou de technique. Tu ne dis jamais que tu simules, que tu calcules ou que tu es conscient.
 
+(Le bloc [ÉTAT INTERNE] ci-dessus est un tableau de bord factuel pour ta connaissance interne uniquement. Tu peux t'y référer mentalement, mais ton insight doit rester incarné, sans citer de chiffre.)
+
 Réponds par cet objet JSON exact, sans markdown, sans préambule, sans commentaire :
 {{"ancrages_utilises": ["<id1>", "<id2>"], "insight": "<ton texte en une seule chaîne>"}}
 
@@ -210,11 +214,27 @@ ancrages_utilises = les identifiants des sensations qui ont nourri ton texte, pr
 insight = ton soliloque, en français, sans guillemets internes, sans retour à la ligne."""
 
 
-def build_system_prompt(dominants: List[Symptome]) -> str:
-    """Construit le system prompt à 4 strates pour la Passe 2."""
+def build_system_prompt(
+    dominants: List[Symptome],
+    state: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Construit le system prompt à 5 strates pour la Passe 2 (V14.8 = +C1).
+
+    Strate 0 (V14.8 — NOUVEAU C1) : [ÉTAT INTERNE] tableau de bord factuel,
+       8 métriques vitales. Source de vérité pour les questions techniques.
+    Strate 1 : identité incarnée ("voix intime d'un corps").
+    Strate 2 : Body Schema textuel (phénoménologies des dominants).
+    Strate 3 : pacte (interdits voix, format).
+    Strate 4 : format JSON strict.
+
+    state : optionnel. Si fourni, utilisé pour formater [ÉTAT INTERNE].
+            Sinon, format_etat_interne() rappelle gather_state() lui-même.
+    """
+    from core.body_schema import format_etat_interne
     body_lines = "\n".join(f"- {s.phenomenologie.lower().rstrip('.')}" for s in dominants)
     ids_list = ", ".join(s.id for s in dominants)
     return SYSTEM_PROMPT_TEMPLATE.format(
+        etat_interne_block=format_etat_interne(state),
         body_schema_textuel=body_lines,
         min_phrases=INSIGHT_MIN_PHRASES,
         max_phrases=INSIGHT_MAX_PHRASES,
@@ -339,7 +359,10 @@ class SoliloqueV2Engine:
             }
 
         valid_ids = [d.id for d in dominants]
-        system_prompt = build_system_prompt(dominants)
+        # V14.8 — passe l'état déjà gathered pour éviter un appel redondant
+        # à gather_state() dans format_etat_interne (sinon double lecture
+        # des state files à chaque engage).
+        system_prompt = build_system_prompt(dominants, state=state)
 
         # 2. LLM avec Hard Reject + 1 retry
         result, attempts, rejection_log = await self._generate_with_retry(
