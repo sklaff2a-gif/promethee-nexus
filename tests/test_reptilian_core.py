@@ -1650,3 +1650,166 @@ class TestAdaptiveFloors:
             threats = await rept._sense_threats()
 
         assert threats.get("cpu", 0) == 8.0, "CPU 90% au-dessus du floor 85% DOIT déclencher threat crit"
+
+
+# ============================================================
+# V14.3 Pilier 2 nocicepteurs — menace stale_dream
+# ============================================================
+
+import time as _time
+
+class TestStaleDreamThreat:
+    """Tests du couplage SYNAPTIC_DEBT_PRESSURE → reptilien.threat_memories['stale_dream']."""
+
+    def _build_event(self, zscore: float, dette_h: float = 24.0):
+        return {
+            "dream_dette_h": dette_h,
+            "zscore": zscore,
+            "bump": 0.05,
+            "pressure_after": 0.5,
+        }
+
+    @pytest.mark.asyncio
+    async def test_premier_event_cree_threat_memory(self, rept):
+        from core.reptilian_core import STALE_DREAM_PATTERN, STALE_DREAM_REFLEX
+        assert STALE_DREAM_PATTERN not in rept.threat_memories
+        await rept._on_synaptic_debt_pressure(self._build_event(zscore=2.0))
+        mem = rept.threat_memories.get(STALE_DREAM_PATTERN)
+        assert mem is not None
+        assert mem.severity == 4.0  # min(10, 2.0 * 2.0)
+        assert mem.occurrences == 1
+        assert mem.conditioned_reflex == STALE_DREAM_REFLEX
+
+    @pytest.mark.asyncio
+    async def test_severity_mise_a_jour_temps_reel_pas_moyenne(self, rept):
+        """Bombardement : 5 events à z=2 puis z=4. Severity finale = 8 (pas une moyenne)."""
+        from core.reptilian_core import STALE_DREAM_PATTERN
+        for _ in range(5):
+            await rept._on_synaptic_debt_pressure(self._build_event(zscore=2.0))
+        mem = rept.threat_memories[STALE_DREAM_PATTERN]
+        assert mem.severity == 4.0
+        assert mem.occurrences == 1, "occurrences NE DOIT PAS exploser sur le bombardement"
+        # Switch z=4
+        await rept._on_synaptic_debt_pressure(self._build_event(zscore=4.0))
+        assert rept.threat_memories[STALE_DREAM_PATTERN].severity == 8.0
+
+    @pytest.mark.asyncio
+    async def test_severity_plafonnee_a_10(self, rept):
+        from core.reptilian_core import STALE_DREAM_PATTERN
+        await rept._on_synaptic_debt_pressure(self._build_event(zscore=10.0))
+        assert rept.threat_memories[STALE_DREAM_PATTERN].severity == 10.0
+
+    @pytest.mark.asyncio
+    async def test_zscore_negatif_no_op(self, rept):
+        """Event reçu mais zscore <= 0 (dette sous baseline) → no-op."""
+        from core.reptilian_core import STALE_DREAM_PATTERN
+        await rept._on_synaptic_debt_pressure(self._build_event(zscore=-1.0))
+        assert STALE_DREAM_PATTERN not in rept.threat_memories
+        await rept._on_synaptic_debt_pressure(self._build_event(zscore=0.0))
+        assert STALE_DREAM_PATTERN not in rept.threat_memories
+
+    @pytest.mark.asyncio
+    async def test_zscore_invalide_no_crash(self, rept):
+        """Event malformé : pas de zscore, ou type non float."""
+        await rept._on_synaptic_debt_pressure({})
+        await rept._on_synaptic_debt_pressure({"zscore": "pas_un_float"})
+        await rept._on_synaptic_debt_pressure({"zscore": None})
+        # Ne doit PAS crasher
+
+    @pytest.mark.asyncio
+    async def test_alert_publie_si_severity_au_seuil(self, rept):
+        """severity >= 5.0 (z=2.5) → REPTILIAN_ALERT publié."""
+        from core.event_bus.bus import bus
+        from core.reptilian_core import STALE_DREAM_PATTERN
+        captured = []
+        async def cap(ev): captured.append(dict(ev))
+        bus.subscribe("REPTILIAN_ALERT", cap)
+        await rept._on_synaptic_debt_pressure(self._build_event(zscore=3.0))  # sev=6
+        # Laisse le temps au bus
+        await asyncio.sleep(0.05)
+        assert len(captured) >= 1
+        alert = captured[-1]
+        assert alert["pattern"] == STALE_DREAM_PATTERN
+        assert alert["severity"] >= 5.0
+
+    @pytest.mark.asyncio
+    async def test_alert_pas_publie_si_sous_seuil(self, rept):
+        """severity < 5.0 (z=1.5..2.4) → pas d'alerte."""
+        from core.event_bus.bus import bus
+        captured = []
+        async def cap(ev): captured.append(dict(ev))
+        bus.subscribe("REPTILIAN_ALERT", cap)
+        await rept._on_synaptic_debt_pressure(self._build_event(zscore=2.0))  # sev=4
+        await asyncio.sleep(0.05)
+        assert len(captured) == 0
+
+    @pytest.mark.asyncio
+    async def test_alert_cooldown_respecte(self, rept):
+        """2 events successifs au seuil → 1 seule alerte (cooldown)."""
+        from core.event_bus.bus import bus
+        captured = []
+        async def cap(ev): captured.append(dict(ev))
+        bus.subscribe("REPTILIAN_ALERT", cap)
+        await rept._on_synaptic_debt_pressure(self._build_event(zscore=3.0))
+        await rept._on_synaptic_debt_pressure(self._build_event(zscore=3.0))
+        await rept._on_synaptic_debt_pressure(self._build_event(zscore=3.0))
+        await asyncio.sleep(0.05)
+        assert len(captured) == 1, "Cooldown de 120s doit empêcher les alertes répétées"
+
+    def test_decay_pas_actif_si_recent(self, rept):
+        """severity NE bouge PAS si refresh récent (dans la grâce)."""
+        from core.reptilian_core import STALE_DREAM_PATTERN, STALE_DREAM_REFRESH_GRACE_S
+        rept.threat_memories[STALE_DREAM_PATTERN] = ThreatMemory(
+            pattern=STALE_DREAM_PATTERN, severity=6.0,
+            occurrences=1, last_seen=_time.time() - 60,  # 1 min ago, dans la grâce
+            conditioned_reflex="ADRENALINE",
+        )
+        rept._decay_stale_dream_threat()
+        assert rept.threat_memories[STALE_DREAM_PATTERN].severity == 6.0
+
+    def test_decay_actif_si_grace_depassee(self, rept):
+        """severity diminue si non rafraîchie depuis grace."""
+        from core.reptilian_core import (
+            STALE_DREAM_PATTERN, STALE_DREAM_REFRESH_GRACE_S,
+            STALE_DREAM_DECAY_PER_TICK,
+        )
+        rept.threat_memories[STALE_DREAM_PATTERN] = ThreatMemory(
+            pattern=STALE_DREAM_PATTERN, severity=6.0,
+            occurrences=1, last_seen=_time.time() - STALE_DREAM_REFRESH_GRACE_S - 10,
+            conditioned_reflex="ADRENALINE",
+        )
+        rept._decay_stale_dream_threat()
+        assert rept.threat_memories[STALE_DREAM_PATTERN].severity == 6.0 - STALE_DREAM_DECAY_PER_TICK
+
+    def test_decay_supprime_si_sous_seuil(self, rept):
+        """Si severity descend sous REMOVE_BELOW, threat retirée + cooldown nettoyé."""
+        from core.reptilian_core import (
+            STALE_DREAM_PATTERN, STALE_DREAM_REFRESH_GRACE_S,
+        )
+        rept.threat_memories[STALE_DREAM_PATTERN] = ThreatMemory(
+            pattern=STALE_DREAM_PATTERN, severity=0.05,  # déjà très bas
+            occurrences=1, last_seen=_time.time() - STALE_DREAM_REFRESH_GRACE_S - 10,
+            conditioned_reflex="ADRENALINE",
+        )
+        rept._alert_cooldowns[STALE_DREAM_PATTERN] = _time.time()
+        rept._decay_stale_dream_threat()
+        assert STALE_DREAM_PATTERN not in rept.threat_memories
+        assert STALE_DREAM_PATTERN not in rept._alert_cooldowns
+
+    def test_decay_no_op_si_pas_de_menace(self, rept):
+        """Si stale_dream absente, no-op safe."""
+        # Pas de stale_dream dans threat_memories
+        rept._decay_stale_dream_threat()  # Doit pas crasher
+
+    @pytest.mark.asyncio
+    async def test_subscribe_dans_subscribe_events(self, rept):
+        """SYNAPTIC_DEBT_PRESSURE doit être dans les souscriptions du bus."""
+        # Vérifier que le subscribe a bien lieu en appelant _subscribe_events
+        from core.event_bus.bus import bus
+        rept._subscribed = False
+        rept._subscribe_events()
+        # On vérifie indirectement : envoyer event via bus, le handler doit être appelé
+        await bus.publish("SYNAPTIC_DEBT_PRESSURE", {"zscore": 3.0, "dream_dette_h": 24.0})
+        await asyncio.sleep(0.05)
+        from core.reptilian_core import STALE_DREAM_PATTERN
+        assert STALE_DREAM_PATTERN in rept.threat_memories

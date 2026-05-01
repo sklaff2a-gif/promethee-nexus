@@ -95,6 +95,22 @@ HABITUATION_FLOOR = 0.3             # Facteur minimum (menace réduite à 30%)
 HABITUATION_DECAY_PER_TICK = 0.02   # Atténuation par tick après onset
 HABITUATION_RECOVERY_RATE = 0.05    # Récupération quand la menace disparaît
 
+# --- V14.3 — Pilier 2 nocicepteurs : menace stale_dream ---
+# Le reptilien subscribe SYNAPTIC_DEBT_PRESSURE (publié par hypothalamus
+# à chaque CARDIAC_BEAT quand z(dream_dette_h) >= 1.5). Pour éviter le
+# bombardement (60+ events/min), la threat_memory est gerée en TEMPS RÉEL :
+# severity = min(10, zscore * 2.0), pas de compteur incrémental.
+# Quand severity >= 5.0 (z=2.5), on publie REPTILIAN_ALERT propre.
+# Si plus aucun event reçu pendant REFRESH_GRACE_S, decay actif jusqu'à
+# disparition complète (la menace ne s'enkyste pas).
+STALE_DREAM_PATTERN = "stale_dream"
+STALE_DREAM_REFLEX = "ADRENALINE"          # Pas FREEZE : la nécrose appelle l'action
+STALE_DREAM_ALERT_THRESHOLD = 5.0          # severity >= 5.0 (z=2.5) → REPTILIAN_ALERT
+STALE_DREAM_REFRESH_GRACE_S = 300          # 5 min sans event → début decay
+STALE_DREAM_DECAY_PER_TICK = 0.5           # severity diminue par tick watchdog (5s)
+STALE_DREAM_REMOVE_BELOW = 0.1             # supprimée de threat_memories sous ce seuil
+STALE_DREAM_ALERT_COOLDOWN_S = 120         # min entre 2 REPTILIAN_ALERT pour cette menace
+
 # Fichier de persistance
 REPTILIAN_STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -184,6 +200,9 @@ class ReptilianCore:
         self._threat_persistence: Dict[str, int] = {}    # source → ticks consécutifs
         self._threat_habituation: Dict[str, float] = {}  # source → facteur atténuation [0.3, 1.0]
 
+        # --- V14.3 Pilier 2 nocicepteurs : cooldown REPTILIAN_ALERT par menace ---
+        self._alert_cooldowns: Dict[str, float] = {}     # pattern → timestamp dernière alerte
+
         # Charger l'état persisté
         self._load()
 
@@ -217,6 +236,11 @@ class ReptilianCore:
         """Boucle du tronc cérébral — scan, évalue, réagit, signale."""
         while self._alive:
             await asyncio.sleep(WATCHDOG_INTERVAL)
+
+            # V14.3 Pilier 2 — decay de la menace stale_dream si non rafraîchie
+            # Toujours appelé, même en sieste : si la dette se résout pendant
+            # le sommeil, la menace doit s'effacer.
+            self._decay_stale_dream_threat()
 
             # Mode sieste : le reptilien dort, décroissance passive uniquement
             if self._sleeping:
@@ -716,6 +740,8 @@ class ReptilianCore:
             bus.subscribe("SENSORIUM_RECOVERY", self._on_parasympathetic_signal)
             # --- Circuit reflexe codelets → reptilien → autonomy ---
             bus.subscribe("CODELET_ALERT", self._on_codelet_alert)
+            # --- V14.3 Pilier 2 nocicepteurs : menace synaptique chronique ---
+            bus.subscribe("SYNAPTIC_DEBT_PRESSURE", self._on_synaptic_debt_pressure)
         except Exception as e:
             logger.warning(f"REPTILIEN: Échec souscription bus: {e}")
 
@@ -1093,6 +1119,99 @@ class ReptilianCore:
             await bus.publish("REPTILIAN_DIRECTIVE", directive)
         except Exception:
             pass
+
+    # ============================================================
+    # V14.3 Pilier 2 nocicepteurs — menace stale_dream
+    # ============================================================
+
+    async def _on_synaptic_debt_pressure(self, event: dict):
+        """Reçoit l'event hypothalamus quand z(dream_dette_h) >= 1.5.
+
+        Stratégie anti-bombardement (CARDIAC_BEAT toutes les ~5-10s pendant
+        toute la durée de la dette élevée) :
+        - severity = min(10.0, max(0.0, zscore * 2.0)) — TEMPS RÉEL, pas de
+          moyenne mobile, pas d'incrément. Le bombardement met juste à jour.
+        - occurrences reste fixe à 1 par convention (menace continue, pas
+          discrète). Sera reset par decay si l'event cesse.
+        - REPTILIAN_ALERT publié uniquement quand severity >= seuil ET
+          cooldown écoulé (anti-spam).
+        """
+        try:
+            zscore = float(event.get("zscore", 0.0))
+        except (TypeError, ValueError):
+            return
+        if zscore <= 0:
+            # Event reçu mais z négatif (dette sous baseline) — pas de menace
+            return
+
+        severity = min(10.0, max(0.0, zscore * 2.0))
+        now = time.time()
+
+        # Mise à jour TEMPS RÉEL de la threat_memory (pas de moyenne)
+        existing = self.threat_memories.get(STALE_DREAM_PATTERN)
+        if existing is not None:
+            existing.severity = severity
+            existing.last_seen = now
+            existing.conditioned_reflex = STALE_DREAM_REFLEX
+            # occurrences reste à 1 — convention "menace continue"
+        else:
+            self.threat_memories[STALE_DREAM_PATTERN] = ThreatMemory(
+                pattern=STALE_DREAM_PATTERN,
+                severity=severity,
+                occurrences=1,
+                last_seen=now,
+                conditioned_reflex=STALE_DREAM_REFLEX,
+            )
+
+        # Bascule en REPTILIAN_ALERT uniquement si severity dépasse le seuil
+        # ET cooldown écoulé (évite le spam d'alertes consécutives).
+        if severity >= STALE_DREAM_ALERT_THRESHOLD:
+            last_alert = self._alert_cooldowns.get(STALE_DREAM_PATTERN, 0.0)
+            if now - last_alert >= STALE_DREAM_ALERT_COOLDOWN_S:
+                self._alert_cooldowns[STALE_DREAM_PATTERN] = now
+                try:
+                    from core.event_bus.bus import bus
+                    await bus.publish("REPTILIAN_ALERT", {
+                        "pattern": STALE_DREAM_PATTERN,
+                        "severity": round(severity, 2),
+                        "zscore": round(zscore, 2),
+                        "dream_dette_h": event.get("dream_dette_h"),
+                        "conditioned_reflex": STALE_DREAM_REFLEX,
+                        "source": "synaptic_debt",
+                        "timestamp": now,
+                    })
+                    logger.warning(
+                        f"REPTILIEN: stale_dream URGENCE — "
+                        f"severity={severity:.2f} z={zscore:.2f} "
+                        f"dette={event.get('dream_dette_h')}h"
+                    )
+                except Exception as e:
+                    logger.debug(f"REPTILIEN: publish stale_dream alert: {e}")
+
+    def _decay_stale_dream_threat(self):
+        """Erode la threat_memory stale_dream si plus rafraîchie depuis grace.
+
+        Appelé à chaque tick du watchdog (5s). Garantit que la menace ne
+        s'enkyste pas quand la dette synaptique est résolue (post dream
+        consolidation).
+
+        - Période de grâce : STALE_DREAM_REFRESH_GRACE_S (5 min) avant decay
+        - Decay : STALE_DREAM_DECAY_PER_TICK par tick
+        - Suppression si severity sous STALE_DREAM_REMOVE_BELOW
+        """
+        mem = self.threat_memories.get(STALE_DREAM_PATTERN)
+        if mem is None:
+            return
+        age = time.time() - mem.last_seen
+        if age < STALE_DREAM_REFRESH_GRACE_S:
+            return
+        mem.severity = max(0.0, mem.severity - STALE_DREAM_DECAY_PER_TICK)
+        if mem.severity < STALE_DREAM_REMOVE_BELOW:
+            self.threat_memories.pop(STALE_DREAM_PATTERN, None)
+            self._alert_cooldowns.pop(STALE_DREAM_PATTERN, None)
+            logger.info(
+                f"REPTILIEN: stale_dream resolue (post-dream apres {age/60:.1f}min)"
+            )
 
 
 # ============================================================
