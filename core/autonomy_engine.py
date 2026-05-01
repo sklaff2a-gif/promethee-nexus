@@ -39,6 +39,16 @@ AUDIT_SURVIE_ERROR_STREAK = 3             # Seuil error_streak alarmant
 AUDIT_SURVIE_FRUITLESS_WINDOW = 10        # Fenêtre historique pour fruitless detection
 AUDIT_SURVIE_FRUITLESS_COUNT = 3          # N occurrences même intent faible qualité
 
+# V14.6 — Audit étendu à l'introspection cognitive.
+# Avant : AUDIT_SURVIE ne lisait que CPU/RAM/dopamine/drives, et pouvait
+# déclarer "tout nominal" pendant que le reptilien hurlait à la nécrose
+# synaptique (cas observé en 42h de torpeur du 29/04 → 01/05). Maintenant
+# l'audit lit aussi l'amygdale (threat_memories.stale_dream) et la dette
+# de rêve directe via Body Schema. Discursif uniquement : la préemption
+# reste l'apanage du Pilier 3 (V14.4).
+AUDIT_SURVIE_STALE_DREAM_SEVERITY_ALERT = 4.0  # seuil < REPTILIAN_ALERT (5.0)
+AUDIT_SURVIE_DREAM_DETTE_ALERT_H = 12.0        # seuil dette directe (h)
+
 # --- Bouton panique : court-circuit limbique (tronc cérébral) ---
 # Quand AUDIT_SURVIE détecte une crise, _on_survival_alert force l'exécution du
 # step en souffrance du goal préfrontal lié au drive en crise. Escalade 3 cycles.
@@ -6581,6 +6591,49 @@ class AutonomyEngine:
                 if avg_q < 0.4:
                     alerts.append(f"[ALERTE] Routine improductive : {intent} ×{stat['count']}, qualité moyenne {avg_q:.2f}")
                     checks_failed += 1
+
+        # V14.6 — CYCLE 5 : Engorgement synaptique (amygdale + Body Schema)
+        # Sans cette lecture, l'audit pouvait déclarer "tout nominal" pendant
+        # que le reptilien hurlait à la nécrose synaptique (cas observé pendant
+        # les 42h de torpeur du 29/04). Discursif : pas de préemption ici, le
+        # Pilier 3 (REPTILIAN_ALERT → MEMORY_CONSOLIDATION) s'en charge.
+        stale_severity_seen = 0.0
+        try:
+            from core.reptilian_core import reptile, STALE_DREAM_PATTERN
+            stale = reptile.threat_memories.get(STALE_DREAM_PATTERN)
+            if stale is not None:
+                stale_severity_seen = float(getattr(stale, "severity", 0.0))
+                if stale_severity_seen >= AUDIT_SURVIE_STALE_DREAM_SEVERITY_ALERT:
+                    reflex = getattr(stale, "conditioned_reflex", "?")
+                    alerts.append(
+                        f"[CRITIQUE] Engorgement synaptique chronique : "
+                        f"stale_dream severity={stale_severity_seen:.1f} "
+                        f"(réflexe armé = {reflex}). "
+                        f"Recommandation : sommeil d'urgence (MEMORY_CONSOLIDATION ou enter_nap deep)."
+                    )
+                    checks_failed += 1
+        except Exception as e:
+            logger.debug(f"[AUDIT_SURVIE] Lecture amygdale indisponible : {e}")
+
+        # Lecture directe de la dette via Body Schema — capte les cas où
+        # le pilier 2 n'a pas encore eu le temps de monter la severity
+        # (déclenchement précoce de l'audit) ou si l'event SYNAPTIC_DEBT_PRESSURE
+        # n'a pas encore atteint le reptilien.
+        try:
+            from core.body_schema import gather_state
+            state = gather_state(now)
+            dette_h = (state.get("synaptic", {}) or {}).get("dream_dette_h")
+            if dette_h is not None and float(dette_h) >= AUDIT_SURVIE_DREAM_DETTE_ALERT_H:
+                # Évite la double-alerte si stale_dream a déjà remonté l'info
+                if stale_severity_seen < AUDIT_SURVIE_STALE_DREAM_SEVERITY_ALERT:
+                    alerts.append(
+                        f"[ALERTE] Dette de rêve élevée : {float(dette_h):.1f}h "
+                        f"sans consolidation synaptique. "
+                        f"Recommandation : MEMORY_CONSOLIDATION."
+                    )
+                    checks_failed += 1
+        except Exception as e:
+            logger.debug(f"[AUDIT_SURVIE] Lecture body_schema indisponible : {e}")
 
         # Escalade si ≥2 seuils dépassés (ou dès qu'un drive est critique : prioritaire)
         should_escalate = checks_failed >= 2 or bool(critical_drives)
