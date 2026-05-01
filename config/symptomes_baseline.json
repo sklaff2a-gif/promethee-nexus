@@ -43,6 +43,11 @@
     "sigma": 0.15,
     "_note": "Insula body_state.stress [0-1]"
   },
+  "dream_dette_h": {
+    "mu": 8.0,
+    "sigma": 6.0,
+    "_note": "V14.2 Pilier 1 nocicepteurs : heures depuis le dernier dream synaptique. mu=8 calibre pour que z>=1.5 declenche autour de 17h, en l'absence de baseline empirique. Sera affine progressivement vers le rythme reel de Promethee."
+  },
 
   "drive_MAITRISE_depriv": {
     "mu": 50.0,

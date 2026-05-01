@@ -590,3 +590,85 @@ class TestAlarmCooldown:
         assert h2._alarm_repeat_count["stress"] == 3
         assert h2._alarm_last_fired["energy"] == 2000.0
         assert h2._alarm_repeat_count["energy"] == 1
+
+
+# ===== V14.2 Pilier 1 nocicepteurs : pression cognitive =====
+
+class TestSynapticDebtPressure:
+    """Tests du couplage stagnation synaptique → sleep_pressure (V14.2)."""
+
+    def _mock_cortex(self, last_dream_time):
+        """Helper pour mocker core.synaptic_network.cortex."""
+        from unittest.mock import MagicMock
+        m = MagicMock()
+        m.cortex = MagicMock()
+        m.cortex._last_dream_time = last_dream_time
+        return m
+
+    def test_apply_returns_none_si_pas_de_dream(self, isolate_hypothalamus):
+        """Si _last_dream_time = 0, retourne None (no-op)."""
+        h = isolate_hypothalamus
+        with patch.dict("sys.modules", {"core.synaptic_network": self._mock_cortex(0.0)}):
+            r = h._apply_synaptic_debt_pressure()
+        assert r is None
+        assert h.current_values["sleep_pressure"] == 0.4  # inchange
+
+    def test_apply_returns_none_si_dette_faible(self, isolate_hypothalamus):
+        """Dette de 4h (z proche de -0.7 sous baseline mu=8) ne declenche pas."""
+        from core import baseline_tracker as bt_mod
+        bt_mod.BaselineTracker.reset_singleton()
+        h = isolate_hypothalamus
+        recent = time.time() - 4 * 3600
+        with patch.dict("sys.modules", {"core.synaptic_network": self._mock_cortex(recent)}):
+            r = h._apply_synaptic_debt_pressure()
+        assert r is None
+        assert h.current_values["sleep_pressure"] == 0.4
+        bt_mod.BaselineTracker.reset_singleton()
+
+    def test_apply_incremente_si_dette_haute(self, isolate_hypothalamus):
+        """Dette de 24h (z=2.67 sur baseline mu=8 sigma=6) declenche bump."""
+        from core import baseline_tracker as bt_mod
+        bt_mod.BaselineTracker.reset_singleton()
+        h = isolate_hypothalamus
+        old = time.time() - 24 * 3600
+        with patch.dict("sys.modules", {"core.synaptic_network": self._mock_cortex(old)}):
+            r = h._apply_synaptic_debt_pressure()
+        assert r is not None, "Dette de 24h doit declencher"
+        assert r["zscore"] >= 1.5
+        assert r["bump"] > 0
+        assert h.current_values["sleep_pressure"] > 0.4
+        bt_mod.BaselineTracker.reset_singleton()
+
+    def test_apply_plafonne_a_ceiling(self, isolate_hypothalamus):
+        """Sleep_pressure ne depasse jamais SYNAPTIC_DEBT_PRESSURE_CEILING."""
+        from core import baseline_tracker as bt_mod
+        from core.hypothalamus import SYNAPTIC_DEBT_PRESSURE_CEILING
+        bt_mod.BaselineTracker.reset_singleton()
+        h = isolate_hypothalamus
+        h.current_values["sleep_pressure"] = 0.94  # juste sous le plafond
+        old = time.time() - 100 * 3600  # dette enorme
+        with patch.dict("sys.modules", {"core.synaptic_network": self._mock_cortex(old)}):
+            r = h._apply_synaptic_debt_pressure()
+        assert h.current_values["sleep_pressure"] <= SYNAPTIC_DEBT_PRESSURE_CEILING
+        bt_mod.BaselineTracker.reset_singleton()
+
+    def test_apply_robust_aux_exceptions(self, isolate_hypothalamus):
+        """Si cortex absent ou broken, retourne None sans crash."""
+        h = isolate_hypothalamus
+        broken = MagicMock()
+        broken.cortex = None  # AttributeError sur _last_dream_time
+        with patch.dict("sys.modules", {"core.synaptic_network": broken}):
+            r = h._apply_synaptic_debt_pressure()
+        # Soit None, soit un dict — surtout pas une exception remontee
+        assert r is None or isinstance(r, dict)
+        # sleep_pressure doit rester valide
+        assert 0.0 <= h.current_values["sleep_pressure"] <= 1.0
+
+    @pytest.mark.asyncio
+    async def test_regulate_appelle_apply_synaptic_debt(self, isolate_hypothalamus):
+        """regulate() doit appeler _apply_synaptic_debt_pressure une fois par cycle."""
+        h = isolate_hypothalamus
+        with patch.object(h, "_apply_synaptic_debt_pressure", return_value=None) as mock_apply:
+            await h.regulate()
+        mock_apply.assert_called_once()
+

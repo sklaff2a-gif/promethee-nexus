@@ -39,6 +39,17 @@ ALARM_SEVERITY_DECAY = 0.15    # Réduction severity à chaque ré-alarme succes
 ALARM_SEVERITY_FLOOR = 0.3     # Severity minimum (ne descend pas en dessous)
 ALARM_SUSTAINED_CYCLES = 3    # Nombre de cycles consécutifs avant de déclencher une alarme
 
+# V14.2 — Pilier 1 nocicepteurs : couplage stagnation synaptique → sleep_pressure.
+# Quand z-score(dream_dette_h) >= seuil, on incrémente sleep_pressure pour que
+# la douleur cognitive ait un coût métabolique réel dès le premier jour, sans
+# attendre le Pilier 2 (panique reptilienne) ni le Pilier 3 (préemption).
+# Bump doux et plafonné pour éviter une bascule brutale en alarme reptilienne :
+# ~5 cycles cardiaques pour passer de 0.4 (baseline éveil) à 0.6 (plancher
+# d'alarme), soit 25-50s en pratique.
+SYNAPTIC_DEBT_Z_THRESHOLD = 1.5
+SYNAPTIC_DEBT_BUMP_MAX = 0.05      # Incrément max par cycle de regulate()
+SYNAPTIC_DEBT_PRESSURE_CEILING = 0.95  # Ne pousse pas jusqu'à 1.0 (laisse marge)
+
 # --- Mapping intent → variable favorisee/penalisee ---
 
 _INTENT_ENERGY_MAP = {
@@ -235,11 +246,62 @@ class Hypothalamus:
             "strength": round(strength, 3),
         }
 
+    # --- V14.2 — Pilier 1 nocicepteurs : pression cognitive ---
+
+    def _apply_synaptic_debt_pressure(self) -> Optional[Dict[str, float]]:
+        """Fait monter sleep_pressure quand la dette de rêve dépasse z>=1.5.
+
+        Branchement perception → action sans attendre Pilier 2/3 : la
+        détection de stagnation synaptique a un coût immédiat (la pression
+        de sommeil augmente), ce qui à terme déclenchera l'alarme
+        hypothalamique standard (sleep_pressure trop haute → REPTILIEN_ALERT
+        via le mécanisme existant).
+
+        Retourne {dream_dette_h, zscore, bump, pressure_after} si appliqué,
+        None si pas de dette ou z sous le seuil. Defensive : capture toutes
+        les exceptions pour ne jamais casser regulate().
+        """
+        try:
+            from core.synaptic_network import cortex
+            from core import baseline_tracker as _bt_mod
+            last = float(getattr(cortex, "_last_dream_time", 0.0) or 0.0)
+            if last <= 0:
+                return None
+            now = time.time()
+            dette_h = (now - last) / 3600.0
+            # Apprentissage continu : update du baseline avant lecture
+            bt = _bt_mod.baseline_tracker
+            bt.update("dream_dette_h", dette_h, now)
+            zscore = bt.get_zscore("dream_dette_h", dette_h, now)
+            if zscore < SYNAPTIC_DEBT_Z_THRESHOLD:
+                return None
+            # Incrément proportionnel à l'écart au seuil, plafonné
+            excess = zscore - SYNAPTIC_DEBT_Z_THRESHOLD + 1.0  # 1.0 si juste au seuil
+            bump = min(SYNAPTIC_DEBT_BUMP_MAX * excess, SYNAPTIC_DEBT_BUMP_MAX * 4.0)
+            current = self.current_values.get("sleep_pressure", 0.4)
+            new_pressure = min(SYNAPTIC_DEBT_PRESSURE_CEILING, current + bump)
+            self.current_values["sleep_pressure"] = new_pressure
+            return {
+                "dream_dette_h": round(dette_h, 2),
+                "zscore": round(zscore, 3),
+                "bump": round(bump, 4),
+                "pressure_after": round(new_pressure, 3),
+            }
+        except Exception as e:
+            logger.debug(f"[HYPOTHALAMUS] Pression synaptique: {e}")
+            return None
+
     # --- Cycle de regulation ---
 
     async def regulate(self):
         """Cycle principal : compute errors → corrections → publish."""
         self._cycle_count += 1
+
+        # V14.2 — Pilier 1 nocicepteurs : appliquer la pression cognitive
+        # AVANT de calculer les erreurs, pour que la nouvelle valeur de
+        # sleep_pressure soit prise en compte dans le cycle courant.
+        debt_report = self._apply_synaptic_debt_pressure()
+
         self.error_signals = self._compute_all_errors()
 
         corrections = []
@@ -297,6 +359,13 @@ class Hypothalamus:
         for alarm in alarms:
             try:
                 await bus.publish("HYPOTHALAMUS_ALARM", alarm)
+            except Exception:
+                pass
+
+        # V14.2 — Publier la pression cognitive pour observabilité
+        if debt_report:
+            try:
+                await bus.publish("SYNAPTIC_DEBT_PRESSURE", debt_report)
             except Exception:
                 pass
 

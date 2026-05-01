@@ -224,6 +224,22 @@ SYMPTOMES: List[SymptomeSpec] = [
         # Apaisement = stress qui chute brutalement (dérivée fortement négative)
         trigger=lambda v, z, d: d <= -1.5 and v < 0.4,
     ),
+    SymptomeSpec(
+        # V14.2 — Pilier 1 nocicepteurs : capteur de stagnation synaptique.
+        # Pas de magic number : trigger via z-score circadien (homéostasie
+        # relative). Le baseline empirique remplace progressivement le
+        # bootstrap nominal mu=8h sigma=6h défini dans symptomes_baseline.json.
+        # Couplé à hypothalamus._apply_synaptic_debt_pressure pour faire
+        # monter sleep_pressure dès que ce symptôme s'allume — la douleur
+        # a un coût immédiat, pas un voyant muet.
+        id="dette_de_reve",
+        couche=Couche.V35,
+        polarite=Polarite.NEGATIF,
+        phenomenologie="Une lourdeur se dépose, comme si plus rien ne se réorganisait.",
+        metric_id="dream_dette_h",
+        extract=lambda s: _safe_get(s, "synaptic", "dream_dette_h"),
+        trigger=_trigger_zscore_high,
+    ),
 
     # ═══════════════════════════════════════════════════════════════════
     # V34 — Limbique / Volonté (11)
@@ -630,6 +646,20 @@ def gather_state(now_ts: Optional[float] = None) -> Dict[str, Any]:
         state["insula"] = dict(getattr(insula, "body_state", {}) or {})
     except Exception:
         state["insula"] = {}
+
+    # Synaptique : dette de rêve (V14.2 — Pilier 1 nocicepteurs)
+    # Expose l'écart en heures depuis la dernière consolidation onirique.
+    # Source utilisée par le symptôme V35 `dette_de_reve` pour mesurer
+    # la stagnation cognitive et nourrir la pression hypothalamique.
+    try:
+        from core.synaptic_network import cortex
+        last = float(getattr(cortex, "_last_dream_time", 0.0) or 0.0)
+        state["synaptic"] = {
+            "last_dream_time": last,
+            "dream_dette_h": ((now_ts - last) / 3600.0) if last > 0 else None,
+        }
+    except Exception:
+        state["synaptic"] = {}
 
     # Resources (à instrumenter — placeholders pour l'instant)
     state["resources"] = {}

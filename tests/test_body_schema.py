@@ -41,18 +41,53 @@ def fresh_baselines(monkeypatch, tmp_path):
 # Catalogue : structure et invariants
 # ─────────────────────────────────────────────────────────────────────────
 
-def test_catalogue_a_32_symptomes():
-    assert len(SYMPTOMES) == 32
+def test_catalogue_a_33_symptomes():
+    """V14.2 : ajout du symptome V35 dette_de_reve (Pilier 1 nocicepteurs)."""
+    assert len(SYMPTOMES) == 33
 
 
 def test_catalogue_repartition_par_couche():
-    """9 V35 + 11 V34 + 12 V36 = 32."""
+    """V14.2 : 10 V35 (+ dette_de_reve) + 11 V34 + 12 V36 = 33."""
     counts = {Couche.V35: 0, Couche.V34: 0, Couche.V36: 0}
     for s in SYMPTOMES:
         counts[s.couche] += 1
-    assert counts[Couche.V35] == 9
+    assert counts[Couche.V35] == 10
     assert counts[Couche.V34] == 11
     assert counts[Couche.V36] == 12
+
+
+def test_dette_de_reve_dans_catalogue(fresh_baselines):
+    """V14.2 : le symptome dette_de_reve est present, V35, NEGATIF, z-score."""
+    spec = next((s for s in SYMPTOMES if s.id == "dette_de_reve"), None)
+    assert spec is not None
+    assert spec.couche == Couche.V35
+    assert spec.polarite == Polarite.NEGATIF
+    assert spec.metric_id == "dream_dette_h"
+    assert "lourdeur" in spec.phenomenologie.lower() or "rien" in spec.phenomenologie.lower()
+
+
+def test_dette_de_reve_extract_synaptic(fresh_baselines):
+    """Extract lit la dette depuis state['synaptic']['dream_dette_h']."""
+    spec = next(s for s in SYMPTOMES if s.id == "dette_de_reve")
+    state = {"synaptic": {"dream_dette_h": 24.0}}
+    assert spec.extract(state) == 24.0
+    state_vide = {}
+    assert spec.extract(state_vide) is None
+
+
+def test_dette_de_reve_trigger_zscore(fresh_baselines):
+    """Trigger via z-score (pas de magic number) : 17h declenche, 8h non."""
+    import time as _time
+    spec = next(s for s in SYMPTOMES if s.id == "dette_de_reve")
+    # Baseline nominal : mu=8 sigma=6 => z=1.5 a 17h
+    state_no = {"synaptic": {"dream_dette_h": 8.0}}  # z=0
+    state_yes = {"synaptic": {"dream_dette_h": 20.0}}  # z=2.0
+    r_no = evaluate_symptome(spec, state_no, _time.time())
+    r_yes = evaluate_symptome(spec, state_yes, _time.time())
+    assert r_no is None, "8h ne doit pas declencher (z=0 sous seuil)"
+    assert r_yes is not None, "20h doit declencher (z=2 au-dessus du seuil)"
+    assert r_yes.id == "dette_de_reve"
+    assert r_yes.zscore >= 1.5
 
 
 def test_catalogue_ids_uniques():
