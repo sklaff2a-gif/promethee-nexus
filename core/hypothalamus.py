@@ -50,6 +50,25 @@ SYNAPTIC_DEBT_Z_THRESHOLD = 1.5
 SYNAPTIC_DEBT_BUMP_MAX = 0.05      # Incrément max par cycle de regulate()
 SYNAPTIC_DEBT_PRESSURE_CEILING = 0.95  # Ne pousse pas jusqu'à 1.0 (laisse marge)
 
+# V14.5 — Descente symétrique : quand la dette est résolue (post MEMORY_CONSOLIDATION),
+# on relâche la pression que NOTRE patch a injectée, pour ne pas laisser une alarme
+# hypothalamique générique bloquée au plafond. Hystérésis 0.5 entre seuil de montée
+# (1.5) et seuil de descente (1.0) pour éviter le yo-yo si z oscille autour du seuil.
+# La descente ne franchit JAMAIS le plancher circadien (sleep_pressure d'éveil = 0.2,
+# crépuscule = 0.6, sommeil_profond = 0.9, aube = 0.4) — sinon on écraserait la
+# pression légitime que la phase circadienne maintient.
+SYNAPTIC_DEBT_RELIEF_THRESHOLD = 1.0    # z sous ce seuil → décompression active
+
+# Plancher de pression dynamique selon la phase circadienne. Source unique de vérité,
+# réutilisée par _on_circadian_phase ET _apply_synaptic_debt_pressure.
+_CIRCADIAN_PRESSURE_FLOOR = {
+    "eveil": 0.2,
+    "crepuscule": 0.6,
+    "sommeil_profond": 0.9,
+    "aube": 0.4,
+}
+_DEFAULT_CIRCADIAN_FLOOR = 0.4
+
 # --- Mapping intent → variable favorisee/penalisee ---
 
 _INTENT_ENERGY_MAP = {
@@ -180,15 +199,15 @@ class Hypothalamus:
         self.current_values["stress"] = spike
 
     async def _on_circadian_phase(self, event: dict):
-        """Met a jour la pression de sommeil depuis le cycle circadien."""
+        """Met a jour la pression de sommeil depuis le cycle circadien.
+
+        V14.5 : utilise _CIRCADIAN_PRESSURE_FLOOR (constante module) comme
+        source unique de verite, partagee avec _apply_synaptic_debt_pressure.
+        """
         phase = event.get("phase", "eveil")
-        pressure_map = {
-            "eveil": 0.2,
-            "crepuscule": 0.6,
-            "sommeil_profond": 0.9,
-            "aube": 0.4,
-        }
-        self.current_values["sleep_pressure"] = pressure_map.get(phase, 0.4)
+        self.current_values["sleep_pressure"] = _CIRCADIAN_PRESSURE_FLOOR.get(
+            phase, _DEFAULT_CIRCADIAN_FLOOR
+        )
 
     async def _on_routine_complete(self, event: dict):
         """Met a jour l'energie basee sur le budget restant."""
@@ -249,17 +268,26 @@ class Hypothalamus:
     # --- V14.2 — Pilier 1 nocicepteurs : pression cognitive ---
 
     def _apply_synaptic_debt_pressure(self) -> Optional[Dict[str, float]]:
-        """Fait monter sleep_pressure quand la dette de rêve dépasse z>=1.5.
+        """Fait monter OU descendre sleep_pressure selon la dette de rêve.
 
-        Branchement perception → action sans attendre Pilier 2/3 : la
-        détection de stagnation synaptique a un coût immédiat (la pression
-        de sommeil augmente), ce qui à terme déclenchera l'alarme
-        hypothalamique standard (sleep_pressure trop haute → REPTILIEN_ALERT
-        via le mécanisme existant).
+        Architecture homéostatique symétrique (V14.5) :
+          - z >= 1.5 (montée)    : sleep_pressure += bump (plafond 0.95)
+          - z <  1.0 (descente)  : sleep_pressure -= relief (plancher
+                                    circadien : eveil=0.2, sommeil=0.9, etc.)
+          - z dans [1.0, 1.5]    : zone neutre (hystérésis anti-yo-yo)
 
-        Retourne {dream_dette_h, zscore, bump, pressure_after} si appliqué,
-        None si pas de dette ou z sous le seuil. Defensive : capture toutes
-        les exceptions pour ne jamais casser regulate().
+        Sans la branche descente, sleep_pressure restait collée au plafond
+        après résolution de la dette par MEMORY_CONSOLIDATION, créant une
+        alarme hypothalamique chronique. Bug détecté en raisonnement
+        avant 1er cycle de vol nocturne (audit V14.4).
+
+        Le plancher circadien protège la pression légitime de sommeil
+        profond (0.9) ou de crépuscule (0.6). On ne casse pas le rythme
+        biologique sous prétexte que la dette synaptique est résolue.
+
+        Retourne dict d'observabilité avec "action" ∈ {rise, relief}, ou
+        None si zone neutre / no-op. Defensive : capture toutes les
+        exceptions pour ne jamais casser regulate().
         """
         try:
             from core.synaptic_network import cortex
@@ -273,20 +301,52 @@ class Hypothalamus:
             bt = _bt_mod.baseline_tracker
             bt.update("dream_dette_h", dette_h, now)
             zscore = bt.get_zscore("dream_dette_h", dette_h, now)
-            if zscore < SYNAPTIC_DEBT_Z_THRESHOLD:
-                return None
-            # Incrément proportionnel à l'écart au seuil, plafonné
-            excess = zscore - SYNAPTIC_DEBT_Z_THRESHOLD + 1.0  # 1.0 si juste au seuil
-            bump = min(SYNAPTIC_DEBT_BUMP_MAX * excess, SYNAPTIC_DEBT_BUMP_MAX * 4.0)
             current = self.current_values.get("sleep_pressure", 0.4)
-            new_pressure = min(SYNAPTIC_DEBT_PRESSURE_CEILING, current + bump)
-            self.current_values["sleep_pressure"] = new_pressure
-            return {
-                "dream_dette_h": round(dette_h, 2),
-                "zscore": round(zscore, 3),
-                "bump": round(bump, 4),
-                "pressure_after": round(new_pressure, 3),
-            }
+
+            # ── Branche MONTÉE : z >= seuil haut ──
+            if zscore >= SYNAPTIC_DEBT_Z_THRESHOLD:
+                excess = zscore - SYNAPTIC_DEBT_Z_THRESHOLD + 1.0
+                bump = min(SYNAPTIC_DEBT_BUMP_MAX * excess, SYNAPTIC_DEBT_BUMP_MAX * 4.0)
+                new_pressure = min(SYNAPTIC_DEBT_PRESSURE_CEILING, current + bump)
+                self.current_values["sleep_pressure"] = new_pressure
+                return {
+                    "action": "rise",
+                    "dream_dette_h": round(dette_h, 2),
+                    "zscore": round(zscore, 3),
+                    "bump": round(bump, 4),
+                    "pressure_after": round(new_pressure, 3),
+                }
+
+            # ── Branche DESCENTE : z sous seuil bas (hystérésis) ──
+            if zscore < SYNAPTIC_DEBT_RELIEF_THRESHOLD:
+                # Plancher dynamique selon phase circadienne — protège la
+                # pression légitime de sommeil_profond / crépuscule.
+                try:
+                    from core.circadian_rhythm import circadian
+                    floor = _CIRCADIAN_PRESSURE_FLOOR.get(
+                        circadian.phase, _DEFAULT_CIRCADIAN_FLOOR
+                    )
+                except Exception:
+                    floor = _DEFAULT_CIRCADIAN_FLOOR
+                # Si la pression actuelle est déjà au plancher (ou en dessous,
+                # cas où la phase circadienne a pris le relais), no-op.
+                if current <= floor:
+                    return None
+                # Relief symétrique au bump nominal — décompression contrôlée
+                relief = SYNAPTIC_DEBT_BUMP_MAX
+                new_pressure = max(floor, current - relief)
+                self.current_values["sleep_pressure"] = new_pressure
+                return {
+                    "action": "relief",
+                    "dream_dette_h": round(dette_h, 2),
+                    "zscore": round(zscore, 3),
+                    "relief": round(relief, 4),
+                    "circadian_floor": round(floor, 3),
+                    "pressure_after": round(new_pressure, 3),
+                }
+
+            # ── Zone neutre [1.0, 1.5] : hystérésis, no-op ──
+            return None
         except Exception as e:
             logger.debug(f"[HYPOTHALAMUS] Pression synaptique: {e}")
             return None

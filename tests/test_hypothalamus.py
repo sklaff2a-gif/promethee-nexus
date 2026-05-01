@@ -228,7 +228,11 @@ class TestHypothalamusRegulation:
     async def test_stability_score_perfect(self, isolate_hypothalamus):
         h = isolate_hypothalamus
         # Toutes au setpoint → stabilite = 1.0
-        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock):
+        # V14.5 : on patch _apply_synaptic_debt_pressure pour qu'il ne touche pas
+        # sleep_pressure (sinon relief actif si dette > seuil bas, ce qui est
+        # un comportement valide mais non testé ici).
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock), \
+             patch.object(h, "_apply_synaptic_debt_pressure", return_value=None):
             await h.regulate()
         score = h._compute_stability_score()
         assert score == 1.0
@@ -613,16 +617,29 @@ class TestSynapticDebtPressure:
         assert r is None
         assert h.current_values["sleep_pressure"] == 0.4  # inchange
 
-    def test_apply_returns_none_si_dette_faible(self, isolate_hypothalamus):
-        """Dette de 4h (z proche de -0.7 sous baseline mu=8) ne declenche pas."""
+    def test_apply_no_op_si_dette_faible_et_pression_au_floor(self, isolate_hypothalamus):
+        """V14.5 : dette faible (z<1.0) + pression deja au floor circadien → no-op.
+
+        Avant V14.5, le test verifiait juste 'dette faible → no-op', mais V14.5
+        a introduit la branche relief qui RELACHE la pression si elle est au-dessus
+        du floor. Le no-op pur n'arrive donc plus que si pression == floor.
+        """
         from core import baseline_tracker as bt_mod
+        from unittest.mock import MagicMock
         bt_mod.BaselineTracker.reset_singleton()
         h = isolate_hypothalamus
+        h.current_values["sleep_pressure"] = 0.2  # exactement au floor eveil
         recent = time.time() - 4 * 3600
-        with patch.dict("sys.modules", {"core.synaptic_network": self._mock_cortex(recent)}):
+        circ_mock = MagicMock()
+        circ_mock.circadian = MagicMock()
+        circ_mock.circadian.phase = "eveil"
+        with patch.dict("sys.modules", {
+            "core.synaptic_network": self._mock_cortex(recent),
+            "core.circadian_rhythm": circ_mock,
+        }):
             r = h._apply_synaptic_debt_pressure()
         assert r is None
-        assert h.current_values["sleep_pressure"] == 0.4
+        assert h.current_values["sleep_pressure"] == 0.2
         bt_mod.BaselineTracker.reset_singleton()
 
     def test_apply_incremente_si_dette_haute(self, isolate_hypothalamus):
@@ -672,3 +689,162 @@ class TestSynapticDebtPressure:
             await h.regulate()
         mock_apply.assert_called_once()
 
+
+
+# ===== V14.5 — Descente symétrique sleep_pressure =====
+
+class TestSynapticDebtRelief:
+    """V14.5 : la pression doit redescendre quand la dette est résolue,
+    mais sans franchir le plancher circadien."""
+
+    def _mock_cortex(self, last_dream_time):
+        from unittest.mock import MagicMock
+        m = MagicMock()
+        m.cortex = MagicMock()
+        m.cortex._last_dream_time = last_dream_time
+        return m
+
+    def _mock_circadian(self, phase: str):
+        from unittest.mock import MagicMock
+        m = MagicMock()
+        m.circadian = MagicMock()
+        m.circadian.phase = phase
+        return m
+
+    def test_relief_actif_si_z_bas_et_pression_haute(self, isolate_hypothalamus):
+        """Dette fraîche (z < 1) ET pression injectée haute → relief actif."""
+        from core import baseline_tracker as bt_mod
+        bt_mod.BaselineTracker.reset_singleton()
+        h = isolate_hypothalamus
+        h.current_values["sleep_pressure"] = 0.85  # post-pic
+        recent = time.time() - 1 * 3600  # 1h, z bien sous baseline mu=8
+
+        with patch.dict("sys.modules", {
+            "core.synaptic_network": self._mock_cortex(recent),
+            "core.circadian_rhythm": self._mock_circadian("eveil"),
+        }):
+            r = h._apply_synaptic_debt_pressure()
+
+        assert r is not None, "Relief doit s'activer"
+        assert r["action"] == "relief"
+        assert h.current_values["sleep_pressure"] < 0.85, "Pression doit baisser"
+        assert h.current_values["sleep_pressure"] >= 0.2, "Mais pas sous floor eveil"
+        bt_mod.BaselineTracker.reset_singleton()
+
+    def test_relief_respecte_floor_eveil(self, isolate_hypothalamus):
+        """En éveil, la pression ne descend pas sous 0.2 même après relief répétés."""
+        from core import baseline_tracker as bt_mod
+        bt_mod.BaselineTracker.reset_singleton()
+        h = isolate_hypothalamus
+        h.current_values["sleep_pressure"] = 0.25  # juste au-dessus du floor 0.2
+        recent = time.time() - 1 * 3600
+
+        with patch.dict("sys.modules", {
+            "core.synaptic_network": self._mock_cortex(recent),
+            "core.circadian_rhythm": self._mock_circadian("eveil"),
+        }):
+            for _ in range(20):
+                h._apply_synaptic_debt_pressure()
+
+        assert h.current_values["sleep_pressure"] >= 0.2, \
+            "Floor eveil 0.2 doit être respecté"
+        assert h.current_values["sleep_pressure"] <= 0.25, \
+            "Mais pression doit avoir baissé"
+        bt_mod.BaselineTracker.reset_singleton()
+
+    def test_relief_floor_dynamique_sommeil_profond(self, isolate_hypothalamus):
+        """En sommeil_profond, le floor monte à 0.9 — relief NE descend PAS sous."""
+        from core import baseline_tracker as bt_mod
+        bt_mod.BaselineTracker.reset_singleton()
+        h = isolate_hypothalamus
+        h.current_values["sleep_pressure"] = 0.95  # max
+        recent = time.time() - 1 * 3600
+
+        with patch.dict("sys.modules", {
+            "core.synaptic_network": self._mock_cortex(recent),
+            "core.circadian_rhythm": self._mock_circadian("sommeil_profond"),
+        }):
+            for _ in range(10):
+                h._apply_synaptic_debt_pressure()
+
+        assert h.current_values["sleep_pressure"] >= 0.9, \
+            "Floor sommeil_profond 0.9 doit être respecté"
+        bt_mod.BaselineTracker.reset_singleton()
+
+    def test_relief_no_op_si_pression_deja_au_floor(self, isolate_hypothalamus):
+        """Si la pression est déjà au plancher circadien, no-op (return None)."""
+        from core import baseline_tracker as bt_mod
+        bt_mod.BaselineTracker.reset_singleton()
+        h = isolate_hypothalamus
+        h.current_values["sleep_pressure"] = 0.20  # exactement au floor eveil
+        recent = time.time() - 1 * 3600
+
+        with patch.dict("sys.modules", {
+            "core.synaptic_network": self._mock_cortex(recent),
+            "core.circadian_rhythm": self._mock_circadian("eveil"),
+        }):
+            r = h._apply_synaptic_debt_pressure()
+
+        assert r is None
+        assert h.current_values["sleep_pressure"] == 0.20
+        bt_mod.BaselineTracker.reset_singleton()
+
+    def test_hysteresis_zone_neutre_no_op(self, isolate_hypothalamus):
+        """z dans [1.0, 1.5] (zone neutre) → no-op, pression inchangée."""
+        from core import baseline_tracker as bt_mod
+        bt_mod.BaselineTracker.reset_singleton()
+        h = isolate_hypothalamus
+        h.current_values["sleep_pressure"] = 0.6
+        # baseline nominal : mu=8 sigma=6 → pour z=1.2, dette = 8 + 1.2*6 = 15.2h
+        in_zone = time.time() - 15.2 * 3600
+
+        with patch.dict("sys.modules", {
+            "core.synaptic_network": self._mock_cortex(in_zone),
+            "core.circadian_rhythm": self._mock_circadian("eveil"),
+        }):
+            r = h._apply_synaptic_debt_pressure()
+
+        assert r is None, "Zone neutre [1, 1.5] doit être no-op"
+        assert h.current_values["sleep_pressure"] == 0.6, "Pression inchangée"
+        bt_mod.BaselineTracker.reset_singleton()
+
+    def test_relief_event_publie_avec_action(self, isolate_hypothalamus):
+        """Le dict retourné doit contenir action=relief + circadian_floor."""
+        from core import baseline_tracker as bt_mod
+        bt_mod.BaselineTracker.reset_singleton()
+        h = isolate_hypothalamus
+        h.current_values["sleep_pressure"] = 0.9
+        recent = time.time() - 1 * 3600
+
+        with patch.dict("sys.modules", {
+            "core.synaptic_network": self._mock_cortex(recent),
+            "core.circadian_rhythm": self._mock_circadian("eveil"),
+        }):
+            r = h._apply_synaptic_debt_pressure()
+
+        assert r is not None
+        assert r["action"] == "relief"
+        assert "circadian_floor" in r
+        assert r["circadian_floor"] == 0.2
+        assert "relief" in r
+        assert "pressure_after" in r
+        bt_mod.BaselineTracker.reset_singleton()
+
+    def test_montee_inchangee_action_rise(self, isolate_hypothalamus):
+        """V14.2 préservée : montée renvoie action=rise (pas action=relief)."""
+        from core import baseline_tracker as bt_mod
+        bt_mod.BaselineTracker.reset_singleton()
+        h = isolate_hypothalamus
+        old = time.time() - 24 * 3600  # z = 2.67
+
+        with patch.dict("sys.modules", {
+            "core.synaptic_network": self._mock_cortex(old),
+            "core.circadian_rhythm": self._mock_circadian("eveil"),
+        }):
+            r = h._apply_synaptic_debt_pressure()
+
+        assert r is not None
+        assert r["action"] == "rise"
+        assert "bump" in r
+        assert "circadian_floor" not in r  # pas de floor sur montée
+        bt_mod.BaselineTracker.reset_singleton()
