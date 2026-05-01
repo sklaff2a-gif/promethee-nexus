@@ -7082,27 +7082,36 @@ class AutonomyEngine:
                 from core.circadian_rhythm import circadian
                 new_phase = circadian._evaluate_transition(budget_status, self.last_health_check)
                 if new_phase:
-                    await circadian._transition_to(new_phase, f"budget={budget_status}")
+                    # V14 (2026-05-01) : utiliser la vraie raison du déclencheur si
+                    # disponible (borbely_night, sleep_pressure, threat...) au lieu
+                    # du générique "budget=full" qui masquait le mécanisme réel.
+                    real_reason = getattr(circadian, "_last_trigger_reason", "") or f"budget={budget_status}"
+                    await circadian._transition_to(new_phase, real_reason)
                 current_phase = circadian.get_phase()
             except Exception:
                 current_phase = "eveil"
 
+            # V14 (2026-05-01) : exécuter les SLEEP_TASKS dès que phase=sommeil_profond,
+            # indépendamment du budget. Avant ce fix, le bloc était imbriqué dans
+            # `if budget_status == "exhausted"` — donc le sommeil Borbély (entré
+            # avec budget=full) ne déclenchait JAMAIS les tâches de maintenance,
+            # produisant 42h sans dream_consolidation.
+            if current_phase == "sommeil_profond":
+                self.is_processing = True
+                try:
+                    from core.circadian_rhythm import circadian as _circ
+                    result = await _circ.execute_next_sleep_task()
+                    if result is None:
+                        await _circ._transition_to("aube", "maintenance terminée")
+                except Exception as e:
+                    logger.warning(f"[AUTONOMY] Erreur maintenance circadienne: {e}")
+                finally:
+                    self._persist_state()
+                    await asyncio.sleep(30)
+                    self.is_processing = False
+                continue
+
             if budget_status == "exhausted":
-                if current_phase == "sommeil_profond":
-                    # Sommeil profond : exécuter les tâches de maintenance
-                    self.is_processing = True
-                    try:
-                        from core.circadian_rhythm import circadian as _circ
-                        result = await _circ.execute_next_sleep_task()
-                        if result is None:
-                            await _circ._transition_to("aube", "maintenance terminée")
-                    except Exception as e:
-                        logger.warning(f"[AUTONOMY] Erreur maintenance circadienne: {e}")
-                    finally:
-                        self._persist_state()
-                        await asyncio.sleep(30)
-                        self.is_processing = False
-                    continue
                 # Crépuscule/Aube : routines post-budget existantes
                 if not self.is_processing:
                     idle_time = time.time() - self.last_user_interaction

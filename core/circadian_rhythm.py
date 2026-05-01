@@ -93,6 +93,16 @@ SLEEP_TASKS = [
 
 SLEEP_TASK_TIMEOUT = 60  # Timeout par tâche (secondes)
 
+# V14 (2026-05-01) : Garde-fou contre blocage en sommeil profond.
+# Si après ce délai aucune tâche n'a progressé (dispatcher mort, etc.),
+# on force le réveil pour éviter une catatonie permanente.
+MAX_SLEEP_DURATION = 30 * 60  # 30 min absolu
+
+# V14 : Pression homéostatique de sommeil — temps max d'éveil avant
+# trigger forcé du sommeil. Évite la dérive si la fenêtre Borbély est
+# manquée (crash, restart, fuseau horaire) et si le budget n'est pas épuisé.
+MAX_AWAKE_DURATION_SECONDS = 20 * 3600  # 20h max éveillé
+
 
 # ============================================================
 # Dataclass — Rapport de sommeil
@@ -163,6 +173,12 @@ class CircadianRhythm:
         # Stocke l'instant précis du dernier sommeil déclenché par horloge.
         # Robuste au Calendar Bug (chevauchement de minuit) et persisté.
         self._last_circadian_sleep_time: Optional[datetime.datetime] = None
+
+        # V14 (2026-05-01) : raison réelle du dernier déclenchement de transition
+        # (borbely_night, sleep_pressure, budget_exhausted, cpu_ram, threat).
+        # Set par _eval_eveil_transition pour observabilité au lieu du
+        # générique "budget=full" hardcodé dans autonomy_engine.
+        self._last_trigger_reason: str = ""
 
         self._load()
 
@@ -446,6 +462,11 @@ class CircadianRhythm:
         en tête des checks. Force le crépuscule dans la fenêtre de nuit
         [CIRCADIAN_NIGHT_START, CIRCADIAN_NIGHT_END[ si la période réfractaire
         (12h) est écoulée depuis le dernier sommeil circadien.
+
+        V14 (2026-05-01) : ajout de la pression homéostatique de sommeil —
+        si éveillé depuis plus de MAX_AWAKE_DURATION_SECONDS, force le crépuscule
+        indépendamment de l'heure et du budget. Évite la dérive si la fenêtre
+        Borbély est manquée (crash, restart en milieu de nuit, fuseau horaire).
         """
         # V13 — Processus C : horloge biologique prioritaire sur le budget
         try:
@@ -459,12 +480,28 @@ class CircadianRhythm:
                    > CIRCADIAN_REFRACTORY_SECONDS
             )
             if in_night_window and can_sleep_again:
+                self._last_trigger_reason = "borbely_night"
                 return PHASE_CREPUSCULE
+        except Exception:
+            pass
+
+        # V14 — Pression homéostatique : trop longtemps éveillé
+        try:
+            if self._last_circadian_sleep_time is not None:
+                awake_seconds = (
+                    datetime.datetime.now() - self._last_circadian_sleep_time
+                ).total_seconds()
+                if awake_seconds > MAX_AWAKE_DURATION_SECONDS:
+                    self._last_trigger_reason = (
+                        f"sleep_pressure (awake={awake_seconds/3600:.0f}h)"
+                    )
+                    return PHASE_CREPUSCULE
         except Exception:
             pass
 
         # Budget épuisé → crépuscule
         if budget_status == "exhausted":
+            self._last_trigger_reason = "budget_exhausted"
             return PHASE_CREPUSCULE
 
         # Pression CPU/RAM
@@ -472,12 +509,14 @@ class CircadianRhythm:
             cpu = health.get("cpu_percent", 0)
             ram = health.get("ram_percent", 0)
             if cpu > CPU_PRESSURE_THRESHOLD and ram > RAM_PRESSURE_THRESHOLD:
+                self._last_trigger_reason = f"cpu_ram_pressure ({cpu:.0f}/{ram:.0f}%)"
                 return PHASE_CREPUSCULE
 
         # Threat level élevé
         try:
             from core.reptilian_core import reptile
             if reptile.threat_level >= THREAT_PRESSURE_THRESHOLD:
+                self._last_trigger_reason = f"threat ({reptile.threat_level:.1f})"
                 return PHASE_CREPUSCULE
         except Exception:
             pass
@@ -500,13 +539,29 @@ class CircadianRhythm:
         return PHASE_SOMMEIL
 
     def _eval_sommeil_transition(self, budget_status: str) -> Optional[str]:
-        """SOMMEIL → AUBE si maintenance terminée ou nouveau jour."""
+        """SOMMEIL → AUBE quand toutes les tâches sont terminées, ou timeout absolu.
+
+        V14 (2026-05-01) : suppression du fallback `budget_status != "exhausted"`.
+        Le sommeil V13 (Borbély horaire) entre indépendamment du budget — il doit
+        donc en sortir indépendamment du budget aussi. La condition précédente
+        annulait toute exécution des SLEEP_TASKS quand le sommeil était déclenché
+        par horloge alors que le budget restait plein (cas typique : 23h-5h).
+        Conséquence observée : sleep report vide pendant 42h, pas de
+        dream_consolidation, graphe synaptique en torpeur (91.7% à w=0.08).
+
+        Filet de sécurité : timeout absolu MAX_SLEEP_DURATION pour éviter
+        un blocage si le dispatcher externe (autonomy_engine) ne tourne pas.
+        """
         # Toutes les tâches terminées
         if self._current_sleep_task_index >= len(SLEEP_TASKS):
             return PHASE_AUBE
 
-        # Nouveau jour (budget reset)
-        if budget_status != "exhausted":
+        # V14 — filet de sécurité : timeout absolu de sommeil
+        if time.time() - self._phase_since > MAX_SLEEP_DURATION:
+            logger.warning(
+                f"CIRCADIEN: Timeout sommeil profond ({MAX_SLEEP_DURATION}s) — "
+                f"réveil forcé. Tasks faites: {self._current_sleep_task_index}/{len(SLEEP_TASKS)}"
+            )
             return PHASE_AUBE
 
         return None

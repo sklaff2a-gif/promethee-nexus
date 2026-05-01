@@ -135,11 +135,24 @@ class TestPhaseTransitions:
         result = isolate_circadian._evaluate_transition("exhausted", _health())
         assert result == PHASE_AUBE
 
-    def test_sommeil_to_aube_budget_reset(self, isolate_circadian):
-        """Sommeil → aube quand le budget est reset (nouveau jour)."""
+    def test_sommeil_reste_si_tasks_inachevees(self, isolate_circadian):
+        """V14 : sommeil persiste tant que les tâches ne sont pas toutes faites,
+        même si le budget redevient plein. Avant V14, ce test affirmait
+        l'inverse — mais c'était précisément le bug qui annulait l'effet
+        Borbély : entrée horaire avec budget=full → sortie immédiate au tick
+        suivant → 0 SLEEP_TASKS exécutées → 42h sans dream_consolidation."""
         _force_phase(isolate_circadian, PHASE_SOMMEIL)
         isolate_circadian._current_sleep_task_index = 1  # Pas toutes terminées
         result = isolate_circadian._evaluate_transition("full", _health())
+        assert result is None  # Doit rester en sommeil, pas sortir
+
+    def test_sommeil_timeout_force_aube(self, isolate_circadian):
+        """V14 : filet de sécurité — si dispatcher externe gelé, timeout
+        absolu force la sortie pour éviter blocage permanent en sommeil."""
+        from core.circadian_rhythm import MAX_SLEEP_DURATION
+        _force_phase(isolate_circadian, PHASE_SOMMEIL, MAX_SLEEP_DURATION + 60)
+        isolate_circadian._current_sleep_task_index = 0  # Aucune task faite
+        result = isolate_circadian._evaluate_transition("exhausted", _health())
         assert result == PHASE_AUBE
 
     def test_aube_to_eveil(self, isolate_circadian):
