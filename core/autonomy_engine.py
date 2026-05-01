@@ -4537,11 +4537,69 @@ class AutonomyEngine:
             return {"status": "error", "result": f"Erreur consolidation: {e}"}
 
     async def _execute_soliloque(self) -> dict:
-        """Dialogue introspectif avec le compagnon intérieur."""
+        """Dialogue introspectif. Aiguillage v1/v2 via config/feature_flags.json.
+
+        v1 = ancien dialogue compagnon socratique (core/soliloque.py)
+        v2 = monologue incarné Body Schema (core/soliloque_v2.py)
+
+        Switch live possible : éditer feature_flags.json, prochain appel détecte
+        via mtime (hot-reload).
+        """
         try:
-            from core.soliloque import soliloque
-            result = await soliloque.engage()
-            return result
+            from core.feature_flags import get_flag
+            engine_kind = get_flag("soliloque_engine", default="v2")
+
+            if engine_kind == "v2":
+                from core.soliloque_v2 import soliloque_v2
+                result = await soliloque_v2.engage()
+                # Mapper les status V2 vers la sémantique attendue par le scoring autonomy.
+                # success → success (avec insight comme "result")
+                # silence → skipped (pas de souffrance, pas de bavardage forcé)
+                # abort   → error (double échec, journal vierge)
+                if result.get("status") == "success":
+                    return {
+                        "status": "success",
+                        "result": f"V2 incarné ({len(result.get('ancrages_utilises', []))} ancrages) : "
+                                  f"{result.get('insight', '')[:200]}",
+                        "insight": result.get("insight"),
+                        "ancrages_utilises": result.get("ancrages_utilises"),
+                        "dominants": result.get("dominants"),
+                        "attempts": result.get("attempts"),
+                        "duration_s": result.get("duration_s"),
+                        "engine": "v2",
+                    }
+                if result.get("status") == "silence":
+                    return {
+                        "status": "skipped",
+                        "result": f"V2 silence métabolique ({result.get('symptomes_actifs', 0)} actifs, aucun >= seuil)",
+                        "engine": "v2",
+                    }
+                if result.get("status") == "abort":
+                    return {
+                        "status": "error",
+                        "result": f"V2 abort double échec : {result.get('rejections', [])}",
+                        "engine": "v2",
+                    }
+                # error_state ou inconnu
+                return {
+                    "status": "error",
+                    "result": f"V2 status={result.get('status')} : {result.get('error', '')}",
+                    "engine": "v2",
+                }
+            elif engine_kind == "v1":
+                from core.soliloque import soliloque
+                result = await soliloque.engage()
+                result["engine"] = "v1"
+                return result
+            else:
+                logger.warning(
+                    f"[AUTONOMY] soliloque_engine flag inconnu '{engine_kind}', "
+                    f"fallback v2"
+                )
+                from core.soliloque_v2 import soliloque_v2
+                result = await soliloque_v2.engage()
+                result["engine"] = "v2_fallback"
+                return result
         except Exception as e:
             return {"status": "error", "result": f"Erreur soliloque: {e}"}
 

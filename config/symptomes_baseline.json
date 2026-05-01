@@ -1,0 +1,133 @@
+{
+  "_doc": "Baselines nominales pour le Body Schema. Bootstrap utilisé tant que le BaselineTracker n'a pas accumulé n_obs >= 30 par créneau circadien (4h) sur 7 jours. Chaque entrée définit mu/sigma estimés à la main. Switch progressif vers baseline empirique entre n=20 et n=30. Voir core/baseline_tracker.py.",
+  "_version": "1.0",
+  "_creneaux": ["nuit", "aube", "matin", "midi", "aprem", "soir"],
+
+  "cardiac_bpm": {
+    "mu": 65.0,
+    "sigma": 12.0,
+    "_note": "Au repos ~55, en activité ~80, alarme ~110+"
+  },
+  "cardiac_emotion_intensity": {
+    "mu": 0.40,
+    "sigma": 0.20,
+    "_note": "Intensité émotionnelle 0-1, baseline calme = 0.3-0.5"
+  },
+  "vram_alloc_ratio": {
+    "mu": 0.55,
+    "sigma": 0.20,
+    "_note": "Ratio VRAM utilisée / 16GB. Saturation à >0.85"
+  },
+  "nap_dette_h": {
+    "mu": 3.0,
+    "sigma": 2.5,
+    "_note": "Heures de sommeil manquantes vs schedule. Critique > 6h"
+  },
+  "gpu_budget_remaining_s": {
+    "mu": 9.0,
+    "sigma": 4.0,
+    "_note": "Budget GPU restant en secondes (max 15s). Sec si <3s"
+  },
+  "last_dropzone_input_h": {
+    "mu": 6.0,
+    "sigma": 4.0,
+    "_note": "Heures depuis dernière entrée dropzone/chat user"
+  },
+  "daily_routine_ratio": {
+    "mu": 0.50,
+    "sigma": 0.25,
+    "_note": "daily_count / max_daily_routines (80). Saturation à >0.85"
+  },
+  "insula_stress": {
+    "mu": 0.30,
+    "sigma": 0.15,
+    "_note": "Insula body_state.stress [0-1]"
+  },
+
+  "drive_MAITRISE_depriv": {
+    "mu": 50.0,
+    "sigma": 20.0,
+    "_note": "Deprivation drive MAITRISE [0-100]"
+  },
+  "drive_CURIOSITE_depriv": {
+    "mu": 40.0,
+    "sigma": 25.0,
+    "_note": "Deprivation drive CURIOSITE [0-100]"
+  },
+  "drive_CONNEXION_depriv": {
+    "mu": 50.0,
+    "sigma": 20.0,
+    "_note": "Deprivation drive CONNEXION [0-100]"
+  },
+  "drive_STABILITE_depriv": {
+    "mu": 50.0,
+    "sigma": 25.0,
+    "_note": "Deprivation drive STABILITE [0-100]"
+  },
+  "drive_CREATION_depriv": {
+    "mu": 45.0,
+    "sigma": 22.0,
+    "_note": "Deprivation drive CREATION [0-100]"
+  },
+  "prefrontal_veto_streak_24h": {
+    "mu": 4.0,
+    "sigma": 3.0,
+    "_note": "Nombre de vetos préfrontaux dans la fenêtre 24h"
+  },
+  "dopamine_RPE_recent": {
+    "mu": 0.0,
+    "sigma": 0.25,
+    "_note": "Reward Prediction Error récent (delta vs expected)"
+  },
+  "reptilian_threat_level": {
+    "mu": 0.30,
+    "sigma": 0.25,
+    "_note": "Threat level reptilien [0-1]"
+  },
+  "cingulate_conflict_rate_60min": {
+    "mu": 2.0,
+    "sigma": 2.5,
+    "_note": "Conflits cingulate dans la fenêtre 60min"
+  },
+
+  "task_force_error_ratio_60min": {
+    "mu": 0.15,
+    "sigma": 0.18,
+    "_note": "Ratio routines en erreur sur les 60 dernières minutes"
+  },
+  "council_consensus_rate_24h": {
+    "mu": 0.55,
+    "sigma": 0.20,
+    "_note": "Taux de consensus des councils sur 24h"
+  },
+  "council_divergence_score": {
+    "mu": 0.40,
+    "sigma": 0.20,
+    "_note": "Score de divergence entre agents en council"
+  },
+  "researcher_repeat_count_24h": {
+    "mu": 1.0,
+    "sigma": 1.5,
+    "_note": "Nombre de cycles veille redondants sur 24h"
+  },
+  "synaptic_new_link_strength_24h": {
+    "mu": 0.30,
+    "sigma": 0.15,
+    "_note": "Poids max des nouveaux liens synaptiques 24h"
+  },
+  "synaptic_pruned_nodes_24h": {
+    "mu": 8.0,
+    "sigma": 6.0,
+    "_note": "Nœuds élagués par consolidation sur 24h"
+  },
+  "tools_external_error_rate": {
+    "mu": 0.05,
+    "sigma": 0.08,
+    "_note": "Taux d'erreurs HTTP/timeout sur outils externes"
+  },
+  "dream_unresolved_count": {
+    "mu": 5.0,
+    "sigma": 4.0,
+    "_note": "Questions sans réponse accumulées dans dream_journal"
+  }
+}

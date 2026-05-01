@@ -1,0 +1,7 @@
+{
+  "_doc": "Feature flags pour aiguillage runtime de modules. Lecture via core/feature_flags.py:get_flag(name, default). Hot-reload sur changement (mtime). Pour les params numériques optimisables, voir tunable_params.json.",
+  "_version": "1.0",
+
+  "soliloque_engine": "v2",
+  "_soliloque_engine_doc": "v1 = ancien dialogue compagnon socratique (core/soliloque.py). v2 = monologue incarné body_schema (core/soliloque_v2.py). Switch live possible."
+}
