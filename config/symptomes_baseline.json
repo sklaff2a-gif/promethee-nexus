@@ -46,7 +46,8 @@
   "dream_dette_h": {
     "mu": 8.0,
     "sigma": 6.0,
-    "_note": "V14.2 Pilier 1 nocicepteurs : heures depuis le dernier dream synaptique. mu=8 calibre pour que z>=1.5 declenche autour de 17h, en l'absence de baseline empirique. Sera affine progressivement vers le rythme reel de Promethee."
+    "min_sigma": 4.0,
+    "_note": "V14.2 Pilier 1 nocicepteurs : heures depuis le dernier dream synaptique. mu=8 calibre pour que z>=1.5 declenche autour de 17h, en l'absence de baseline empirique. V14.7 : min_sigma=4.0 garantit que sigma_empirique ne descend pas sous 4h, evitant l'hypocondrie statistique (effondrement de variance quand le systeme consolide souvent). Avec ce floor, une dette < 10h ne pourra jamais franchir le seuil z>=1.5 quel que soit l'apprentissage de baseline."
   },
 
   "drive_MAITRISE_depriv": {

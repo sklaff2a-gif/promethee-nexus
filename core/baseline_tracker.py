@@ -109,10 +109,17 @@ class BaselineTracker:
                 if k.startswith("_"):
                     continue
                 if isinstance(v, dict) and "mu" in v and "sigma" in v:
-                    self._nominal[k] = {
+                    entry = {
                         "mu": float(v["mu"]),
                         "sigma": float(v["sigma"]),
                     }
+                    # V14.7 — min_sigma optionnel : empêche l'effondrement
+                    # de variance pour les métriques d'accumulation nocive
+                    # (dream_dette_h, etc.). Sans ce floor, sigma_empirique
+                    # se resserre et déclenche des z >= 1.5 sur des états sains.
+                    if "min_sigma" in v:
+                        entry["min_sigma"] = float(v["min_sigma"])
+                    self._nominal[k] = entry
             logger.info(f"[BASELINE] {len(self._nominal)} baselines nominales chargées.")
         except Exception as e:
             logger.warning(f"[BASELINE] Échec chargement nominal: {e}")
@@ -146,6 +153,19 @@ class BaselineTracker:
             self._recent[metric_id] = deque(maxlen=30)
         self._recent[metric_id].append((ts, v))
 
+    def _apply_min_sigma(self, metric_id: str, sigma: float) -> float:
+        """V14.7 : applique le plancher min_sigma déclaré dans le nominal.
+
+        Empêche l'effondrement de variance qui produit l'hypocondrie
+        statistique : si Prométhée consolide souvent (état sain), sigma
+        empirique chute, et toute dette légèrement supérieure à la moyenne
+        franchit z>=1.5, déclenchant l'alarme nociceptive sur un état
+        parfaitement normal.
+        """
+        nominal = self._nominal.get(metric_id, {})
+        min_sigma = nominal.get("min_sigma", 0.0)
+        return max(sigma, min_sigma, 1e-6)
+
     def get_baseline(
         self, metric_id: str, ts: Optional[float] = None
     ) -> Tuple[float, float, int]:
@@ -155,6 +175,9 @@ class BaselineTracker:
         - n >= 30  : 100% empirique
         - 20 <= n < 30 : blend linéaire nominal/empirique
         - n < 20  : 100% nominal (ou défaut si pas de nominal)
+
+        V14.7 : sigma final passe par _apply_min_sigma pour respecter le
+        plancher déclaré dans symptomes_baseline.json (anti-hypocondrie).
         """
         if ts is None:
             ts = time.time()
@@ -166,7 +189,11 @@ class BaselineTracker:
 
         tracker = self._trackers.get(metric_id, {}).get(creneau)
         if tracker is None or tracker.count() < CRENEAU_MIN_SAMPLES_BLEND:
-            return (mu_n, max(sigma_n, 1e-6), tracker.count() if tracker else 0)
+            return (
+                mu_n,
+                self._apply_min_sigma(metric_id, sigma_n),
+                tracker.count() if tracker else 0,
+            )
 
         # Calcul empirique
         n = tracker.count()
@@ -176,7 +203,7 @@ class BaselineTracker:
         sigma_e = math.sqrt(var_e) if var_e > 0 else 1e-6
 
         if n >= CRENEAU_MIN_SAMPLES_FULL:
-            return (mu_e, max(sigma_e, 1e-6), n)
+            return (mu_e, self._apply_min_sigma(metric_id, sigma_e), n)
 
         # Blend linéaire entre 20 et 30
         alpha = (n - CRENEAU_MIN_SAMPLES_BLEND) / (
@@ -184,7 +211,7 @@ class BaselineTracker:
         )
         mu_blend = (1 - alpha) * mu_n + alpha * mu_e
         sigma_blend = (1 - alpha) * sigma_n + alpha * sigma_e
-        return (mu_blend, max(sigma_blend, 1e-6), n)
+        return (mu_blend, self._apply_min_sigma(metric_id, sigma_blend), n)
 
     def get_zscore(
         self, metric_id: str, value: float, ts: Optional[float] = None

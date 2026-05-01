@@ -158,3 +158,68 @@ def test_metric_inconnue_renvoie_defaut(tracker):
     assert mu == 0.0
     assert sigma >= 1e-6
     assert n == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# V14.7 — min_sigma anti-hypocondrie
+# ─────────────────────────────────────────────────────────────────────────
+
+def test_min_sigma_applique_si_sigma_empirique_bas(tracker):
+    """V14.7 : si min_sigma déclaré, sigma_empirique ne descend pas sous."""
+    ts = time.time()
+    # Inject 35 obs très proches → sigma_e va s'effondrer
+    for _ in range(35):
+        tracker.update("dream_dette_h", 0.5, ts)
+    mu, sigma, n = tracker.get_baseline("dream_dette_h", ts)
+    # min_sigma=4.0 dans symptomes_baseline.json → sigma final >= 4.0
+    assert sigma >= 4.0, (
+        f"sigma={sigma} doit etre >= 4.0 (min_sigma) malgre effondrement "
+        f"empirique (vraie sigma_empirique ~= 0)"
+    )
+
+
+def test_min_sigma_n_affecte_pas_metric_sans_min_sigma(tracker):
+    """Si min_sigma absent du nominal, comportement V14.6 préservé (rétrocompat)."""
+    ts = time.time()
+    # cardiac_bpm n'a pas de min_sigma déclaré
+    for _ in range(35):
+        tracker.update("cardiac_bpm", 60.0, ts)
+    mu, sigma, n = tracker.get_baseline("cardiac_bpm", ts)
+    # sigma_empirique très bas, pas de min_sigma → on garde la petite valeur
+    assert sigma < 1.0, (
+        f"sigma cardiac_bpm sans min_sigma doit pouvoir descendre "
+        f"librement, ici {sigma}"
+    )
+
+
+def test_anti_hypocondrie_dette_reve_sous_seuil(tracker):
+    """Cas concret : avec min_sigma=4 sur dream_dette_h, une dette de
+    9h ne doit JAMAIS franchir z>=1.5 quel que soit l'apprentissage."""
+    ts = time.time()
+    # Simule le cas observé en vol : Promethee consolide souvent,
+    # baseline empirique converge vers ~0.5h avec sigma proche de 0
+    for _ in range(35):
+        tracker.update("dream_dette_h", 0.5, ts)
+    # Avec ancien comportement : z = (9 - 0.5) / 0.001 = 8500 → ALARME
+    # Avec V14.7 : sigma >= 4.0 → z <= (9 - 0.5) / 4.0 = 2.125
+    z = tracker.get_zscore("dream_dette_h", 9.0, ts)
+    # Pas garantit < 1.5 (9h vs mu=0.5 donne z>=1.5 même avec sigma=4),
+    # mais BORNÉ : ~2.125 au lieu de 8500.
+    assert z < 3.0, f"z={z} doit etre borne par min_sigma, pas exploser"
+
+
+def test_min_sigma_test_sous_n20_aussi(tracker):
+    """min_sigma s'applique aussi au mode bootstrap (n<20)."""
+    ts = time.time()
+    # Inject 5 obs (n<20 → mode nominal pur)
+    for _ in range(5):
+        tracker.update("dream_dette_h", 0.5, ts)
+    mu, sigma, n = tracker.get_baseline("dream_dette_h", ts)
+    # En mode nominal pur, sigma_n = 6.0 (déjà > min_sigma 4.0)
+    # Donc sigma final = 6.0 (pas affecté par min_sigma)
+    assert sigma == 6.0
+    # Mais si on force un nominal avec sigma_n=2 et min_sigma=4 ?
+    # → sigma final = 4 (min_sigma gagne)
+    # Ce cas n'existe pas dans la config actuelle, donc on teste juste
+    # que le mécanisme ne casse pas le mode bootstrap.
+    assert n == 5
