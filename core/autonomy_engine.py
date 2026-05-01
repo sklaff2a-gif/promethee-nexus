@@ -479,6 +479,13 @@ AUTORESEARCH_INTERVAL = 60         # 1 min entre expériences (observation inclu
 # Anti-gaspillage : seuil d'échecs consécutifs pour blacklister un intent FORCED
 FORCED_FAILURE_THRESHOLD = 3  # après 3 échecs consécutifs, l'intent FORCED est ignoré pour la session
 
+# V14.4 — Pilier 3 nocicepteurs : préemption MEMORY_CONSOLIDATION sur REPTILIAN_ALERT
+# pattern=stale_dream. Cooldown de 5 min entre 2 préemptions pour éviter une
+# boucle infinie si MEMORY_CONSOLIDATION échoue à résoudre la dette
+# instantanément (ce qui est normal — la consolidation prend du temps,
+# et la baseline doit rattraper la nouvelle valeur).
+STALE_DREAM_PREEMPTION_COOLDOWN_S = 300
+
 # Journal Intime (narrative nocturne déterministe)
 DREAM_JOURNAL_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -1025,6 +1032,10 @@ class AutonomyEngine:
         bus.subscribe("EUREKA_MOMENT", self._on_eureka_moment)
         # Bouton panique : le tronc cérébral écoute ses propres alarmes
         bus.subscribe("AUTONOMY_SURVIVAL_ALERT", self._on_survival_alert)
+        # V14.4 Pilier 3 nocicepteurs : préemption MEMORY_CONSOLIDATION sur stale_dream
+        bus.subscribe("REPTILIAN_ALERT", self._on_reptilian_alert)
+        # Timestamp de la dernière préemption stale_dream (cooldown anti-boucle)
+        self._stale_dream_preemption_last: float = 0.0
 
         # État de survie (bouton panique, Étage 3 : garde-fous)
         # Persistance : compteur quota quotidien, cooldown par drive, escalade
@@ -1426,6 +1437,77 @@ class AutonomyEngine:
                 print(f"   🦎 REPTILIEN REFLEX: Boost [{target}] +3.0 (codelet={source})")
 
             logger.info(f"[AUTONOMY] Directive reptilienne MODERATE: boost {target} (source={source})")
+
+    async def _on_reptilian_alert(self, event: dict):
+        """V14.4 Pilier 3 nocicepteurs — préemption MEMORY_CONSOLIDATION sur stale_dream.
+
+        Quand le reptilien crie "URGENCE necrose synaptique" (REPTILIAN_ALERT
+        avec pattern=stale_dream), on court-circuite le scheduler normal pour
+        forcer MEMORY_CONSOLIDATION au prochain cycle. C'est l'équivalent
+        d'une bouffée d'adrénaline qui force l'organisme à dormir avant
+        l'effondrement métabolique.
+
+        Garde-fous (dans l'ordre, premier qui matche bloque) :
+        1. Pattern doit être exactement "stale_dream" (les autres alarmes
+           reptiliennes ont leur propre logique)
+        2. Pas de coffee_mode (interaction humaine inviolable, on serre
+           les dents jusqu'à la fin de l'échange)
+        3. Pas de nap (le sommeil fait DEJA la consolidation via
+           dream_consolidation, préempter serait redondant et coûteux)
+        4. Cooldown 5 min depuis dernière préemption (anti-boucle infinie
+           si MEMORY_CONSOLIDATION échoue à résoudre la dette d'un coup)
+        """
+        if event.get("pattern") != "stale_dream":
+            return
+
+        # Garde-fou 1 : interaction humaine en cours
+        if getattr(self, "is_coffee_mode", False):
+            logger.info(
+                "[AUTONOMY] REFLEXE PURGE refusé — coffee_mode actif "
+                "(humain présent, on serre les dents)"
+            )
+            return
+
+        # Garde-fou 2 : déjà en sommeil = déjà en consolidation
+        if getattr(self, "is_napping", False):
+            logger.info(
+                "[AUTONOMY] REFLEXE PURGE refusé — déjà en nap "
+                "(consolidation synaptique en cours via sleep_tasks)"
+            )
+            return
+
+        # Garde-fou 3 : cooldown anti-boucle
+        now = time.time()
+        elapsed = now - self._stale_dream_preemption_last
+        if elapsed < STALE_DREAM_PREEMPTION_COOLDOWN_S:
+            logger.debug(
+                f"[AUTONOMY] REFLEXE PURGE refusé — cooldown "
+                f"({elapsed:.0f}s < {STALE_DREAM_PREEMPTION_COOLDOWN_S}s)"
+            )
+            return
+
+        # Préemption : on force MEMORY_CONSOLIDATION au prochain cycle
+        # (réutilise le mécanisme _forced_next_intent existant — pas de
+        # nouveau chemin de décision, ce qui simplifie le débogage).
+        severity = event.get("severity", 0.0)
+        dette_h = event.get("dream_dette_h")
+        # Ne pas écraser une préemption existante (autre force prioritaire)
+        if not self._forced_next_intent:
+            self._forced_next_intent = "MEMORY_CONSOLIDATION"
+            self._stale_dream_preemption_last = now
+            logger.warning(
+                f"[AUTONOMY] REFLEXE PURGE — préemption stale_dream "
+                f"(severity={severity}, dette={dette_h}h) → MEMORY_CONSOLIDATION"
+            )
+            print(
+                f"   🚨 REFLEXE PURGE: stale_dream sev={severity} dette={dette_h}h "
+                f"→ MEMORY_CONSOLIDATION forcé"
+            )
+        else:
+            logger.info(
+                f"[AUTONOMY] REFLEXE PURGE en attente — _forced_next_intent "
+                f"déjà={self._forced_next_intent}"
+            )
 
     def _check_daily_budget(self) -> str:
         """Vérifie et reset le compteur quotidien.
