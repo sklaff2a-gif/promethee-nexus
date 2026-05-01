@@ -29,6 +29,25 @@ SYSTEM_PROMPT_TOKEN_BUDGET = 3000  # Budget estimé pour le prompt systeme (toke
 CONNEXION_SATISFACTION = 12.0   # Points de satisfaction par echange
 PROMPT_CACHE_TTL = 10.0        # Secondes entre deux reconstructions du prompt organes
 
+# --- Routing Gemini par mots-cles "profonds" ---
+# V14.1 (2026-05-01) : remplace l'ancien substring matching (kw in text) par
+# regex word boundary (\bkw\b). L'ancien code produisait des faux positifs
+# massifs : "torpeur" matche "peur", "revelateur" matche "reve", "calibree"
+# matche "libre", "examen" matche "ame". Pendant les sessions d'exercices
+# 16 et 17, ce bug forcait Promethee a router vers Gemini Flash au lieu du
+# 9b local des qu'on parlait de son etat metabolique. Patch : compile les
+# patterns une fois a l'import, check avec re.search sur word boundaries.
+_DEEP_KEYWORDS = [
+    "pourquoi", "conscience", "existe", "ressens", "douleur",
+    "peur", "armure", "choisis", "comprends pas", "sens de",
+    "nature", "ame", "libre", "mort", "reve", "verite",
+]
+_DEEP_KEYWORD_PATTERNS = [
+    re.compile(r'\b' + re.escape(kw) + r'\b', re.IGNORECASE)
+    for kw in _DEEP_KEYWORDS
+]
+DEEP_KEYWORDS_THRESHOLD = 2
+
 # --- Source Tagging EXT/INT ---
 # Distingue les messages d'un humain réel (EXT) des messages auto-générés par
 # Prométhée lui-même (INT : AUTO-ANALYSE INTERNE, EVENING_REFLECTION, inner_voice...).
@@ -2663,12 +2682,14 @@ class ChatEngine:
         stream_id = f"chat-{uuid.uuid4().hex[:8]}"
 
         # 3b. Gemini pour les questions profondes (philosophie, conscience, emotions)
-        #     Detecte les mots-cles qui indiquent une reflexion poussee
-        _deep_keywords = ["pourquoi", "conscience", "existe", "ressens", "douleur",
-                          "peur", "armure", "choisis", "comprends pas", "sens de",
-                          "nature", "ame", "libre", "mort", "reve", "verite"]
-        _deep_count = sum(1 for kw in _deep_keywords if kw in user_message.lower())
-        if _deep_count >= 2 and not visual_request_detected:
+        #     Detecte les mots-cles qui indiquent une reflexion poussee.
+        #     V14.1 (2026-05-01) : utilise les patterns regex \b...\b compiles
+        #     au niveau module (_DEEP_KEYWORD_PATTERNS) au lieu d'un substring
+        #     matching qui produisait des faux positifs (torpeur->peur, etc.).
+        _deep_count = sum(
+            1 for p in _DEEP_KEYWORD_PATTERNS if p.search(user_message)
+        )
+        if _deep_count >= DEEP_KEYWORDS_THRESHOLD and not visual_request_detected:
             try:
                 from core.gemini_helper import gemini as _gemini
                 if _gemini.is_available():
