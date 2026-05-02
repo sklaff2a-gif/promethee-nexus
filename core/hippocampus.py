@@ -1211,7 +1211,21 @@ class Hippocampus:
             "stats": self._stats,
             "oldest_episode": self._episodes[0].timestamp if self._episodes else None,
             "newest_episode": self._episodes[-1].timestamp if self._episodes else None,
+            # Option B — compteur d'engorgement (épisodes pending consolidation)
+            "pending_episodes": self._episode_count_since_consolidation,
         }
+
+    def get_pending_episodes_count(self) -> int:
+        """Option B — nombre d'épisodes encodés depuis la dernière consolidate().
+
+        Métrique orthogonale à `dream_dette_h` (qui mesure le temps depuis le
+        dernier rêve). Ici on mesure la DENSITÉ : combien d'épisodes saillants
+        attendent d'être intégrés à un arc consolidé. Si MEMORY_CONSOLIDATION
+        est bloquée (sieste, coffee, error), ce compteur s'envole et indique
+        l'asphyxie informationnelle. Source unique de vérité pour le symptôme
+        Body Schema `congestion_synaptique`.
+        """
+        return self._episode_count_since_consolidation
 
     # ─── Persistance ─────────────────────────────────────────────────────
 
@@ -1226,6 +1240,9 @@ class Hippocampus:
                 "last_cognitive_state": self._last_cognitive_state,
                 "stats": self._stats,
                 "session_start": self._session_start,
+                # Option B — préserver le compteur d'engorgement entre reboots
+                # (sinon le restart "résout" artificiellement la congestion)
+                "episode_count_since_consolidation": self._episode_count_since_consolidation,
                 "saved_at": time.time(),
             }
             os.makedirs(os.path.dirname(HIPPOCAMPUS_STATE_FILE), exist_ok=True)
@@ -1260,6 +1277,10 @@ class Hippocampus:
             self._last_cognitive_state = data.get("last_cognitive_state", "")
             saved_stats = data.get("stats", {})
             self._stats.update(saved_stats)
+            # Option B — restaurer le compteur d'engorgement (rétrocompat : 0 si absent)
+            self._episode_count_since_consolidation = int(
+                data.get("episode_count_since_consolidation", 0)
+            )
 
             # Purger les vieux episodes/arcs
             self._purge_old()

@@ -240,6 +240,23 @@ SYMPTOMES: List[SymptomeSpec] = [
         extract=lambda s: _safe_get(s, "synaptic", "dream_dette_h"),
         trigger=_trigger_zscore_high,
     ),
+    SymptomeSpec(
+        # Option B — Capteur orthogonal de DENSITÉ (vs dette_de_reve qui mesure
+        # le TEMPS). Compte les épisodes saillants en attente de consolidation
+        # (compteur natif _episode_count_since_consolidation de l'hippocampe).
+        # En régime sain : 0-10 (auto-consolidate à 10). Au-delà = engorgement.
+        # Couplé à hypothalamus._apply_synaptic_congestion_pressure → reptilian
+        # → REFLEXE PURGE (pattern=synaptic_congestion) → MEMORY_CONSOLIDATION
+        # forcée. Sémantique : "ma salle d'attente déborde, je dois dormir
+        # pour la vider, peu importe que mon dernier rêve soit récent."
+        id="congestion_synaptique",
+        couche=Couche.V35,
+        polarite=Polarite.NEGATIF,
+        phenomenologie="Trop de choses sans encore de place. Le bruit derrière le bruit.",
+        metric_id="hippocampus_pending_episodes",
+        extract=lambda s: _safe_get(s, "hippocampus", "pending_episodes"),
+        trigger=_trigger_zscore_high,
+    ),
 
     # ═══════════════════════════════════════════════════════════════════
     # V34 — Limbique / Volonté (11)
@@ -660,6 +677,20 @@ def gather_state(now_ts: Optional[float] = None) -> Dict[str, Any]:
         }
     except Exception:
         state["synaptic"] = {}
+
+    # Hippocampe : congestion par densité (Option B — capteur orthogonal)
+    # Le compteur _episode_count_since_consolidation mesure le backlog
+    # d'épisodes saillants en attente de consolidation. Source du symptôme
+    # V35 `congestion_synaptique`. Orthogonal à dream_dette_h (qui mesure
+    # le TEMPS) : ici on mesure la DENSITÉ. Un système très sollicité peut
+    # s'asphyxier en 4h sans attendre 28h.
+    try:
+        from core.hippocampus import hippocampus as _hipp
+        state["hippocampus"] = {
+            "pending_episodes": int(_hipp.get_pending_episodes_count()),
+        }
+    except Exception:
+        state["hippocampus"] = {}
 
     # Resources (à instrumenter — placeholders pour l'instant)
     state["resources"] = {}

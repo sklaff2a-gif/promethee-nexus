@@ -83,6 +83,15 @@ STRESS_RELIEF_RATE = 0.15              # 15% de l'écart par cycle (proportionne
 STRESS_RELIEF_PER_CYCLE_MIN = 0.03     # plancher minimum de descente par cycle
 STRESS_RELIEF_FLOOR = 0.3              # = SETPOINTS["stress"]["target"]
 
+# Option B — Pilier 1bis nocicepteurs : capteur de DENSITÉ (orthogonal à V14.2
+# qui mesure le TEMPS). Lit hippocampus._episode_count_since_consolidation et
+# pousse sleep_pressure quand le z-score dépasse le seuil. Réutilise les MÊMES
+# constantes que synaptic_debt (Z_THRESHOLD, BUMP_MAX, CEILING) — la pression
+# physiologique est la même, seule la cause amont diffère.
+CONGESTION_Z_THRESHOLD = SYNAPTIC_DEBT_Z_THRESHOLD       # z >= 1.5
+CONGESTION_BUMP_MAX = SYNAPTIC_DEBT_BUMP_MAX             # 0.05/cycle
+CONGESTION_PRESSURE_CEILING = SYNAPTIC_DEBT_PRESSURE_CEILING  # 0.95
+
 # --- Mapping intent → variable favorisee/penalisee ---
 
 _INTENT_ENERGY_MAP = {
@@ -372,6 +381,63 @@ class Hypothalamus:
             logger.debug(f"[HYPOTHALAMUS] Pression synaptique: {e}")
             return None
 
+    # --- Option B — Pilier 1bis : pression de DENSITÉ (engorgement hippocampe) ---
+
+    def _apply_synaptic_congestion_pressure(self) -> Optional[Dict[str, float]]:
+        """Push sleep_pressure si l'hippocampe est engorgé (densité d'épisodes
+        pending consolidation > baseline).
+
+        Capteur orthogonal à V14.2 (_apply_synaptic_debt_pressure) qui mesure
+        le TEMPS depuis dernier rêve. Ici on mesure la DENSITÉ : combien
+        d'épisodes saillants attendent d'être intégrés à un arc consolidé.
+        Un système très sollicité peut s'asphyxier en 4h sans attendre 28h.
+
+        Mécanique identique à V14.2 : z-score circadien sur baseline
+        `hippocampus_pending_episodes` (mu=5 σ=8 min_sigma=8). Quand z>=1.5,
+        bump sleep_pressure. Publie event `SYNAPTIC_CONGESTION_PRESSURE` sur
+        le bus pour réveil reptilien (Pilier 2bis).
+
+        Pas de branche descente ici (contrairement à V14.5) : la routine
+        MEMORY_CONSOLIDATION reset le compteur _episode_count_since_consolidation
+        à 0 dès qu'elle tourne, donc z redescend naturellement et le relief
+        sleep_pressure de V14.5 prend le relais.
+
+        Retourne dict d'observabilité ou None si zone neutre / no-op.
+        """
+        try:
+            from core.hippocampus import hippocampus as _hipp
+            from core import baseline_tracker as _bt_mod
+
+            pending = float(_hipp.get_pending_episodes_count())
+            if pending <= 0:
+                return None
+
+            now = time.time()
+            bt = _bt_mod.baseline_tracker
+            bt.update("hippocampus_pending_episodes", pending, now)
+            zscore = bt.get_zscore("hippocampus_pending_episodes", pending, now)
+
+            if zscore < CONGESTION_Z_THRESHOLD:
+                return None  # Pas d'engorgement détecté
+
+            current = self.current_values.get("sleep_pressure", 0.4)
+            excess = zscore - CONGESTION_Z_THRESHOLD + 1.0
+            bump = min(CONGESTION_BUMP_MAX * excess, CONGESTION_BUMP_MAX * 4.0)
+            new_pressure = min(CONGESTION_PRESSURE_CEILING, current + bump)
+            self.current_values["sleep_pressure"] = new_pressure
+
+            return {
+                "action": "rise",
+                "source": "synaptic_congestion",
+                "pending_episodes": int(pending),
+                "zscore": round(zscore, 3),
+                "bump": round(bump, 4),
+                "pressure_after": round(new_pressure, 3),
+            }
+        except Exception as e:
+            logger.debug(f"[HYPOTHALAMUS] Pression congestion: {e}")
+            return None
+
     # --- V14.9 — Stress Relief : descente symétrique post-REPTILIAN_ALERT ---
 
     def _apply_stress_relief(self) -> Optional[Dict[str, float]]:
@@ -442,6 +508,11 @@ class Hypothalamus:
         # sleep_pressure soit prise en compte dans le cycle courant.
         debt_report = self._apply_synaptic_debt_pressure()
 
+        # Option B — Pilier 1bis : pression de DENSITÉ (engorgement hippocampe).
+        # Orthogonal à V14.2 (temps). Mêmes effets sur sleep_pressure +
+        # publication d'un event séparé pour réveil reptilien dédié.
+        congestion_report = self._apply_synaptic_congestion_pressure()
+
         # V14.9 — Stress Relief : descente symétrique du stress post-alerte.
         # Idem AVANT compute_errors pour que la nouvelle valeur soit prise.
         relief_report = self._apply_stress_relief()
@@ -510,6 +581,14 @@ class Hypothalamus:
         if debt_report:
             try:
                 await bus.publish("SYNAPTIC_DEBT_PRESSURE", debt_report)
+            except Exception:
+                pass
+
+        # Option B — Publier la pression de congestion (event séparé pour
+        # déclencher Pilier 2bis dans reptilian_core)
+        if congestion_report:
+            try:
+                await bus.publish("SYNAPTIC_CONGESTION_PRESSURE", congestion_report)
             except Exception:
                 pass
 

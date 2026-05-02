@@ -285,3 +285,55 @@ class TestV1410UrgentWakeup:
         await engine._on_reptilian_alert(_alert())
         assert engine._urgent_wakeup.is_set(), \
             "Event doit pouvoir être re-set après clear()"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Option B — Pattern synaptic_congestion accepté par REFLEXE PURGE
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestSynapticCongestionPattern:
+    """Option B — l'autonomy doit traiter pattern=synaptic_congestion comme
+    pattern=stale_dream : mêmes garde-fous, même MEMORY_CONSOLIDATION forcée,
+    même réveil V14.10. La douleur de DENSITÉ est aussi urgente que la
+    douleur de TEMPS."""
+
+    @pytest.mark.asyncio
+    async def test_pattern_synaptic_congestion_declenche_preemption(self, engine):
+        """Pattern=synaptic_congestion → MEMORY_CONSOLIDATION forcée."""
+        event = {
+            "pattern": "synaptic_congestion",
+            "severity": 6.0,
+            "zscore": 3.0,
+            "pending_episodes": 30,
+            "conditioned_reflex": "ADRENALINE",
+            "source": "synaptic_congestion",
+            "timestamp": time.time(),
+        }
+        await engine._on_reptilian_alert(event)
+        assert engine._forced_next_intent == "MEMORY_CONSOLIDATION"
+        assert engine._urgent_wakeup.is_set(), \
+            "V14.10 _urgent_wakeup doit être set pour synaptic_congestion aussi"
+
+    @pytest.mark.asyncio
+    async def test_pattern_inconnu_toujours_rejete(self, engine):
+        """Garde-fou : pattern non whitelisté → no-op (sécurité contre nouveaux patterns)."""
+        event = {
+            "pattern": "ollama",  # ni stale_dream ni synaptic_congestion
+            "severity": 9.0,
+        }
+        await engine._on_reptilian_alert(event)
+        assert engine._forced_next_intent == ""
+        assert not engine._urgent_wakeup.is_set()
+
+    @pytest.mark.asyncio
+    async def test_coffee_mode_bloque_aussi_synaptic_congestion(self, engine):
+        """Garde-fou coffee_mode s'applique aux 2 patterns."""
+        engine.is_coffee_mode = True
+        event = {
+            "pattern": "synaptic_congestion",
+            "severity": 6.0,
+            "pending_episodes": 30,
+        }
+        await engine._on_reptilian_alert(event)
+        assert engine._forced_next_intent == ""
+        assert not engine._urgent_wakeup.is_set()

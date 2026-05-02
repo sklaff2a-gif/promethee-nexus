@@ -1473,7 +1473,10 @@ class AutonomyEngine:
         4. Cooldown 5 min depuis dernière préemption (anti-boucle infinie
            si MEMORY_CONSOLIDATION échoue à résoudre la dette d'un coup)
         """
-        if event.get("pattern") != "stale_dream":
+        # Option B — accepte aussi pattern=synaptic_congestion (densité, pas temps).
+        # Mécanique identique : MEMORY_CONSOLIDATION forcée, mêmes garde-fous,
+        # même asyncio.Event _urgent_wakeup V14.10 → latence ~1s.
+        if event.get("pattern") not in ("stale_dream", "synaptic_congestion"):
             return
 
         # Garde-fou 1 : interaction humaine en cours
@@ -1506,7 +1509,13 @@ class AutonomyEngine:
         # (réutilise le mécanisme _forced_next_intent existant — pas de
         # nouveau chemin de décision, ce qui simplifie le débogage).
         severity = event.get("severity", 0.0)
-        dette_h = event.get("dream_dette_h")
+        # Option B — métrique adaptée au pattern (dream_dette_h pour stale_dream,
+        # pending_episodes pour synaptic_congestion). Évite "dette=None" dans logs.
+        pattern = event.get("pattern", "stale_dream")
+        if pattern == "synaptic_congestion":
+            metric_label = f"pending={event.get('pending_episodes')}"
+        else:
+            metric_label = f"dette={event.get('dream_dette_h')}h"
         # Ne pas écraser une préemption existante (autre force prioritaire)
         if not self._forced_next_intent:
             self._forced_next_intent = "MEMORY_CONSOLIDATION"
@@ -1517,11 +1526,11 @@ class AutonomyEngine:
             # de "réflexe" du REFLEXE PURGE.
             self._urgent_wakeup.set()
             logger.warning(
-                f"[AUTONOMY] REFLEXE PURGE — préemption stale_dream "
-                f"(severity={severity}, dette={dette_h}h) → MEMORY_CONSOLIDATION"
+                f"[AUTONOMY] REFLEXE PURGE — préemption {pattern} "
+                f"(severity={severity}, {metric_label}) → MEMORY_CONSOLIDATION"
             )
             print(
-                f"   🚨 REFLEXE PURGE: stale_dream sev={severity} dette={dette_h}h "
+                f"   🚨 REFLEXE PURGE: {pattern} sev={severity} {metric_label} "
                 f"→ MEMORY_CONSOLIDATION forcé"
             )
         else:

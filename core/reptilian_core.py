@@ -111,6 +111,18 @@ STALE_DREAM_DECAY_PER_TICK = 0.5           # severity diminue par tick watchdog 
 STALE_DREAM_REMOVE_BELOW = 0.1             # supprimée de threat_memories sous ce seuil
 STALE_DREAM_ALERT_COOLDOWN_S = 120         # min entre 2 REPTILIAN_ALERT pour cette menace
 
+# --- Option B — Pilier 2bis nocicepteurs : menace synaptic_congestion ---
+# Symétrique à stale_dream mais sur la DENSITÉ d'épisodes pending consolidation
+# (vs le TEMPS depuis dernier rêve). Réutilise les mêmes constantes : la
+# pression métabolique est identique, seule la cause amont diffère.
+SYNAPTIC_CONGESTION_PATTERN = "synaptic_congestion"
+SYNAPTIC_CONGESTION_REFLEX = "ADRENALINE"
+SYNAPTIC_CONGESTION_ALERT_THRESHOLD = STALE_DREAM_ALERT_THRESHOLD
+SYNAPTIC_CONGESTION_REFRESH_GRACE_S = STALE_DREAM_REFRESH_GRACE_S
+SYNAPTIC_CONGESTION_DECAY_PER_TICK = STALE_DREAM_DECAY_PER_TICK
+SYNAPTIC_CONGESTION_REMOVE_BELOW = STALE_DREAM_REMOVE_BELOW
+SYNAPTIC_CONGESTION_ALERT_COOLDOWN_S = STALE_DREAM_ALERT_COOLDOWN_S
+
 # Fichier de persistance
 REPTILIAN_STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -742,6 +754,8 @@ class ReptilianCore:
             bus.subscribe("CODELET_ALERT", self._on_codelet_alert)
             # --- V14.3 Pilier 2 nocicepteurs : menace synaptique chronique ---
             bus.subscribe("SYNAPTIC_DEBT_PRESSURE", self._on_synaptic_debt_pressure)
+            # Option B — Pilier 2bis : menace congestion (densité)
+            bus.subscribe("SYNAPTIC_CONGESTION_PRESSURE", self._on_synaptic_congestion_pressure)
         except Exception as e:
             logger.warning(f"REPTILIEN: Échec souscription bus: {e}")
 
@@ -1199,19 +1213,107 @@ class ReptilianCore:
         - Decay : STALE_DREAM_DECAY_PER_TICK par tick
         - Suppression si severity sous STALE_DREAM_REMOVE_BELOW
         """
-        mem = self.threat_memories.get(STALE_DREAM_PATTERN)
+        # V14.3 — décompresse stale_dream
+        self._decay_pattern_threat(
+            STALE_DREAM_PATTERN,
+            STALE_DREAM_REFRESH_GRACE_S,
+            STALE_DREAM_DECAY_PER_TICK,
+            STALE_DREAM_REMOVE_BELOW,
+        )
+        # Option B — décompresse synaptic_congestion (même mécanique)
+        self._decay_pattern_threat(
+            SYNAPTIC_CONGESTION_PATTERN,
+            SYNAPTIC_CONGESTION_REFRESH_GRACE_S,
+            SYNAPTIC_CONGESTION_DECAY_PER_TICK,
+            SYNAPTIC_CONGESTION_REMOVE_BELOW,
+        )
+
+    def _decay_pattern_threat(
+        self,
+        pattern: str,
+        grace_s: float,
+        decay_per_tick: float,
+        remove_below: float,
+    ) -> None:
+        """Décompresse une threat_memory donnée si grace écoulée. Helper
+        commun extrait pour V14.3 (stale_dream) et Option B (congestion)."""
+        mem = self.threat_memories.get(pattern)
         if mem is None:
             return
         age = time.time() - mem.last_seen
-        if age < STALE_DREAM_REFRESH_GRACE_S:
+        if age < grace_s:
             return
-        mem.severity = max(0.0, mem.severity - STALE_DREAM_DECAY_PER_TICK)
-        if mem.severity < STALE_DREAM_REMOVE_BELOW:
-            self.threat_memories.pop(STALE_DREAM_PATTERN, None)
-            self._alert_cooldowns.pop(STALE_DREAM_PATTERN, None)
+        mem.severity = max(0.0, mem.severity - decay_per_tick)
+        if mem.severity < remove_below:
+            self.threat_memories.pop(pattern, None)
+            self._alert_cooldowns.pop(pattern, None)
             logger.info(
-                f"REPTILIEN: stale_dream resolue (post-dream apres {age/60:.1f}min)"
+                f"REPTILIEN: {pattern} resolue (apres {age/60:.1f}min sans event)"
             )
+
+    # ============================================================
+    # Option B — Pilier 2bis nocicepteurs : menace synaptic_congestion
+    # ============================================================
+
+    async def _on_synaptic_congestion_pressure(self, event: dict):
+        """Reçoit l'event hypothalamus quand z(hippocampus_pending_episodes) >= 1.5.
+
+        Symétrique à _on_synaptic_debt_pressure (V14.3) : crée/met à jour la
+        threat_memory[synaptic_congestion] avec severity = zscore × 2.0, et
+        publie REPTILIAN_ALERT pattern=synaptic_congestion quand severity ≥ 5.0
+        (cooldown 120s anti-spam). Le decay est géré par _decay_pattern_threat
+        appelé à chaque tick watchdog (via _decay_stale_dream_threat).
+
+        Le filter autonomy_engine._on_reptilian_alert (V14.4) accepte ce
+        pattern aussi → REFLEXE PURGE → MEMORY_CONSOLIDATION forcée → reset
+        du compteur _episode_count_since_consolidation côté hippocampe.
+        """
+        try:
+            zscore = float(event.get("zscore", 0.0))
+        except (TypeError, ValueError):
+            return
+        if zscore <= 0:
+            return
+
+        severity = min(10.0, max(0.0, zscore * 2.0))
+        now = time.time()
+
+        existing = self.threat_memories.get(SYNAPTIC_CONGESTION_PATTERN)
+        if existing is not None:
+            existing.severity = severity
+            existing.last_seen = now
+            existing.conditioned_reflex = SYNAPTIC_CONGESTION_REFLEX
+        else:
+            self.threat_memories[SYNAPTIC_CONGESTION_PATTERN] = ThreatMemory(
+                pattern=SYNAPTIC_CONGESTION_PATTERN,
+                severity=severity,
+                occurrences=1,
+                last_seen=now,
+                conditioned_reflex=SYNAPTIC_CONGESTION_REFLEX,
+            )
+
+        if severity >= SYNAPTIC_CONGESTION_ALERT_THRESHOLD:
+            last_alert = self._alert_cooldowns.get(SYNAPTIC_CONGESTION_PATTERN, 0.0)
+            if now - last_alert >= SYNAPTIC_CONGESTION_ALERT_COOLDOWN_S:
+                self._alert_cooldowns[SYNAPTIC_CONGESTION_PATTERN] = now
+                try:
+                    from core.event_bus.bus import bus
+                    await bus.publish("REPTILIAN_ALERT", {
+                        "pattern": SYNAPTIC_CONGESTION_PATTERN,
+                        "severity": round(severity, 2),
+                        "zscore": round(zscore, 2),
+                        "pending_episodes": event.get("pending_episodes"),
+                        "conditioned_reflex": SYNAPTIC_CONGESTION_REFLEX,
+                        "source": "synaptic_congestion",
+                        "timestamp": now,
+                    })
+                    logger.warning(
+                        f"REPTILIEN: synaptic_congestion URGENCE — "
+                        f"severity={severity:.2f} z={zscore:.2f} "
+                        f"pending={event.get('pending_episodes')}"
+                    )
+                except Exception as e:
+                    logger.debug(f"REPTILIEN: publish congestion alert: {e}")
 
 
 # ============================================================
