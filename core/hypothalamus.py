@@ -69,6 +69,20 @@ _CIRCADIAN_PRESSURE_FLOOR = {
 }
 _DEFAULT_CIRCADIAN_FLOOR = 0.4
 
+# V14.9 — Stress Relief : descente symétrique post-REPTILIAN_ALERT.
+# Pattern symétrique à V14.5 (sleep_pressure relief). Sans ce mécanisme,
+# current_values["stress"] est monotone ascendant (cf _on_reptilian_alert) —
+# bug latent depuis l'origine, devenu pathologique avec V14.3 qui multiplie
+# les alertes reptiliennes (alarm_repeat_count.stress=36142 observé runtime).
+# Grace alignée sur STALE_DREAM_REFRESH_GRACE_S (300s) du reptilien : à 5min
+# sans alerte, le reptilien decay sa propre menace, l'hypothalamus relâche le
+# stress en parallèle. Les deux organes respirent au même rythme métabolique.
+# Cinétique : 1.0 → 0.3 en ~12 cycles regulate (45s) ≈ 9 min après grace.
+STRESS_RELIEF_GRACE_S = 300            # 5 min sans REPTILIAN_ALERT avant relief
+STRESS_RELIEF_RATE = 0.15              # 15% de l'écart par cycle (proportionnel)
+STRESS_RELIEF_PER_CYCLE_MIN = 0.03     # plancher minimum de descente par cycle
+STRESS_RELIEF_FLOOR = 0.3              # = SETPOINTS["stress"]["target"]
+
 # --- Mapping intent → variable favorisee/penalisee ---
 
 _INTENT_ENERGY_MAP = {
@@ -146,6 +160,9 @@ class Hypothalamus:
         self._alarm_repeat_count: Dict[str, int] = {}    # variable → nb répétitions consécutives
         self._alarm_sustained_count: Dict[str, int] = {}  # cycles consécutifs au-dessus du seuil
 
+        # V14.9 — timestamp dernière REPTILIAN_ALERT non-nulle reçue (pour grace de relief)
+        self._last_reptilian_alert_ts: float = 0.0
+
         self._load()
 
     @classmethod
@@ -193,6 +210,10 @@ class Hypothalamus:
     async def _on_reptilian_alert(self, event: dict):
         """Met a jour le stress depuis les alertes reptiliennes."""
         severity = event.get("severity", event.get("threat_level", 0.5))
+        # V14.9 — marquer une alerte non-nulle pour reset le grace de relief.
+        # Severity nulle (event sans menace réelle) ne doit PAS rafraîchir le timer.
+        if float(severity) > 0:
+            self._last_reptilian_alert_ts = time.time()
         # Spike de stress proportionnel a la severite
         current = self.current_values["stress"]
         spike = min(1.0, current + float(severity) * 0.3)
@@ -351,6 +372,65 @@ class Hypothalamus:
             logger.debug(f"[HYPOTHALAMUS] Pression synaptique: {e}")
             return None
 
+    # --- V14.9 — Stress Relief : descente symétrique post-REPTILIAN_ALERT ---
+
+    def _apply_stress_relief(self) -> Optional[Dict[str, float]]:
+        """Fait redescendre stress après grace sans REPTILIAN_ALERT.
+
+        Pattern symétrique à V14.5 _apply_synaptic_debt_pressure (relief
+        sleep_pressure). Sans ce mécanisme, current_values["stress"] est
+        monotone ascendant (cf _on_reptilian_alert) — bug observé en runtime
+        runtime 02/05 : stress=1.0 saturé, alarm_repeat_count.stress=36142,
+        78% du temps en alarme depuis V14.3.
+
+        Grace = 300s alignée sur STALE_DREAM_REFRESH_GRACE_S du reptilien :
+        quand le reptilien commence son propre decay (5 min sans event), on
+        relâche en parallèle. Synchronisation métabolique cross-organe.
+
+        Relief proportionnel à l'écart : plus rapide quand stress haut, ralenti
+        près du target. Plancher de descente min pour garantir progrès.
+
+        Premier boot (timestamp = 0) : grace considérée écoulée (pas d'alerte
+        passée, pas de raison d'avoir du stress résiduel).
+
+        Retourne dict d'observabilité avec "action": "relief", ou None si
+        grace non écoulée / stress déjà au floor / exception silencieuse.
+        """
+        try:
+            now = time.time()
+            # Grace écoulée si pas d'alerte connue OU temps écoulé depuis dernière
+            if self._last_reptilian_alert_ts <= 0:
+                grace_elapsed = True
+                grace_age_s = None
+            else:
+                grace_age_s = now - self._last_reptilian_alert_ts
+                grace_elapsed = grace_age_s >= STRESS_RELIEF_GRACE_S
+
+            if not grace_elapsed:
+                return None
+
+            current = self.current_values.get("stress", STRESS_RELIEF_FLOOR)
+            if current <= STRESS_RELIEF_FLOOR:
+                return None  # Déjà au plancher, no-op
+
+            # Relief proportionnel à l'écart, avec plancher minimum
+            gap = current - STRESS_RELIEF_FLOOR
+            relief = max(STRESS_RELIEF_PER_CYCLE_MIN, gap * STRESS_RELIEF_RATE)
+            new_stress = max(STRESS_RELIEF_FLOOR, current - relief)
+            self.current_values["stress"] = new_stress
+
+            return {
+                "action": "relief",
+                "stress_before": round(current, 3),
+                "stress_after": round(new_stress, 3),
+                "relief": round(relief, 4),
+                "grace_age_s": round(grace_age_s, 1) if grace_age_s is not None else None,
+                "floor": STRESS_RELIEF_FLOOR,
+            }
+        except Exception as e:
+            logger.debug(f"[HYPOTHALAMUS] Stress relief: {e}")
+            return None
+
     # --- Cycle de regulation ---
 
     async def regulate(self):
@@ -361,6 +441,10 @@ class Hypothalamus:
         # AVANT de calculer les erreurs, pour que la nouvelle valeur de
         # sleep_pressure soit prise en compte dans le cycle courant.
         debt_report = self._apply_synaptic_debt_pressure()
+
+        # V14.9 — Stress Relief : descente symétrique du stress post-alerte.
+        # Idem AVANT compute_errors pour que la nouvelle valeur soit prise.
+        relief_report = self._apply_stress_relief()
 
         self.error_signals = self._compute_all_errors()
 
@@ -426,6 +510,13 @@ class Hypothalamus:
         if debt_report:
             try:
                 await bus.publish("SYNAPTIC_DEBT_PRESSURE", debt_report)
+            except Exception:
+                pass
+
+        # V14.9 — Publier le relief stress pour observabilité
+        if relief_report:
+            try:
+                await bus.publish("STRESS_RELIEF", relief_report)
             except Exception:
                 pass
 
@@ -552,6 +643,7 @@ class Hypothalamus:
                 "alarm_last_fired": self._alarm_last_fired,
                 "alarm_repeat_count": self._alarm_repeat_count,
                 "alarm_sustained_count": self._alarm_sustained_count,
+                "last_reptilian_alert_ts": self._last_reptilian_alert_ts,
                 "saved_at": time.time(),
             }
             tmp = HYPOTHALAMUS_STATE_FILE + ".tmp"
@@ -577,6 +669,8 @@ class Hypothalamus:
                 self._alarm_last_fired = {k: float(v) for k, v in data.get("alarm_last_fired", {}).items()}
                 self._alarm_repeat_count = {k: int(v) for k, v in data.get("alarm_repeat_count", {}).items()}
                 self._alarm_sustained_count = {k: int(v) for k, v in data.get("alarm_sustained_count", {}).items()}
+                # V14.9 — restauration timestamp grace (rétrocompatible : 0.0 si absent)
+                self._last_reptilian_alert_ts = float(data.get("last_reptilian_alert_ts", 0.0))
                 logger.info("[HYPOTHALAMUS] Etat restaure.")
         except Exception as e:
             logger.warning(f"[HYPOTHALAMUS] Chargement echoue: {e}")

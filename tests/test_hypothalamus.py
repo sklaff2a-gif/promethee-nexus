@@ -32,6 +32,10 @@ def isolate_hypothalamus(tmp_path, monkeypatch):
     h._alarm_last_fired = {}
     h._alarm_repeat_count = {}
     h._alarm_sustained_count = {}
+    # V14.9 — défaut "alerte récente" pour que les tests existants ne voient
+    # PAS de relief actif (sinon TestAlarmCooldown casse car stress descend
+    # pendant les cycles regulate). Les tests TestStressRelief overrident.
+    h._last_reptilian_alert_ts = time.time()
     h._subscribed = False
     mod.hypothalamus = h
     yield h
@@ -285,6 +289,23 @@ class TestHypothalamusBusHandlers:
         h.current_values["stress"] = 0.3
         await h._on_reptilian_alert({"severity": 0.8})
         assert h.current_values["stress"] > 0.3
+
+    @pytest.mark.asyncio
+    async def test_reptilian_alert_severity_positive_resets_grace(self, isolate_hypothalamus):
+        """V14.9 — alerte avec severity > 0 doit rafraîchir le timer de grace."""
+        h = isolate_hypothalamus
+        h._last_reptilian_alert_ts = 0.0
+        before = time.time()
+        await h._on_reptilian_alert({"severity": 0.5})
+        assert h._last_reptilian_alert_ts >= before
+
+    @pytest.mark.asyncio
+    async def test_reptilian_alert_severity_zero_does_not_reset_grace(self, isolate_hypothalamus):
+        """V14.9 — alerte avec severity = 0 ne doit PAS rafraîchir le timer."""
+        h = isolate_hypothalamus
+        h._last_reptilian_alert_ts = 1000.0  # marqueur figé
+        await h._on_reptilian_alert({"severity": 0.0})
+        assert h._last_reptilian_alert_ts == 1000.0
 
     @pytest.mark.asyncio
     async def test_circadian_phase_sleep(self, isolate_hypothalamus):
@@ -848,3 +869,180 @@ class TestSynapticDebtRelief:
         assert "bump" in r
         assert "circadian_floor" not in r  # pas de floor sur montée
         bt_mod.BaselineTracker.reset_singleton()
+
+
+# ===== V14.9 — Stress Relief : descente symétrique post-REPTILIAN_ALERT =====
+
+class TestStressRelief:
+    """V14.9 : current_values["stress"] doit redescendre quand aucune alerte
+    reptilienne n'est arrivée depuis STRESS_RELIEF_GRACE_S, sans franchir
+    STRESS_RELIEF_FLOOR (= setpoint target stress)."""
+
+    def test_relief_actif_si_grace_ecoule_et_stress_haut(self, isolate_hypothalamus):
+        """Pas d'alerte depuis 400s + stress=1.0 → relief actif."""
+        from core.hypothalamus import STRESS_RELIEF_FLOOR
+        h = isolate_hypothalamus
+        h.current_values["stress"] = 1.0
+        h._last_reptilian_alert_ts = time.time() - 400  # > 300s grace
+
+        r = h._apply_stress_relief()
+
+        assert r is not None, "Relief doit s'activer"
+        assert r["action"] == "relief"
+        assert h.current_values["stress"] < 1.0, "Stress doit baisser"
+        assert h.current_values["stress"] >= STRESS_RELIEF_FLOOR, "Pas sous le floor"
+        assert r["stress_after"] < r["stress_before"]
+
+    def test_relief_no_op_si_alerte_recente(self, isolate_hypothalamus):
+        """Alerte il y a 100s (< grace 300s) + stress=1.0 → no-op."""
+        h = isolate_hypothalamus
+        h.current_values["stress"] = 1.0
+        h._last_reptilian_alert_ts = time.time() - 100  # < 300s grace
+
+        r = h._apply_stress_relief()
+
+        assert r is None, "Relief doit être bloqué par grace non écoulé"
+        assert h.current_values["stress"] == 1.0, "Stress inchangé"
+
+    def test_relief_no_op_si_stress_au_floor(self, isolate_hypothalamus):
+        """Stress = floor + grace écoulée → no-op (rien à faire)."""
+        from core.hypothalamus import STRESS_RELIEF_FLOOR
+        h = isolate_hypothalamus
+        h.current_values["stress"] = STRESS_RELIEF_FLOOR
+        h._last_reptilian_alert_ts = time.time() - 1000  # grace largement écoulée
+
+        r = h._apply_stress_relief()
+
+        assert r is None
+        assert h.current_values["stress"] == STRESS_RELIEF_FLOOR
+
+    def test_relief_no_op_si_stress_sous_floor(self, isolate_hypothalamus):
+        """Stress < floor (cas défensif) → no-op, ne remonte PAS au floor."""
+        from core.hypothalamus import STRESS_RELIEF_FLOOR
+        h = isolate_hypothalamus
+        h.current_values["stress"] = 0.1  # sous le floor 0.3
+        h._last_reptilian_alert_ts = time.time() - 1000
+
+        r = h._apply_stress_relief()
+
+        assert r is None
+        assert h.current_values["stress"] == 0.1  # inchangé, pas de remontée
+
+    def test_relief_respecte_floor_apres_iterations_multiples(self, isolate_hypothalamus):
+        """20 cycles de relief → stress arrive au floor sans le franchir."""
+        from core.hypothalamus import STRESS_RELIEF_FLOOR
+        h = isolate_hypothalamus
+        h.current_values["stress"] = 1.0
+        h._last_reptilian_alert_ts = time.time() - 400
+
+        for _ in range(50):  # largement assez pour converger
+            h._apply_stress_relief()
+
+        assert h.current_values["stress"] >= STRESS_RELIEF_FLOOR
+        assert h.current_values["stress"] <= STRESS_RELIEF_FLOOR + 0.01  # quasi convergé
+
+    def test_relief_proportionnel_plus_rapide_si_haut(self, isolate_hypothalamus):
+        """Relief proportionnel : descente plus grande quand stress haut."""
+        h = isolate_hypothalamus
+        h._last_reptilian_alert_ts = time.time() - 400
+
+        # Cas haut
+        h.current_values["stress"] = 1.0
+        r_high = h._apply_stress_relief()
+        descent_high = r_high["stress_before"] - r_high["stress_after"]
+
+        # Cas modéré
+        h.current_values["stress"] = 0.5
+        r_low = h._apply_stress_relief()
+        descent_low = r_low["stress_before"] - r_low["stress_after"]
+
+        assert descent_high > descent_low, \
+            "Relief doit être proportionnel à l'écart au floor"
+
+    def test_relief_premier_boot_grace_consideree_ecoule(self, isolate_hypothalamus):
+        """Premier boot (_last_reptilian_alert_ts=0) → grace écoulée par défaut."""
+        h = isolate_hypothalamus
+        h.current_values["stress"] = 0.8  # héritage non expliqué (ex: load corrompu)
+        h._last_reptilian_alert_ts = 0.0
+
+        r = h._apply_stress_relief()
+
+        assert r is not None
+        assert r["action"] == "relief"
+        assert h.current_values["stress"] < 0.8
+
+    def test_relief_payload_complet(self, isolate_hypothalamus):
+        """Payload retourné contient action/stress_before/after/relief/floor."""
+        from core.hypothalamus import STRESS_RELIEF_FLOOR
+        h = isolate_hypothalamus
+        h.current_values["stress"] = 0.9
+        h._last_reptilian_alert_ts = time.time() - 400
+
+        r = h._apply_stress_relief()
+
+        assert r is not None
+        assert r["action"] == "relief"
+        assert "stress_before" in r and r["stress_before"] == 0.9
+        assert "stress_after" in r
+        assert "relief" in r and r["relief"] > 0
+        assert "floor" in r and r["floor"] == STRESS_RELIEF_FLOOR
+        assert "grace_age_s" in r and r["grace_age_s"] >= 300
+
+    @pytest.mark.asyncio
+    async def test_regulate_appelle_apply_stress_relief(self, isolate_hypothalamus):
+        """regulate() doit appeler _apply_stress_relief une fois par cycle."""
+        h = isolate_hypothalamus
+        with patch.object(h, "_apply_stress_relief", return_value=None) as mock_relief, \
+             patch("core.hypothalamus.bus.publish", new_callable=AsyncMock):
+            await h.regulate()
+        mock_relief.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_regulate_publie_stress_relief_event(self, isolate_hypothalamus):
+        """Si relief actif → publication STRESS_RELIEF sur le bus."""
+        h = isolate_hypothalamus
+        h.current_values["stress"] = 1.0
+        h._last_reptilian_alert_ts = time.time() - 400
+
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock) as mock_pub:
+            await h.regulate()
+
+        relief_calls = [c for c in mock_pub.call_args_list if c[0][0] == "STRESS_RELIEF"]
+        assert len(relief_calls) == 1
+        assert relief_calls[0][0][1]["action"] == "relief"
+
+    @pytest.mark.asyncio
+    async def test_regulate_pas_de_publication_si_no_op(self, isolate_hypothalamus):
+        """Pas de relief → pas de publication STRESS_RELIEF."""
+        h = isolate_hypothalamus
+        h.current_values["stress"] = 0.3  # déjà au floor
+        h._last_reptilian_alert_ts = time.time() - 1000
+
+        with patch("core.hypothalamus.bus.publish", new_callable=AsyncMock) as mock_pub:
+            await h.regulate()
+
+        relief_calls = [c for c in mock_pub.call_args_list if c[0][0] == "STRESS_RELIEF"]
+        assert len(relief_calls) == 0
+
+    def test_persistence_last_reptilian_alert_ts(self, isolate_hypothalamus, tmp_path):
+        """Save/load préserve _last_reptilian_alert_ts."""
+        from core import hypothalamus as mod
+        h = isolate_hypothalamus
+        h._last_reptilian_alert_ts = 1234567.89
+        h._save()
+
+        mod.Hypothalamus.reset_singleton()
+        h2 = mod.Hypothalamus()
+        assert h2._last_reptilian_alert_ts == 1234567.89
+
+    def test_persistence_retrocompat_absence_du_champ(self, isolate_hypothalamus, tmp_path):
+        """Fichier sans last_reptilian_alert_ts (V<14.9) → défaut 0.0."""
+        from core.hypothalamus import HYPOTHALAMUS_STATE_FILE
+        from core import hypothalamus as mod
+        # Fichier ancien format sans le nouveau champ
+        data = {"current_values": {"stress": 0.5}, "total_corrections": 10}
+        with open(HYPOTHALAMUS_STATE_FILE, "w") as f:
+            json.dump(data, f)
+        mod.Hypothalamus.reset_singleton()
+        h2 = mod.Hypothalamus()
+        assert h2._last_reptilian_alert_ts == 0.0
