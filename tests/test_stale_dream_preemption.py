@@ -6,8 +6,14 @@ Garde-fous testés :
   2. Pas de coffee_mode (interaction humaine inviolable)
   3. Pas de nap (consolidation déjà en cours)
   4. Cooldown 5 min anti-boucle
+
+V14.10 — Interruption matérielle logicielle (asyncio.Event _urgent_wakeup).
+Tests vérifient que l'event est SET ssi la préemption a réussi (pas en cas
+de garde-fou bloquant). Validation in-vivo : latence cascade nociceptive
+24min47s → <5s post-V14.10 (cible de validation chaos engineering).
 """
 
+import asyncio
 import time
 from unittest.mock import patch
 
@@ -29,6 +35,8 @@ def engine():
     inst._stale_dream_preemption_last = 0.0
     inst.is_coffee_mode = False
     inst.is_napping = False
+    # V14.10 — Event pour réveil instantané du main loop
+    inst._urgent_wakeup = asyncio.Event()
     yield inst
 
 
@@ -166,3 +174,114 @@ async def test_severity_none_ne_crashe_pas(engine):
     event["severity"] = None
     await engine._on_reptilian_alert(event)
     assert engine._forced_next_intent == "MEMORY_CONSOLIDATION"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# V14.10 — Interruption matérielle logicielle (asyncio.Event)
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestV1410UrgentWakeup:
+    """V14.10 — l'asyncio.Event _urgent_wakeup doit être set IFF la
+    préemption a effectivement eu lieu. Validation in-vivo : latence
+    cascade nociceptive 24min47s → <5s post-V14.10."""
+
+    @pytest.mark.asyncio
+    async def test_urgent_wakeup_set_apres_preemption_reussie(self, engine):
+        """Préemption réussie → _urgent_wakeup.is_set() == True."""
+        assert not engine._urgent_wakeup.is_set()
+        await engine._on_reptilian_alert(_alert())
+        assert engine._forced_next_intent == "MEMORY_CONSOLIDATION"
+        assert engine._urgent_wakeup.is_set(), \
+            "Event MUST be set après armement REFLEXE PURGE"
+
+    @pytest.mark.asyncio
+    async def test_urgent_wakeup_pas_set_si_pattern_different(self, engine):
+        """Garde-fou pattern → préemption pas faite → event PAS set."""
+        await engine._on_reptilian_alert(_alert(pattern="ollama"))
+        assert not engine._urgent_wakeup.is_set()
+
+    @pytest.mark.asyncio
+    async def test_urgent_wakeup_pas_set_si_coffee_mode(self, engine):
+        """Garde-fou coffee_mode → préemption refusée → event PAS set."""
+        engine.is_coffee_mode = True
+        await engine._on_reptilian_alert(_alert())
+        assert not engine._urgent_wakeup.is_set()
+
+    @pytest.mark.asyncio
+    async def test_urgent_wakeup_pas_set_si_napping(self, engine):
+        """Garde-fou nap → consolidation déjà active → event PAS set."""
+        engine.is_napping = True
+        await engine._on_reptilian_alert(_alert())
+        assert not engine._urgent_wakeup.is_set()
+
+    @pytest.mark.asyncio
+    async def test_urgent_wakeup_pas_set_si_cooldown(self, engine):
+        """Garde-fou cooldown → 2e alerte refusée → event PAS set la 2e fois."""
+        await engine._on_reptilian_alert(_alert())
+        # Reset event + forced (simule consume)
+        engine._urgent_wakeup.clear()
+        engine._forced_next_intent = ""
+        # Re-alerte immédiate (sous cooldown)
+        await engine._on_reptilian_alert(_alert())
+        assert not engine._urgent_wakeup.is_set(), \
+            "Cooldown doit empêcher le réveil dupliqué"
+
+    @pytest.mark.asyncio
+    async def test_urgent_wakeup_pas_set_si_intent_deja_force(self, engine):
+        """_forced_next_intent déjà set par autre voie → branche ELSE → pas de set."""
+        engine._forced_next_intent = "AUDIT_STRUCTURE"
+        await engine._on_reptilian_alert(_alert())
+        # La force existante est conservée, pas de réveil urgent
+        assert engine._forced_next_intent == "AUDIT_STRUCTURE"
+        assert not engine._urgent_wakeup.is_set()
+
+    @pytest.mark.asyncio
+    async def test_urgent_wakeup_interrompt_sleep_simule(self, engine):
+        """Simule la boucle de sleep V14.10 : event set pendant l'attente
+        doit déclencher un break en moins de 100ms (vs sleep_time complet)."""
+        sleep_time = 30  # simule un cycle de 30s
+        chunk = 15
+
+        async def sleep_loop_simule():
+            """Simule la nouvelle boucle V14.10 lignes 7065-7088."""
+            remaining = sleep_time
+            broken = False
+            while remaining > 0:
+                c = min(remaining, chunk)
+                try:
+                    await asyncio.wait_for(engine._urgent_wakeup.wait(), timeout=c)
+                    engine._urgent_wakeup.clear()
+                    broken = True
+                    break
+                except asyncio.TimeoutError:
+                    remaining -= c
+            return broken
+
+        async def trigger_alert_apres_50ms():
+            await asyncio.sleep(0.05)
+            await engine._on_reptilian_alert(_alert())
+
+        start = time.monotonic()
+        # Lance les 2 coroutines en parallèle
+        broken, _ = await asyncio.gather(sleep_loop_simule(), trigger_alert_apres_50ms())
+        elapsed = time.monotonic() - start
+
+        assert broken, "La boucle doit être interrompue par l'event"
+        assert elapsed < 1.0, \
+            f"Latence d'interruption trop élevée : {elapsed*1000:.0f}ms (cible <100ms)"
+
+    @pytest.mark.asyncio
+    async def test_event_clear_ne_casse_pas_re_arming(self, engine):
+        """Après clear() puis re-arming, l'event doit pouvoir re-set."""
+        # 1ère préemption
+        await engine._on_reptilian_alert(_alert())
+        assert engine._urgent_wakeup.is_set()
+        # Simule consume par main loop
+        engine._urgent_wakeup.clear()
+        engine._forced_next_intent = ""
+        # Cooldown forcé expiré
+        engine._stale_dream_preemption_last = time.time() - STALE_DREAM_PREEMPTION_COOLDOWN_S - 10
+        # 2ème préemption
+        await engine._on_reptilian_alert(_alert())
+        assert engine._urgent_wakeup.is_set(), \
+            "Event doit pouvoir être re-set après clear()"

@@ -955,6 +955,12 @@ class AutonomyEngine:
         self._temp_blacklist: set = set()
         # Loop breaker : intent force par le loop_breaker (bypass scoring)
         self._forced_next_intent: str = ""
+        # V14.10 — Interruption matérielle logicielle pour réflexes urgents.
+        # asyncio.Event set par _on_reptilian_alert après armement réussi du
+        # _forced_next_intent (REFLEXE PURGE). Réveille le main loop instan-
+        # tanément (<100ms), court-circuite le sleep adaptatif (10-30 min)
+        # qui rendait V14.4 inopérant en pratique (latence ×36 observée).
+        self._urgent_wakeup: asyncio.Event = asyncio.Event()
         # V34.1 : drive a notifier (mark_drive_satisfied) apres execution reussie
         # de la routine forcee par le motivational_router. Reset apres usage.
         self._v34_pending_drive: str = ""
@@ -1505,6 +1511,11 @@ class AutonomyEngine:
         if not self._forced_next_intent:
             self._forced_next_intent = "MEMORY_CONSOLIDATION"
             self._stale_dream_preemption_last = now
+            # V14.10 — réveil instantané du main loop (interruption matérielle
+            # logicielle). Sans ce signal, le drapeau attend le prochain cycle
+            # naturel (10-30 min observé in-vivo), ce qui annule la sémantique
+            # de "réflexe" du REFLEXE PURGE.
+            self._urgent_wakeup.set()
             logger.warning(
                 f"[AUTONOMY] REFLEXE PURGE — préemption stale_dream "
                 f"(severity={severity}, dette={dette_h}h) → MEMORY_CONSOLIDATION"
@@ -7061,14 +7072,31 @@ class AutonomyEngine:
                     sleep_time = int(sleep_time * circadian.get_sleep_multiplier())
                 except Exception:
                     pass
-                # Sleep interruptible : permet au mode café/sieste de réveiller la boucle
+                # V14.10 — Sleep DOUBLEMENT interruptible :
+                # - chunks de 15s : compat coffee_mode/is_napping legacy (≤15s latence)
+                # - asyncio.Event _urgent_wakeup : réflexe nociceptif (<100ms latence)
+                # Sans cette double condition, le REFLEXE PURGE armé par V14.4
+                # attendait la fin du cycle adaptatif (10-30 min) — observé
+                # in-vivo le 02/05 à 24min47s (ticket V14.10).
                 remaining = sleep_time
                 while remaining > 0:
                     chunk = min(remaining, 15)
-                    await asyncio.sleep(chunk)
-                    remaining -= chunk
-                    if getattr(self, "is_coffee_mode", False) or self.is_napping:
+                    try:
+                        await asyncio.wait_for(
+                            self._urgent_wakeup.wait(), timeout=chunk
+                        )
+                        # Interruption par signal d'urgence cognitif (REFLEXE PURGE)
+                        self._urgent_wakeup.clear()
+                        if self._forced_next_intent:
+                            logger.info(
+                                f"[AUTONOMY] Réveil URGENT — _forced_next_intent="
+                                f"{self._forced_next_intent}"
+                            )
                         break
+                    except asyncio.TimeoutError:
+                        remaining -= chunk
+                        if getattr(self, "is_coffee_mode", False) or self.is_napping:
+                            break
 
             if orchestrator.kill_switch_active or self.is_processing:
                 continue
@@ -7265,7 +7293,12 @@ class AutonomyEngine:
 
             idle_time = time.time() - self.last_user_interaction
 
-            if idle_time > self.idle_threshold:
+            # V14.10b — un réflexe nociceptif (REFLEXE PURGE) ne respecte pas
+            # le idle_threshold (300s). Si _forced_next_intent est armé, on
+            # bypass l'attente d'inactivité utilisateur. Sans ça, le réveil
+            # URGENT du V14.10 n'avait aucun effet pendant les 5 premières
+            # minutes post-boot ou post-interaction (bug observé in-vivo).
+            if idle_time > self.idle_threshold or self._forced_next_intent:
                 # Health check
                 try:
                     health = await SystemHealthCheck.run()
