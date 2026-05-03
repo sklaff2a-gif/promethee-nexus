@@ -16,10 +16,14 @@ import pytest
 
 from core.bullshit_detector import (
     D1_SKIP_SLOTS,
+    D5_COVERAGE_THRESHOLD,
+    D5_MIN_KEYWORDS,
+    _extract_subject_keywords,
     d1_completeness,
     d2_truncation,
     d3_target_drift,
     d4a_syntax_parse,
+    d5_subject_drift,
     evaluate_deliverable,
     extract_promised_items,
     extract_sections,
@@ -520,3 +524,174 @@ class TestRealCorpusCases:
         )
         # Au moins un des deux doit se declencher (D1 section courte < 80 mots OU D2 section finale < 100)
         assert r["d1_completeness"] or r["d2_truncation"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# D5 (03/05/2026) — Subject Drift sémantique
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestExtractSubjectKeywords:
+    """Helper d'extraction des keywords saillants du sujet pour D5."""
+
+    def test_acronymes_capitalises(self):
+        kws = _extract_subject_keywords("Architectures : RAG, GraphRAG, MemWalker")
+        assert "rag" in kws
+        assert "graphrag" in kws
+        assert "memwalker" in kws
+
+    def test_paths_python(self):
+        kws = _extract_subject_keywords("Améliorer : core/ci_pipeline.py")
+        assert any("ci_pipeline" in k for k in kws)
+
+    def test_snake_case(self):
+        kws = _extract_subject_keywords("Revue de code : factory_agent.py")
+        assert any("factory_agent" in k for k in kws)
+
+    def test_stop_words_filtres(self):
+        kws = _extract_subject_keywords("Le système de mémoire pour les agents")
+        # "le", "de", "pour", "les" doivent être exclus
+        assert "le" not in kws
+        assert "les" not in kws
+        assert "pour" not in kws
+        # mais "système", "mémoire", "agents" doivent rester
+        assert any("syst" in k for k in kws)
+
+    def test_subject_vide(self):
+        assert _extract_subject_keywords("") == []
+        assert _extract_subject_keywords(None) == []
+
+    def test_dedup_stable_order(self):
+        kws = _extract_subject_keywords("RAG GraphRAG RAG MemWalker GraphRAG")
+        assert kws.count("rag") == 1
+        assert kws.count("graphrag") == 1
+
+
+class TestD5SubjectDrift:
+    """D5 : flag si coverage des keywords du sujet dans le livrable < 30%."""
+
+    def test_skip_si_subject_vide(self):
+        assert not d5_subject_drift("body assez long pour passer le filtre min", "", "RESEARCH")
+        assert not d5_subject_drift("body assez long pour passer le filtre min", None, "RESEARCH")
+
+    def test_skip_si_body_trop_court(self):
+        # body < 100 chars → skip (autre flag actif)
+        assert not d5_subject_drift("court", "Architectures RAG GraphRAG MemWalker", "RESEARCH")
+
+    def test_skip_si_subject_pas_assez_keywords(self):
+        # Subject avec < 3 keywords → ambigu, ne pas flag
+        body = "x" * 200
+        assert not d5_subject_drift(body, "veille", "RESEARCH")
+
+    def test_drift_evident_flag(self):
+        """Sujet RAG/GraphRAG/MemWalker, livrable parle de pulsions."""
+        body = (
+            "Aujourd'hui j'ai analyse mes pulsions internes. La curiosite "
+            "depasse 50, la maitrise est saturee. Mes drives oscillent entre "
+            "creation et stabilite. Le tissu neural montre une activite normale."
+        )
+        subject = "Architectures de memoire pour systemes multi-agents (RAG, GraphRAG, MemWalker)"
+        assert d5_subject_drift(body, subject, "RESEARCH")
+
+    def test_couverture_complete_no_flag(self):
+        """Body qui cite tous les keywords du sujet → pas de flag."""
+        body = (
+            "RAG (Retrieval Augmented Generation) est une architecture de memoire "
+            "qui combine indexation vectorielle et generation. GraphRAG etend cette "
+            "approche avec un graphe de connaissance. MemWalker traite la memoire "
+            "comme un arbre navigable. Pour les systemes multi-agents, ces architectures "
+            "offrent des compromis differents."
+        )
+        subject = "Architectures de memoire pour systemes multi-agents (RAG, GraphRAG, MemWalker)"
+        assert not d5_subject_drift(body, subject, "RESEARCH")
+
+    def test_couverture_partielle_seuil(self):
+        """Coverage entre 30% et 50% → tolere (pas de flag)."""
+        # 4 keywords (rag, graphrag, memwalker, multi-agents probable), ~50% couverts
+        body = (
+            "RAG est une architecture interessante. GraphRAG etend RAG. "
+            "Pour le reste, mes systemes internes utilisent autre chose. "
+            "L'orchestration des differents agents se fait via le bus event."
+        )
+        subject = "Architectures de memoire pour systemes multi-agents (RAG, GraphRAG, MemWalker)"
+        # 2 keywords cites sur 3-4 minimum → coverage >= 50% → pas flag
+        assert not d5_subject_drift(body, subject, "RESEARCH")
+
+    def test_tous_les_slots_couverts(self):
+        """D5 doit fonctionner pour TOUS les slots (vs D3 qui était limité)."""
+        body = "x" * 200 + " contenu hors-sujet absolument generique"
+        subject = "Architectures RAG GraphRAG MemWalker pour multi-agents"
+        for slot in ("CODE_REVIEW", "RESEARCH", "WORKSHOP", "CREATION", "BULLETIN"):
+            assert d5_subject_drift(body, subject, slot), f"D5 doit flag pour {slot}"
+
+
+class TestD5ReproductionInVivo:
+    """Tests de calibration : reproduction des 4 hors-sujets observes 02-03/05.
+
+    Si D5 ne flag pas ces cas, le seuil COVERAGE_THRESHOLD est trop laxe.
+    """
+
+    def test_creation_ci_pipeline_recyclee_en_rag(self):
+        """02:14 → 03:25 : CREATION ci_pipeline.py rend un plan d'atelier RAG."""
+        body = (
+            "Plan d'atelier sur les architectures de memoire pour systemes "
+            "multi-agents. Premier objectif : comprendre RAG (Retrieval Augmented "
+            "Generation). Deuxieme : explorer GraphRAG comme extension. Troisieme : "
+            "implementer un prototype MemWalker minimal."
+        ) * 3  # body assez long
+        subject = "Ameliorer : core/ci_pipeline.py"
+        r = evaluate_deliverable(body, subject, "CREATION")
+        assert r["d5_subject_drift"], (
+            "Le hors-sujet ci_pipeline.py → RAG doit declencher D5"
+        )
+
+    def test_research_rag_repli_introspection(self):
+        """01:05 : RESEARCH RAG, livrable = introspection systeme."""
+        body = (
+            "Etat des lieux de mon systeme. Mes contraintes Windows m'empechent "
+            "d'utiliser certains outils. Mes echecs du Jour #47 ont impacte mon "
+            "budget de credits. Je remarque que mes routines de la nuit ont consomme "
+            "plus que prevu, et la car les credits"
+        )
+        subject = "Architectures de memoire pour systemes multi-agents (RAG, GraphRAG, MemWalker)"
+        r = evaluate_deliverable(body, subject, "RESEARCH")
+        assert r["d5_subject_drift"], (
+            "Le repli introspectif sur sujet RAG doit declencher D5"
+        )
+
+    def test_workshop_rag_physics_playground(self):
+        """02:14 : WORKSHOP RAG, livrable = Physics Playground."""
+        body = (
+            "Physics Playground - simulation de particules.\n"
+            "```python\n"
+            "def apply_force(particle, force):\n"
+            "    particle.velocity += force * time_step\n"
+            "    return particle\n"
+            "```\n"
+            "Cette simulation modelise les interactions gravitationnelles entre "
+            "particules. La docstring decrit la spéci"
+        )
+        subject = "Architectures de memoire pour systemes multi-agents (RAG, GraphRAG, MemWalker)"
+        r = evaluate_deliverable(body, subject, "WORKSHOP")
+        assert r["d5_subject_drift"], (
+            "Physics Playground sur sujet RAG doit declencher D5"
+        )
+
+    def test_code_review_factory_agent_audit_securite(self):
+        """00:32 : CODE_REVIEW audit securite factory_agent, livrable = banalites."""
+        body = (
+            "[V1] Severite MOYENNE — validation insuffisante des inputs ligne 42. "
+            "Les imports dynamiques peuvent ralentir le demarrage. "
+            "[V2] Severite FAIBLE — manque de logging structure. "
+            "[V3] Recommandation generale : ajouter des tests unitaires. "
+            "[V4] Pas de gestion d'erreur sur certaines branches"
+        )
+        # Sujet a target_file factory_agent.py — D3 devrait flag (target_file present)
+        # ET D5 devrait flag (keywords audit/securite/factory_agent absents du body)
+        subject = "Audit de securite : Agents/factory_agent.py — injection chemin, traversal, execution code arbitraire"
+        r = evaluate_deliverable(body, subject, "CODE_REVIEW")
+        # Le body cite "factory_agent" indirectement via "[V1]..." ? Non, il ne cite pas le fichier.
+        # On exige au moins UN des deux flags drift (D3 ou D5)
+        assert r["d3_target_drift"] or r["d5_subject_drift"], (
+            "Audit securite generique doit declencher D3 ou D5"
+        )

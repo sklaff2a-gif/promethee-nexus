@@ -51,6 +51,113 @@ D1_SKIP_SLOTS = frozenset({"BULLETIN", "CREATION"})
 # interrompue) reste actif pour TOUS les slots.
 _NARRATIVE_LENGTH_SKIP = frozenset({"BULLETIN", "CREATION"})
 
+# ─── D5 (03/05/2026) — Subject Drift sémantique ──────────────────────────
+# Couverture orthogonale a D3 (qui flag uniquement target_file Python pour
+# CODE_REVIEW/WORKSHOP). D5 mesure la coverage des mots-cles du sujet dans
+# le livrable pour TOUS les slots. Detecte les hors-sujets observes 02-03/05 :
+# CREATION ci_pipeline.py rendant du RAG, RESEARCH RAG rendant introspection,
+# WORKSHOP RAG rendant Physics Playground, etc.
+#
+# Calibration anti-hypocondrie (V14.7 doctrine) :
+#   - Min 3 keywords requis dans le sujet (sinon skip — sujets ambigus)
+#   - Seuil coverage 30% (en dessous = drift)
+#   - Stop-words FR/EN exclus
+#   - Bonus mots avec capitales (acronymes RAG, GraphRAG, MemWalker)
+#   - Bonus snake_case et paths (ci_pipeline.py, core/factory_agent.py)
+
+D5_MIN_KEYWORDS = 3
+D5_COVERAGE_THRESHOLD = 0.30
+D5_MIN_KEYWORD_LEN = 4
+
+_STOP_WORDS = frozenset({
+    # FR — articles, prepositions, conjonctions, auxiliaires
+    "le", "la", "les", "un", "une", "des", "du", "de", "au", "aux",
+    "et", "ou", "mais", "donc", "car", "ni", "or", "que", "qui", "quoi",
+    "dans", "sur", "sous", "avec", "sans", "pour", "par", "vers", "chez",
+    "etre", "avoir", "faire", "aller", "voir", "savoir", "pouvoir",
+    "ce", "cet", "cette", "ces", "son", "sa", "ses", "leur", "leurs",
+    "il", "elle", "ils", "elles", "nous", "vous", "moi", "toi", "lui",
+    "ne", "pas", "plus", "moins", "tres", "trop", "tout", "tous", "toute",
+    "comme", "ainsi", "alors", "encore", "deja", "puis", "ensuite",
+    "tes", "premiers", "leurs", "entre", "sans",
+    # EN — articles, prepositions, conjonctions
+    "the", "a", "an", "and", "or", "but", "if", "then", "else",
+    "in", "on", "at", "to", "from", "with", "without", "for", "by",
+    "is", "are", "was", "were", "be", "been", "being", "have", "has",
+    "do", "does", "did", "will", "would", "should", "could", "may", "might",
+    "this", "that", "these", "those", "their", "his", "her", "its",
+    "not", "no", "yes", "all", "some", "any", "more", "less", "very",
+    # Mots de slot très génériques qu'on ne veut pas compter
+    "cours", "sujet", "livrable", "exercice",
+})
+
+
+def _extract_subject_keywords(subject: str) -> List[str]:
+    """Extrait les keywords saillants d'un sujet pour mesurer la drift D5.
+
+    Conserve :
+      - Mots ≥ D5_MIN_KEYWORD_LEN lettres hors stop-words
+      - Acronymes (>= 2 capitales consécutives) — ex: RAG, MemWalker
+      - Tokens techniques avec _ ou / ou .py — ex: ci_pipeline.py, core/foo
+    Retourne en lowercase, dédupliqué, ordre stable.
+    """
+    if not subject:
+        return []
+    seen = []
+    seen_set = set()
+
+    # 1. Acronymes et CamelCase (preserves capitales originales)
+    for match in re.finditer(r"\b([A-Z][a-zA-Z]*[A-Z][a-zA-Z]*|[A-Z]{2,})\b", subject):
+        kw = match.group(1).lower()
+        if kw not in seen_set:
+            seen.append(kw)
+            seen_set.add(kw)
+
+    # 2. Tokens techniques (snake_case, paths, fichiers .py)
+    for match in re.finditer(r"\b([a-z_][a-z0-9_]*\.py|[a-z]+/[a-z_/]+|[a-z]+_[a-z_]+)\b",
+                              subject, re.IGNORECASE):
+        kw = match.group(1).lower()
+        if kw not in seen_set:
+            seen.append(kw)
+            seen_set.add(kw)
+
+    # 3. Mots normaux >= D5_MIN_KEYWORD_LEN, hors stop-words
+    for match in re.finditer(r"\b([a-zA-ZàâäéèêëïîôöùûüÿçÀÂÄÉÈÊËÏÎÔÖÙÛÜŸÇ]{%d,})\b" % D5_MIN_KEYWORD_LEN,
+                              subject):
+        kw = match.group(1).lower()
+        if kw in _STOP_WORDS:
+            continue
+        if kw not in seen_set:
+            seen.append(kw)
+            seen_set.add(kw)
+
+    return seen
+
+
+def d5_subject_drift(body: str, subject: str, slot: str) -> bool:
+    """D5 : flag si la coverage des keywords du sujet dans le livrable < 30%.
+
+    Detecte les drifts semantiques que D3 ne capture pas (D3 = target_file
+    Python uniquement, CODE_REVIEW/WORKSHOP uniquement). D5 fonctionne pour
+    tous les slots tant que le sujet contient assez de keywords.
+
+    Anti-hypocondrie (V14.7 doctrine) :
+      - Skip si moins de D5_MIN_KEYWORDS dans le sujet (ambigu)
+      - Skip si body trop court (< 100 chars — autre flag actif)
+      - Skip si subject vide ou None
+    """
+    if not subject or not body or len(body) < 100:
+        return False
+    keywords = _extract_subject_keywords(subject)
+    if len(keywords) < D5_MIN_KEYWORDS:
+        return False  # Sujet trop ambigu ou trop court pour juger
+    body_lower = body.lower()
+    # Coverage par presence : un keyword est "couvert" s'il apparait au moins
+    # une fois dans le body (même comme substring pour les paths/snake_case).
+    covered = sum(1 for kw in keywords if kw in body_lower)
+    coverage = covered / len(keywords)
+    return coverage < D5_COVERAGE_THRESHOLD
+
 
 def strip_header(text: str) -> str:
     """Retire le preambule d'evaluation (# Livrable, Note, Feedback, Challenge).
@@ -271,8 +378,8 @@ def grade_multiplier(n_flags: int) -> float:
 
 
 def evaluate_deliverable(deliverable: str, subject: str, slot: str) -> dict:
-    """Applique D1/D2/D3 sur un livrable et retourne le multiplicateur a
-    appliquer au grade.
+    """Applique D1/D2/D3/D4a/D5 sur un livrable et retourne le multiplicateur
+    a appliquer au grade.
 
     Args:
         deliverable: contenu brut (avec ou sans header d'evaluation)
@@ -280,15 +387,16 @@ def evaluate_deliverable(deliverable: str, subject: str, slot: str) -> dict:
         slot: CODE_REVIEW, RESEARCH, WORKSHOP, CREATION, BULLETIN
 
     Returns:
-        dict {d1_completeness, d2_truncation, d3_target_drift, n_flags,
-              multiplier, reasons}
+        dict {d1_completeness, d2_truncation, d3_target_drift, d4a_syntax_parse,
+              d5_subject_drift, n_flags, multiplier, reasons}
     """
     body = strip_header(deliverable)
     d1 = d1_completeness(body, subject, slot)
     d2 = d2_truncation(body, slot=slot)
     d3 = d3_target_drift(body, subject, slot)
     d4a = d4a_syntax_parse(body)
-    n_flags = int(d1) + int(d2) + int(d3) + int(d4a)
+    d5 = d5_subject_drift(body, subject, slot)
+    n_flags = int(d1) + int(d2) + int(d3) + int(d4a) + int(d5)
     reasons: List[str] = []
     if d1:
         reasons.append("completeness (items promis absents)")
@@ -298,11 +406,14 @@ def evaluate_deliverable(deliverable: str, subject: str, slot: str) -> dict:
         reasons.append("target drift (fichier cible non cite)")
     if d4a:
         reasons.append("d4a (SyntaxError dans un bloc code)")
+    if d5:
+        reasons.append("subject drift (keywords du sujet absents du livrable)")
     return {
         "d1_completeness": d1,
         "d2_truncation": d2,
         "d3_target_drift": d3,
         "d4a_syntax_parse": d4a,
+        "d5_subject_drift": d5,
         "n_flags": n_flags,
         "multiplier": grade_multiplier(n_flags),
         "reasons": reasons,
