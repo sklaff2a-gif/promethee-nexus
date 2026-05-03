@@ -15,6 +15,7 @@ Ce qu'il retient des cours = le contexte de la nuit suivante.
 
 import json
 import os
+import re
 import time
 import logging
 from datetime import date, datetime
@@ -25,6 +26,46 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MENTOR_STATE_FILE = os.path.join(_PROJECT_ROOT, "memory", "mentor_state.json")
 NIGHTLY_BUDGET = 5  # Max 5 appels Claude par nuit
+
+# 03/05/2026 — Slot routing pour pending_directions/challenges (anti-fuite cross-routine).
+# Le mentor produit des directions slot-spécifiques ("le prochain workshop doit...").
+# Avant ce patch : un champ STRING unique consommé peu importe le slot du cours suivant
+# → pollution observée in-vivo nuit 02-03/05 (CREATION ci_pipeline.py recyclait du RAG
+# car la direction WORKSHOP-RAG du cours précédent était injectée aveuglément).
+# Maintenant : dict {slot: text} avec extraction du slot cible depuis le texte libre
+# de la direction. Catch-all "*" pour les directions slot-agnostiques.
+SLOT_NAMES = ("CODE_REVIEW", "RESEARCH", "WORKSHOP", "CREATION", "BULLETIN")
+_SLOT_PATTERNS = {
+    "CODE_REVIEW": r"\b(code[\s_-]?review|revue\s+de\s+code|revue\s+du\s+code|revue)\b",
+    "RESEARCH":    r"\b(research|recherche|étude|etude)\b",
+    "WORKSHOP":    r"\b(workshop|atelier)\b",
+    "CREATION":    r"\b(creation|création|cr[ée]atif|cr[ée]er|invente|imagine|dessine|écrit?\b|ecris)\b",
+    "BULLETIN":    r"\b(bulletin|bilan|auto[\s-]?[ée]valuation)\b",
+}
+_CATCH_ALL_SLOT = "*"
+
+
+def _extract_target_slot(text: str) -> str:
+    """Identifie le slot cible mentionné dans une direction de mentor.
+
+    Le mentor écrit en texte libre des directions du type :
+      "le prochain WORKSHOP doit reprendre RAG..."
+      "Le prochain cours sera un RESEARCH ciblé..."
+      "Bulletin demain : ouvre tel fichier..."
+    Cette fonction extrait le slot ciblé pour indexer la direction.
+
+    Retourne le slot canonique (CODE_REVIEW/RESEARCH/WORKSHOP/CREATION/BULLETIN)
+    ou '*' (catch-all) si aucun slot n'est mentionné explicitement.
+    """
+    if not text:
+        return _CATCH_ALL_SLOT
+    text_lower = text.lower()
+    # On parcourt dans l'ordre : si plusieurs slots mentionnés, le PREMIER trouvé gagne.
+    # Limitation acceptée : direction multi-slot rare en pratique.
+    for slot in SLOT_NAMES:
+        if re.search(_SLOT_PATTERNS[slot], text_lower, re.IGNORECASE):
+            return slot
+    return _CATCH_ALL_SLOT
 
 # V32.4 (2026-04-27) — Source unique des mots-cles d'hallucination.
 # Avant V32.4 : _inject_into_tissue utilisait 5 mots-cles, mais la condition
@@ -72,8 +113,10 @@ class Mentor:
         self._calls_today: int = 0
         self._today: str = ""
         self._history: List[Dict] = []  # Derniers echanges (contexte)
-        self._pending_challenge: str = ""  # Defi pour le prochain cours
-        self._pending_direction: str = ""  # Direction pour le prochain cours
+        # 03/05/2026 — Slot routing : Dict[slot, text] indexe par slot cible.
+        # Avant : champs str uniques, fuite cross-routine. Voir _extract_target_slot.
+        self._pending_challenges: Dict[str, str] = {}  # {slot: defi}
+        self._pending_directions: Dict[str, str] = {}  # {slot: direction}
         self._load()
         self._load_api_key()
 
@@ -147,10 +190,16 @@ class Mentor:
         # Enregistrer dans l'historique
         # Extraire defi et direction de la reponse
         challenge, direction = self._extract_challenge_direction(response)
+        # 03/05/2026 — Slot routing : on indexe par slot cible mentionné dans
+        # le texte libre de la direction/challenge. Le catch-all "*" gère les
+        # directions slot-agnostiques. Last-wins en cas de double évaluation
+        # sur le même slot (écrasement assumé : la dernière est la plus fraîche).
         if challenge:
-            self._pending_challenge = challenge
+            target_slot = _extract_target_slot(challenge)
+            self._pending_challenges[target_slot] = challenge
         if direction:
-            self._pending_direction = direction
+            target_slot = _extract_target_slot(direction)
+            self._pending_directions[target_slot] = direction
 
         entry = {
             "date": datetime.now().isoformat(),
@@ -446,20 +495,49 @@ class Mentor:
                 direction = non_empty[-1]
         return challenge, direction
 
-    def get_pending_challenge(self) -> str:
-        """Retourne le defi en attente pour le prochain cours."""
-        return self._pending_challenge
+    def get_pending_challenge(self, slot: str = _CATCH_ALL_SLOT) -> str:
+        """Lecture sans consume — slot match prioritaire, fallback catch-all '*'."""
+        if slot in self._pending_challenges:
+            return self._pending_challenges[slot]
+        return self._pending_challenges.get(_CATCH_ALL_SLOT, "")
 
-    def get_pending_direction(self) -> str:
-        """Retourne la direction suggeree pour le prochain cours."""
-        return self._pending_direction
+    def get_pending_direction(self, slot: str = _CATCH_ALL_SLOT) -> str:
+        """Lecture sans consume — slot match prioritaire, fallback catch-all '*'."""
+        if slot in self._pending_directions:
+            return self._pending_directions[slot]
+        return self._pending_directions.get(_CATCH_ALL_SLOT, "")
 
-    def consume_direction(self) -> str:
-        """Retourne et consomme la direction (usage unique)."""
-        d = self._pending_direction
-        self._pending_direction = ""
-        self._save()
-        return d
+    def consume_direction(self, slot: str = _CATCH_ALL_SLOT) -> str:
+        """Retourne et consomme la direction pour ce slot (usage unique).
+
+        Stratégie : slot match exact prioritaire, sinon fallback sur catch-all '*'.
+        Ne touche pas aux directions stockées sous d'autres slots.
+        Backward compat : sans arg → consume catch-all uniquement.
+        """
+        if slot in self._pending_directions:
+            d = self._pending_directions.pop(slot)
+            self._save()
+            return d
+        if _CATCH_ALL_SLOT in self._pending_directions:
+            d = self._pending_directions.pop(_CATCH_ALL_SLOT)
+            self._save()
+            return d
+        return ""
+
+    def consume_challenge(self, slot: str = _CATCH_ALL_SLOT) -> str:
+        """Retourne et consomme le défi pour ce slot (usage unique).
+
+        Symétrique à consume_direction. Remplace l'accès direct attribut
+        depuis autonomy_engine (encapsulation respectée)."""
+        if slot in self._pending_challenges:
+            c = self._pending_challenges.pop(slot)
+            self._save()
+            return c
+        if _CATCH_ALL_SLOT in self._pending_challenges:
+            c = self._pending_challenges.pop(_CATCH_ALL_SLOT)
+            self._save()
+            return c
+        return ""
 
     def get_status(self) -> Dict[str, Any]:
         """Retourne l'etat du mentor."""
@@ -470,8 +548,8 @@ class Mentor:
             "calls_today": self._calls_today,
             "budget": NIGHTLY_BUDGET,
             "remaining": max(0, NIGHTLY_BUDGET - self._calls_today),
-            "pending_challenge": self._pending_challenge,
-            "pending_direction": self._pending_direction,
+            "pending_challenges": dict(self._pending_challenges),
+            "pending_directions": dict(self._pending_directions),
             "history_count": len(self._history),
             "last_session": self._history[-1] if self._history else None,
         }
@@ -483,8 +561,9 @@ class Mentor:
                 "calls_today": self._calls_today,
                 "today": self._today,
                 "history": self._history[-20:],
-                "pending_challenge": self._pending_challenge,
-                "pending_direction": self._pending_direction,
+                # 03/05/2026 — Nouveau format : dicts indexés par slot cible.
+                "pending_challenges": dict(self._pending_challenges),
+                "pending_directions": dict(self._pending_directions),
             }
             tmp = MENTOR_STATE_FILE + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -501,10 +580,30 @@ class Mentor:
                 self._calls_today = data.get("calls_today", 0)
                 self._today = data.get("today", "")
                 self._history = data.get("history", [])
-                self._pending_challenge = data.get("pending_challenge", "")
-                self._pending_direction = data.get("pending_direction", "")
-        except Exception:
-            pass
+                # 03/05/2026 — Lecture du nouveau format en priorité.
+                new_directions = data.get("pending_directions")
+                new_challenges = data.get("pending_challenges")
+                if isinstance(new_directions, dict):
+                    self._pending_directions = {
+                        str(k): str(v) for k, v in new_directions.items()
+                    }
+                if isinstance(new_challenges, dict):
+                    self._pending_challenges = {
+                        str(k): str(v) for k, v in new_challenges.items()
+                    }
+                # Rétrocompat ancien format (string) — migration douce vers
+                # catch-all si non-vide. Si dejà migré (dict présent), on
+                # ignore les vieilles clés string.
+                if not self._pending_directions:
+                    old_dir = data.get("pending_direction", "")
+                    if isinstance(old_dir, str) and old_dir.strip():
+                        self._pending_directions[_CATCH_ALL_SLOT] = old_dir
+                if not self._pending_challenges:
+                    old_ch = data.get("pending_challenge", "")
+                    if isinstance(old_ch, str) and old_ch.strip():
+                        self._pending_challenges[_CATCH_ALL_SLOT] = old_ch
+        except Exception as e:
+            logger.warning(f"MENTOR: load failed (gardera defaults): {e}")
 
 
 # Singleton

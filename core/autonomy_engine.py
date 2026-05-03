@@ -10071,18 +10071,21 @@ RAISON: <1 phrase courte>"""
             pass
 
         # Injecter la direction du mentor Claude (s'il a donne une direction)
+        # 03/05/2026 — Slot routing : on consume UNIQUEMENT les directions/défis
+        # ciblés sur ce slot (ou sur le catch-all "*"). Évite la fuite cross-routine
+        # observée nuit 02-03/05 où la direction WORKSHOP-RAG se déversait dans
+        # un CREATION ci_pipeline.py qui suivait. Encapsulation respectée :
+        # plus d'accès direct à _pending_challenge, on passe par consume_challenge.
         mentor_ctx = ""
         try:
             from core.mentor import mentor as _mentor
-            direction = _mentor.consume_direction()
-            challenge = _mentor.get_pending_challenge()
+            direction = _mentor.consume_direction(slot=slot)
+            challenge = _mentor.consume_challenge(slot=slot)
             if direction:
                 mentor_ctx = f"\nDIRECTION DU MENTOR CLAUDE : {direction}"
                 print(f"   🎓 MENTOR: Direction injectee et consommee — {direction[:80]}")
             if challenge:
                 mentor_ctx += f"\nDEFI DU MENTOR CLAUDE : {challenge}"
-                _mentor._pending_challenge = ""  # consommer aussi le defi
-                _mentor._save()
         except Exception:
             pass
 
