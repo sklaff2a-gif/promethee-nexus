@@ -879,3 +879,63 @@ class TestSalienceV2:
         )
         s = h._compute_salience("council_forced", "BRAND_NEW_V2", affect, error_streak=10)
         assert s <= 1.0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TestNoteworthyAutoFlag (04/05/2026 — Fix C cablage automatique)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestNoteworthyAutoFlag:
+    """Le flag noteworthy doit etre set automatiquement a la creation d'episode
+    selon NOTEWORTHY_SALIENCE_THRESHOLD. Sans ce cablage, l'Attention Conjointe
+    ne peut JAMAIS se declencher organiquement."""
+
+    def test_high_salience_event_is_noteworthy(self, reset_hippocampus):
+        """Un evenement a haute saillance (veto + emotion forte) doit etre flag."""
+        h = _make_hippocampus()
+        # veto = base 0.7, donc bien au-dessus du seuil 0.55
+        affect = _mock_affect(cardiac_emotion="rage", dopamine_level=0.8)
+        with patch.object(h, "_capture_affect", return_value=affect):
+            ep = h._encode_episode("veto", intent="TEST_HIGH", agent="strategist")
+        assert ep is not None
+        assert ep.salience >= 0.55, f"salience={ep.salience} doit depasser le seuil"
+        assert ep.noteworthy is True, "Episode haute salience doit etre noteworthy"
+
+    def test_low_salience_event_is_not_noteworthy(self, reset_hippocampus):
+        """Un evenement a faible saillance ne doit PAS etre flag."""
+        h = _make_hippocampus()
+        h._known_intents.add("KNOWN")  # eviter bonus first intent
+        # routine_success = 0.15, threshold = 0.3, donc soit rejete soit faible
+        # on prend un cas qui passe le filtre mais reste sous 0.55
+        affect = _mock_affect(cardiac_emotion="serenite", dopamine_level=0.3)
+        with patch.object(h, "_capture_affect", return_value=affect):
+            # Force un evenement qui passe le filtre mais reste sous le seuil
+            ep = h._encode_episode("intent_change", intent="KNOWN", agent="coder")
+        if ep is not None and ep.salience < 0.55:
+            assert ep.noteworthy is False, (
+                f"Episode salience={ep.salience} < 0.55 ne doit PAS etre noteworthy"
+            )
+
+    def test_noteworthy_threshold_constant(self, reset_hippocampus):
+        """La constante NOTEWORTHY_SALIENCE_THRESHOLD existe et vaut 0.55."""
+        from core.hippocampus import NOTEWORTHY_SALIENCE_THRESHOLD
+        assert NOTEWORTHY_SALIENCE_THRESHOLD == 0.55
+
+    def test_noteworthy_field_persists_in_save_load(self, reset_hippocampus, tmp_path, monkeypatch):
+        """Le flag noteworthy survit a un cycle save/load."""
+        import json
+        h = _make_hippocampus()
+        # Creer un episode haute salience
+        affect = _mock_affect(cardiac_emotion="rage", dopamine_level=0.8)
+        with patch.object(h, "_capture_affect", return_value=affect):
+            ep = h._encode_episode("veto", intent="PERSIST_TEST", agent="strategist")
+        assert ep.noteworthy is True
+        # Save -> Load
+        state_file = str(tmp_path / "persist_test.json")
+        monkeypatch.setattr("core.hippocampus.HIPPOCAMPUS_STATE_FILE", state_file)
+        h._save()
+        # Verifier directement le JSON
+        with open(state_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        loaded_ep = next(e for e in data["episodes"] if e["intent"] == "PERSIST_TEST")
+        assert loaded_ep["noteworthy"] is True

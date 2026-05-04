@@ -420,6 +420,11 @@ class Hippocampus:
             cognitive_state=affect["cognitive_state"],
             threat_level=affect["threat_level"],
             salience=salience,
+            # 04/05/2026 — Fix C : flag automatique pour Attention Conjointe.
+            # Sans ce calcul, NOTEWORTHY_SALIENCE_THRESHOLD existait mais
+            # n'etait utilise nulle part, donc l'Editor ne se declenchait
+            # JAMAIS organiquement (uniquement sur injection manuelle).
+            noteworthy=(salience >= NOTEWORTHY_SALIENCE_THRESHOLD),
             causal_chain=causal_chain or [],
             scoring_factors=scoring_factors or {},
         )
