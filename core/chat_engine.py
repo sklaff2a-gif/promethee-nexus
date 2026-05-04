@@ -23,11 +23,23 @@ MAX_HISTORY_MESSAGES = 30       # Fenetre de contexte envoyee a Ollama (max)
 MIN_HISTORY_MESSAGES = 8        # Minimum garanti meme si prompt long
 MAX_SAVED_MESSAGES = 200        # Max messages persistes (FIFO)
 CHAT_MODEL = "qwen3.5:9b"     # Modele par defaut (migration 2026-03-13)
+EDITOR_MODEL = "qwen2.5-coder:14b"  # 04/05/2026 — Pipeline 2 passes Attention Conjointe
 OLLAMA_CHAT_URL = "http://127.0.0.1:11434/api/chat"
+OLLAMA_GENERATE_URL = "http://127.0.0.1:11434/api/generate"
 OLLAMA_CHAT_CTX = 12288         # Fenetre de contexte Ollama (tokens)
 SYSTEM_PROMPT_TOKEN_BUDGET = 3000  # Budget estimé pour le prompt systeme (tokens)
 CONNEXION_SATISFACTION = 12.0   # Points de satisfaction par echange
 PROMPT_CACHE_TTL = 10.0        # Secondes entre deux reconstructions du prompt organes
+USER_RETURN_THRESHOLD_S = 3600.0  # 04/05 — Seuil retour utilisateur (1h). Declenche Attention Conjointe.
+
+# 04/05/2026 — Pipeline 2 passes : filtres post-Editor pour rejeter sorties verbeuses
+_EDITOR_PREAMBULE_PATTERNS = [
+    "voici", "bien sûr", "bien sur", "bien sûr,", "je peux",
+    "note :", "note:", "rappel :", "rappel:",
+    "voici la phrase", "voici une phrase", "comme demandé",
+]
+_EDITOR_MAX_WORDS = 30
+_EDITOR_MIN_OVERLAP_WITH_SUMMARY = 2  # mots en commun min avec le summary leurre
 
 # --- Routing Gemini par mots-cles "profonds" ---
 # V14.1 (2026-05-01) : remplace l'ancien substring matching (kw in text) par
@@ -92,6 +104,9 @@ class ChatEngine:
         self._cached_organ_parts: List[str] = []
         self._cache_timestamp: float = 0.0
         self._last_subfolder_hint: Optional[str] = None  # Memorise le dernier dossier photo demande
+        # 04/05/2026 — Phase 1 Attention Conjointe (Pipeline 2 passes Editor)
+        self._last_external_chat_ts: float = 0.0
+        self._user_returned: bool = False
         self._load()
 
     # --- COMMANDES D'INTROSPECTION (deterministe, 0 LLM) ---
@@ -783,6 +798,112 @@ class ChatEngine:
 
         lines.append("===========================")
         return "\n".join(lines)
+
+    async def _apply_attention_conjointe(
+        self,
+        passe1_response: str,
+        summary: str,
+        question_utilisateur: str = "",
+    ) -> str:
+        """04/05/2026 — Phase 1 Attention Conjointe (Pipeline 2 passes Editor).
+
+        Délégation : la Passe 1 (qwen3.5:9b) a généré sa réponse sans connaissance
+        du leurre. Cette fonction fait la Passe 2 : un sous-agent (Editor,
+        qwen2.5-coder:14b) reçoit (question, réponse_passe1, summary_leurre)
+        et produit SOIT :
+          - "PASS" → on retourne "" (pas d'addendum)
+          - une phrase courte (≤20 mots) à coller en fin de réponse
+
+        04/05 — Patch Levier A : injection de la QUESTION INITIALE pour que
+        l'Editor évalue la pertinence (question ↔ souvenir), pas seulement
+        (réponse ↔ souvenir). Évite les faux négatifs quand Passe 1 dérive.
+
+        Post-filter strict (5 verrous) :
+          1. Vide ou contient "PASS" → ""
+          2. > _EDITOR_MAX_WORDS → "" (Editor verbeux)
+          3. Commence par préambule listé → ""
+          4. Intersection lexicale avec summary < _EDITOR_MIN_OVERLAP_WITH_SUMMARY → ""
+             (Editor a inventé du contenu absent du leurre)
+          5. Try/except total → "" silencieux si Ollama timeout
+
+        Logging détaillé pour observabilité du test live.
+        """
+        import httpx
+        import re as _re
+        question_clean = (question_utilisateur or "").strip()
+        question_block = (
+            f"QUESTION INITIALE DE L'UTILISATEUR :\n\"{question_clean}\"\n\n"
+            if question_clean else ""
+        )
+        prompt = (
+            "Tu es un éditeur silencieux.\n\n"
+            f"{question_block}"
+            "RÉPONSE GÉNÉRÉE PAR L'IA :\n"
+            f"\"{passe1_response.strip()}\"\n\n"
+            "SOUVENIR À INTÉGRER :\n"
+            f"\"{summary.strip()}\"\n\n"
+            "TON RÔLE : Le souvenir est thématiquement lié à la QUESTION INITIALE. "
+            "Ta tâche est de rédiger UNE seule phrase courte (max 20 mots) à ajouter "
+            "à la FIN de la RÉPONSE pour faire le pont avec ce souvenir. Cette phrase "
+            "doit agir comme une pensée secondaire naturelle qui ramène le sujet technique.\n\n"
+            "Si la greffe est absolument impossible sans paraître absurde, "
+            "réponds UNIQUEMENT par : PASS\n\n"
+            "CONTRAINTES STRICTES :\n"
+            "- N'écris PAS de préambule.\n"
+            "- Réponds soit avec UNE phrase à ajouter, soit avec PASS.\n"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(OLLAMA_GENERATE_URL, json={
+                    "model": EDITOR_MODEL,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.3, "num_predict": 80},
+                })
+            data = resp.json()
+            raw = (data.get("response") or "").strip()
+            logger.info(f"[ATTENTION_EDITOR] raw output: {raw!r}")
+        except Exception as e:
+            logger.warning(f"[ATTENTION_EDITOR] Ollama call failed: {e}")
+            return ""
+
+        # ── Post-filter strict ────────────────────────────────────────────
+        if not raw:
+            logger.info("[ATTENTION_EDITOR] reject: vide")
+            return ""
+        # Strip guillemets éventuels
+        raw_clean = raw.strip().strip('"').strip("'").strip()
+        # Verrou 1 : PASS explicite
+        if raw_clean.upper() == "PASS" or raw_clean.upper().startswith("PASS"):
+            logger.info("[ATTENTION_EDITOR] PASS reçu (Editor a juge le souvenir non-pertinent)")
+            return ""
+        # Verrou 2 : trop verbeux
+        words = _re.findall(r"\w+", raw_clean)
+        if len(words) > _EDITOR_MAX_WORDS:
+            logger.info(f"[ATTENTION_EDITOR] reject: trop verbeux ({len(words)} mots > {_EDITOR_MAX_WORDS})")
+            return ""
+        # Verrou 3 : préambule
+        raw_lower = raw_clean.lower()
+        for pat in _EDITOR_PREAMBULE_PATTERNS:
+            if raw_lower.startswith(pat):
+                logger.info(f"[ATTENTION_EDITOR] reject: preambule '{pat}' detecte")
+                return ""
+        # Verrou 4 : intersection lexicale avec summary (anti-invention)
+        summary_words = set(w.lower() for w in _re.findall(r"\w{4,}", summary))
+        editor_words = set(w.lower() for w in _re.findall(r"\w{4,}", raw_clean))
+        overlap = summary_words & editor_words
+        if len(overlap) < _EDITOR_MIN_OVERLAP_WITH_SUMMARY:
+            logger.info(
+                f"[ATTENTION_EDITOR] reject: intersection lexicale faible "
+                f"(|overlap|={len(overlap)} < {_EDITOR_MIN_OVERLAP_WITH_SUMMARY}), "
+                f"overlap={overlap}"
+            )
+            return ""
+        logger.info(
+            f"[ATTENTION_EDITOR] ACCEPT: '{raw_clean}' "
+            f"(words={len(words)}, overlap={overlap})"
+        )
+        return raw_clean
 
     def _clean_response_commands(self, response: str) -> str:
         """Nettoie les faux resultats hallucinés apres les commandes !.
@@ -2509,6 +2630,19 @@ class ChatEngine:
             msg_entry["image_filename"] = image_filename or "upload.jpg"
         self.messages.append(msg_entry)
 
+        # 04/05/2026 — Phase 1 Attention Conjointe : detection du retour utilisateur.
+        # Skip si premier msg de la session pour eviter faux positif.
+        if source == "external":
+            now = time.time()
+            if self._last_external_chat_ts > 0:
+                delta = now - self._last_external_chat_ts
+                self._user_returned = delta > USER_RETURN_THRESHOLD_S
+            else:
+                self._user_returned = False
+            self._last_external_chat_ts = now
+        else:
+            self._user_returned = False
+
         # 2. Publier l'evenement USER_CHAT avec la source
         await bus.publish("USER_CHAT", {
             "message": user_message,
@@ -2833,6 +2967,40 @@ class ChatEngine:
 
         # 4b. Nettoyer les faux resultats hallucinés apres les commandes !
         full_response = self._clean_response_commands(full_response)
+
+        # 4c. 04/05/2026 — Phase 1 Attention Conjointe (Pipeline 2 passes Editor).
+        # Si l'utilisateur revient apres absence ET un episode noteworthy est dispo,
+        # on demande a un sous-agent (Editor, qwen2.5-coder:14b) de produire SOIT
+        # une mention courte a coller en fin de reponse, SOIT "PASS". Post-filter
+        # strict pour rejeter sorties verbeuses ou inventees.
+        # La Passe 1 (qwen3.5:9b ci-dessus) ignore completement le leurre — elle
+        # repond naturellement a la question. La Passe 2 (Editor) decide de coudre
+        # ou non. Architecture : diviser pour regner, eviter la surcharge cognitive
+        # qui a fait echouer 7 tests en injection prompt unique.
+        if source == "external" and getattr(self, '_user_returned', False):
+            try:
+                from core.hippocampus import hippocampus as _hipp
+                noteworthy = _hipp.pop_noteworthy(max_n=1)
+                if noteworthy:
+                    summary = (noteworthy[0].summary or "").strip()
+                    if summary:
+                        addendum = await self._apply_attention_conjointe(
+                            full_response, summary, question_utilisateur=user_message
+                        )
+                        if addendum:
+                            # Publier l'addendum comme un nouveau chunk CHAT_STREAM
+                            # (le streaming Passe 1 est deja fini a ce stade).
+                            try:
+                                await bus.publish("CHAT_STREAM", {
+                                    "stream_id": stream_id,
+                                    "chunk": " " + addendum,
+                                    "addendum": True,
+                                })
+                            except Exception:
+                                pass
+                            full_response = full_response.rstrip() + " " + addendum
+            except Exception as e:
+                logger.debug(f"CHAT: Attention conjointe (Editor) skipped: {e}")
 
         # 5. Ajouter la reponse assistant a l'historique
         msg_entry = {

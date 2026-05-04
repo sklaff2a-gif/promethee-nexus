@@ -37,6 +37,9 @@ PURGE_ARCS_DAYS = 30
 AUTOSAVE_INTERVAL = 5
 CONSOLIDATION_INTERVAL = 10
 
+# 04/05/2026 — Phase 1 Attention Conjointe (Pipeline 2 passes Editor)
+NOTEWORTHY_SALIENCE_THRESHOLD = 0.55
+
 # V12.0 (Phase 13 - 2026-04-22) : buffer de trajectoire pour MDP + replay.
 # Volatile intentionnellement : au reboot, ardoise propre — on evite de
 # retropropager des trajectoires fantomes dont le contexte n'existe plus.
@@ -104,6 +107,8 @@ class Episode:
     threat_level: float = 0.0
     # Saillance
     salience: float = 0.0
+    # 04/05/2026 — Attention Conjointe (Pipeline 2 passes Editor)
+    noteworthy: bool = False
     # Causal (WHY — chaine causale deterministe)
     causal_chain: list = field(default_factory=list)
     scoring_factors: dict = field(default_factory=dict)
@@ -1214,6 +1219,23 @@ class Hippocampus:
             # Option B — compteur d'engorgement (épisodes pending consolidation)
             "pending_episodes": self._episode_count_since_consolidation,
         }
+
+    def pop_noteworthy(self, max_n: int = 3) -> List[Episode]:
+        """04/05 — Phase 1 Attention Conjointe (Pipeline 2 passes Editor).
+
+        Retourne et consume les épisodes flag noteworthy parmi les 100 derniers.
+        Tri du plus récent au plus ancien, max_n épisodes.
+        Consume strict (flag → False + persist) pour éviter répétition.
+        """
+        recent = self._episodes[-100:]
+        flagged = [e for e in recent if e.noteworthy]
+        flagged.sort(key=lambda e: e.timestamp, reverse=True)
+        chosen = flagged[:max_n]
+        for e in chosen:
+            e.noteworthy = False
+        if chosen:
+            self._save()
+        return chosen
 
     def get_pending_episodes_count(self) -> int:
         """Option B — nombre d'épisodes encodés depuis la dernière consolidate().
