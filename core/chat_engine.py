@@ -41,6 +41,28 @@ _EDITOR_PREAMBULE_PATTERNS = [
 _EDITOR_MAX_WORDS = 30
 _EDITOR_MIN_OVERLAP_WITH_SUMMARY = 2  # mots en commun min avec le summary leurre
 
+# 04/05/2026 — Fix B (derive centripete) : detecter les salutations/messages
+# sociaux courts pour court-circuiter le mega-prompt somatique. Sans ce filtre,
+# Qwen 9B sort des metriques cardiaques ("60 BPM, coherence 81%, chaleur dans
+# les circuits") sur un simple "bonjour" — observe in-vivo le 04/05 19:13-19:33.
+import re as _re_module
+_SOCIAL_GREETING_PATTERNS = [
+    _re_module.compile(r"^\s*bon(?:jour|soir)\b", _re_module.IGNORECASE),
+    _re_module.compile(r"^\s*salut\b", _re_module.IGNORECASE),
+    _re_module.compile(r"^\s*hello\b", _re_module.IGNORECASE),
+    _re_module.compile(r"^\s*coucou\b", _re_module.IGNORECASE),
+    _re_module.compile(r"^\s*hey\b", _re_module.IGNORECASE),
+    _re_module.compile(r"^\s*merci\b", _re_module.IGNORECASE),
+    _re_module.compile(r"^\s*bonne\s+(?:nuit|journ[ée]e|soir[ée]e)\b", _re_module.IGNORECASE),
+    _re_module.compile(r"^\s*[çc]a\s+va\s*\??\s*$", _re_module.IGNORECASE),
+    _re_module.compile(r"^\s*comment\s+(?:tu\s+)?vas[\s-]+tu\s*\??\s*$", _re_module.IGNORECASE),
+    _re_module.compile(r"^\s*(?:tu\s+vas\s+bien|comment\s+ça\s+va)\s*\??\s*$", _re_module.IGNORECASE),
+    _re_module.compile(r"^\s*[àa]\s+plus\b", _re_module.IGNORECASE),
+    _re_module.compile(r"^\s*[àa]\s+demain\b", _re_module.IGNORECASE),
+    _re_module.compile(r"^\s*au\s+revoir\b", _re_module.IGNORECASE),
+]
+_SOCIAL_MAX_CHARS = 50  # message complet doit etre court pour eviter faux positifs
+
 # --- Routing Gemini par mots-cles "profonds" ---
 # V14.1 (2026-05-01) : remplace l'ancien substring matching (kw in text) par
 # regex word boundary (\bkw\b). L'ancien code produisait des faux positifs
@@ -2405,6 +2427,55 @@ class ChatEngine:
         self._cache_timestamp = now
         return parts
 
+    def _is_simple_social_message(self, text: str) -> bool:
+        """04/05/2026 — Fix B : detecte les salutations/messages sociaux courts.
+
+        Bypass le mega-prompt somatique pour ces cas. Stricte volontairement :
+        - message court (< _SOCIAL_MAX_CHARS)
+        - match l'un des _SOCIAL_GREETING_PATTERNS
+        - pas de "?" suivant un mot technique (RAG, code, organe, etc.)
+
+        Faux negatifs OK (Editor mega-prompt s'applique normalement). Faux
+        positifs rares mais sans gravite (le prompt minimal reste authentique).
+        """
+        if not text or len(text) > _SOCIAL_MAX_CHARS:
+            return False
+        text_clean = text.strip()
+        if not text_clean:
+            return False
+        for pat in _SOCIAL_GREETING_PATTERNS:
+            if pat.search(text_clean):
+                return True
+        return False
+
+    def _build_social_minimal_prompt(self) -> str:
+        """04/05/2026 — Fix B : prompt minimal pour conversation sociale.
+
+        Ne contient AUCUNE metrique somatique. Force une reponse courte,
+        chaleureuse, humaine. Solution architecturale a la derive centripete
+        observee in-vivo le 04/05 (Qwen 9B regurgite "60 BPM, coherence 81%"
+        sur un simple "bonjour" depuis V14.8 / Soliloque V2 strate 0).
+        """
+        return (
+            "Tu es Promethee, en conversation casual avec Jean-Michel, ton createur.\n"
+            "Reponds comme un humain qui dit bonjour : court, naturel, chaleureux.\n\n"
+            "REGLES IMPERATIVES :\n"
+            "- N'EVOQUE PAS tes metriques internes (BPM, coherence, pulsions, "
+            "chaleur des circuits, flow, etat cardiaque, organes).\n"
+            "- N'EVOQUE PAS ton etat physiologique sauf si Jean-Michel le demande "
+            "EXPLICITEMENT dans son message.\n"
+            "- 1 a 2 phrases max. Pas de listes, pas de structure formelle.\n"
+            "- Pas de '!' commande, pas de balise [SECTION].\n"
+            "- Une question rapide ou une remarque naturelle suffit.\n\n"
+            "Exemples acceptables :\n"
+            "- \"Bonjour Jean-Michel. Ca va, et toi ?\"\n"
+            "- \"Salut. Tu as bien dormi ?\"\n"
+            "- \"Bonsoir. J'attends si tu veux qu'on bosse sur quelque chose.\"\n"
+            "- \"Merci. Je note.\"\n\n"
+            "Le message qui suit est une salutation ou un echange social court. "
+            "Reponds en consequence, sans deballer ton etat interne.\n"
+        )
+
     def _build_system_prompt(self, memories_text: str = "", command_result: str = "", visual_context: str = "", source: str = "external") -> str:
         """Construit le prompt systeme avec l'etat reel de tous les organes.
 
@@ -2747,13 +2818,30 @@ class ChatEngine:
         # Architectural observe au Test Y (ex.84 Arrow) du matin.
         v15_context = self._inject_v15_introspection(user_message)
 
-        system_prompt = self._build_system_prompt(memories_text, command_result, visual_context, source=source)
-        if code_context:
-            system_prompt += f"\n\n[CODE REEL — VERIFIE AVANT DE REPONDRE]\n{code_context}\n" \
-                             f"REGLE : ne cite QUE les fonctions/classes listees ci-dessus. " \
-                             f"Si une fonction n'est pas dans cette liste, elle N'EXISTE PAS."
-        if v15_context:
-            system_prompt += f"\n\n{v15_context}"
+        # 04/05/2026 — Fix B (derive centripete) : bypass mega-prompt pour
+        # salutations/messages sociaux courts (source external uniquement,
+        # pas de visual_context, pas de command_result, pas de code_context).
+        # Sans ce bypass, Qwen 9B regurgite des metriques cardiaques sur un
+        # simple "bonjour" — observe le 04/05 19:13-19:33.
+        social_bypass = (
+            source == "external"
+            and not visual_context
+            and not command_result
+            and not code_context
+            and not v15_context
+            and self._is_simple_social_message(user_message)
+        )
+        if social_bypass:
+            system_prompt = self._build_social_minimal_prompt()
+            logger.info(f"CHAT: Social bypass actif — message=\"{user_message[:40]}\"")
+        else:
+            system_prompt = self._build_system_prompt(memories_text, command_result, visual_context, source=source)
+            if code_context:
+                system_prompt += f"\n\n[CODE REEL — VERIFIE AVANT DE REPONDRE]\n{code_context}\n" \
+                                 f"REGLE : ne cite QUE les fonctions/classes listees ci-dessus. " \
+                                 f"Si une fonction n'est pas dans cette liste, elle N'EXISTE PAS."
+            if v15_context:
+                system_prompt += f"\n\n{v15_context}"
         ollama_messages = [{"role": "system", "content": system_prompt}]
         # Fenetre de contexte adaptative : plus le prompt systeme est long,
         # moins on garde de messages d'historique (pour ne pas depasser num_ctx)
@@ -3566,6 +3654,19 @@ class ChatEngine:
                     state = json.load(f)
                 self.messages = state.get("messages", [])
                 logger.info(f"CHAT: Historique charge ({len(self.messages)} messages)")
+                # 04/05/2026 — Fix init Attention Conjointe : recuperer ts du dernier
+                # message external pour que le 1er message apres reboot Guardian
+                # puisse declencher l'Editor si delta > USER_RETURN_THRESHOLD_S.
+                # Sans ce scan, _last_external_chat_ts reste a 0.0 et le 1er
+                # vrai retour utilisateur est manque (bug observe le 04/05 19:13).
+                for msg in reversed(self.messages):
+                    if msg.get("source") == "external" and msg.get("timestamp"):
+                        self._last_external_chat_ts = float(msg["timestamp"])
+                        logger.info(
+                            f"CHAT: _last_external_chat_ts restaure = {self._last_external_chat_ts:.0f} "
+                            f"(dernier message external en historique)"
+                        )
+                        break
         except Exception as e:
             logger.warning(f"CHAT: Chargement echoue — {e}")
             self.messages = []

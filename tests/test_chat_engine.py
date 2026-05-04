@@ -146,3 +146,123 @@ class TestOrganSections:
         assert "Promethee" in prompt
         assert "[VALEURS FONDAMENTALES]" in prompt
         assert "[STYLE DE CONVERSATION" in prompt
+
+
+# --- TestSocialBypass (04/05/2026 — Fix B derive centripete) ---
+
+class TestSocialBypass:
+    """Detecteur de salutations + prompt minimal pour eviter regurgitation
+    metriques somatiques sur "bonjour"/"salut"/etc."""
+
+    def test_detect_bonjour(self, engine):
+        assert engine._is_simple_social_message("bonjour") is True
+        assert engine._is_simple_social_message("Bonjour Prométhée") is True
+        assert engine._is_simple_social_message("BONJOUR") is True
+
+    def test_detect_salut_hello_coucou(self, engine):
+        assert engine._is_simple_social_message("salut") is True
+        assert engine._is_simple_social_message("Hello") is True
+        assert engine._is_simple_social_message("coucou") is True
+        assert engine._is_simple_social_message("hey") is True
+
+    def test_detect_ca_va(self, engine):
+        assert engine._is_simple_social_message("ca va ?") is True
+        assert engine._is_simple_social_message("ça va") is True
+        assert engine._is_simple_social_message("comment vas-tu ?") is True
+
+    def test_detect_merci_au_revoir(self, engine):
+        assert engine._is_simple_social_message("merci") is True
+        assert engine._is_simple_social_message("au revoir") is True
+        assert engine._is_simple_social_message("bonne nuit") is True
+
+    def test_reject_long_message(self, engine):
+        """Message > 50 chars n'est pas social meme si commence par bonjour."""
+        long_msg = "bonjour, peux-tu m'expliquer comment fonctionne ton RAG aujourd'hui ?"
+        assert engine._is_simple_social_message(long_msg) is False
+
+    def test_reject_technical_question(self, engine):
+        """Question technique n'est pas sociale."""
+        assert engine._is_simple_social_message("comment marche le RAG ?") is False
+        assert engine._is_simple_social_message("explique le pipeline") is False
+
+    def test_reject_empty(self, engine):
+        assert engine._is_simple_social_message("") is False
+        assert engine._is_simple_social_message("   ") is False
+
+    def test_minimal_prompt_no_metrics(self, engine):
+        """Le prompt social minimal liste les metriques a NE PAS evoquer."""
+        prompt = engine._build_social_minimal_prompt()
+        # Mots qui doivent apparaitre comme interdits (cf liste REGLES)
+        forbidden_listed = ["BPM", "coherence", "pulsions", "circuits", "cardiaque"]
+        for word in forbidden_listed:
+            assert word in prompt, f"prompt doit lister {word!r} comme interdit"
+        # Le prompt doit etre court (< 1500 chars)
+        assert len(prompt) < 1500
+
+    def test_minimal_prompt_includes_examples(self, engine):
+        """Le prompt social inclut des exemples de reponses naturelles."""
+        prompt = engine._build_social_minimal_prompt()
+        assert "Bonjour" in prompt
+        assert "Jean-Michel" in prompt
+
+
+# --- TestLastExternalChatTsRestoration (04/05/2026 — Fix A bug init) ---
+
+class TestLastExternalChatTsRestoration:
+    """Le ts du dernier message external doit etre restaure au _load
+    pour que le 1er retour user apres reboot puisse trigger Editor."""
+
+    def test_load_restores_last_external_ts(self, tmp_path, monkeypatch):
+        """Apres _load, _last_external_chat_ts == ts du dernier msg external."""
+        import json
+        from core import chat_engine as ce_mod
+
+        # Construire un faux chat_history sur disque
+        fake_history = {
+            "version": "1.0",
+            "messages": [
+                {"role": "user", "content": "premier", "timestamp": 1000.0, "source": "external"},
+                {"role": "assistant", "content": "rep1", "timestamp": 1001.0},
+                {"role": "user", "content": "auto", "timestamp": 1002.0, "source": "internal"},
+                {"role": "user", "content": "dernier", "timestamp": 1003.0, "source": "external"},
+                {"role": "assistant", "content": "rep2", "timestamp": 1004.0},
+            ],
+        }
+        history_path = tmp_path / "chat_history.json"
+        history_path.write_text(json.dumps(fake_history), encoding="utf-8")
+        monkeypatch.setattr(ce_mod, "CHAT_HISTORY_FILE", history_path)
+
+        ChatEngine.reset_singleton()
+        e = ChatEngine()
+        # Le dernier msg external a ts=1003.0
+        assert e._last_external_chat_ts == 1003.0
+
+    def test_load_no_external_keeps_zero(self, tmp_path, monkeypatch):
+        """Si chat_history sans message external, _last_external_chat_ts reste 0."""
+        import json
+        from core import chat_engine as ce_mod
+
+        fake_history = {
+            "version": "1.0",
+            "messages": [
+                {"role": "user", "content": "auto", "timestamp": 500.0, "source": "internal"},
+                {"role": "assistant", "content": "rep", "timestamp": 501.0},
+            ],
+        }
+        history_path = tmp_path / "chat_history.json"
+        history_path.write_text(json.dumps(fake_history), encoding="utf-8")
+        monkeypatch.setattr(ce_mod, "CHAT_HISTORY_FILE", history_path)
+
+        ChatEngine.reset_singleton()
+        e = ChatEngine()
+        assert e._last_external_chat_ts == 0.0
+
+    def test_load_empty_history_keeps_zero(self, tmp_path, monkeypatch):
+        """Pas de fichier chat_history -> _last_external_chat_ts == 0.0."""
+        from core import chat_engine as ce_mod
+        history_path = tmp_path / "chat_history.json"  # n'existe pas
+        monkeypatch.setattr(ce_mod, "CHAT_HISTORY_FILE", history_path)
+
+        ChatEngine.reset_singleton()
+        e = ChatEngine()
+        assert e._last_external_chat_ts == 0.0
