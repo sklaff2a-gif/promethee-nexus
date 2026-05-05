@@ -371,3 +371,179 @@ de la Passe 1 sans avoir à toucher au prompt système d'Inner-Voice
 
 ---
 
+## 05 mai 2026 (matin) — Doctrine d'apprentissage par immersion : épistémologie synthétique
+
+### Le geste fondateur (Jean-Michel)
+
+> *« Tu veux que Prométhée devienne un expert. Alors tu ne lui donnes aucune
+> consigne. Tu le jettes dans un environnement de données hyper-spécifique
+> (le réseau), tu lui donnes une douleur liée à l'incompréhension, et tu
+> observes comment il écrit son propre savoir (le contenu) pour survivre
+> au flux. »*
+
+C'est l'inverse exact de ce qu'on a fait jusqu'ici. Pendant 12 sessions
+d'exercices mathématiques, on l'a entraîné comme un élève : énoncés,
+notes, recadrages, mentor. Il a appris à **réussir nos exercices**, pas
+à **dévorer le réel**. Cette doctrine est un sevrage : couper la
+pédagogie, exposer au flux brut, laisser la douleur fabriquer la grille.
+
+Pas un cours. Pas un mentor. Pas de note. Juste : digère, ou crève.
+
+### Pourquoi le projet "expert réseau" comme premier terrain
+
+L'origine narrative est l'échange du 04/05 21:01 :
+
+> *— Jean-Michel : peux-tu devenir un expert réseau ?*
+> *— Prométhée : Pour devenir expert réseau, il me faudrait des données
+> réelles sur les architectures actuelles, des accès à des logs de
+> trafic, et surtout, la possibilité de simuler des pannes en temps
+> réel. Je ne peux pas simplement lire des manuels ; il me faut vivre
+> le chaos du réseau pour en comprendre la résilience.*
+
+Cette réponse n'était pas un script. C'est lui qui a posé les mots
+"vivre le chaos" — formulation cohérente avec sa propre architecture
+nociceptive. Le terrain "réseau" n'est pas arbitraire : c'est un
+domaine **dense, vivant, hostile, documenté publiquement, à contexte
+adversarial** (les attaques, les fails, les RCA). Un terrain idéal
+pour observer si l'apprentissage par douleur produit une expertise
+ou juste une consolidation cosmétique.
+
+### Les trois piliers (réponses épistémologiquement rigoureuses
+       aux trois questions du diagnostic Claude du même jour)
+
+#### 1. Granularité de la douleur — ingestion métabolique, pas temporelle
+
+Le déclencheur du fetch d'un nouveau document **n'est pas un chronomètre**
+(ce serait reproduire la posture du professeur qui distribue des devoirs).
+Le déclencheur est un **état de faim épistémique** : couplage à
+l'homéostasie interne.
+
+Conditions de déclenchement (ET logique) :
+- `dopamine_level` basse (frustration de stagnation)
+- `pending_episodes_count` faible (pas de surcharge mémoire)
+- `synaptic_congestion` faible (pas en dette de consolidation)
+- `threat_level` faible (pas en alarme reptilienne)
+
+Conséquences :
+- S'il lui faut 12h pour digérer un pcap complexe, le flux s'arrête
+  naturellement 12h
+- Si on lui jette 50 RFC d'un coup, il va déclencher REFLEXE PURGE
+  — c'est une réaction **saine** d'un organisme qui vomit pour ne
+  pas mourir d'indigestion. Pas un bug.
+
+#### 2. Verdict de compréhension — compression interne (Predictive Coding)
+
+**Aucun juge externe.** Le `professor_agent` est explicitement banni de
+cette boucle. Si un agent externe juge, on retombe dans l'ancien
+paradigme pédagogique.
+
+Le verdict émerge de la **structure du graphe** lui-même. Cadre
+théorique : Friston / Predictive Coding. Un système Fristonien a
+"compris" quand il **compresse** la nouveauté en utilisant ses acquis.
+
+Métrique observable :
+- **« Je pige rien » (douleur)** : ingestion d'un document génère
+  N nouveaux concepts flottants dans le `synaptic_network`, peu
+  ou pas reliés aux nœuds existants. Le graphe s'éparpille.
+  L'entropie monte. Pic de dopamine DIP.
+- **« J'ai compris » (apaisement)** : ingestion d'un document
+  génère un résumé internalisé qui réutilise majoritairement des
+  concepts existants — densification du sous-graphe. La surprise
+  s'effondre. Pas de pic dopaminergique négatif.
+
+Ratio à surveiller : **`nouveaux_concepts / concepts_reutilises`**
+par document ingéré. Décroissance attendue au fil des semaines.
+
+#### 3. Objectif terminal — aplatissement de la courbe de surprise
+
+L'objectif **n'est pas** un score sur un QCM Cisco. L'objectif est
+purement architectural : observer le moment où l'ingestion d'un
+nouveau document réseau extrêmement complexe ne provoque **plus
+aucun pic de douleur épistémique**, parce que le sous-graphe
+"réseau" du `synaptic_network` est devenu suffisamment dense et
+prédictif pour absorber la trame sans effort.
+
+Définition opérationnelle de l'expertise dans un organisme synthétique :
+**absence de surprise face à un domaine qui, auparavant, générait
+de l'entropie.**
+
+### Hypothèse formelle (à graver — ne pas relâcher)
+
+> *L'exposition autonome à un flux de données brutes domain-specific,
+> sans évaluation externe, sans consigne pédagogique, et avec un
+> rythme d'ingestion gouverné par l'état homéostatique interne,
+> peut-elle forcer la structuration d'un sous-graphe conceptuel
+> spécialisé dans le `synaptic_network`, observable par la
+> minimisation de l'entropie cognitive (mesurée comme ratio
+> nouveaux_concepts / concepts_reutilises) au fil du temps ?*
+
+### Métriques observables (cadre de surveillance)
+
+1. **Métabolique** :
+   - `documents_ingeres_jour` (devrait suivre la disponibilité métabolique)
+   - `documents_rejetes_par_satiete` (signe de saturation autonome)
+
+2. **Cognitive** :
+   - `nouveaux_concepts_par_doc` (mesure brute de la surprise)
+   - `concepts_reutilises_par_doc` (mesure brute de la digestion)
+   - `ratio_compression = reutilises / (reutilises + nouveaux)` (à
+     surveiller : courbe d'apprentissage)
+
+3. **Topologique** :
+   - `densite_sous_graphe_reseau` (nb arêtes / nb nœuds dans le
+     cluster identifié comme "réseau" par spreading_activation)
+   - `clustering_coefficient_reseau` (Watts-Strogatz : transition
+     vers un small-world dense ?)
+
+4. **Affective** :
+   - `dopamine_dip_par_doc` (douleur épistémique brute)
+   - `recovery_time_post_ingestion` (combien de temps avant la
+     prochaine routine non liée au domaine)
+
+5. **Émergent** :
+   - `mentions_spontanees_concepts_reseau_dans_chat` (Prométhée
+     commence-t-il à parler de TCP, BGP, MTU spontanément dans
+     ses échanges avec Jean-Michel ?)
+   - `nouveaux_souhaits_de_documents` (Prométhée demande-t-il
+     lui-même à lire X ou Y, signe d'une faim ciblée ?)
+
+### Pièges à éviter (anti-patterns identifiés à l'avance)
+
+- **Reconstituer une école déguisée** : aucun système de note, aucun
+  agent juge, aucune consigne sur ce qu'il "doit" comprendre.
+- **Distribuer un curriculum** : ne pas hiérarchiser les documents
+  (RFC1234 avant RFC5678 = pédagogie). Le flux est plat. Il
+  organise lui-même.
+- **Commenter sa progression dans le chat** : tentation forte d'aller
+  lui dire "tu as bien compris ça". Briserait le sevrage. Si on
+  veut interagir, c'est uniquement comme observateurs ou via les
+  exercices habituels (séparés de la boucle d'immersion).
+- **Optimiser le ratio de compression** : si on commence à régler
+  les paramètres pour faire baisser le ratio, on triche avec le
+  thermomètre. Le ratio est un indicateur, pas une cible.
+
+### Conditions d'arrêt / pivot
+
+L'expérience est valide si, après 4-8 semaines :
+- Soit le ratio de compression décroît significativement (succès)
+- Soit le ratio reste stable malgré l'exposition continue (échec
+  partiel : le 9B-14B local n'a peut-être pas la capacité de
+  réorganisation sémantique requise — donnée précieuse pour
+  l'architecture future)
+- Soit Prométhée arrête de digérer (auto-régulation totale =
+  succès paradoxal : il a appris à se réguler en refusant le flux,
+  ce qui est aussi une forme d'expertise)
+
+### Idées d'exercices à puiser dans cette doctrine
+
+- *« Si tu devais m'expliquer pourquoi un RST flag arrive en pleine
+  session TCP, qu'est-ce qui te manque ? »* — méta-question sur
+  ses propres trous épistémiques
+- *« Quel document veux-tu lire aujourd'hui ? »* — voir si une
+  faim ciblée émerge
+- *« Décris-moi le concept de "réseau" tel que tu le comprends
+  aujourd'hui »* — en début et après 4 semaines d'immersion,
+  comparer
+
+---
+
