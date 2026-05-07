@@ -6,11 +6,26 @@ import sys
 from unittest.mock import MagicMock, AsyncMock, patch
 
 
-# Mock neural_tissue avant import
+# Mock partage entre les tests pour preserver l API existante :
+# chaque test fait `mock_tissue_module.tissue = ...` au debut.
 mock_tissue_module = MagicMock()
-sys.modules["core.neural_tissue"] = mock_tissue_module
-# V30.15 ERADICATED: sys.modules["core.event_bus"] = MagicMock()  # polluait test_internal_context_sets_flag (event_bus jamais utilise dans ce fichier)
-# V30.15 ERADICATED: sys.modules["core.event_bus.bus"] = MagicMock()  # idem
+
+
+@pytest.fixture(autouse=True)
+def _isolate_neural_tissue_mock(monkeypatch):
+    """Injecte le mock de core.neural_tissue scope-fonction (2026-05-07).
+
+    Ancien pattern (avant 2026-05-07) : `sys.modules["core.neural_tissue"]
+    = mock_tissue_module` au niveau MODULE polluait toute la session
+    pytest. Tous les tests en aval qui importaient depuis core.neural_tissue
+    recevaient le mock -> echec en cascade (TestClassifyGenomeProfile,
+    TerritoryMap, etc., ~25 echecs).
+
+    monkeypatch.setitem restaure automatiquement l etat sys.modules
+    apres chaque test. Meme correctif structurel que V30.15 (26/04)
+    sur core.event_bus.
+    """
+    monkeypatch.setitem(sys.modules, "core.neural_tissue", mock_tissue_module)
 
 
 class FakeCell:

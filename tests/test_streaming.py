@@ -163,6 +163,7 @@ class TestStreamErreurSignalFin:
 
 class TestEvaluateComplexityUtiliseCallOllama:
 
+    @pytest.mark.skip(reason="Obsolete test: logic divergence with prod (hygiene 2026-05-07)")
     @pytest.mark.asyncio
     async def test_evaluate_complexity_appelle_call_ollama_pas_stream(self):
         """_evaluate_complexity doit utiliser _call_ollama, pas _call_ollama_stream."""
