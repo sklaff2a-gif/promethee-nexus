@@ -45,7 +45,9 @@ HEBBIAN_CAUSAL_KNOWN_DRIVES = frozenset([
 EPISTEMIC_LEARNING_RATE = 0.18           # Separe de HEBBIAN_CAUSAL (Gemini Q4)
 EPISTEMIC_RPE_UPPER_BOUND = 3.0          # Plafond surprise (Gemini Q3)
 EPISTEMIC_RPE_LOWER_BOUND = 0.1          # Plancher anti-farming (Gemini Q3)
-EPISTEMIC_MIN_NOTE_FOR_CLOSURE = 7.0     # Seuil en deca : pas de dopamine
+EPISTEMIC_MIN_NOTE_FOR_CLOSURE = 7.0     # Seuil de pleine consolidation
+EPISTEMIC_NOTE_FLOOR = 4.0               # Plancher absolu (sous : aucune action)
+EPISTEMIC_PARTIAL_LR_FACTOR = 0.25       # Facteur micro-consolidation a 4.0
 EPISTEMIC_COOLDOWN_SECONDS = 300.0       # Pas de renforcement < 5min meme slot
 EPISTEMIC_HISTORY_WINDOW = 10            # Moyenne glissante (Jean-Michel: N=10)
 EPISTEMIC_ENTROPY_MIN = 0.2              # Variance min inputs (anti-repetition)
@@ -1468,11 +1470,27 @@ class SynapticNetwork:
         score = float(event.get("grade") or event.get("score") or 0)
         slot = (event.get("slot") or event.get("task_category") or "").upper()
 
-        # F1 : score insuffisant = pas de fermeture epistemique
-        if score < EPISTEMIC_MIN_NOTE_FOR_CLOSURE:
-            self.stats["epistemic_skipped_low_score"] = \
-                self.stats.get("epistemic_skipped_low_score", 0) + 1
+        # F1 : rampe lineaire au lieu d une falaise binaire (Jean-Michel 2026-05-07).
+        # Ancien comportement (V3.1) : score < 7.0 -> return sec, l historique
+        # glissant ne se peuplait jamais avec les notes moyennes -> expected
+        # fige a 5.0 a vie -> impuissance apprise du Circuit B (RESEARCH/BULLETIN
+        # bloques sous 7 depuis 14 jours, hubs satures fossilises).
+        # Nouveau : sous EPISTEMIC_NOTE_FLOOR (4.0) on continue a skip (bruit
+        # pur). Entre 4.0 et 7.0 on applique une micro-consolidation pour
+        # maintenir la synapse hors du coma. >= 7.0 : consolidation pleine.
+        if score < EPISTEMIC_NOTE_FLOOR:
+            self.stats["epistemic_skipped_below_floor"] = \
+                self.stats.get("epistemic_skipped_below_floor", 0) + 1
             return
+        if score >= EPISTEMIC_MIN_NOTE_FOR_CLOSURE:
+            partial_factor = 1.0
+        else:
+            partial_factor = (
+                EPISTEMIC_PARTIAL_LR_FACTOR
+                + (1.0 - EPISTEMIC_PARTIAL_LR_FACTOR)
+                * (score - EPISTEMIC_NOTE_FLOOR)
+                / (EPISTEMIC_MIN_NOTE_FOR_CLOSURE - EPISTEMIC_NOTE_FLOOR)
+            )
 
         # F2 : slot ou intent manquants
         intent = event.get("intent", "")
@@ -1607,10 +1625,13 @@ class SynapticNetwork:
                 if not intent_nid:
                     continue
             weight_triangular = self._triangular_weight(idx, n)
-            delta = normalized_drop * weight_triangular * EPISTEMIC_LEARNING_RATE
+            delta = (
+                normalized_drop * weight_triangular
+                * EPISTEMIC_LEARNING_RATE * partial_factor
+            )
             self._apply_causal_delta(intent_nid, drive_nid, delta, context=(
                 f"epistemic:{slot}<-{step_intent}[{idx+1}/{n}] "
-                f"rpe={surprise_factor:.2f} score={score}"
+                f"rpe={surprise_factor:.2f} pf={partial_factor:.2f} score={score}"
             ))
             total_delta += delta
 
@@ -1631,7 +1652,7 @@ class SynapticNetwork:
         logger.info(
             f"SYNAPSE_EPISTEMIC: +{total_delta:.4f} sur {slot} "
             f"score={score} expected={expected:.2f} rpe={surprise_factor:.2f} "
-            f"entropy={entropy:.2f} via {n} step(s)"
+            f"pf={partial_factor:.2f} entropy={entropy:.2f} via {n} step(s)"
         )
 
     def _apply_causal_delta(self, src_nid: str, tgt_nid: str, delta: float,

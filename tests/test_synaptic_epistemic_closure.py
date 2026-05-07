@@ -17,6 +17,8 @@ from core.synaptic_network import (
     SynapticNetwork,
     EPISTEMIC_LEARNING_RATE,
     EPISTEMIC_MIN_NOTE_FOR_CLOSURE,
+    EPISTEMIC_NOTE_FLOOR,
+    EPISTEMIC_PARTIAL_LR_FACTOR,
     EPISTEMIC_COOLDOWN_SECONDS,
     EPISTEMIC_HISTORY_WINDOW,
     EPISTEMIC_RPE_UPPER_BOUND,
@@ -44,11 +46,69 @@ def _build_event(grade=8.0, slot="RESEARCH", intent="RESEARCH", task_entropy=1.0
 
 class TestFilters:
     @pytest.mark.asyncio
-    async def test_f1_low_score_skipped(self, network):
-        """Score < 7 -> pas de fermeture epistemique."""
-        await network._learn_from_epistemic_closure(_build_event(grade=6.5))
-        assert network.stats.get("epistemic_skipped_low_score") == 1
+    async def test_f1_below_floor_skipped(self, network):
+        """Score < EPISTEMIC_NOTE_FLOOR (4.0) -> skip total (bruit pur)."""
+        await network._learn_from_epistemic_closure(_build_event(grade=3.5))
+        assert network.stats.get("epistemic_skipped_below_floor") == 1
         assert "epistemic_reinforcements" not in network.stats
+
+    @pytest.mark.asyncio
+    async def test_f1_ramp_zone_consolidates_partially(self, network):
+        """Score dans [4.0, 7.0) -> micro-consolidation, pas de skip."""
+        await network._learn_from_epistemic_closure(_build_event(grade=5.0))
+        assert network.stats.get("epistemic_reinforcements") == 1
+        assert "epistemic_skipped_below_floor" not in network.stats
+        # Le delta doit etre plus faible qu un score 8.0 (meme expected initial)
+
+    @pytest.mark.asyncio
+    async def test_f1_ramp_micro_delta_smaller_than_full(self, network):
+        """Note moyenne (5.0) doit consolider moins qu une note pleine (8.0)."""
+        await network._learn_from_epistemic_closure(
+            _build_event(grade=5.0, slot="RESEARCH")
+        )
+        delta_low = network.stats["epistemic_total_delta_applied"]
+        # Reset pour bypass cooldown sur autre slot
+        await network._learn_from_epistemic_closure(
+            _build_event(grade=8.0, slot="CODE_REVIEW")
+        )
+        delta_full = (
+            network.stats["epistemic_total_delta_applied"] - delta_low
+        )
+        assert 0 < delta_low < delta_full
+
+    @pytest.mark.asyncio
+    async def test_f1_floor_boundary_applies_partial_factor(self, network):
+        """Score exactement a EPISTEMIC_NOTE_FLOOR -> partial_factor minimal."""
+        await network._learn_from_epistemic_closure(
+            _build_event(grade=EPISTEMIC_NOTE_FLOOR)
+        )
+        delta = network.stats["epistemic_total_delta_applied"]
+        # partial_factor = 0.25 a la frontiere basse
+        # surprise = exp(4-5) = 0.368 (au-dessus du floor 0.1, pas clip)
+        # normalized_drop = (4/10) * 0.368 = 0.147
+        # sum_triangular = 1.0 (3 steps : 0.25 + 0.5 + 0.25)
+        # delta_total = 0.147 * 1.0 * 0.18 * 0.25 = 0.0066
+        assert delta > 0
+        assert delta < 0.01
+
+    @pytest.mark.asyncio
+    async def test_f1_threshold_boundary_applies_full_factor(self, network):
+        """Score >= EPISTEMIC_MIN_NOTE_FOR_CLOSURE -> partial_factor=1.0."""
+        await network._learn_from_epistemic_closure(
+            _build_event(grade=EPISTEMIC_MIN_NOTE_FOR_CLOSURE)
+        )
+        delta_at_threshold = network.stats["epistemic_total_delta_applied"]
+        # Comparer avec un score juste sous le seuil (sur autre slot pour cooldown)
+        await network._learn_from_epistemic_closure(
+            _build_event(grade=EPISTEMIC_MIN_NOTE_FOR_CLOSURE - 0.01,
+                         slot="CODE_REVIEW")
+        )
+        delta_below_threshold = (
+            network.stats["epistemic_total_delta_applied"] - delta_at_threshold
+        )
+        # Avec rampe lineaire, juste sous 7.0 -> partial_factor ~ 0.9975
+        # Donc delta presque egal mais legerement inferieur
+        assert delta_below_threshold < delta_at_threshold
 
     @pytest.mark.asyncio
     async def test_f2_empty_slot_skipped(self, network):
