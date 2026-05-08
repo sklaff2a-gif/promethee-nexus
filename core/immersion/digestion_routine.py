@@ -122,9 +122,26 @@ def _strip_preempted_suffix(name: str) -> str:
 def pick_next_document(raw_flux_dir: Path) -> Optional[Path]:
     """Selectionne le prochain document candidat a la digestion.
 
+    Tri deterministe : (priority, name) — ordre ALPHABETIQUE STRICT
+    sur le nom dans chaque categorie de priorite.
+
     Priorite :
-      1. FRESH (*.txt sans .preempted)
-      2. WOUNDED (*.preempted.N.txt) en cooldown leve
+      -1 : FRESH (*.txt sans .preempted) — passe en premier
+      0+ : WOUNDED (*.preempted.N.txt) — passe ensuite, ordonne par
+           retry_count croissant (le moins traumatise d abord) puis nom
+
+    Pourquoi pas mtime : quand Jean-Michel depose un dossier de
+    chapitres en lot (ex: 10 chapitres copies en 1 minute), tous les
+    fichiers ont des mtime identiques ou quasi. Un tri par mtime ne
+    discrimine pas, et l ordre final depend de l implementation
+    filesystem de glob() — non garantie en Python. Le risque est
+    qu un essai philosophique soit digere a l envers (ch.8 avant ch.1),
+    construisant le synaptic_network sur de mauvaises fondations
+    semantiques.
+
+    Le tri alphabetique sur le nom respecte les conventions usuelles
+    de chapitrage (01_intro.txt < 02_xxx.txt < ... < 10_yyy.txt avec
+    zero-padding sur 2 chiffres).
 
     Exclut :
       - .preempted.N en cooldown actif (anti-boucle preempt)
@@ -133,7 +150,7 @@ def pick_next_document(raw_flux_dir: Path) -> Optional[Path]:
     if not raw_flux_dir.exists():
         return None
     now = time.time()
-    candidates: List[tuple] = []  # (priority, mtime, path)
+    candidates: List[tuple] = []  # (priority, name, path)
     for f in raw_flux_dir.glob("*.txt"):
         if f.name.startswith("."):
             continue
@@ -141,11 +158,14 @@ def pick_next_document(raw_flux_dir: Path) -> Optional[Path]:
             if now - f.stat().st_mtime < PREEMPT_RETRY_COOLDOWN:
                 continue  # encore convalescent
             retry = _extract_retry_count(f.name)
-            candidates.append((retry, f.stat().st_mtime, f))
+            candidates.append((retry, f.name, f))
         else:
-            candidates.append((-1, f.stat().st_mtime, f))  # FRESH prioritaire
+            candidates.append((-1, f.name, f))  # FRESH prioritaire
     if not candidates:
         return None
+    # Tri ALPHABETIQUE STRICT : (priority, name). Garantit que les
+    # documents avec prefixes numeriques zero-padded (01_, 02_, ...)
+    # sont digeres dans l ordre chronologique de l essai.
     candidates.sort(key=lambda x: (x[0], x[1]))
     return candidates[0][2]
 

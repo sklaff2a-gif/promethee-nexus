@@ -28,6 +28,12 @@ from core.immersion.compression import (
     FLOATING_CONCEPT_NODE_TYPE,
 )
 from core.immersion.extractor import parse_extraction_response
+from core.immersion.digestion_routine import (
+    pick_next_document,
+    select_profile,
+    INFRASTRUCTURE_POST_MORTEM,
+    ARCHITECTURAL_THINKER,
+)
 
 
 # ============================================================
@@ -332,3 +338,90 @@ class TestExtractorParser:
         result = parse_extraction_response("")
         assert result.is_nothing is True
         assert result.concepts == []
+
+
+# ============================================================
+# Phase 4 dispatcher + picker (digestion_routine)
+# ============================================================
+
+
+class TestSelectProfile:
+    def test_post_mortems_returns_infrastructure(self, tmp_path):
+        p = tmp_path / "data" / "raw_flux" / "post_mortems" / "x.txt"
+        p.parent.mkdir(parents=True)
+        p.write_text("...")
+        assert select_profile(p) is INFRASTRUCTURE_POST_MORTEM
+
+    def test_limite_pauseai_returns_architectural(self, tmp_path):
+        p = tmp_path / "USER_DROPZONE" / "limite_pauseai" / "01_intro.txt"
+        p.parent.mkdir(parents=True)
+        p.write_text("...")
+        assert select_profile(p) is ARCHITECTURAL_THINKER
+
+    def test_unknown_zone_raises_no_silent_fallback(self, tmp_path):
+        p = tmp_path / "random_zone" / "x.txt"
+        p.parent.mkdir(parents=True)
+        p.write_text("...")
+        with pytest.raises(ValueError):
+            select_profile(p)
+
+
+class TestPickerOrdering:
+    """Verrou anti-regression : le picker DOIT etre alphabetique strict
+    quand les mtime sont identiques (cas typique : 10 chapitres deposes
+    en lot par cp -r ou drag-and-drop)."""
+
+    def test_alphabetical_order_with_identical_mtime(self, tmp_path):
+        """10 chapitres avec meme mtime -> ordre alphabetique strict."""
+        files = [
+            "01_intro.txt", "02_alerte.txt", "03_contexte.txt",
+            "04_competition.txt", "05_mythos.txt", "06_mensonges.txt",
+            "07_pandore.txt", "08_debrancher.txt", "09_bulle.txt",
+            "10_militarisation.txt",
+        ]
+        # Creer dans l ordre INVERSE pour s assurer que le tri ne suit
+        # pas l ordre de creation (qui pourrait etre l ordre de glob).
+        for name in reversed(files):
+            (tmp_path / name).write_text("...", encoding="utf-8")
+        # Mtime force identique pour tous (cas du depot en lot)
+        ts = 1700000000.0
+        for name in files:
+            os.utime(tmp_path / name, (ts, ts))
+        # Le picker doit retourner 01_intro.txt en premier
+        chosen = pick_next_document(tmp_path)
+        assert chosen is not None
+        assert chosen.name == "01_intro.txt", (
+            f"Ordre non alphabetique : {chosen.name} au lieu de 01_intro.txt. "
+            f"Le picker ne doit JAMAIS dependre de l ordre filesystem."
+        )
+
+    def test_fresh_passes_before_wounded(self, tmp_path):
+        """FRESH (.txt) prioritaire sur WOUNDED (.preempted.N.txt)."""
+        (tmp_path / "z_fresh.txt").write_text("...", encoding="utf-8")
+        (tmp_path / "a_wounded.preempted.1.txt").write_text("...", encoding="utf-8")
+        # Force mtime ancien sur le wounded pour qu il sorte du cooldown
+        old = 1000000000.0
+        os.utime(tmp_path / "a_wounded.preempted.1.txt", (old, old))
+        chosen = pick_next_document(tmp_path)
+        assert chosen.name == "z_fresh.txt", (
+            "FRESH doit toujours passer avant WOUNDED, meme si WOUNDED "
+            "est plus ancien et plus 'a' alphabetiquement."
+        )
+
+    def test_wounded_in_cooldown_is_skipped(self, tmp_path):
+        """Un .preempted.N.txt de moins de 30min doit etre ignore."""
+        (tmp_path / "x.preempted.1.txt").write_text("...", encoding="utf-8")
+        # mtime recent (moins de 30min) -> en cooldown
+        import time as _t
+        recent = _t.time() - 60  # 1 minute
+        os.utime(tmp_path / "x.preempted.1.txt", (recent, recent))
+        chosen = pick_next_document(tmp_path)
+        assert chosen is None, "Le wounded en cooldown ne doit pas etre selectionne"
+
+    def test_empty_dir_returns_none(self, tmp_path):
+        assert pick_next_document(tmp_path) is None
+
+    def test_gitkeep_is_ignored(self, tmp_path):
+        """Les fichiers caches/marqueurs doivent etre ignores."""
+        (tmp_path / ".gitkeep").write_text("", encoding="utf-8")
+        assert pick_next_document(tmp_path) is None
