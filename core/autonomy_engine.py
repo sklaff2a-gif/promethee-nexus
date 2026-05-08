@@ -3351,6 +3351,42 @@ class AutonomyEngine:
         except Exception:
             pass
 
+        # --- Cri de Famine Epistemique (Couche 26ter, 2026-05-08) ---
+        # Quand aucune fermeture epistemique reussie n'a eu lieu depuis
+        # 24h+, multiplie le score brut des SCHOOL_* par 3.0. Donne au
+        # cortex epistemique le moyen de gagner dans le scoring classique
+        # face a un COFFEE_BREAK ou un AUDIT_SURVIE.
+        #
+        # NOTE DOCTRINALE : ce boost vit dans le scoring cortical haut,
+        # PAS dans la V34 motivational. L'ecole ne doit pas devenir un
+        # reflexe reptilien (ce serait trahir le compartimentage Gemini
+        # Q1 du 17/04). Elle doit gagner loyalement par le haut, via un
+        # signal d'urgence cognitive proportionnel au retard accumule.
+        try:
+            from core.synaptic_network import SynapticNetwork
+            _syn = SynapticNetwork()
+            _last_closure_times = list(getattr(_syn, "_epistemic_last_closure", {}).values())
+            _time_since_last = (time.time() - max(_last_closure_times)) if _last_closure_times else float("inf")
+            EPISTEMIC_FAMINE_THRESHOLD_S = 86400.0  # 24h
+            EPISTEMIC_FAMINE_MULTIPLIER = 3.0
+            if _time_since_last > EPISTEMIC_FAMINE_THRESHOLD_S:
+                _famine_effects = []
+                for i, (routine, s) in enumerate(scored):
+                    if routine["intent"].startswith("SCHOOL_"):
+                        scored[i] = (routine, s * EPISTEMIC_FAMINE_MULTIPLIER)
+                        _famine_effects.append(routine["intent"])
+                if _famine_effects:
+                    _hours = _time_since_last / 3600.0
+                    print(f"   🍞 FAMINE EPISTEMIQUE: {_hours:.0f}h sans closure -> "
+                          f"x{EPISTEMIC_FAMINE_MULTIPLIER:.1f} sur {len(_famine_effects)} SCHOOL_*")
+                    logger.warning(
+                        f"[FAMINE_EPISTEMIQUE] {_hours:.1f}h sans closure -> "
+                        f"x{EPISTEMIC_FAMINE_MULTIPLIER} sur {len(_famine_effects)} intents : "
+                        f"{', '.join(_famine_effects)}"
+                    )
+        except Exception as _famine_err:
+            logger.debug(f"[FAMINE_EPISTEMIQUE] check echoue: {_famine_err}")
+
         # --- Feedback rendement (Couche 26bis, avril 2026) ---
         # Auto-penalite pour les routines a faible rendement (ratio q/cout < 0.05)
         # Auto-bonus pour les routines a haut rendement (ratio > 0.15)

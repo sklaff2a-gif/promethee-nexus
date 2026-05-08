@@ -51,14 +51,22 @@ SLOT_SLEEP = "SLEEP"
 
 # (heure_debut, heure_fin, type_slot)
 # Emploi du temps nocturne (0h-6h) : fenêtre ininterrompue, 0 reboot.
-# La journée (6h-18h) est réservée aux routines normales + interventions humaines.
+# Cours de rattrapage diurnes (8h-18h, ajoutés 2026-05-08) :
+#   La fenêtre nocturne seule s'est révélée structurellement vulnérable :
+#   quand V34 motivational préempte sur des drives saturés (typiquement
+#   STABILITE 89+) pendant la nuit, l'école n'est jamais dispatchée et
+#   `pulsion:maitrise_epistemic` reste muette pour 24h+. Trois fenêtres
+#   diurnes donnent une seconde chance au cortex épistémique.
 DAILY_SCHEDULE = [
     (0, 1, SLOT_CODE_REVIEW),
     (1, 3, SLOT_RESEARCH),
     (3, 4, SLOT_WORKSHOP),
     (4, 5, SLOT_CREATION),
     (5, 6, SLOT_BULLETIN),
-    # 6h-0h = pas de créneau scolaire (routines normales + maintenance humaine)
+    # Cours de rattrapage diurnes (2026-05-08)
+    (8, 10, SLOT_RESEARCH),
+    (14, 16, SLOT_RESEARCH),
+    (17, 18, SLOT_WORKSHOP),
 ]
 
 # Mapping slot -> intent autonomy_engine
