@@ -429,12 +429,17 @@ def check_drive_override(
     return None
 
 
-def mark_drive_satisfied(drive_name: str) -> None:
-    """V34 — Notifie le router qu'une pulsion a été assouvie.
-    Active le refractory period.
+def mark_drive_satisfied(drive_name: str, quality: float = 1.0) -> None:
+    """V34.7 (2026-05-08) — Notifie le router + decharge metabolique.
 
-    À appeler après l'exécution réussie d'une routine déclenchée par
-    override (l'autonomy_engine peut l'appeler dans son post-routine hook).
+    Avant ce patch : juste un timestamp comptable (refractory 60min).
+    La deprivation ne baissait pas, creant un pattern obsessionnel
+    documente le 08/05 (STABILITE 98 forcait V34 -> AUDIT_SURVIE ->
+    mark_satisfied symbolique -> STABILITE reste a 98).
+
+    Maintenant : applique aussi une decharge metabolique proportionnelle
+    a la qualite via desire_engine.apply_motivational_relief
+    (q=1.0 -> -15 pts, q=0.5 -> -7.5 pts, q=0.0 -> 0).
     """
     drive_name = drive_name.upper()
     _state.mark_satisfied(drive_name)
@@ -445,6 +450,17 @@ def mark_drive_satisfied(drive_name: str) -> None:
         )
     except Exception:
         pass
+    # V34.7 — decharge metabolique : faire baisser effectivement la depriv
+    try:
+        from core.desire_engine import desires
+        delta_applied = desires.apply_motivational_relief(drive_name, quality=quality)
+        if delta_applied != 0.0:
+            logger.info(
+                f"[V34.7 RELIEF] drive={drive_name} quality={quality:.2f} "
+                f"deprivation delta={delta_applied:+.2f}"
+            )
+    except Exception as _e:
+        logger.debug(f"[V34.7 RELIEF] apply_motivational_relief crash: {_e}")
 
 
 def mark_intent_skipped(intent: str) -> None:

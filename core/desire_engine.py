@@ -622,6 +622,59 @@ class DesireEngine:
             elif delta > 0 and abs(delta) >= 5:  # Frustration significative
                 drive.frustration_streak += 1
 
+    def apply_motivational_relief(self, drive_name: str, quality: float = 1.0) -> float:
+        """V34.7 (2026-05-08) — Decharge metabolique post-success FORCED.
+
+        Appelee par motivational_router.mark_drive_satisfied apres une
+        routine forcee reussie. Calcule un delta negatif proportionnel a
+        la qualite (q=1.0 -> -15.0, q=0.5 -> -7.5, q=0.0 -> 0.0) et
+        l applique en respectant tolerance et ceiling, mais en bypassant
+        le refractory (la satisfaction declenche le refractory, elle ne
+        peut pas en etre bloquee).
+
+        Avant ce patch, mark_satisfied etait purement comptable (timestamp
+        pour refractory). La deprivation ne baissait jamais malgre des
+        routines forcees reussies, creant un pattern obsessionnel : V34
+        forcait AUDIT_SURVIE pour STABILITE 89, l audit reussissait sans
+        baisser STABILITE, et le pattern recommencait toutes les 60min.
+        Documente le 08/05.
+
+        Returns: le delta effectivement applique (negatif ou 0).
+        """
+        drive = self.drives.get(drive_name)
+        if not drive:
+            return 0.0
+        quality = max(0.0, min(1.0, quality))
+        delta = -15.0 * quality
+        if delta == 0.0:
+            return 0.0
+
+        # Plein effet en privation extreme (>= 80), tolerance sinon.
+        if drive.deprivation >= DEPRIVATION_TOLERANCE_BYPASS:
+            effective_delta = delta
+            drive.tolerance_accumulator = min(
+                TOLERANCE_MAX,
+                drive.tolerance_accumulator + abs(delta) * 0.3,
+            )
+        else:
+            tolerance = self._compute_tolerance(drive)
+            effective_delta = delta * tolerance
+            drive.tolerance_accumulator = min(
+                TOLERANCE_MAX,
+                drive.tolerance_accumulator + abs(delta),
+            )
+
+        before = drive.deprivation
+        drive.deprivation = max(0.0, min(100.0, drive.deprivation + effective_delta))
+        # Bookkeeping satisfaction (cohérent avec on_event)
+        drive.satiation_count += 1
+        drive.total_satisfied += 1
+        drive.last_satisfied = time.time()
+        drive.frustration_streak = 0
+        if drive.tolerance_accumulator > DRIVE_SATURATED_TOLERANCE_THRESHOLD:
+            self._emit_drive_saturated(drive)
+        return drive.deprivation - before
+
     def _emit_drive_saturated(self, drive: "Drive") -> None:
         """V5.0 : emet DRIVE_SATURATED sur le bus quand tolerance > seuil.
         Signal deterministe pour meta_observer (remplace l'hallucination de

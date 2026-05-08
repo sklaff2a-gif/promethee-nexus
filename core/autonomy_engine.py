@@ -2857,6 +2857,43 @@ class AutonomyEngine:
         # Ne jamais ecraser un intent deja force (ex: SELF_ANALYSIS, eureka)
         if self._forced_next_intent:
             return
+
+        # --- VETO EXECUTIF (Couche 25ter, 2026-05-08) ---
+        # Inhibition top-down du V34 motivational quand la famine
+        # epistemique est critique (>24h sans school_*_conclude) ET
+        # qu un creneau scolaire est actif. Doctrine biomimetique :
+        # le cortex prefrontal est capable de supprimer activement les
+        # signaux de panique de l amygdale (V34) pour forcer la
+        # concentration sur une tache vitale (l ecole, dans notre cas
+        # l accumulation epistemologique a long terme).
+        #
+        # Sans ce veto, V34 enchaine les preemptions sur les drives
+        # satures (STABILITE, CONNEXION, CROISSANCE) et le scoring
+        # classique - donc la couche 26ter (boost famine x3) - n est
+        # JAMAIS atteint, meme pendant un creneau scolaire actif.
+        try:
+            from core.synaptic_network import SynapticNetwork as _Syn
+            from core.school_schedule import schedule as _sched
+            _syn = _Syn()
+            _last = list(getattr(_syn, "_epistemic_last_closure", {}).values())
+            _famine_s = (time.time() - max(_last)) if _last else float("inf")
+            _slot = _sched.get_current_slot()
+            if _famine_s > 86400.0 and _slot != "SLEEP":
+                logger.warning(
+                    f"[VETO_EXECUTIF] Famine epistemique {_famine_s/3600:.0f}h + "
+                    f"creneau {_slot} actif -> V34 motivational inhibe"
+                )
+                try:
+                    print(
+                        f"   🛡️ VETO EXECUTIF: cortex inhibe V34 "
+                        f"(famine {_famine_s/3600:.0f}h, slot {_slot})"
+                    )
+                except Exception:
+                    pass
+                return
+        except Exception as _veto_err:
+            logger.debug(f"[VETO_EXECUTIF] check failed: {_veto_err}")
+
         try:
             from core.motivational_router import check_drive_override
             from core.desire_engine import desires
@@ -4406,10 +4443,13 @@ class AutonomyEngine:
             if self._v34_pending_drive:
                 try:
                     from core.motivational_router import mark_drive_satisfied
-                    mark_drive_satisfied(self._v34_pending_drive)
+                    # V34.7 (2026-05-08) : passer la quality pour decharge
+                    # metabolique proportionnelle (mark_satisfied avait perdu
+                    # ses dents — il etait juste comptable).
+                    mark_drive_satisfied(self._v34_pending_drive, quality=quality)
                     logger.info(
                         f"[V34 MOTIVATIONAL] drive {self._v34_pending_drive} "
-                        f"marque assouvi via {intent} (succes)"
+                        f"marque assouvi via {intent} (succes, q={quality:.2f})"
                     )
                 except Exception as _e:
                     logger.debug(f"[V34 MOTIVATIONAL] mark_satisfied crash silencieux: {_e}")
