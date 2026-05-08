@@ -1011,6 +1011,10 @@ class AutonomyEngine:
         self._daily_analysis_done: bool = False
         # Introspection vesperale quotidienne : garantir 1 EVENING_REFLECTION par jour
         self._daily_reflection_done: bool = False
+        # IMMERSION_DOMAIN (2026-05-08) : compteurs metaboliques pour la
+        # routine d ingestion de flux brut. Reseted via reset_daily_state.
+        self._last_immersion_time: float = 0.0
+        self._immersion_daily_count: int = 0
         # Soliloque quotidien : garantir 1 SOLILOQUE_INTERNE par jour
         self._daily_soliloque_done: bool = False
         self._daily_stefan_done: bool = False
@@ -1555,6 +1559,7 @@ class AutonomyEngine:
             self._daily_analysis_done = False
             self._daily_reflection_done = False
             self._daily_soliloque_done = False
+            self._immersion_daily_count = 0
             self._daily_stefan_done = False
             self._daily_open_intent_count = 0
             self._curiosity_explored_tonight = False
@@ -1971,6 +1976,12 @@ class AutonomyEngine:
             {"agent": "_school_class", "intent": "SCHOOL_CREATION", "mission": ""},
             {"agent": "_school_class", "intent": "SCHOOL_BULLETIN", "mission": ""},
             {"agent": "_school_class", "intent": "SCHOOL_FREE_TIME", "mission": ""},
+            # --- IMMERSION_DOMAIN (2026-05-08, V1) ---
+            # Ingestion d un document brut depuis raw_flux/post_mortems/
+            # ou USER_DROPZONE/limite_pauseai/. Le declencheur metabolique
+            # (3 portes A/B/C) vit dans digestion_routine.should_trigger.
+            {"agent": "_immersion_domain", "intent": "IMMERSION_DOMAIN",
+             "mission": "Digestion d un document du flux brut (philosophie ou infrastructure)"},
             {"agent": "strategist", "intent": "NEURAL_TRAINING", "mission": "Entraînement neuronal ciblé"},
             {"agent": "_param_experiment", "intent": "PARAM_EXPERIMENT", "mission": "Expérimentation autonome: varier un paramètre, observer, comparer, garder ou rollback."},
             {"agent": "_evening_reflection", "intent": "EVENING_REFLECTION",
@@ -3736,6 +3747,8 @@ class AutonomyEngine:
             response = await self._execute_param_experiment()
         elif intent == "EVENING_REFLECTION":
             response = await self._execute_evening_reflection()
+        elif intent == "IMMERSION_DOMAIN":
+            response = await self._execute_immersion_domain()
         elif intent == "GRIMOIRE_EVOLVE":
             response = await self._execute_grimoire_evolve()
         elif intent == "VEILLE_IA":
@@ -4360,6 +4373,8 @@ class AutonomyEngine:
             response = await self._execute_param_experiment()
         elif intent == "EVENING_REFLECTION":
             response = await self._execute_evening_reflection()
+        elif intent == "IMMERSION_DOMAIN":
+            response = await self._execute_immersion_domain()
         elif intent == "GRIMOIRE_EVOLVE":
             response = await self._execute_grimoire_evolve()
         elif intent == "VEILLE_IA":
@@ -11073,6 +11088,70 @@ RAISON: <1 phrase courte>"""
             f"[V21 TRIUMPH] target={target_file} iter={iteration + 1} "
             f"tests_ok={result.tests_passed} dur={total_duration_s:.1f}s"
         )
+
+    async def _execute_immersion_domain(self) -> dict:
+        """IMMERSION_DOMAIN — ingestion d un document du flux brut.
+
+        Architecture (conception 2026-05-07/08, V1) :
+          - Porte A/B/C dans digestion_routine.should_trigger_immersion
+            (kill switches reptilien + capacite metabolique + appetit)
+          - Pipeline 4 phases (chunker / extractor dialectique /
+            compression / tir Hebbien)
+          - Polymorphisme par origine spatiale (post_mortems vs limite_pauseai)
+          - Cycle de vie filesystem (FRESH -> WOUNDED -> POISONED/DIGESTED)
+
+        L event de preemption est tire de reptilian_core._urgent_wakeup
+        (V14.10) si disponible — sinon timeouts seulement.
+        """
+        from core.immersion.digestion_routine import (
+            run_immersion_cycle, should_trigger_immersion,
+        )
+        verdict = should_trigger_immersion(self)
+        if not verdict.triggered:
+            logger.info(
+                f"[IMMERSION] skipped : {verdict.reason or 'score insuffisant'} "
+                f"(score={verdict.score})"
+            )
+            return {
+                "status": "skipped",
+                "reason": verdict.reason or "low_score",
+                "result": "Conditions metaboliques non remplies pour IMMERSION.",
+            }
+
+        # Preemption event reptilien (V14.10) si disponible
+        preempt_event = None
+        try:
+            from core.reptilian_core import reptilian
+            preempt_event = getattr(reptilian, "_urgent_wakeup", None)
+        except Exception:
+            preempt_event = None
+
+        report = await run_immersion_cycle(self, preempt_event=preempt_event)
+        if report is None:
+            return {
+                "status": "skipped",
+                "reason": "no_food_or_preempted",
+                "result": "Aucun document a digerer ou cycle preempte.",
+            }
+
+        if report.verdict == "ignored":
+            return {
+                "status": "skipped",
+                "reason": "all_chunks_empty",
+                "result": f"Document {os.path.basename(report.document_path)} : aucun concept extrait.",
+            }
+
+        # Quality calculee a partir du ratio de compression
+        quality = report.ratio if report.ratio is not None else 0.0
+        return {
+            "status": "success",
+            "result": (
+                f"IMMERSION {report.verdict} : "
+                f"{report.n_recognized}/{report.n_concepts_extracted} concepts reconnus, "
+                f"{report.n_unknown_assimilated} assimiles, delta={report.delta_synaptic:+.3f}"
+            ),
+            "quality": quality,
+        }
 
     # Cooldown introspection vesperale (max 1 par 8h)
     _last_reflection_ts: float = 0.0
