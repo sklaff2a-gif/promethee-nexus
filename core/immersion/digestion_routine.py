@@ -337,7 +337,13 @@ def should_trigger_immersion(autonomy_engine) -> TriggerVerdict:
                 score += 0.35 * max(0.0, (7.0 - avg) / 7.0)
         last_closure = list(getattr(syn, "_epistemic_last_closure", {}).values())
         if last_closure:
-            hours_since = (time.time() - max(last_closure)) / 3600.0
+            # FIX 2026-05-09 : MIN au lieu de MAX. La famine doit refleter
+            # le slot LE PLUS affame, pas le plus repu. Coherence avec le
+            # fix similaire dans autonomy_engine.py (Veto Executif + couche
+            # 26ter). Sans ce fix, la Porte C se fermait des qu un seul
+            # slot avait recemment ferme (ex: CREATION 4h), masquant la
+            # famine reelle de BULLETIN/RESEARCH/CODE_REVIEW (200-460h).
+            hours_since = (time.time() - min(last_closure)) / 3600.0
             if hours_since > EPISTEMIC_FAMINE_HOURS:
                 score += 0.15  # bonus famine
     except Exception:
