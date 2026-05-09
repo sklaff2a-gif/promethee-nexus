@@ -2887,7 +2887,10 @@ class AutonomyEngine:
             from core.school_schedule import schedule as _sched
             _syn = _Syn()
             _last = list(getattr(_syn, "_epistemic_last_closure", {}).values())
-            _famine_s = (time.time() - max(_last)) if _last else float("inf")
+            # FIX 2026-05-09 : MIN au lieu de MAX. La famine doit refleter le
+            # slot le PLUS affame, pas le plus repu. Sinon un FREE_TIME ferme
+            # hier soir masque la famine de RESEARCH 17 jours / BULLETIN 19 j.
+            _famine_s = (time.time() - min(_last)) if _last else float("inf")
             _slot = _sched.get_current_slot()
             if _famine_s > 86400.0 and _slot != "SLEEP":
                 logger.warning(
@@ -3399,11 +3402,17 @@ class AutonomyEngine:
         except Exception:
             pass
 
-        # --- Cri de Famine Epistemique (Couche 26ter, 2026-05-08) ---
+        # --- Cri de Famine Epistemique (Couche 26ter, 2026-05-08, fix 2026-05-09) ---
         # Quand aucune fermeture epistemique reussie n'a eu lieu depuis
         # 24h+, multiplie le score brut des SCHOOL_* par 3.0. Donne au
         # cortex epistemique le moyen de gagner dans le scoring classique
         # face a un COFFEE_BREAK ou un AUDIT_SURVIE.
+        #
+        # FIX 2026-05-09 : on utilise MIN (pas MAX) sur les timestamps de
+        # _epistemic_last_closure. Le bug original masquait la famine de
+        # RESEARCH (17 jours) et BULLETIN (19 jours) parce qu'un FREE_TIME
+        # recent (12h) etait compte comme "fermeture recente". La famine
+        # doit refleter le slot le PLUS affame, pas le plus repu.
         #
         # NOTE DOCTRINALE : ce boost vit dans le scoring cortical haut,
         # PAS dans la V34 motivational. L'ecole ne doit pas devenir un
@@ -3414,7 +3423,8 @@ class AutonomyEngine:
             from core.synaptic_network import SynapticNetwork
             _syn = SynapticNetwork()
             _last_closure_times = list(getattr(_syn, "_epistemic_last_closure", {}).values())
-            _time_since_last = (time.time() - max(_last_closure_times)) if _last_closure_times else float("inf")
+            # MIN = slot le plus en retard (le plus ancien timestamp = plus affame)
+            _time_since_last = (time.time() - min(_last_closure_times)) if _last_closure_times else float("inf")
             EPISTEMIC_FAMINE_THRESHOLD_S = 86400.0  # 24h
             EPISTEMIC_FAMINE_MULTIPLIER = 3.0
             if _time_since_last > EPISTEMIC_FAMINE_THRESHOLD_S:
@@ -3434,6 +3444,76 @@ class AutonomyEngine:
                     )
         except Exception as _famine_err:
             logger.debug(f"[FAMINE_EPISTEMIQUE] check echoue: {_famine_err}")
+
+        # --- Appetit IMMERSION (Couche 26quater, 2026-05-09) ---
+        # Bonus de scoring sur IMMERSION_DOMAIN proportionnel a la
+        # presence physique de fichiers dans la dropzone et a leur
+        # anciennete. Si la dropzone est vide, BONUS = 0 (pas de
+        # gaspillage de cycles a evaluer un appetit sans nourriture).
+        #
+        # DOCTRINE : ce bonus reste DANS le scoring cortical (pas V34,
+        # pas preemption). Max +4.0 — comparable au bonus scolaire (+5.0)
+        # mais jamais dominant. L immersion reste un APPETIT, pas une
+        # OBLIGATION. Si un autre intent vital (SAUNA quand waste_grid
+        # sature, MEMORY_CONSOLIDATION quand pending_episodes plein)
+        # gagne quand meme, c est correct : la fonction vitale prime
+        # toujours sur l appetit cognitif.
+        #
+        # Refute explicitement la pression de Challenger Gemini 2026-05-09
+        # qui voulait un score de 15.0 et "domination des routines de
+        # routine comme COFFEE_BREAK". On ne reconstitue pas le pattern
+        # STABILITE=98 d il y a 2 jours.
+        try:
+            import os as _os_im
+            project_root = _os_im.path.dirname(_os_im.path.dirname(_os_im.path.abspath(__file__)))
+            food_count = 0
+            oldest_food_age = 0.0
+            for sub in ("data/raw_flux/post_mortems", "USER_DROPZONE/limite_pauseai"):
+                d = _os_im.path.join(project_root, sub)
+                if not _os_im.path.exists(d):
+                    continue
+                for fname in _os_im.listdir(d):
+                    if fname.startswith(".") or not fname.endswith(".txt"):
+                        continue
+                    food_count += 1
+                    fpath = _os_im.path.join(d, fname)
+                    try:
+                        age = time.time() - _os_im.path.getmtime(fpath)
+                        if age > oldest_food_age:
+                            oldest_food_age = age
+                    except OSError:
+                        continue
+            if food_count > 0:
+                immersion_bonus = 1.5  # base : il y a a manger
+                if oldest_food_age > 7200:  # 2h
+                    immersion_bonus += 1.5  # food vieillit -> +1.5
+                last_im = float(getattr(self, "_last_immersion_time", 0.0))
+                if last_im == 0.0:
+                    stale_h = 999.0
+                else:
+                    stale_h = (time.time() - last_im) / 3600.0
+                if stale_h > 6:
+                    immersion_bonus += 1.0  # 6h+ depuis derniere -> +1.0
+                # Plafond explicite a 4.0 : n entre jamais dans la zone
+                # des bonus preemptifs (V34) ni des bonus scolaires (+5)
+                immersion_bonus = min(4.0, immersion_bonus)
+                for i, (routine, s) in enumerate(scored):
+                    if routine["intent"] == "IMMERSION_DOMAIN":
+                        scored[i] = (routine, s + immersion_bonus)
+                        logger.info(
+                            f"[APPETIT_IMMERSION] +{immersion_bonus:.1f} sur "
+                            f"IMMERSION_DOMAIN ({food_count} fichiers, "
+                            f"oldest={oldest_food_age/3600:.1f}h, "
+                            f"stale={stale_h:.1f}h)"
+                        )
+                        break
+            else:
+                # Frigo vide : log silencieux a debug, pas de bruit
+                logger.debug(
+                    "[APPETIT_IMMERSION] dropzone vide, pas de bonus IMMERSION_DOMAIN"
+                )
+        except Exception as _ap_err:
+            logger.debug(f"[APPETIT_IMMERSION] check failed: {_ap_err}")
 
         # --- Feedback rendement (Couche 26bis, avril 2026) ---
         # Auto-penalite pour les routines a faible rendement (ratio q/cout < 0.05)
