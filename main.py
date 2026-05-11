@@ -332,6 +332,24 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         print(f"   ⚠️ BLOOM V4.2: init echouee ({_e}) - fallback transparent")
 
+    # --- V15 SOURCE_CODE_INDEXER : RAG semantique sur le code projet ---
+    # Couple complementaire au BLOOM V4.2 ci-dessus : Bloom = filtre regex
+    # rapide, V15 = recherche semantique ChromaDB sur chunks AST. Sans ce
+    # call, la collection 'source_code' reste vide et _inject_v15_introspection
+    # (chat_engine.py:3314) echoue silencieusement -> confabulation Korsakoff.
+    try:
+        from core.capabilities.source_code_indexer import indexer as _src_idx
+        _v15_root = os.path.dirname(os.path.abspath(__file__))
+        _v15_stats = _src_idx.index_at_boot(_v15_root)
+        print(
+            f"   🔍 V15 SOURCE_CODE: {_v15_stats['files_indexed']}/"
+            f"{_v15_stats['files_scanned']} fichiers, "
+            f"{_v15_stats['chunks_added']} chunks "
+            f"({_v15_stats['duration_s']}s)."
+        )
+    except Exception as _e:
+        print(f"   ⚠️ V15 SOURCE_CODE: init echouee ({_e}) - fallback transparent")
+
     # --- PSYCHE : Moteur de personnalité ---
     psyche.init(list(orchestrator.agents.keys()))
     print("   🧬 PSYCHE: Moteur de personnalité actif.")
