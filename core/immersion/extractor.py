@@ -519,9 +519,10 @@ async def extract_concepts_dialectical(
         chunk : Chunk produit par la Phase 1 (chunker.chunk_post_mortem).
         profile : ExtractionProfile (INFRASTRUCTURE_POST_MORTEM ou
             ARCHITECTURAL_THINKER).
-        preempt_event : Event injecte (typiquement reptilian_core._urgent_wakeup).
-            Si set pendant l execution, la fonction retourne un
-            ExtractionResult avec failed_at="preempted".
+        preempt_event : Event injecte (typiquement
+            autonomy_engine._urgency_mirror — bridge V14.11 alimente par
+            le watcher sur reptile.urgency_cond). Si set pendant l execution,
+            la fonction retourne un ExtractionResult avec failed_at="preempted".
         llm_callable : injection de dependance pour les tests (signature
             async (profile, system, user, max_tokens) -> str).
             En production, _call_ollama est utilise.

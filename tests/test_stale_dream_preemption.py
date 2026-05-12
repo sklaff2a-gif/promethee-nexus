@@ -8,9 +8,12 @@ Garde-fous testés :
   4. Cooldown 5 min anti-boucle
 
 V14.10 — Interruption matérielle logicielle (asyncio.Event _urgent_wakeup).
-Tests vérifient que l'event est SET ssi la préemption a réussi (pas en cas
-de garde-fou bloquant). Validation in-vivo : latence cascade nociceptive
-24min47s → <5s post-V14.10 (cible de validation chaos engineering).
+V14.11 — Couplage fort source-de-vérité-unique : _urgent_wakeup remplacé
+par bridge asyncio.Condition (reptile.urgency_cond) + mirror Event local
+(_urgency_mirror). Tests vérifient que (a) la notify_all() de reptile est
+appelée IFF la préemption a réussi et (b) le mirror reste consultable.
+Validation in-vivo : latence cascade nociceptive 24min47s → <5s post-V14.10
+(cible de validation chaos engineering).
 """
 
 import asyncio
@@ -25,6 +28,18 @@ from core.autonomy_engine import (
 )
 
 
+# V14.11 — Helper class : asyncio.Condition espionnée (compte les notify_all)
+class _SpyCondition(asyncio.Condition):
+    """asyncio.Condition étendue qui compte les notify_all() pour tests."""
+    def __init__(self):
+        super().__init__()
+        self.notify_all_count = 0
+
+    def notify_all(self):
+        self.notify_all_count += 1
+        super().notify_all()
+
+
 @pytest.fixture
 def engine():
     """Instance bare-bones (object.__new__) — _on_reptilian_alert ne dépend
@@ -35,9 +50,32 @@ def engine():
     inst._stale_dream_preemption_last = 0.0
     inst.is_coffee_mode = False
     inst.is_napping = False
-    # V14.10 — Event pour réveil instantané du main loop
-    inst._urgent_wakeup = asyncio.Event()
+    # V14.11 — Mirror Event local (remplace _urgent_wakeup, alimenté par
+    # le watcher bridge en production). En test, on assert directement sur
+    # le mirror ET sur la notify_all() côté reptile mock.
+    inst._urgency_mirror = asyncio.Event()
     yield inst
+
+
+@pytest.fixture
+def reptile_mock(monkeypatch):
+    """V14.11 — Mock du singleton reptile avec asyncio.Condition espionnée.
+
+    Permet aux tests de vérifier que reptile.urgency_cond.notify_all() est
+    bien appelé par _on_reptilian_alert après armement du REFLEXE PURGE.
+    Le mock fournit une vraie Condition fonctionnelle (pas un MagicMock) pour
+    que le `async with reptile.urgency_cond:` du code de prod ne crashe pas.
+    """
+    class _MockReptile:
+        pass
+
+    mock = _MockReptile()
+    mock.urgency_cond = _SpyCondition()
+    mock.last_urgent_pattern = ""
+    mock.last_urgent_severity = 0.0
+    mock.last_urgent_at = 0.0
+    monkeypatch.setattr("core.reptilian_core.reptile", mock)
+    yield mock
 
 
 def _alert(pattern: str = "stale_dream", severity: float = 6.0, dette_h: float = 24.0):
@@ -177,80 +215,99 @@ async def test_severity_none_ne_crashe_pas(engine):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# V14.10 — Interruption matérielle logicielle (asyncio.Event)
+# V14.11 — Couplage fort : notify reptile.urgency_cond + mirror Event local
 # ═══════════════════════════════════════════════════════════════════════
 
-class TestV1410UrgentWakeup:
-    """V14.10 — l'asyncio.Event _urgent_wakeup doit être set IFF la
-    préemption a effectivement eu lieu. Validation in-vivo : latence
-    cascade nociceptive 24min47s → <5s post-V14.10."""
+class TestV1411UrgencyMirror:
+    """V14.11 — Le notify_all() sur reptile.urgency_cond doit être appelé IFF
+    la préemption a effectivement eu lieu. Le mirror Event est alimenté par
+    un watcher en prod (non testé ici unitairement — couvert par tests
+    d'intégration). Validation in-vivo : latence cascade nociceptive
+    24min47s → <5s post-V14.10."""
 
     @pytest.mark.asyncio
-    async def test_urgent_wakeup_set_apres_preemption_reussie(self, engine):
-        """Préemption réussie → _urgent_wakeup.is_set() == True."""
-        assert not engine._urgent_wakeup.is_set()
+    async def test_notify_apres_preemption_reussie(self, engine, reptile_mock):
+        """Préemption réussie → reptile.urgency_cond.notify_all() appelé."""
+        assert reptile_mock.urgency_cond.notify_all_count == 0
+        assert not engine._urgency_mirror.is_set()
         await engine._on_reptilian_alert(_alert())
         assert engine._forced_next_intent == "MEMORY_CONSOLIDATION"
-        assert engine._urgent_wakeup.is_set(), \
-            "Event MUST be set après armement REFLEXE PURGE"
+        assert reptile_mock.urgency_cond.notify_all_count == 1, \
+            "notify_all() MUST être appelé après armement REFLEXE PURGE"
+        assert reptile_mock.last_urgent_pattern == "stale_dream"
+        # Mirror non set ici (watcher pas spawné en test unitaire)
+        # — couvert par test_urgent_interrompt_sleep_simule plus bas
 
     @pytest.mark.asyncio
-    async def test_urgent_wakeup_pas_set_si_pattern_different(self, engine):
-        """Garde-fou pattern → préemption pas faite → event PAS set."""
+    async def test_pas_notify_si_pattern_different(self, engine, reptile_mock):
+        """Garde-fou pattern → préemption pas faite → notify_all PAS appelé."""
         await engine._on_reptilian_alert(_alert(pattern="ollama"))
-        assert not engine._urgent_wakeup.is_set()
+        assert reptile_mock.urgency_cond.notify_all_count == 0
 
     @pytest.mark.asyncio
-    async def test_urgent_wakeup_pas_set_si_coffee_mode(self, engine):
-        """Garde-fou coffee_mode → préemption refusée → event PAS set."""
+    async def test_pas_notify_si_coffee_mode(self, engine, reptile_mock):
+        """Garde-fou coffee_mode → préemption refusée → notify_all PAS appelé."""
         engine.is_coffee_mode = True
         await engine._on_reptilian_alert(_alert())
-        assert not engine._urgent_wakeup.is_set()
+        assert reptile_mock.urgency_cond.notify_all_count == 0
 
     @pytest.mark.asyncio
-    async def test_urgent_wakeup_pas_set_si_napping(self, engine):
-        """Garde-fou nap → consolidation déjà active → event PAS set."""
+    async def test_pas_notify_si_napping(self, engine, reptile_mock):
+        """Garde-fou nap → consolidation déjà active → notify_all PAS appelé."""
         engine.is_napping = True
         await engine._on_reptilian_alert(_alert())
-        assert not engine._urgent_wakeup.is_set()
+        assert reptile_mock.urgency_cond.notify_all_count == 0
 
     @pytest.mark.asyncio
-    async def test_urgent_wakeup_pas_set_si_cooldown(self, engine):
-        """Garde-fou cooldown → 2e alerte refusée → event PAS set la 2e fois."""
+    async def test_pas_notify_si_cooldown(self, engine, reptile_mock):
+        """Garde-fou cooldown → 2e alerte refusée → 1 seule notify."""
         await engine._on_reptilian_alert(_alert())
-        # Reset event + forced (simule consume)
-        engine._urgent_wakeup.clear()
+        assert reptile_mock.urgency_cond.notify_all_count == 1
+        # Reset forced (simule consume par main loop)
         engine._forced_next_intent = ""
         # Re-alerte immédiate (sous cooldown)
         await engine._on_reptilian_alert(_alert())
-        assert not engine._urgent_wakeup.is_set(), \
-            "Cooldown doit empêcher le réveil dupliqué"
+        assert reptile_mock.urgency_cond.notify_all_count == 1, \
+            "Cooldown doit empêcher le notify dupliqué"
 
     @pytest.mark.asyncio
-    async def test_urgent_wakeup_pas_set_si_intent_deja_force(self, engine):
-        """_forced_next_intent déjà set par autre voie → branche ELSE → pas de set."""
+    async def test_pas_notify_si_intent_deja_force(self, engine, reptile_mock):
+        """_forced_next_intent déjà set par autre voie → branche ELSE → pas de notify."""
         engine._forced_next_intent = "AUDIT_STRUCTURE"
         await engine._on_reptilian_alert(_alert())
         # La force existante est conservée, pas de réveil urgent
         assert engine._forced_next_intent == "AUDIT_STRUCTURE"
-        assert not engine._urgent_wakeup.is_set()
+        assert reptile_mock.urgency_cond.notify_all_count == 0
 
     @pytest.mark.asyncio
-    async def test_urgent_wakeup_interrompt_sleep_simule(self, engine):
-        """Simule la boucle de sleep V14.10 : event set pendant l'attente
-        doit déclencher un break en moins de 100ms (vs sleep_time complet)."""
+    async def test_urgent_interrompt_sleep_simule(self, engine, reptile_mock):
+        """Simule la boucle de sleep V14.10/V14.11 : le mirror set par le
+        watcher pendant l'attente doit déclencher un break en moins de 100ms.
+
+        Spawn manuel du watcher V14.11 pour simuler le bridge Condition→Event.
+        """
         sleep_time = 30  # simule un cycle de 30s
         chunk = 15
 
+        # V14.11 — watcher manuel (équivalent _urgency_mirror_watcher)
+        async def manual_watcher():
+            async with reptile_mock.urgency_cond:
+                await reptile_mock.urgency_cond.wait()
+            engine._urgency_mirror.set()
+
+        watcher_task = asyncio.create_task(manual_watcher())
+        # Laisser le watcher prendre la main pour entrer dans le wait
+        await asyncio.sleep(0.01)
+
         async def sleep_loop_simule():
-            """Simule la nouvelle boucle V14.10 lignes 7065-7088."""
+            """Simule la boucle main loop V14.10/V14.11 lignes 7275-7289."""
             remaining = sleep_time
             broken = False
             while remaining > 0:
                 c = min(remaining, chunk)
                 try:
-                    await asyncio.wait_for(engine._urgent_wakeup.wait(), timeout=c)
-                    engine._urgent_wakeup.clear()
+                    await asyncio.wait_for(engine._urgency_mirror.wait(), timeout=c)
+                    engine._urgency_mirror.clear()
                     broken = True
                     break
                 except asyncio.TimeoutError:
@@ -262,29 +319,40 @@ class TestV1410UrgentWakeup:
             await engine._on_reptilian_alert(_alert())
 
         start = time.monotonic()
-        # Lance les 2 coroutines en parallèle
-        broken, _ = await asyncio.gather(sleep_loop_simule(), trigger_alert_apres_50ms())
-        elapsed = time.monotonic() - start
+        try:
+            # Lance les 2 coroutines en parallèle
+            broken, _ = await asyncio.gather(sleep_loop_simule(), trigger_alert_apres_50ms())
+            elapsed = time.monotonic() - start
 
-        assert broken, "La boucle doit être interrompue par l'event"
-        assert elapsed < 1.0, \
-            f"Latence d'interruption trop élevée : {elapsed*1000:.0f}ms (cible <100ms)"
+            assert broken, "La boucle doit être interrompue par le mirror"
+            assert elapsed < 1.0, \
+                f"Latence d'interruption trop élevée : {elapsed*1000:.0f}ms (cible <100ms)"
+            assert reptile_mock.urgency_cond.notify_all_count == 1, \
+                "notify_all() doit avoir été appelé une fois"
+        finally:
+            # Cleanup watcher task
+            if not watcher_task.done():
+                watcher_task.cancel()
+                try:
+                    await watcher_task
+                except (asyncio.CancelledError, RuntimeError):
+                    pass
 
     @pytest.mark.asyncio
-    async def test_event_clear_ne_casse_pas_re_arming(self, engine):
-        """Après clear() puis re-arming, l'event doit pouvoir re-set."""
+    async def test_re_arming_apres_consume(self, engine, reptile_mock):
+        """Après consume du forced_next_intent et cooldown expiré, la 2ème
+        préemption doit re-déclencher notify_all()."""
         # 1ère préemption
         await engine._on_reptilian_alert(_alert())
-        assert engine._urgent_wakeup.is_set()
+        assert reptile_mock.urgency_cond.notify_all_count == 1
         # Simule consume par main loop
-        engine._urgent_wakeup.clear()
         engine._forced_next_intent = ""
         # Cooldown forcé expiré
         engine._stale_dream_preemption_last = time.time() - STALE_DREAM_PREEMPTION_COOLDOWN_S - 10
         # 2ème préemption
         await engine._on_reptilian_alert(_alert())
-        assert engine._urgent_wakeup.is_set(), \
-            "Event doit pouvoir être re-set après clear()"
+        assert reptile_mock.urgency_cond.notify_all_count == 2, \
+            "notify_all() doit pouvoir être ré-appelé après consume + cooldown expiré"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -294,12 +362,12 @@ class TestV1410UrgentWakeup:
 class TestSynapticCongestionPattern:
     """Option B — l'autonomy doit traiter pattern=synaptic_congestion comme
     pattern=stale_dream : mêmes garde-fous, même MEMORY_CONSOLIDATION forcée,
-    même réveil V14.10. La douleur de DENSITÉ est aussi urgente que la
-    douleur de TEMPS."""
+    même réveil V14.10/V14.11. La douleur de DENSITÉ est aussi urgente que
+    la douleur de TEMPS."""
 
     @pytest.mark.asyncio
-    async def test_pattern_synaptic_congestion_declenche_preemption(self, engine):
-        """Pattern=synaptic_congestion → MEMORY_CONSOLIDATION forcée."""
+    async def test_pattern_synaptic_congestion_declenche_preemption(self, engine, reptile_mock):
+        """Pattern=synaptic_congestion → MEMORY_CONSOLIDATION forcée + notify."""
         event = {
             "pattern": "synaptic_congestion",
             "severity": 6.0,
@@ -311,11 +379,12 @@ class TestSynapticCongestionPattern:
         }
         await engine._on_reptilian_alert(event)
         assert engine._forced_next_intent == "MEMORY_CONSOLIDATION"
-        assert engine._urgent_wakeup.is_set(), \
-            "V14.10 _urgent_wakeup doit être set pour synaptic_congestion aussi"
+        assert reptile_mock.urgency_cond.notify_all_count == 1, \
+            "V14.11 notify_all() doit être appelé pour synaptic_congestion aussi"
+        assert reptile_mock.last_urgent_pattern == "synaptic_congestion"
 
     @pytest.mark.asyncio
-    async def test_pattern_inconnu_toujours_rejete(self, engine):
+    async def test_pattern_inconnu_toujours_rejete(self, engine, reptile_mock):
         """Garde-fou : pattern non whitelisté → no-op (sécurité contre nouveaux patterns)."""
         event = {
             "pattern": "ollama",  # ni stale_dream ni synaptic_congestion
@@ -323,10 +392,10 @@ class TestSynapticCongestionPattern:
         }
         await engine._on_reptilian_alert(event)
         assert engine._forced_next_intent == ""
-        assert not engine._urgent_wakeup.is_set()
+        assert reptile_mock.urgency_cond.notify_all_count == 0
 
     @pytest.mark.asyncio
-    async def test_coffee_mode_bloque_aussi_synaptic_congestion(self, engine):
+    async def test_coffee_mode_bloque_aussi_synaptic_congestion(self, engine, reptile_mock):
         """Garde-fou coffee_mode s'applique aux 2 patterns."""
         engine.is_coffee_mode = True
         event = {
@@ -336,4 +405,4 @@ class TestSynapticCongestionPattern:
         }
         await engine._on_reptilian_alert(event)
         assert engine._forced_next_intent == ""
-        assert not engine._urgent_wakeup.is_set()
+        assert reptile_mock.urgency_cond.notify_all_count == 0

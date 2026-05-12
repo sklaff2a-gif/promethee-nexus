@@ -16,7 +16,8 @@ Au prochain reboot du Guardian, l'arc nociceptif Option B doit déclencher :
         ↓
     autonomy_engine._on_reptilian_alert (filter accepte synaptic_congestion)
         → _forced_next_intent = MEMORY_CONSOLIDATION
-        → asyncio.Event _urgent_wakeup.set() (V14.10)
+        → reptile.urgency_cond.notify_all() (V14.11 couplage fort)
+        → _urgency_mirror_watcher set _urgency_mirror Event (V14.11 bridge)
         ↓
     🚨 REFLEXE PURGE → MEMORY_CONSOLIDATION exécutée en ~1s
 

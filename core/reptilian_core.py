@@ -215,6 +215,20 @@ class ReptilianCore:
         # --- V14.3 Pilier 2 nocicepteurs : cooldown REPTILIAN_ALERT par menace ---
         self._alert_cooldowns: Dict[str, float] = {}     # pattern → timestamp dernière alerte
 
+        # --- V14.11 Couplage fort source-de-vérité-unique ---
+        # urgency_cond + last_urgent_* : source de vérité pour les
+        # subscribers (AutonomyEngine via watcher mirror). Lazy-init pour
+        # survivre aux Smart Restart (exit 65, event loop change).
+        # Avant V14.11 : AutonomyEngine maintenait son propre _urgent_wakeup
+        # Event en doublon (horloge fantôme) + la branche IMMERSION_DOMAIN
+        # ligne 11215 cherchait reptilian._urgent_wakeup qui n'existait pas
+        # (fil mort silencieux depuis V14.10).
+        self._urgency_cond: Optional[asyncio.Condition] = None
+        self._urgency_cond_loop_id: Optional[int] = None
+        self.last_urgent_pattern: str = ""
+        self.last_urgent_severity: float = 0.0
+        self.last_urgent_at: float = 0.0
+
         # Charger l'état persisté
         self._load()
 
@@ -226,6 +240,26 @@ class ReptilianCore:
             if cls._instance._watchdog_task and not cls._instance._watchdog_task.done():
                 cls._instance._watchdog_task.cancel()
             cls._instance = None
+
+    @property
+    def urgency_cond(self) -> asyncio.Condition:
+        """V14.11 — Lazy-init de la Condition urgency. Recréée si event loop
+        change (Smart Restart exit 65). Pattern reuse de vector_store._get_lock().
+
+        Notify_all() est appelé par AutonomyEngine._on_reptilian_alert APRÈS
+        application des garde-fous (coffee_mode, nap, cooldown). Le subscriber
+        (AutonomyEngine._urgency_mirror_task) wait sur cette cond.
+        """
+        try:
+            loop_id = id(asyncio.get_running_loop())
+        except RuntimeError:
+            # Pas d'event loop courant — retourne une cond éphémère
+            # (cas : appel hors contexte async, principalement les tests sync)
+            return asyncio.Condition()
+        if self._urgency_cond is None or self._urgency_cond_loop_id != loop_id:
+            self._urgency_cond = asyncio.Condition()
+            self._urgency_cond_loop_id = loop_id
+        return self._urgency_cond
 
     def init(self):
         """Initialisation appelée depuis main.py — souscriptions bus."""

@@ -955,12 +955,16 @@ class AutonomyEngine:
         self._temp_blacklist: set = set()
         # Loop breaker : intent force par le loop_breaker (bypass scoring)
         self._forced_next_intent: str = ""
-        # V14.10 — Interruption matérielle logicielle pour réflexes urgents.
-        # asyncio.Event set par _on_reptilian_alert après armement réussi du
-        # _forced_next_intent (REFLEXE PURGE). Réveille le main loop instan-
-        # tanément (<100ms), court-circuite le sleep adaptatif (10-30 min)
-        # qui rendait V14.4 inopérant en pratique (latence ×36 observée).
-        self._urgent_wakeup: asyncio.Event = asyncio.Event()
+        # V14.10/V14.11 — Interruption matérielle logicielle pour réflexes urgents.
+        # _urgency_mirror : asyncio.Event LOCAL alimenté par watcher task
+        # (_urgency_mirror_task) qui wait sur reptilian.urgency_cond (V14.11
+        # couplage fort source-de-vérité-unique). Le mirror sert d'adaptateur
+        # Condition→Event pour les consumers qui attendent l'API Event
+        # (main loop ligne 7275, extractor immersion ligne 11215).
+        # Set par le watcher quand reptile.urgency_cond.notify_all() est
+        # appelé par _on_reptilian_alert APRÈS armement REFLEXE PURGE.
+        self._urgency_mirror: asyncio.Event = asyncio.Event()
+        self._urgency_mirror_task: Optional[asyncio.Task] = None
         # V34.1 : drive a notifier (mark_drive_satisfied) apres execution reussie
         # de la routine forcee par le motivational_router. Reset apres usage.
         self._v34_pending_drive: str = ""
@@ -1524,11 +1528,23 @@ class AutonomyEngine:
         if not self._forced_next_intent:
             self._forced_next_intent = "MEMORY_CONSOLIDATION"
             self._stale_dream_preemption_last = now
-            # V14.10 — réveil instantané du main loop (interruption matérielle
-            # logicielle). Sans ce signal, le drapeau attend le prochain cycle
-            # naturel (10-30 min observé in-vivo), ce qui annule la sémantique
-            # de "réflexe" du REFLEXE PURGE.
-            self._urgent_wakeup.set()
+            # V14.11 — Couplage fort source-de-vérité-unique. Au lieu de
+            # set un Event local _urgent_wakeup (horloge fantôme, V14.10),
+            # on notify la cond reptilien qui est la source de vérité.
+            # Le _urgency_mirror_watcher propage ensuite le signal au mirror
+            # Event local pour les consumers (main loop + extractor).
+            try:
+                from core.reptilian_core import reptile
+                async with reptile.urgency_cond:
+                    reptile.last_urgent_pattern = pattern
+                    reptile.last_urgent_severity = severity
+                    reptile.last_urgent_at = now
+                    reptile.urgency_cond.notify_all()
+            except Exception as e:
+                # Fallback : signal direct sur le mirror si reptile indispo
+                # (cas dégradé, ex : Smart Restart en cours)
+                logger.warning(f"[AUTONOMY] urgency_cond notify échoué ({e}), fallback mirror direct")
+                self._urgency_mirror.set()
             logger.warning(
                 f"[AUTONOMY] REFLEXE PURGE — préemption {pattern} "
                 f"(severity={severity}, {metric_label}) → MEMORY_CONSOLIDATION"
@@ -1542,6 +1558,42 @@ class AutonomyEngine:
                 f"[AUTONOMY] REFLEXE PURGE en attente — _forced_next_intent "
                 f"déjà={self._forced_next_intent}"
             )
+
+    async def _urgency_mirror_watcher(self):
+        """V14.11 — Watcher bridge Condition → Event.
+
+        Wait sur reptile.urgency_cond et propage notify_all() vers
+        self._urgency_mirror (Event local). Permet aux consumers qui
+        attendent l'API Event de continuer à fonctionner après le
+        couplage fort côté reptilien.
+
+        Robustesse :
+          - try/except permissif : si la cond échoue ou si reptile mort,
+            log warning et retry après 1s (pas de crash silencieux)
+          - lazy-init de la cond : la propriété urgency_cond gère le cas
+            Smart Restart (event loop change)
+          - relance auto via start_loop si task die (boucle while True)
+        """
+        from core.reptilian_core import reptile
+        consecutive_errors = 0
+        while self.is_running:
+            try:
+                async with reptile.urgency_cond:
+                    await reptile.urgency_cond.wait()
+                # Réveil : propage au mirror
+                self._urgency_mirror.set()
+                consecutive_errors = 0  # reset compteur
+            except asyncio.CancelledError:
+                # Sortie normale (shutdown)
+                raise
+            except Exception as e:
+                consecutive_errors += 1
+                logger.warning(
+                    f"[URGENCY_MIRROR] Erreur watcher (#{consecutive_errors}) : {e}"
+                )
+                # Backoff exponentiel borné : 1s, 2s, 4s, max 30s
+                backoff = min(30.0, 2 ** min(consecutive_errors - 1, 5))
+                await asyncio.sleep(backoff)
 
     def _check_daily_budget(self) -> str:
         """Vérifie et reset le compteur quotidien.
@@ -7226,6 +7278,15 @@ class AutonomyEngine:
             self._survival_tick_task = asyncio.create_task(self._survival_heartbeat_loop())
             print(f"   🫀 SURVIVAL: Heartbeat tronc cérébral démarré (tick {AUDIT_SURVIE_TICK_INTERVAL_S:.0f}s).")
 
+        # V14.11 — Démarrer le watcher urgency mirror (bridge Condition → Event).
+        # Le watcher wait sur reptile.urgency_cond et set self._urgency_mirror.
+        # Permet aux consumers (main loop ligne 7275, extractor immersion
+        # ligne 11215) de continuer à utiliser l'API Event sans changement
+        # tout en bénéficiant de la source de vérité unique côté reptilien.
+        if self._urgency_mirror_task is None or self._urgency_mirror_task.done():
+            self._urgency_mirror_task = asyncio.create_task(self._urgency_mirror_watcher())
+            print("   🌉 URGENCY MIRROR: Bridge Condition→Event démarré (V14.11).")
+
         while self.is_running:
           try:
             # === HEARTBEAT : preuve de vie à chaque cycle ===
@@ -7262,9 +7323,11 @@ class AutonomyEngine:
                     sleep_time = int(sleep_time * circadian.get_sleep_multiplier())
                 except Exception:
                     pass
-                # V14.10 — Sleep DOUBLEMENT interruptible :
+                # V14.10/V14.11 — Sleep DOUBLEMENT interruptible :
                 # - chunks de 15s : compat coffee_mode/is_napping legacy (≤15s latence)
-                # - asyncio.Event _urgent_wakeup : réflexe nociceptif (<100ms latence)
+                # - asyncio.Event _urgency_mirror : réflexe nociceptif (<100ms latence)
+                # V14.11 : le mirror est alimenté par _urgency_mirror_watcher
+                # qui wait sur reptile.urgency_cond (source de vérité unique).
                 # Sans cette double condition, le REFLEXE PURGE armé par V14.4
                 # attendait la fin du cycle adaptatif (10-30 min) — observé
                 # in-vivo le 02/05 à 24min47s (ticket V14.10).
@@ -7273,10 +7336,10 @@ class AutonomyEngine:
                     chunk = min(remaining, 15)
                     try:
                         await asyncio.wait_for(
-                            self._urgent_wakeup.wait(), timeout=chunk
+                            self._urgency_mirror.wait(), timeout=chunk
                         )
                         # Interruption par signal d'urgence cognitif (REFLEXE PURGE)
-                        self._urgent_wakeup.clear()
+                        self._urgency_mirror.clear()
                         if self._forced_next_intent:
                             logger.info(
                                 f"[AUTONOMY] Réveil URGENT — _forced_next_intent="
@@ -11190,8 +11253,12 @@ RAISON: <1 phrase courte>"""
           - Polymorphisme par origine spatiale (post_mortems vs limite_pauseai)
           - Cycle de vie filesystem (FRESH -> WOUNDED -> POISONED/DIGESTED)
 
-        L event de preemption est tire de reptilian_core._urgent_wakeup
-        (V14.10) si disponible — sinon timeouts seulement.
+        L event de preemption est tire de self._urgency_mirror (V14.11)
+        qui est alimente par le watcher bridge sur reptile.urgency_cond.
+
+        Note : avant V14.11, ce code essayait getattr(reptilian, "_urgent_wakeup",
+        None) qui retournait toujours None (l'Event vivait dans AutonomyEngine,
+        pas dans ReptilianCore — fil mort silencieux depuis V14.10).
         """
         from core.immersion.digestion_routine import (
             run_immersion_cycle, should_trigger_immersion,
@@ -11208,13 +11275,11 @@ RAISON: <1 phrase courte>"""
                 "result": "Conditions metaboliques non remplies pour IMMERSION.",
             }
 
-        # Preemption event reptilien (V14.10) si disponible
-        preempt_event = None
-        try:
-            from core.reptilian_core import reptilian
-            preempt_event = getattr(reptilian, "_urgent_wakeup", None)
-        except Exception:
-            preempt_event = None
+        # V14.11 — preempt_event garanti non-None (mirror local alimenté
+        # par watcher sur reptile.urgency_cond). Réparation du fil mort
+        # qui pendait dans le vide depuis V14.10 (getattr sur attribut
+        # inexistant dans reptilian_core).
+        preempt_event = self._urgency_mirror
 
         report = await run_immersion_cycle(self, preempt_event=preempt_event)
         if report is None:
