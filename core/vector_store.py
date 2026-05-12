@@ -10,6 +10,21 @@ from typing import List, Dict, Any
 
 logger = logging.getLogger("VectorStore")
 
+# Collections protegees des purges qualitatives/temporelles aveugles.
+# Conçues pour stocker du contenu structurel (chunks AST de code, signatures,
+# logs CI) dont la longueur typique est < 100 chars — incompatible avec les
+# filtres min_length=100 et purge par age conçus pour le wisdom textuel.
+# 11/05/2026 : decouverte que purge_low_quality(min_length=100) sans
+# collection_name iterait sur TOUTES les collections et wipait source_code
+# (2964 chunks AST < 100 chars supprimes silencieusement chaque nuit).
+PROTECTED_COLLECTIONS = frozenset({
+    "source_code",   # V15 RAG du code source (chunks AST)
+    "code_snippets", # snippets de code valides
+    "ci_failures",   # logs CI bisect (timestamps + diff courts)
+    "ci_successes",
+})
+
+
 class ChromaMemoryManager:
     _instances: Dict[str, "ChromaMemoryManager"] = {}
 
@@ -206,7 +221,16 @@ class ChromaMemoryManager:
         récupère tous les docs et on filtre côté Python.
         """
         cutoff = time.time() - max_age_days * 86400
-        targets = [collection_name] if collection_name else list(self.collections.keys())
+        # Defense intrinseque : si pas de collection_name explicite, exclure
+        # les collections protegees (code source, snippets, CI logs).
+        if collection_name is None:
+            targets = [n for n in self.collections.keys() if n not in PROTECTED_COLLECTIONS]
+        elif collection_name in PROTECTED_COLLECTIONS:
+            # Appel explicite sur une collection protegee : autorise mais loggue
+            logger.warning(f"purge_expired explicite sur collection protegee '{collection_name}' — autorise")
+            targets = [collection_name]
+        else:
+            targets = [collection_name]
         total = 0
         for name in targets:
             try:
@@ -305,7 +329,18 @@ class ChromaMemoryManager:
         Returns:
             Nombre de documents supprimés.
         """
-        targets = [collection_name] if collection_name else list(self.collections.keys())
+        # Defense intrinseque : si pas de collection_name explicite, exclure
+        # les collections protegees. Conçue pour wisdom textuel, cette purge
+        # est toxique sur source_code (chunks AST < 100 chars systematiquement).
+        # 11/05/2026 : autopsie confirme que cet appel sans filtre avait wipe
+        # 2964 chunks de source_code chaque nuit.
+        if collection_name is None:
+            targets = [n for n in self.collections.keys() if n not in PROTECTED_COLLECTIONS]
+        elif collection_name in PROTECTED_COLLECTIONS:
+            logger.warning(f"purge_low_quality explicite sur collection protegee '{collection_name}' — autorise")
+            targets = [collection_name]
+        else:
+            targets = [collection_name]
         total = 0
         for name in targets:
             try:

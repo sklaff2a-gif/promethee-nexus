@@ -745,8 +745,11 @@ async def _task_chromadb_cleanup(circ: CircadianRhythm) -> str:
     if not instances:
         return "aucune instance ChromaDB"
     mgr = next(iter(instances.values()))
-    removed_expired = await mgr.async_purge_expired(60)
-    removed_quality = await mgr.async_purge_low_quality(100, 0.10)
+    # 11/05/2026 : collection_name="collective_wisdom" explicite — la purge
+    # circadienne ne doit JAMAIS toucher source_code/code_snippets/ci_failures
+    # (cf. PROTECTED_COLLECTIONS dans vector_store.py).
+    removed_expired = await mgr.async_purge_expired(60, collection_name="collective_wisdom")
+    removed_quality = await mgr.async_purge_low_quality(100, 0.10, collection_name="collective_wisdom")
     total_removed = removed_expired + removed_quality
     if circ._sleep_report:
         circ._sleep_report.chromadb_removed = total_removed

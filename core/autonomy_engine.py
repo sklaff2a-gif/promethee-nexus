@@ -6512,12 +6512,22 @@ class AutonomyEngine:
                 return {"status": "error", "result": "ChromaDB indisponible."}
 
             # Phase 1 : Purge des entrées anciennes (>60 jours) — protégé par lock
-            removed_old = await mgr.async_purge_expired(max_age_days=60)
+            # 11/05/2026 : collection_name="collective_wisdom" explicite pour
+            # ne pas declencher la defense intrinseque PROTECTED_COLLECTIONS
+            # (qui passerait sinon en mode "exclure source_code" silencieusement)
+            removed_old = await mgr.async_purge_expired(
+                max_age_days=60,
+                collection_name="collective_wisdom",
+            )
 
             # Phase 2 : Purge qualitative (textes courts, hallucinations non-latin) — protégé par lock
+            # Cible explicite collective_wisdom : cette purge est CONÇUE pour
+            # du wisdom textuel, pas pour des chunks AST de code (qui font
+            # systematiquement < 100 chars).
             removed_quality = await mgr.async_purge_low_quality(
                 min_length=100,
                 max_non_latin_ratio=0.10,
+                collection_name="collective_wisdom",
             )
 
             total = removed_old + removed_quality
