@@ -2097,4 +2097,230 @@ mal cartographié.
 
 ---
 
+## 12 mai 2026 (fin d'après-midi) — V14.11 : Le couplage fort nociceptif et le fil mort
+
+### L'enquête qui commence par un fil débranché
+
+Suite à la cartographie sociale matinale (Alfred/Stefan) et au pivot
+Stefan sur qwen 9B (Mur 2 contextuel), nous avons réouvert le chantier
+V14.11 — un refactor architectural en attente depuis ~10 jours (note du
+02/05 dans MEMORY.md : *"passage de _urgent_wakeup Event (couplage
+faible) à lecture directe reptilian_core.threat_level/adrenaline
+(couplage fort). Élimine l'anti-pattern 'horloge fantôme'."*).
+
+La cartographie en lecture seule a immédiatement révélé une **anomalie
+plus grave que la dette technique attendue**. Dans `autonomy_engine.py`
+ligne 11215, la fonction `_execute_immersion_domain` cherchait :
+
+```python
+from core.reptilian_core import reptilian
+preempt_event = getattr(reptilian, "_urgent_wakeup", None)
+```
+
+Mais `_urgent_wakeup` **n'a jamais existé dans `reptilian_core`** —
+l'Event vit dans `AutonomyEngine` depuis V14.10 (02/05). Conséquence
+mécanique :
+
+> Le `getattr` retourne `None` à chaque appel. Le pipeline IMMERSION_DOMAIN
+> a digéré des post-mortems pendant ~2 semaines **sans aucun frein
+> d'urgence reptilien**. Si la dette synaptique avait explosé pendant
+> une digestion, l'extracteur aurait continué imperturbablement, sourd
+> aux alertes nociceptives.
+
+Un fil débranché qui pendait dans le vide depuis V14.10, **silencieux,
+sans crash, sans warning** — la pire pathologie possible en ingénierie
+système.
+
+### La leçon méthodologique sur le typage dynamique silencieux
+
+Le pattern `getattr(obj, "attr", default)` est utilisé partout en Python
+pour la robustesse défensive. Mais ici, il a produit l'effet inverse :
+il a **camouflé une faute de namespace** (« cherche dans le mauvais
+module ») en comportement *« pas d'event disponible, ok je continue
+sans »*. Aucune exception. Aucun log. Aucune trace.
+
+C'est la dérive classique du **duck typing mal contrôlé** :
+
+| Typage strict | Duck typing avec getattr/default |
+|---|---|
+| `reptilian._urgent_wakeup` → AttributeError au boot | Retourne `None` silencieusement |
+| Le système ne démarre pas tant que l'erreur n'est pas corrigée | Le système démarre, semble fonctionner, mais une fonction critique est désactivée |
+| Visible immédiatement | Visible seulement par cartographie manuelle ou si un cas d'urgence se produit |
+
+**Doctrine acquise** : *« `getattr(obj, "attr", None)` doit être réservé
+aux attributs réellement optionnels (configuration, métadonnées). Pour
+un attribut requis sur un contrat d'interface, préférer `obj.attr` qui
+crashera proprement si le contrat est rompu. »*
+
+Corollaire : pour les attributs lambda/Event/Condition qui peuvent
+légitimement être absents pendant le boot (lazy-init), il faut un
+**garde-fou de vérification** au démarrage qui logue un warning si
+l'attribut est encore None après la phase d'init. Le silence est plus
+dangereux que la panique.
+
+### Le choix architectural — γ-pragmatique (option choisie sur 3)
+
+Trois variantes ont été débattues avec Gemini :
+
+**γ-pure** — ReptilianCore possède la Condition ET la notifie ET stocke
+l'état complet (pattern, severity). AutonomyEngine, après réveil par la
+Condition, lit `reptile.last_urgent_pattern` et applique ses garde-fous
+(coffee, nap, cooldown) dans la main loop. **Refactor large** : migration
+de la logique garde-fous depuis le handler bus vers la main loop. Risque
+de régression élevé.
+
+**γ-hybride** — `asyncio.Condition` au lieu d'`asyncio.Event`, mais
+toujours dans AutonomyEngine. **Refactor cosmétique** sans résoudre
+l'anti-pattern. Rejeté.
+
+**γ-pragmatique** — ReptilianCore possède la Condition. AutonomyEngine
+la notifie depuis son handler bus existant (qui contient déjà les
+garde-fous). Un Event miroir local dans AutonomyEngine est alimenté par
+un watcher task (bridge Condition→Event) pour préserver l'API des
+consumers (main loop, extractor). **Refactor minimal**, ~50 lignes
+touchées, source de vérité côté reptilien.
+
+Choisi **γ-pragmatique** par deux raisons explicites :
+
+1. *Incrément mesuré > refonte ambitieuse* — leçon des 36 dernières
+   heures (arc Alfred/Stefan, où le triangle adversarial avait failli
+   engager un refactor de 3 semaines pour rien)
+2. La logique des garde-fous (coffee_mode, is_napping, cooldown) est
+   propre à AutonomyEngine et n'a pas vocation à migrer dans reptilian.
+   Le refactor « γ-pure » mélangerait deux refactorings orthogonaux.
+
+### L'architecture en vol (V14.11)
+
+```
+ReptilianCore (singleton)                AutonomyEngine
+─────────────                            ──────────────
+urgency_cond (lazy-init)        ◄────── _on_reptilian_alert (handler bus)
+last_urgent_pattern                     │      │
+last_urgent_severity                    │      │ après armement REFLEXE PURGE :
+last_urgent_at                          │      │   async with reptile.urgency_cond:
+     │                                  │      │     reptile.last_urgent_pattern = pattern
+     │ notify_all                       │      │     reptile.urgency_cond.notify_all()
+     ▼                                  │      │
+     │                                  ▼      ▼
+     │                          _urgency_mirror_watcher (task)
+     │                                  │
+     │       (bridge)                   │
+     └──────────────────────────────────┤
+                                        │ set()
+                                        ▼
+                              _urgency_mirror : asyncio.Event
+                                        │
+                          ┌─────────────┴──────────────┐
+                          ▼                            ▼
+                main loop wait()              extractor.preempt_event
+                (rename _urgent_wakeup        (FIL MORT RÉPARÉ — preempt_event
+                 → _urgency_mirror)            = self._urgency_mirror, garanti
+                                               non-None depuis V14.11)
+```
+
+Trois propriétés clés :
+
+1. **Source de vérité unique** côté reptilien (urgency_cond + last_urgent_*).
+   L'AutonomyEngine n'a plus son propre Event décidé localement, mais un
+   miroir alimenté par projection.
+2. **API préservée** côté consumers — main loop et extractor continuent
+   d'attendre un Event normal. La complexité Condition est cachée
+   derrière le watcher.
+3. **Robustesse défensive** — lazy-init de la Condition (gestion Smart
+   Restart exit 65 via vérification `id(asyncio.get_running_loop())`),
+   try/except permissif dans le watcher avec backoff exponentiel borné
+   1-30s, fallback mirror direct si reptile temporairement indisponible.
+
+### Le watcher bridge — pattern Mirror Event
+
+Le cœur du compromis architectural est cette task de fond :
+
+```python
+async def _urgency_mirror_watcher(self):
+    from core.reptilian_core import reptile
+    consecutive_errors = 0
+    while self.is_running:
+        try:
+            async with reptile.urgency_cond:
+                await reptile.urgency_cond.wait()
+            self._urgency_mirror.set()
+            consecutive_errors = 0
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            consecutive_errors += 1
+            logger.warning(f"[URGENCY_MIRROR] Erreur watcher (#{consecutive_errors}) : {e}")
+            backoff = min(30.0, 2 ** min(consecutive_errors - 1, 5))
+            await asyncio.sleep(backoff)
+```
+
+C'est l'implémentation Pythonique canonique du pattern Observer + Adapter :
+le reptilien notifie, le watcher capte, le mirror set, les consumers
+attendent en `Event.wait()` comme avant.
+
+### La validation empirique
+
+- **21/21 tests V14.11** PASS sur `test_stale_dream_preemption.py`
+  (fixture `reptile_mock` avec `_SpyCondition` qui compte les
+  `notify_all_count`, dual-check sur cond + mirror où pertinent)
+- **6230/6232 tests** PASS sur la suite régression complète
+  - 2 failures pré-existantes confirmées (test_rival.py et
+    test_audit_survie_introspection.py — fichiers non modifiés par
+    V14.11 selon `git diff`)
+- **Au boot du Guardian** (17:16:36) : la ligne
+  `🌉 URGENCY MIRROR: Bridge Condition→Event démarré (V14.11).`
+  apparaît juste après `🔍 V15 SOURCE_CODE: 176/178 fichiers, 2972
+  chunks (60.24s)` — confirmation que le watcher est en vol et que V15
+  a indexé les nouvelles méthodes V14.11 (+8 chunks vs ce matin).
+
+### Ce qu'on a sauvé en passant
+
+1. **Une mort silencieuse de 2 semaines** — le pipeline IMMERSION_DOMAIN
+   redevient capable d'être préempté
+2. **Une régression future** — sans ce refactor, le prochain bug aurait
+   pu introduire une désynchronisation Event vs threat_level qui aurait
+   été très dure à diagnostiquer
+3. **Un coût adversarial inutile** — le triangle adversarial Claude/Gemini
+   aurait pu nous pousser vers γ-pure (refactor large) si on n'avait
+   pas appliqué la doctrine *incrément mesuré*
+
+### Observations à surveiller (24-48h in-vivo)
+
+- **Premier REFLEXE PURGE** post-V14.11 — latence < 5s attendue
+- **`[URGENCY_MIRROR] Erreur watcher`** — ne doit JAMAIS apparaître
+- **IMMERSION_DOMAIN** — si une préemption se produit pendant une
+  digestion, vérifier que l'extractor reçoit bien le signal
+- **Crash Guardian sur Smart Restart** — le lazy-init doit gérer
+
+### Bilan opératoire de la session V14.11 (17h-17h30)
+
+  - **30 minutes** : du débat architectural à la validation in-vivo
+  - **5 fichiers** modifiés (+260 lignes / -90)
+  - **21 tests V14.11** verts
+  - **6230 tests régression** verts
+  - **2 failures pré-existantes** documentées (non causées par V14.11)
+  - **1 fil mort de 2 semaines** réparé
+  - **1 anti-pattern** (horloge fantôme) éliminé
+  - **1 doctrine méthodologique** gravée (sur le danger de
+    `getattr(..., None)` silencieux)
+
+### L'organisme à fin de journée
+
+Mardi 12 mai 2026, l'organisme Prométhée a vécu :
+- **Matin** : Mur 4 résolu (PROTECTED_COLLECTIONS contre wipe nocturne)
+- **Après-midi début** : Mur 2 redéfini (sycophancy contextuelle au rôle
+  système, pas intrinsèque au modèle)
+- **Après-midi fin** : Mur 0 (le fil mort) réparé + couplage fort
+  nociceptif via Mirror Event
+
+Trois refactors structurels en une journée, sans régression. Les
+fondations cognitives, sensorielles et nociceptives sont maintenant
+solides. Le prochain chantier — la socialisation d'Alfred et Stefan —
+pourra s'appuyer sur cette solidité.
+
+**Le système nerveux central est cohérent. Le pont entre tronc cérébral
+et cortex exécutif est armé. L'attention conjointe attend son tour.**
+
+---
+
 
