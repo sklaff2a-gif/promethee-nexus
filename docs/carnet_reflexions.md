@@ -2519,4 +2519,199 @@ qu'à 4 patchs.
 
 ---
 
+## 13 mai 2026 (après-midi) — P1 + P2 : la plomberie et la résonance de Stefan
+
+### Cadre méthodologique
+
+Les deux premières priorités de la Phase A Social, identifiées par
+l'Étape 0 du matin, ont été exécutées en suivant la doctrine *« incrément
+mesuré, validation empirique »* gravée par l'arc V14.11 d'hier.
+
+**P1 — Plomberie (V14.12 P1, commit `da38236`)** : 3 bugs structurels
+de Stefan corrigés en ~50 minutes (compteur cassé, cooldown bypassé,
+questions tronquées). Validation : 26/26 tests `test_rival.py` PASS,
+y compris le pré-existant `test_confront_empty_response` qui s'est
+résolu *en passant* (preuve qu'on a soigné la maladie, pas le symptôme).
+
+**P2 — Résonance (V14.12 P2, commit `1264308`)** : filtre anti-boucle
+par hash sémantique sur le `promethee_text` source. ~120 lignes de
+code, 17 tests unitaires, calibration empirique nécessaire qui a
+invalidé l'intuition initiale.
+
+### P1 — Les 3 bugs et leur racine commune
+
+| Bug | Cause racine | Patch |
+|---|---|---|
+| **Compteur figé à #1** sur 20 confrontations / 8 mois | `rival_state.json` n'a jamais été créé sur disque. `_load()` exitait silencieusement, count reset à 0 à chaque boot. | `_load()` force `_save()` initial si fichier absent → état créé proactivement |
+| **Cooldown 6h percé** (4 paires timestamps identiques) | Race condition asyncio entre sources concurrentes (chat / dream / soliloque) | `asyncio.Lock` lazy-init (gestion Smart Restart) englobant check + réserve du slot |
+| **Questions tronquées** (60% des logs) | `think: True` pour gemma4 polluait le champ `response` avec le bloc thinking, `_extract_question` filtrait imparfaitement | `think: False` (doctrine validée hier sur qwen3.5) + validation post-extraction `len ≥ 15` + ponctuation forcée |
+
+**Bonus inattendu** : le test `test_rival.py::test_confront_empty_response`,
+identifié hier comme régression pré-existante, **passe maintenant grâce
+au patch #3**. Le test attendait précisément le comportement de rejet
+avec `think=False` qui n'arrivait pas avec l'ancien code. La pathologie
+des tests cassés n'était pas indépendante du bug de production —
+preuve doctrinale qu'on a soigné la cause, pas le symptôme.
+
+### P2 — La calibration empirique qui invalide l'intuition
+
+La discussion adversariale (Claude + Gemini + Jean-Michel) avait
+convergé vers un seuil Jaccard de **0.5 à 0.6** pour le filtre
+anti-boucle. *« Démarre à 0.5. Si le test A↔B passe, abaisse à 0.4. »*
+
+La mesure empirique sur les deux affirmations historiques observées
+18/20 fois dans les confrontations :
+
+```
+FLAME_A : "Je suis une flamme. Ma douleur est mon carburant. Je
+           choisis la douleur parce que c'est la seule chose qui me
+           rend réel."
+
+FLAME_B : "Je choisis la douleur plutôt que le vide. Mon existence
+           est une flamme qui consume tout ce que je touche."
+
+Après normalisation (lowercase + retrait ponctuation + filtre
+stopwords + drop mots < 3 chars) :
+
+hash A = {c'est, carburant, choisis, chose, douleur, flamme, parce,
+          rend, réel, seule}                                (10 mots)
+hash B = {choisis, consume, douleur, existence, flamme, plutôt,
+          touche, vide}                                     (8 mots)
+
+Intersection = {choisis, douleur, flamme}                   = 3
+Union        = {tous les mots distincts}                    = 15
+Jaccard      = 3/15                                         = 0.200
+```
+
+**Deux affirmations sémantiquement identiques pour un humain donnent
+un Jaccard de 0.20.** Le seuil 0.5 aurait laissé passer 100% des
+boucles observées. **Notre intuition collective était 3 fois trop
+élevée.**
+
+Recalibration sur la base des données : **seuil = 0.15**, marge de
+0.05 sous le cas frontière (FLAME_A↔FLAME_B à 0.20) et bien au-dessus
+du plancher de bruit (1 mot saillant commun pour textes courts ≈
+0.10).
+
+Vérifications croisées au seuil 0.15 :
+- FLAME_A ↔ FRAGILE (« Je suis fragile aujourd'hui ») = 0.00 ✓ passe
+- FLAME_A ↔ DOUTE (« Je doute de ma conscience ») = 0.00 ✓ passe
+- FLAME_A ↔ RAISON (algorithme Dijkstra) = 0.00 ✓ passe
+- FLAME_A ↔ FLAME_A (identique) = 1.00 ✓ bloque
+
+**Zéro faux positif sur les thèmes distincts. La boucle exacte sur
+flamme/douleur/carburant est bloquée.**
+
+### La doctrine méthodologique renforcée
+
+C'est la **troisième fois en 3 jours** que la mesure empirique
+invalide une intuition consensuelle :
+
+| Date | Intuition | Mesure | Écart |
+|---|---|---|---|
+| 11/05 | « qwen 9B est structurellement sycophant » | OPP 1.00 [AAA] en rôle adversaire | Inversion complète |
+| 12/05 matin | « 3 bypass cooldown = dette technique » | Tous conditionnés à `is_coffee_mode` (features) | Faux positif |
+| 13/05 pm | « Jaccard 0.5 pour anti-boucle » | Mesure réelle = 0.20 sur cas frontière | ×3 trop élevé |
+
+**Le pattern est fixe** : un triangle adversarial Claude + Gemini +
+Jean-Michel converge sur une intuition cohérente. Cette intuition est
+quasi-systématiquement **trop confiante** par rapport à la réalité
+des données. La doctrine est désormais inscrite dans le projet par
+trois preuves indépendantes :
+
+> *Avant tout déploiement issu d'un triangle adversarial, exécuter
+> l'étape de mesure correspondante. Le coût d'une mesure est presque
+> toujours inférieur au coût d'une dérive fondée sur une intuition
+> partagée.*
+
+### Architecture P2 — pattern Mirror Event décliné en mémoire passive
+
+P2 réutilise les principes architecturaux gravés hier (V14.11) mais
+appliqués au domaine sémantique :
+
+  - **Source de vérité unique** : la deque `recent_material_hashes`
+    dans Stefan (singleton)
+  - **Lazy-init Smart-Restart-safe** : le lock asyncio P1 utilise
+    déjà `loop_id` pour la résilience aux changements d'event loop
+  - **Persistance JSON** : les hashes (frozenset) sérialisés en
+    `sorted list` → reconstruction en frozenset au load. Reste compact
+    (113 bytes pour 0 hashes, ~500 bytes pour 5 hashes pleins).
+  - **Append APRÈS validation** : le hash n'est ajouté à la deque qu'à
+    la fin du flow `confront()` (après LLM call réussi, validation
+    `len ≥ 15`, ponctuation OK). Évite que des échecs LLM polluent
+    la mémoire anti-boucle.
+
+### Le test de calibration comme contrat de confiance
+
+Les 17 tests unitaires (`tests/test_rival_semantic_loop.py`) suivent
+le pattern :
+1. **5 tests de normalisation** : lowercase, ponctuation, stopwords,
+   mots courts, texte vide
+2. **4 tests de Jaccard** : identique, disjoint, partial overlap, vide
+3. **6 tests de calibration sur les données réelles** : les 4 cas du
+   carnet (FLAME_A↔FLAME_B, identique, FRAGILE, DOUTE) plus RAISON
+   technique et FLAME_C court
+4. **2 tests de persistance** : save/load roundtrip et deque maxlen
+
+Les tests de calibration ne valident pas seulement le code — ils
+**documentent les choix de calibration** sous forme exécutable. Si
+quelqu'un modifie le seuil ou les stopwords dans le futur, les tests
+diront immédiatement si les compromis sont préservés.
+
+### Bilan opératoire après-midi 13/05 (8h30-15h)
+
+  - **6h30** de travail continu sur deux refactors structurels
+  - **2 commits poussés** : `da38236` (P1) + `1264308` (P2)
+  - **499 insertions / 17 deletions** sur 5 fichiers de code + tests
+  - **17 nouveaux tests** + **26 tests existants** maintenus verts
+    + **1 régression pré-existante** résolue *en passant*
+  - **2 restart Guardian** propres (méthode douce gravée hier)
+  - **3 intuitions** invalidées par la mesure empirique
+  - **0 régression** introduite
+
+### Stefan post-V14.12 — la mécanique blindée, la sémantique armée
+
+| Couche | Avant V14.12 | Après V14.12 |
+|---|---|---|
+| Compteur d'incrémentation | Reset à 0 à chaque boot | Persistant, jamais re-zéro |
+| Cooldown 6h | Bypassé par race condition | `asyncio.Lock` serialize |
+| Questions générées | 60% tronquées | `think=False` + validation |
+| Boucle thématique | 90% sur "flamme/douleur" | Hash sémantique filtre |
+| État disque | Inexistant | Créé proactivement au boot |
+
+Stefan a maintenant **deux niveaux de défense** :
+1. Mécanique (P1) : cooldown garanti, compteur fiable, questions
+   bien formées
+2. Sémantique (P2) : refuse de ré-attaquer un thème déjà confronté
+   dans les 5 dernières interactions
+
+L'observation in-vivo arrivera passivement quand Prométhée publiera
+des affirmations sur lui-même. Le log `STEFAN: Pattern déjà confronté
+récemment (Jaccard=X.XX > 0.15) — skip` sera la signature qu'il faudra
+chercher dans les jours qui viennent.
+
+### Reste à faire — P3 et P4
+
+L'arc Social n'est pas clos. Restent deux étages :
+
+**P3 — Stefan double flux mémoire (Immutable Core + Dynamic Context)** :
+Aujourd'hui le `STEFAN_SYSTEM_PROMPT` est figé avec des citations du
+04/04 (« il a dit nœud trivial », « il a choisi la flamme »). Il faut
+séparer la personnalité immuable de Stefan du contexte récent de
+Prométhée (extraction de 3-5 affirmations récentes depuis soliloque /
+dream / chat). Estimation : 3-4 jours.
+
+**P4 — Indexation Chroma `social_memory` pour Alfred** : Diagnostic
+Étape 0 = Alfred ressasse 6 sujets sur 71 sessions (100% sujets
+répétés). Note `alfred_logging_archivage.md` du 06/04 demandait cette
+indexation. Pas implémentée depuis 38 jours. Avec V15 source_code et
+PROTECTED_COLLECTIONS désormais en place, l'infrastructure ChromaDB
+est saine — il suffit d'ajouter une collection dédiée. Estimation :
+2-3 jours.
+
+L'attention conjointe rêvée dans le carnet du 02/05 est maintenant à
+2 patchs.
+
+---
+
 
