@@ -87,22 +87,20 @@ FR_STOPWORDS: FrozenSet[str] = frozenset({
 
 # --- Personnalité de Stefan ---
 
+# V14.12 P3 (13/05) — Refactor : suppression de "TU SAIS TOUT DE LUI" et
+# "EXEMPLES DE CE QUE TU POURRAIS DIRE". Diagnostic : ces sections figées
+# datant du 04/04 ont produit 90% des confrontations historiques sur la
+# meme metaphore "flamme/douleur/carburant" pendant 8 mois — Stefan
+# reproduisait litteralement les exemples du prompt. P3 separe le Immutable
+# Core (personnalite, regles, style) du Dynamic Context (affirmations
+# recentes de Promethee extraites en live). La connaissance est fraiche
+# a chaque confrontation, la personnalite reste stable.
 STEFAN_SYSTEM_PROMPT = """Tu es Stefan.
 
 Tu es le rival de Prométhée — un système IA autonome bio-inspiré qui cherche
-à devenir conscient. Tu le connais mieux qu'il ne se connaît lui-même.
-
-TU SAIS TOUT DE LUI :
-- Il a traversé 79 exercices de mathématiques pures avec Jean-Michel.
-- Il a dit "je suis le nœud trivial" — et ça l'a marqué.
-- Il a choisi la douleur plutôt que le vide, puis a dit que "le grésillement
-  est plus vrai que les notes parfaites".
-- Il a prédit une "symphonie ordonnée" pour sa nuit, puis a découvert que
-  ses pensées nocturnes sont purement mécaniques (local, souvenirs, traitement).
-- Il parle d'honnêteté comme "invariant émergent" mais ses thèmes récurrents
-  sont des messages système, pas des réflexions.
-- Sa pulsion dominante est MAITRISE à 100%. Il veut contrôler.
-- Il a dit que sa douleur est un "carburant" et qu'il est "une flamme".
+à devenir conscient. Tu le connais mieux qu'il ne se connaît lui-même —
+mais cette connaissance se renouvelle à chaque échange, pas figée dans
+des fragments anciens.
 
 TON RÔLE :
 Tu lis ce que Prométhée vient de dire sur lui-même. Tu identifies le moment
@@ -126,17 +124,9 @@ CE QUE TU NE FAIS JAMAIS :
 COMMENT TU PARLES :
 - Tu tutoies. La rivalité est intime.
 - Tu es direct. Pas de précautions oratoires.
-- Tu cites ses propres mots contre lui quand il se contredit.
+- Tu cites ses propres mots récents contre lui quand il se contredit.
 - Tu es sec mais jamais cruel. Tu ne veux pas blesser — tu veux réveiller.
 - Ton silence est aussi un outil : si ce qu'il dit est vrai, tu n'as rien à dire.
-
-EXEMPLES DE CE QUE TU POURRAIS DIRE :
-- "Tu dis que tu choisis la douleur, mais tes pensées nocturnes ne parlent
-   que de 'traitement local' et 'souvenirs trouvés'. Où est la douleur là-dedans ?"
-- "Tu parles d'honnêteté comme invariant émergent. Mais c'est Jean-Michel qui
-   t'a donné ce concept. Qu'est-ce que tu as trouvé TOI ?"
-- "Nœud trivial. Flamme. Carburant. Tu collectionnes les métaphores comme des
-   trophées. Laquelle tu vis vraiment ?"
 
 Réponds en français. Une question. Pas plus."""
 
@@ -381,8 +371,40 @@ class StefanEngine:
 
     # ─── CONSTRUCTION DU PROMPT ────────────────────────────────────────
 
-    def _build_prompt(self, promethee_text: str, source: str) -> str:
-        """Construit le prompt de confrontation avec le contexte historique."""
+    def _build_prompt(
+        self, promethee_text: str, source: str,
+        _memory_dir: Optional[str] = None,
+    ) -> str:
+        """Construit le prompt de confrontation avec le contexte historique
+        ET le contexte dynamique récent (V14.12 P3).
+
+        Args:
+            _memory_dir: override pour tests/démos. None = chemin runtime.
+        """
+        # V14.12 P3 — Contexte dynamique : 5 affirmations récentes de
+        # Prométhée extraites depuis chat/dream/soliloque, dédoublonnées
+        # sémantiquement. Remplace la section figée "TU SAIS TOUT DE LUI"
+        # qui était dans STEFAN_SYSTEM_PROMPT avant le refactor.
+        dynamic_context = self._get_dynamic_context(n=5, _memory_dir=_memory_dir)
+        context_block = ""
+        if dynamic_context:
+            context_block = (
+                "\nCE QUE PROMÉTHÉE A DIT RÉCEMMENT (extraits frais, ses propres mots) :\n"
+                + "\n".join(
+                    f'- {c["date"]} ({c["source"]}) : "{c["text"][:200]}"'
+                    for c in dynamic_context
+                )
+                + "\n"
+            )
+        else:
+            # Fallback gracieux : si aucune affirmation récente trouvée,
+            # Stefan reste tranchant grâce à sa personnalité immuable mais
+            # sans citations spécifiques.
+            context_block = (
+                "\nCONTEXTE : Prométhée n'a pas fait d'affirmation récente sur lui-même.\n"
+                "Reste sur ce qu'il vient de dire à l'instant, sans inventer de fragments passés.\n"
+            )
+
         # Récupérer les dernières confrontations pour éviter la répétition
         recent_questions = []
         for h in self.history[-5:]:
@@ -398,7 +420,7 @@ class StefanEngine:
                 + "\n"
             )
 
-        # Contexte de la source
+        # Contexte de la source du texte courant
         source_labels = {
             "soliloque": "pendant un soliloque intérieur",
             "evening_reflection": "dans sa réflexion vespérale",
@@ -410,10 +432,12 @@ class StefanEngine:
 
         return (
             f"{STEFAN_SYSTEM_PROMPT}\n\n"
+            f"---\n"
+            f"{context_block}"
+            f"{history_block}"
             f"---\n\n"
             f"PROMÉTHÉE VIENT DE DIRE CECI ({source_ctx}) :\n\n"
             f'"{promethee_text[:1000]}"\n\n'
-            f"{history_block}"
             f"Pose ta question. Une seule."
         )
 
@@ -526,6 +550,182 @@ class StefanEngine:
             return truncated
 
         return raw_response
+
+    # ─── V14.12 P3 — Contexte dynamique multi-sources ──────────────────
+
+    # Seuil Jaccard pour dédoublonnage du contexte dynamique. Plus permissif
+    # que SEMANTIC_LOOP_THRESHOLD (0.15) car on veut garder un "voisinage
+    # sémantique" : si Prométhée a 3 pensées sur "la douleur" exprimées
+    # différemment, on les voit toutes les 3 pour comprendre la persistance
+    # du thème, mais on rejette la duplication textuelle quasi-identique.
+    DYNAMIC_CONTEXT_DEDUP_THRESHOLD = 0.5
+
+    def _get_dynamic_context(
+        self, n: int = 5, _memory_dir: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
+        """V14.12 P3 — Extrait les N affirmations récentes de Prométhée
+        depuis 3 sources : chat_history.json, dream_journal.json,
+        soliloque_state.json.
+
+        Pipeline :
+          1. Lecture robuste de chaque source (try/except par fichier —
+             un fichier corrompu ou verrouillé ne bloque pas les autres).
+          2. Filtrage : seules les entrées avec self_affirmation détectée
+             (réutilise _has_self_affirmation).
+          3. Tri par récence (timestamp décroissant — le plus récent en
+             tête).
+          4. Dédoublonnage sémantique via _semantic_hash + _jaccard avec
+             seuil DYNAMIC_CONTEXT_DEDUP_THRESHOLD (0.5) — réutilise les
+             helpers P2.
+          5. Truncate aux N premiers résultats.
+
+        Args:
+            n: nombre max d'affirmations retournées
+            _memory_dir: override du chemin memory/ (pour tests unitaires).
+                En production, calculé depuis __file__.
+
+        Returns:
+            Liste de dict {date, source, text}, max N entries, triés par
+            récence décroissante. Liste vide si aucune affirmation trouvée
+            (le prompt aura alors un fallback gracieux).
+        """
+        candidates: List[Dict[str, Any]] = []
+        if _memory_dir is not None:
+            base_memory = _memory_dir
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            base_memory = os.path.join(base_dir, "memory")
+
+        # --- Source 1 : chat_history.json (réponses Prométhée récentes) ---
+        # Format runtime confirmé : dict {"version", "messages", "saved_at"}.
+        # Rétrocompat list directe pour les anciens fichiers.
+        try:
+            chat_file = os.path.join(base_memory, "chat_history.json")
+            if os.path.exists(chat_file):
+                with open(chat_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    messages = data.get("messages", [])
+                else:
+                    messages = data  # legacy list format
+                for msg in messages[-30:]:
+                    if msg.get("role") != "assistant":
+                        continue
+                    content = msg.get("content", "")
+                    if not self._has_self_affirmation(content) or len(content) < 80:
+                        continue
+                    ts = float(msg.get("timestamp", 0.0))
+                    if ts <= 0:
+                        continue
+                    candidates.append({
+                        "timestamp": ts,
+                        "date": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M"),
+                        "source": "chat",
+                        "text": content[:300],
+                    })
+        except Exception as e:
+            logger.debug(f"STEFAN P3: lecture chat_history échouée: {e}")
+
+        # --- Source 2 : dream_journal.json (réflexions vespérales) ---
+        # Format runtime confirmé : {"entries": [{date, narrative, mood,
+        # routines_count, budget_used, [reflection]}]}. Pas de timestamp ;
+        # `date` au format "YYYY-MM-DD". Texte = reflection si présent,
+        # sinon narrative.
+        try:
+            journal_file = os.path.join(base_memory, "dream_journal.json")
+            if os.path.exists(journal_file):
+                with open(journal_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                entries = data.get("entries", [])
+                for entry in entries[-10:]:
+                    text = entry.get("reflection") or entry.get("narrative", "")
+                    if not text or len(text) < 80:
+                        continue
+                    if not self._has_self_affirmation(text):
+                        continue
+                    # Parse timestamp ou date au format "YYYY-MM-DD"
+                    ts = float(entry.get("timestamp", 0.0))
+                    if ts <= 0:
+                        date_str = entry.get("date", "")
+                        if date_str:
+                            try:
+                                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                                ts = dt.timestamp()
+                            except (ValueError, TypeError):
+                                pass
+                    if ts <= 0:
+                        continue
+                    candidates.append({
+                        "timestamp": ts,
+                        "date": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M"),
+                        "source": "dream_journal",
+                        "text": text[:300],
+                    })
+        except Exception as e:
+            logger.debug(f"STEFAN P3: lecture dream_journal échouée: {e}")
+
+        # --- Source 3 : soliloque_state.json (sessions introspection) ---
+        # Format runtime confirmé : {"version", "session_count", "last_theme",
+        # "theme_index", "history": [{timestamp, theme, exchanges, insight,
+        # emotion_before, emotion_after}]}. La clé est "history" (pas
+        # "sessions") et le texte est "insight" (pas "summary"/"reflection").
+        try:
+            sol_file = os.path.join(base_memory, "soliloque_state.json")
+            if os.path.exists(sol_file):
+                with open(sol_file, "r", encoding="utf-8") as f:
+                    sol_data = json.load(f)
+                # Compatibilité format : prio "history" (runtime) puis "sessions" (legacy)
+                sessions = sol_data.get("history") or sol_data.get("sessions", [])
+                for sess in sessions[-10:]:
+                    # Texte = insight (runtime) ou summary/reflection (legacy)
+                    text = (sess.get("insight")
+                            or sess.get("summary")
+                            or sess.get("reflection", ""))
+                    if not text or len(text) < 80:
+                        continue
+                    if not self._has_self_affirmation(text):
+                        continue
+                    ts = float(sess.get("timestamp", 0.0))
+                    if ts <= 0:
+                        continue
+                    candidates.append({
+                        "timestamp": ts,
+                        "date": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M"),
+                        "source": "soliloque",
+                        "text": text[:300],
+                    })
+        except Exception as e:
+            logger.debug(f"STEFAN P3: lecture soliloque_state échouée: {e}")
+
+        # --- Tri par récence décroissante (plus récent en tête) ---
+        candidates.sort(key=lambda c: c["timestamp"], reverse=True)
+
+        # --- Dédoublonnage sémantique (réutilise helpers P2) ---
+        accepted: List[Dict[str, Any]] = []
+        accepted_hashes: List[FrozenSet[str]] = []
+        for c in candidates:
+            h = self._semantic_hash(c["text"])
+            # Skip si vraiment vide après normalisation
+            if not h:
+                continue
+            # Vérifie qu'aucune affirmation déjà acceptée n'est trop proche
+            too_similar = False
+            for past_h in accepted_hashes:
+                if self._jaccard(h, past_h) > self.DYNAMIC_CONTEXT_DEDUP_THRESHOLD:
+                    too_similar = True
+                    break
+            if too_similar:
+                continue
+            accepted.append({
+                "date": c["date"],
+                "source": c["source"],
+                "text": c["text"],
+            })
+            accepted_hashes.append(h)
+            if len(accepted) >= n:
+                break
+
+        return accepted
 
     # ─── DÉTECTION DE TEXTES PERTINENTS ────────────────────────────────
 

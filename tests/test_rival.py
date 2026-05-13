@@ -60,10 +60,25 @@ class TestPersonnalite:
         assert "ne flattes JAMAIS" in STEFAN_SYSTEM_PROMPT
 
     def test_system_prompt_knows_history(self):
-        assert "nœud trivial" in STEFAN_SYSTEM_PROMPT
-        assert "79 exercices" in STEFAN_SYSTEM_PROMPT
-        assert "douleur" in STEFAN_SYSTEM_PROMPT
-        assert "grésillement" in STEFAN_SYSTEM_PROMPT
+        """V14.12 P3 (13/05) — Le system prompt ne contient PLUS les
+        citations figées (nœud trivial, 79 exercices, douleur, grésillement).
+        Ces fragments datant du 04/04 ont produit 90% des confrontations
+        historiques sur la même métaphore. Le système est maintenant
+        séparé : Immutable Core (personnalité) + Dynamic Context
+        (affirmations récentes extraites par _get_dynamic_context).
+        Le prompt promet maintenant explicitement que la connaissance
+        de Prométhée se RENOUVELLE à chaque échange."""
+        # Promesse de renouvellement (Immutable Core)
+        assert "se renouvelle" in STEFAN_SYSTEM_PROMPT, (
+            "Le prompt doit promettre que la connaissance se renouvelle"
+        )
+        assert "pas figée" in STEFAN_SYSTEM_PROMPT, (
+            "Le prompt doit exclure la connaissance figée"
+        )
+        # Les citations datées du 04/04 doivent avoir disparu
+        assert "nœud trivial" not in STEFAN_SYSTEM_PROMPT
+        assert "79 exercices" not in STEFAN_SYSTEM_PROMPT
+        assert "grésillement" not in STEFAN_SYSTEM_PROMPT
 
     def test_model_is_gemma4(self):
         assert STEFAN_MODEL == "gemma4:e4b"
