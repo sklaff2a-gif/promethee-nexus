@@ -287,6 +287,19 @@ class AlfredEngine:
             self.session_count += 1
             self._save()
 
+            # V14.12 P4 — Indexation dans Chroma social_memory pour casser
+            # l'amnésie sociale. Diagnostic Étape 0 (13/05) : 6 sujets uniques
+            # sur 71 sessions historiques (100% répétition). Le filtre
+            # _last_cafe_subject (RAM, perdu au reboot) ne dédoublait que
+            # le DERNIER café. Avec social_memory persistée, Alfred connaît
+            # ses 7 derniers cafés et évite leurs sujets.
+            try:
+                self._index_cafe_to_social_memory(
+                    text_source, messages, exchanges, duration,
+                )
+            except Exception as e:
+                logger.debug(f"ALFRED P4: indexation social_memory échouée: {e}")
+
             logger.info(f"ALFRED: Café terminé — {exchanges} échanges, {duration:.0f}s")
 
             return {
@@ -299,6 +312,109 @@ class AlfredEngine:
         except Exception as e:
             logger.error(f"ALFRED: Erreur café — {e}")
             return {"status": "error", "result": f"Café raté : {e}"}
+
+    # ─── V14.12 P4 — Mémoire sociale Chroma ────────────────────────────
+
+    # Fenêtre des N derniers cafés à exclure quand on choisit un sujet.
+    # 7 = ~2 jours d'historique en mode actif (4 cafés/jour). Force Alfred
+    # à balayer ses 5 sources avant de revenir sur un sujet.
+    RECENT_CAFE_WINDOW = 7
+
+    def _index_cafe_to_social_memory(
+        self, text_source: Dict, messages: List[Dict],
+        exchanges: int, duration: float,
+    ) -> None:
+        """V14.12 P4 — Indexe le café terminé dans la collection ChromaDB
+        social_memory. Permet le filtrage anti-amnésie au prochain café
+        ET prépare le terrain pour un futur "Alfred cite un café passé".
+
+        Stocké :
+          - document : résumé textuel du café (transcript synthétique)
+          - metadata : timestamp, date, subject, type, exchanges, duration_s
+          - id : f"cafe_{int(timestamp)}" (unique et triable)
+        """
+        from core.vector_store import ChromaMemoryManager
+        mgr = ChromaMemoryManager.get_instance()
+        if not mgr:
+            return
+        now = time.time()
+        # Résumé textuel : sujet + premier échange utilisateur (Alfred)
+        # + dernière réponse Prométhée. Compact mais indexable.
+        first_alfred = next(
+            (m["content"] for m in messages if m.get("role") == "assistant"),
+            "",
+        )[:200]
+        last_promethee = next(
+            (m["content"] for m in reversed(messages) if m.get("role") == "user"),
+            "",
+        )[:200]
+        summary = (
+            f"Café Alfred sur '{text_source.get('subject', '?')}' "
+            f"({text_source.get('type', '?')}, {exchanges} échanges). "
+            f"Alfred: \"{first_alfred}\" Prométhée (fin): \"{last_promethee}\""
+        )
+        metadata = {
+            "timestamp": now,
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "subject": text_source.get("subject", "")[:100],
+            "type": text_source.get("type", "")[:50],
+            "exchanges": int(exchanges),
+            "duration_s": float(duration),
+        }
+        doc_id = f"cafe_{int(now * 1000)}"  # ms timestamp → unique même 2x/s
+        mgr.add_documents(
+            documents=[summary],
+            metadatas=[metadata],
+            ids=[doc_id],
+            collection_name="social_memory",
+        )
+        logger.info(
+            f"ALFRED P4: Café indexé dans social_memory "
+            f"(id={doc_id}, subject='{text_source.get('subject', '?')[:40]}')"
+        )
+
+    def _get_recent_cafe_subjects(
+        self, n: Optional[int] = None,
+    ) -> set:
+        """V14.12 P4 — Retourne les subjects des N derniers cafés indexés
+        dans social_memory. Utilisé par _find_recent_text pour filtrer
+        les sujets récemment abordés (anti-amnésie).
+
+        Args:
+            n: nombre max de cafés à considérer. Default = RECENT_CAFE_WINDOW.
+
+        Returns:
+            set[str] des subjects récents. Vide si Chroma indisponible ou
+            si aucun café indexé (premier démarrage post-P4).
+        """
+        if n is None:
+            n = self.RECENT_CAFE_WINDOW
+        try:
+            from core.vector_store import ChromaMemoryManager
+            mgr = ChromaMemoryManager.get_instance()
+            if not mgr:
+                return set()
+            col = mgr._get_collection("social_memory")
+            # ChromaDB get() avec metadatas — on récupère tout puis on
+            # trie côté Python (collection petite : ~100 cafés max).
+            results = col.get(include=["metadatas"])
+            if not results or not results.get("metadatas"):
+                return set()
+            metas = results["metadatas"]
+            # Tri par timestamp décroissant (plus récent en tête)
+            metas_sorted = sorted(
+                metas,
+                key=lambda m: float(m.get("timestamp", 0.0)),
+                reverse=True,
+            )
+            return {
+                m.get("subject", "")
+                for m in metas_sorted[:n]
+                if m.get("subject")
+            }
+        except Exception as e:
+            logger.debug(f"ALFRED P4: query social_memory échouée: {e}")
+            return set()
 
     # ─── TROUVER UN TEXTE RÉCENT ────────────────────────────────────────
 
@@ -398,10 +514,34 @@ class AlfredEngine:
         if not candidates:
             return None
 
-        # Eviter de reproposer le meme sujet que le dernier cafe
+        # V14.12 P4 — Filtrage anti-amnésie via Chroma social_memory.
+        # Diagnostic Étape 0 : 6 sujets uniques sur 71 sessions historiques
+        # (100% répétition). L'ancien filtre _last_cafe_subject (RAM)
+        # ne dédoublait QUE le dernier café et était perdu au reboot.
+        # Maintenant : on exclut les subjects des N derniers cafés
+        # persistés dans Chroma.
+        recent_subjects = self._get_recent_cafe_subjects()
+        if recent_subjects and len(candidates) > 1:
+            fresh = [
+                c for c in candidates
+                if c.get("subject") not in recent_subjects
+            ]
+            if fresh:
+                candidates = fresh
+                logger.debug(
+                    f"ALFRED P4: {len(fresh)} candidats frais "
+                    f"(filtré {len(recent_subjects)} sujets récents)"
+                )
+            # Si tous filtrés → fallback random sur l'ensemble (Alfred parle
+            # quand même, mais on accepte la répétition pour ne pas paralyser)
+
+        # Rétrocompat : _last_cafe_subject reste comme garde-fou local
+        # (cas Chroma indisponible)
         last_subject = getattr(self, '_last_cafe_subject', '')
         if last_subject and len(candidates) > 1:
-            candidates = [c for c in candidates if c.get("subject") != last_subject] or candidates
+            candidates = [
+                c for c in candidates if c.get("subject") != last_subject
+            ] or candidates
 
         choice = random.choice(candidates)
         self._last_cafe_subject = choice.get("subject", "")

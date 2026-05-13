@@ -18,10 +18,14 @@ logger = logging.getLogger("VectorStore")
 # collection_name iterait sur TOUTES les collections et wipait source_code
 # (2964 chunks AST < 100 chars supprimes silencieusement chaque nuit).
 PROTECTED_COLLECTIONS = frozenset({
-    "source_code",   # V15 RAG du code source (chunks AST)
-    "code_snippets", # snippets de code valides
-    "ci_failures",   # logs CI bisect (timestamps + diff courts)
+    "source_code",     # V15 RAG du code source (chunks AST)
+    "code_snippets",   # snippets de code valides
+    "ci_failures",     # logs CI bisect (timestamps + diff courts)
     "ci_successes",
+    # V14.12 P4 (13/05) — mémoire sociale d'Alfred (résumés de café avec
+    # metadata). Sujets et résumés courts (100-500 chars) qui passeraient
+    # sous le seuil min_length=100 de purge_low_quality si non protégés.
+    "social_memory",
 })
 
 
