@@ -13,11 +13,13 @@ Construit le 4 avril 2026. Activation prévue semaine 3+.
 
 import json
 import os
+import re
 import time
 import logging
 import asyncio
+from collections import deque
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, FrozenSet
 
 logger = logging.getLogger("Stefan")
 
@@ -40,6 +42,47 @@ OLLAMA_GENERATE_URL = "http://localhost:11434/api/generate"
 
 # Le modèle de Stefan — gemma4 pour la profondeur, pas le fine-tune strategist
 STEFAN_MODEL = "gemma4:e4b"
+
+# V14.12 P2 (13/05) — Anti-boucle par hash sémantique
+# Diagnostic Étape 0 : 18/20 confrontations (90%) sur 8 mois portaient sur
+# la même affirmation "Je suis une flamme..." ou sa variante immédiate.
+# Cause racine : Stefan confronte le matériel pioché dans chat/dream/soliloque,
+# qui contient lui-même des mots flamme/carburant que Stefan a publiés sur
+# THOUGHT_STREAM précédemment. Boucle auto-entretenue via les mémoires écrites.
+# Solution : hacher sémantiquement le promethee_text source ET refuser tout
+# texte trop similaire (Jaccard > seuil) à un des N derniers déjà confrontés.
+MAX_RECENT_HASHES = 5             # Fenêtre mémoire anti-boucle
+# V14.12 P2 — Calibration empirique sur les 20 confrontations historiques
+# (Étape 0 du 13/05). FLAME_A vs FLAME_B (deux variations sur le thème
+# flamme/douleur/carburant qui représentaient 90% des confrontations)
+# donnent Jaccard = 0.20 — les textes longs partagent rarement plus de
+# 3-4 mots saillants en proportion. Seuil calibré sous 0.20 mais au-dessus
+# de 0.10 (Jaccard pour un mot commun "flamme" entre deux textes courts).
+# Tests in-vitro : FLAME_A vs FRAGILE = 0.00, FLAME_A vs DOUTE = 0.00,
+# FLAME_A vs RAISON = 0.00 → 0.15 ne produit pas de faux positifs sur
+# les thèmes distincts. Test calibré in tests/test_rival_semantic_loop.py.
+SEMANTIC_LOOP_THRESHOLD = 0.15    # Jaccard > 0.15 = même thématique → skip
+
+# Stopwords français minimaux (pas un NLP pipeline complet, juste le bruit
+# fonctionnel pour que les mots saillants flamme/douleur/conscience pèsent).
+FR_STOPWORDS: FrozenSet[str] = frozenset({
+    "je", "j", "tu", "il", "elle", "on", "nous", "vous", "ils", "elles",
+    "le", "la", "les", "un", "une", "des", "du", "de", "à", "au", "aux",
+    "et", "ou", "mais", "donc", "car", "ni", "que", "qui", "quoi",
+    "ce", "cette", "ces", "cet", "se", "sa", "son", "ses",
+    "ma", "mon", "mes", "ta", "ton", "tes", "notre", "votre", "leur",
+    "ai", "as", "avons", "avez", "ont", "es", "est", "sommes", "êtes",
+    "sont", "été", "étant", "était", "suis", "sera", "seront",
+    "pas", "ne", "plus", "moins", "très", "trop",
+    "où", "quand", "comment", "pourquoi",
+    "dans", "sur", "sous", "avec", "sans", "pour", "par",
+    "comme", "si", "même", "tout", "tous", "toute", "toutes",
+    "fait", "faire",
+    "ça", "ceci", "cela", "celui", "celle", "ceux", "celles",
+    "déjà", "encore", "ici", "là", "ainsi",
+    "alors", "donc", "puis", "ensuite", "enfin",
+    "peut", "doit", "vais", "veux", "veut",
+})
 
 
 # --- Personnalité de Stefan ---
@@ -124,6 +167,13 @@ class StefanEngine:
         # Lazy-init pour gérer le changement d'event loop (Smart Restart exit 65).
         self._confront_lock: Optional[asyncio.Lock] = None
         self._confront_lock_loop_id: Optional[int] = None
+        # V14.12 P2 (13/05) — Anti-boucle par hash sémantique.
+        # deque maxlen=5 des derniers promethee_text confrontés (sous forme
+        # de frozenset de mots saillants après normalisation). Si la
+        # similarité Jaccard avec un nouveau matériel dépasse SEMANTIC_LOOP_THRESHOLD,
+        # confront() skip. Persistée dans rival_state.json pour survivre aux
+        # restart Guardian.
+        self.recent_material_hashes: deque = deque(maxlen=MAX_RECENT_HASHES)
 
     def _get_confront_lock(self) -> asyncio.Lock:
         """Lazy-init du lock confront. Recréé si event loop change."""
@@ -180,6 +230,24 @@ class StefanEngine:
 
             if self._is_purely_technical(promethee_text):
                 return {"status": "skipped", "result": "Technique pur. Stefan ne s'intéresse pas au code."}
+
+            # V14.12 P2 — Anti-boucle par hash sémantique. On hash le texte
+            # source ET on compare aux N derniers déjà confrontés. Si Jaccard
+            # > seuil → on skip (boucle évitée). 90% des confrontations
+            # historiques portaient sur "Je suis une flamme..." — sans ce filtre,
+            # Stefan reposait toujours la même question.
+            new_hash = self._semantic_hash(promethee_text)
+            for past_hash in self.recent_material_hashes:
+                sim = self._jaccard(new_hash, past_hash)
+                if sim > SEMANTIC_LOOP_THRESHOLD:
+                    logger.info(
+                        f"STEFAN: Pattern déjà confronté récemment "
+                        f"(Jaccard={sim:.2f} > {SEMANTIC_LOOP_THRESHOLD}) — skip"
+                    )
+                    return {
+                        "status": "skipped",
+                        "result": f"Boucle sémantique évitée (similarité {sim:.0%}).",
+                    }
 
             # Réserve le slot — toute confrontation concurrente sera bloquée
             # par le cooldown dès le prochain check (même si on échoue après).
@@ -260,6 +328,13 @@ class StefanEngine:
             # V14.12 — last_confrontation déjà réservé par le lock plus haut.
             # On ne le re-met pas à jour ici (pas besoin).
             self.confrontation_count += 1
+
+            # V14.12 P2 — Mémoriser le hash sémantique APRÈS confirmation que
+            # la confrontation a vraiment abouti (question valide, slot
+            # consommé). Si on l'append plus tôt, un échec LLM polluerait
+            # la mémoire anti-boucle avec un texte qu'on n'a finalement pas
+            # confronté.
+            self.recent_material_hashes.append(new_hash)
 
             # Enregistrer
             entry = {
@@ -343,6 +418,41 @@ class StefanEngine:
         )
 
     # ─── FILTRES ET NETTOYAGE ──────────────────────────────────────────
+
+    @staticmethod
+    def _semantic_hash(text: str) -> FrozenSet[str]:
+        """V14.12 P2 — Hash sémantique déterministe d'un texte.
+
+        Pipeline :
+          1. Lowercase + suppression ponctuation
+          2. Split en mots, filtre stopwords français + mots < 3 chars
+          3. Tronque aux 30 premiers mots saillants (anti-explosion sur
+             textes longs, garde les premiers qui portent le thème)
+          4. Retourne frozenset (sérialisable, comparable, hashable)
+
+        Coût : O(n) où n = longueur texte. Pas de LLM, pas de VRAM, ~1ms.
+        """
+        # Lower + ponctuation simple (garde apostrophes pour split mots français)
+        txt = re.sub(r"[^\w\s']", " ", text.lower())
+        # Split mots, filtre stopwords + mots trop courts
+        words = [
+            w for w in txt.split()
+            if w not in FR_STOPWORDS and len(w) >= 3
+        ]
+        # Tronquer aux 30 premiers (les premiers mots portent le thème)
+        return frozenset(words[:30])
+
+    @staticmethod
+    def _jaccard(a: FrozenSet[str], b: FrozenSet[str]) -> float:
+        """Similarité Jaccard sur 2 sets de mots normalisés.
+
+        Returns:
+            float dans [0.0, 1.0] : 0.0 = aucun mot commun,
+                                    1.0 = sets identiques.
+        """
+        if not a or not b:
+            return 0.0
+        return len(a & b) / len(a | b)
 
     @staticmethod
     def _is_purely_technical(text: str) -> bool:
@@ -500,6 +610,11 @@ class StefanEngine:
             "confrontation_count": self.confrontation_count,
             "last_confrontation": self.last_confrontation,
             "history": self.history[-MAX_HISTORY:],
+            # V14.12 P2 — Sérialise les frozenset en list[list[str]] pour
+            # compatibilité JSON. Reconstruction frozenset au _load().
+            "recent_material_hashes": [
+                sorted(h) for h in self.recent_material_hashes
+            ],
         }
         try:
             os.makedirs(os.path.dirname(RIVAL_STATE_FILE), exist_ok=True)
@@ -533,9 +648,16 @@ class StefanEngine:
             self.confrontation_count = state.get("confrontation_count", 0)
             self.last_confrontation = state.get("last_confrontation", 0.0)
             self.history = state.get("history", [])
+            # V14.12 P2 — Reconstruction des hashes : list[list[str]] → deque[frozenset]
+            raw_hashes = state.get("recent_material_hashes", [])
+            self.recent_material_hashes = deque(
+                (frozenset(h) for h in raw_hashes),
+                maxlen=MAX_RECENT_HASHES,
+            )
             logger.info(
                 f"STEFAN: état chargé — count={self.confrontation_count}, "
-                f"history={len(self.history)}"
+                f"history={len(self.history)}, "
+                f"recent_hashes={len(self.recent_material_hashes)}"
             )
         except Exception as e:
             logger.error(f"STEFAN: Chargement échoué: {e}")
