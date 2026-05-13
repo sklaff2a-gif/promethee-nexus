@@ -115,6 +115,26 @@ class StefanEngine:
         self.history: List[Dict] = []
         self.last_confrontation: float = 0.0
         self._initialized: bool = False
+        # V14.12 (13/05) — Lock asyncio pour anti-race sur cooldown.
+        # Le diagnostic Étape 0 a montré 4 paires de timestamps identiques
+        # sur 20 confrontations (cooldown 6h percé). Cause : confront() est
+        # async, plusieurs sources (chat, soliloque, dream) appellent en
+        # parallèle, toutes lisent last_confrontation=ancien AVANT que la
+        # première ait le temps de mettre à jour. Lock = serialize.
+        # Lazy-init pour gérer le changement d'event loop (Smart Restart exit 65).
+        self._confront_lock: Optional[asyncio.Lock] = None
+        self._confront_lock_loop_id: Optional[int] = None
+
+    def _get_confront_lock(self) -> asyncio.Lock:
+        """Lazy-init du lock confront. Recréé si event loop change."""
+        try:
+            loop_id = id(asyncio.get_running_loop())
+        except RuntimeError:
+            return asyncio.Lock()
+        if self._confront_lock is None or self._confront_lock_loop_id != loop_id:
+            self._confront_lock = asyncio.Lock()
+            self._confront_lock_loop_id = loop_id
+        return self._confront_lock
 
     @classmethod
     def reset_singleton(cls):
@@ -141,17 +161,29 @@ class StefanEngine:
         """
         now = time.time()
 
-        # Cooldown
-        if now - self.last_confrontation < COOLDOWN_HOURS * 3600:
-            remaining = int((COOLDOWN_HOURS * 3600 - (now - self.last_confrontation)) / 3600)
-            return {"status": "skipped", "result": f"Stefan attend. Prochain round dans ~{remaining}h."}
+        # V14.12 — Lock asyncio sur la phase check-and-reserve pour
+        # éliminer la race condition sur le cooldown (diagnostic Étape 0 :
+        # 4 paires de timestamps identiques sur 20 confrontations). On
+        # lâche le lock AVANT le LLM call (qui peut prendre 30s) pour ne
+        # pas bloquer les autres sources sur la durée d'inférence — mais
+        # on RÉSERVE le slot avant en updatant last_confrontation, donc
+        # toute confrontation concurrente sera filtrée par le cooldown.
+        async with self._get_confront_lock():
+            # Cooldown
+            if now - self.last_confrontation < COOLDOWN_HOURS * 3600:
+                remaining = int((COOLDOWN_HOURS * 3600 - (now - self.last_confrontation)) / 3600)
+                return {"status": "skipped", "result": f"Stefan attend. Prochain round dans ~{remaining}h."}
 
-        # Filtrer le texte trop court ou trop technique
-        if not promethee_text or len(promethee_text) < 50:
-            return {"status": "skipped", "result": "Rien à confronter."}
+            # Filtrer le texte trop court ou trop technique
+            if not promethee_text or len(promethee_text) < 50:
+                return {"status": "skipped", "result": "Rien à confronter."}
 
-        if self._is_purely_technical(promethee_text):
-            return {"status": "skipped", "result": "Technique pur. Stefan ne s'intéresse pas au code."}
+            if self._is_purely_technical(promethee_text):
+                return {"status": "skipped", "result": "Technique pur. Stefan ne s'intéresse pas au code."}
+
+            # Réserve le slot — toute confrontation concurrente sera bloquée
+            # par le cooldown dès le prochain check (même si on échoue après).
+            self.last_confrontation = now
 
         try:
             # Construire le prompt
@@ -187,7 +219,13 @@ class StefanEngine:
                                 "model": STEFAN_MODEL,
                                 "prompt": prompt,
                                 "stream": False,
-                                "think": True,
+                                # V14.12 (13/05) — think=False : gemma4/qwen3.5 polluent
+                                # le champ `response` avec le bloc thinking quand True,
+                                # produisant des questions tronquées (60% troncature
+                                # observée sur 20 confrontations historiques).
+                                # Doctrine doctrine appliquée hier (11/05) sur qwen3.5
+                                # pour le sycophancy_probe — même problème ici.
+                                "think": False,
                                 "keep_alive": "30s",
                                 "options": {
                                     "temperature": 0.8,
@@ -206,7 +244,21 @@ class StefanEngine:
             # Nettoyer : garder seulement la question (supprimer le thinking si présent)
             question = self._extract_question(question)
 
-            self.last_confrontation = now
+            # V14.12 — Validation post-extraction : si la question est vide,
+            # trop courte (<15 chars) ou ne se termine pas par un terminateur,
+            # on rejette. Ajoute un "?" final si manquant et que c'est viable.
+            if not question or len(question) < 15:
+                logger.warning(f"STEFAN: question malformée rejetée : '{question[:80]}'")
+                # Le slot a été pris par le lock; on le libère pour ne pas
+                # gaspiller un cooldown de 6h sur un échec de génération.
+                self.last_confrontation = 0.0
+                return {"status": "error", "result": "Question Stefan malformée (LLM tronqué)."}
+            if not question.rstrip().endswith(("?", ".", "!")):
+                # Question valide mais sans ponctuation finale — on complète.
+                question = question.rstrip() + " ?"
+
+            # V14.12 — last_confrontation déjà réservé par le lock plus haut.
+            # On ne le re-met pas à jour ici (pas besoin).
             self.confrontation_count += 1
 
             # Enregistrer
@@ -459,8 +511,21 @@ class StefanEngine:
             logger.warning(f"STEFAN: Sauvegarde échouée: {e}")
 
     def _load(self):
-        """Charge l'état depuis le disque."""
+        """Charge l'état depuis le disque. Crée le fichier initial si absent.
+
+        V14.12 (13/05) — Avant ce patch, si rival_state.json n'existait pas,
+        _load() sortait silencieusement (return) et le compteur restait à 0
+        à chaque démarrage. Les confrontations s'auto-écrasaient à #1 dans
+        les logs. Le diagnostic Étape 0 (20 confrontations, toutes #1) a
+        confirmé que le fichier n'a jamais été créé sur 8 mois — alors
+        que `_save()` marche techniquement. Plus sûr de forcer la création
+        au boot que d'espérer que la première confrontation succès le crée.
+        """
         if not os.path.exists(RIVAL_STATE_FILE):
+            logger.info(
+                f"STEFAN: rival_state.json absent au boot — création initiale (count=0)"
+            )
+            self._save()
             return
         try:
             with open(RIVAL_STATE_FILE, "r", encoding="utf-8") as f:
@@ -468,8 +533,12 @@ class StefanEngine:
             self.confrontation_count = state.get("confrontation_count", 0)
             self.last_confrontation = state.get("last_confrontation", 0.0)
             self.history = state.get("history", [])
+            logger.info(
+                f"STEFAN: état chargé — count={self.confrontation_count}, "
+                f"history={len(self.history)}"
+            )
         except Exception as e:
-            logger.warning(f"STEFAN: Chargement échoué: {e}")
+            logger.error(f"STEFAN: Chargement échoué: {e}")
 
     def _log_confrontation(self, entry: Dict):
         """Sauvegarde la confrontation dans un fichier de log dédié."""

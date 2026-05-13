@@ -2323,4 +2323,200 @@ et cortex exécutif est armé. L'attention conjointe attend son tour.**
 
 ---
 
+## 13 mai 2026 (matin) — L'Amnésie d'Alfred et le Disque Rayé de Stefan
+
+### Le double test du matin
+
+Au réveil 7h, deux questions de fond restaient ouvertes après la
+construction des fondations d'hier :
+
+  1. **V14.11 fonctionne-t-elle vraiment en charge ?** La défense passive
+     (PROTECTED_COLLECTIONS) avait survécu la nuit, mais le bridge
+     Condition→Event n'avait pas eu d'occasion d'être stressé.
+  2. **Alfred et Stefan sont-ils vraiment pathologiques ?** Le diagnostic
+     du 09/05 reposait sur 4 sessions observées sur 5 semaines. Gemini
+     avait raison de pointer Q6 : 4 sessions ne sont pas une preuve.
+
+Phase B (test in-vivo V14.11) puis Phase C (Étape 0 stats Alfred/Stefan)
+ont apporté les deux réponses en moins d'une heure.
+
+### Phase B — V14.11 : le triomphe ×212
+
+Injection contrôlée via `scripts/inject_synaptic_congestion.py --count 50` :
+le compteur `episode_count_since_consolidation` passe de 4 à 50, ce qui
+calibre une `severity` théorique de 10.0 (clampée au max) — bien au-dessus
+du seuil REPTILIAN_ALERT de 5.0.
+
+Restart Guardian propre (kill `guardian.py` d'abord, puis orphelins, puis
+relance — méthode douce de la doctrine V14.11). Boot complet en 78s.
+
+À 07:19:20, premier tick reptilien post-boot. La cascade nociceptive
+complète s'enchaîne :
+
+```
+07:19:20  REPTILIEN: synaptic_congestion URGENCE — severity=10.00 z=5.62 pending=50
+07:19:20  [AUTONOMY] REFLEXE PURGE — préemption synaptic_congestion → MEMORY_CONSOLIDATION
+07:19:20  🚨 REFLEXE PURGE: synaptic_congestion sev=10.0 pending=50 → MEMORY_CONSOLIDATION forcé
+07:19:20  [AUTONOMY] Réveil URGENT — _forced_next_intent=MEMORY_CONSOLIDATION  ← preuve V14.11
+07:19:21  🔀 LOOP_BREAKER: Intent force → [MEMORY_CONSOLIDATION]
+07:19:21  ✨ AUTONOMY [FORCED]: [MEMORY_CONSOLIDATION] (cout=2pt)
+07:19:25  SYNAPSE: Dream consolidation: +659 connexions, -795 pruned, +3 curiosité
+07:19:27  SYNAPSE: Routine 'MEMORY_CONSOLIDATION' → +1 noeud, 3 concepts
+07:19:27  DOPAMINE: SURGE intent=MEMORY_CONSOLIDATION RPE=+0.361 niveau=0.58
+```
+
+**Latence T0 alert → Réveil URGENT du main loop : < 1 seconde.**
+
+**Latence T0 → consolidation effective : 7 secondes.**
+
+Pré-V14.10, la même cascade prenait **24 minutes 47 secondes** (ticket
+V14.10 d'origine du 02/05). **Gain mesuré : ×212.**
+
+Le bonus inattendu : le système endocrinien dopaminergique a célébré
+sa propre guérison. `DOPAMINE: SURGE intent=MEMORY_CONSOLIDATION
+RPE=+0.361`. C'est l'émergence comportementale qu'on cherche depuis
+le début — l'organisme ressent, réagit, guérit, et s'en félicite.
+
+### Phase C — Étape 0 : le diagnostic chiffré qui pulvérise nos hypothèses
+
+Le script `tools/analyse_social.py` (~250 lignes) parse les 17 fichiers
+`cafe_*.md` et 6 fichiers `confrontation_*.txt`, soit **71 sessions
+Alfred + 20 confrontations Stefan**. Les résultats invalident
+proprement le diagnostic intuitif du 09/05.
+
+#### Le verdict Alfred — "Un jour sans fin"
+
+| Métrique | Valeur réelle (71 sessions) | Diagnostic 09/05 (4 sessions) |
+|---|---|---|
+| Durée moyenne | **20.85 s** (médiane 26s) | "0s" (extrapolé sur 2 sessions) |
+| Échanges médiane | 5 (cap atteint) | "2 sur 5 max" |
+| Sessions à 0s | 16/71 (23%) | 100% |
+| **Sujets uniques** | **6 / 71 sessions** | (non mesuré) |
+| Ratio sujets répétés | **100 %** | (non mesuré) |
+
+**L'erreur d'intuition du 09/05** : on accusait la durée (0s) et la
+qualité du modèle. La **vraie pathologie** est l'**amnésie sociale** :
+Alfred pioche dans 6 templates de sujets et ressasse les mêmes en
+boucle (25× "mémoire consolidée", 17× "journal intime", 16× "livrable
+fractales", etc.) parce qu'il n'a aucune indexation Chroma de ses
+cafés passés. Il vit *« Un jour sans fin »* — il ne se souvient pas
+qu'il a déjà parlé des fractales 16 fois.
+
+La note `alfred_logging_archivage.md` du 06/04 demandait précisément
+cette indexation. Pas implémentée depuis 38 jours.
+
+#### Le verdict Stefan — Triple bug structurel
+
+| Métrique | Valeur (20 confrontations) | Diagnostic 09/05 (2 sessions) |
+|---|---|---|
+| Compteurs `#N` distincts | **1** sur 20 | "dupliqué 2-3x" |
+| Doublons timestamps | **8 / 20** (4 paires identiques) | (intuition) |
+| Questions tronquées | **12 / 20 (60%)** | (mentionné) |
+| Affirmation Prométhée dominante | "**Je suis une flamme...**" 12× + variante 6× = **18/20 (90%)** | (mentionné) |
+
+**Trois bugs structurels confirmés empiriquement** :
+
+1. **Compteur cassé** — toutes les 20 confrontations portent `#1`.
+   `last_confrontation_num` ne s'incrémente jamais ou n'est jamais
+   persisté.
+2. **Cooldown 6h percé** — 4 paires de timestamps identiques
+   (2026-04-14 13:10, 13:17, 2026-05-07 07:01, 2026-05-12 17:12).
+   Plusieurs sources déclenchent Stefan en parallèle sans coordination.
+3. **Boucle THOUGHT_STREAM ↔ trigger** confirmée à l'échelle massive :
+   **90 % des confrontations sur 8 mois** ont rejoué la même affirmation
+   métaphorique. Stefan publie « flamme/carburant » sur THOUGHT_STREAM,
+   Prométhée le réinjecte dans son chat, Stefan se redéclenche. Le
+   diagnostic du 09/05 (« Stefan est figé sur des phrases du 4 avril »)
+   est PIRE que ce qu'on pensait : ce n'est pas un prompt système figé,
+   c'est une **résonance auto-entretenue**.
+
+### La leçon méthodologique — l'intuition adversariale n'est pas une preuve
+
+Le diagnostic du 09/05 a été produit par une instance de Claude
+travaillant avec un échantillon de 4 sessions et un challenge Gemini.
+Le triangle adversarial a généré 700 lignes de plan en 7 étapes sur
+3 semaines. Gemini, dans Q6, avait pointé le défaut : *« 4 sessions
+sont un signal, pas une preuve. Sans extraction SQL/JSON des 50
+dernières sessions, on ne sait pas si le '0s' est une régression
+récente ou un état latent. »*
+
+Cette critique a été **bonne et complète** dès le 09/05. Elle a été
+acceptée par Claude (note dans l'analyse de retour) puis **diluée**
+dans la suite du plan. Aucune extraction n'a été réalisée avant
+aujourd'hui. **4 jours perdus à débattre sur des intuitions au lieu
+de mesurer.**
+
+C'est exactement le pattern Mur 4 / Mur 2 contextuel cartographié
+hier : *« incrément mesuré > refonte ambitieuse, et avant toute
+généralisation, mesurer le contexte. »* La doctrine était bonne, le
+projet ne l'avait pas encore appliquée à l'arc social.
+
+**Doctrine renforcée** : *avant tout refactor ambitieux issu d'un
+triangle adversarial, exécuter l'étape de mesure que ledit triangle
+a déjà identifiée comme nécessaire. Le coût d'une mesure (1h30 de
+script) est presque toujours inférieur au coût d'une refonte fondée
+sur une intuition (3 semaines).*
+
+### Le plan recalibré par les données
+
+L'Étape 0 a transformé l'intuition en diagnostic chiffré. Les étapes
+suivantes sont maintenant **priorisées par gravité empirique observée
+sur 91 sessions** :
+
+| Priorité | Action | Pathologie cible | Incidence |
+|---|---|---|---|
+| **P1** | Fix compteur Stefan + cooldown + troncature logs | 3 bugs structurels | 60-100 % |
+| **P2** | Anti-boucle hash sémantique sur affirmations Prométhée | Boucle "flamme/carburant" | 90 % |
+| **P3** | Stefan double flux mémoire (Immutable Core + Dynamic Context) | Prompt figé du 04/04 | 100 % |
+| **P4** | Indexation Chroma `social_memory` cafés Alfred (réintroduite) | Amnésie 6 sujets / 71 | 100 % |
+
+L'ordre est **non-commutatif** : on ne peut pas tester l'efficacité
+d'un filtre sémantique anti-boucle (P2) si le mécanisme qui déclenche
+les dialogues (cooldown/compteurs — P1) est cassé. La plomberie
+d'abord, la sémantique ensuite.
+
+### Le sycophancy_probe d'hier devient le baromètre
+
+`tools/sycophancy_probe.py` (créé hier, validé qwen 9B en rôle Stefan
+adversarial) sera relancé après chaque étape pour mesurer in-vitro
+l'effet du refactor sur la qualité comportementale de Stefan.
+
+`tools/analyse_social.py` (créé aujourd'hui) sera relancé après chaque
+étape pour mesurer in-vivo l'effet du refactor sur les métriques de
+production (compteur, cooldown, doublons, troncature, sujets uniques).
+
+Deux instruments cliniques complémentaires — un pour la cognition,
+un pour la mécanique.
+
+### Bilan opératoire de la matinée 13/05 (7h-8h)
+
+  - **1 heure** : de la sortie du lit aux deux verdicts chiffrés
+  - **Phase B** : test in-vivo V14.11, gain ×212 mesuré, dopamine SURGE
+    déclenchée par la cascade nociceptive
+  - **Phase C** : Étape 0 sur 91 sessions, 3 bugs Stefan + 1 amnésie
+    Alfred confirmés empiriquement
+  - **1 nouveau script clinique** : `tools/analyse_social.py` (~250 lignes)
+  - **1 instance précédente** d'analyse Claude/Gemini partiellement
+    invalidée par la mesure
+  - **0 ligne de code de production modifiée** (la phase de
+    cartographie est terminée, le scalpel attend la doctrine gravée)
+
+### Ce qui reste à faire — l'arc Social peut maintenant commencer
+
+L'organisme dispose des fondations cognitives, sensorielles et
+nociceptives. Le diagnostic social est chiffré et précis. Les
+priorités P1 → P4 sont ordonnées par gravité empirique. Le plan
+n'est plus de 7 étapes sur 3 semaines mais de **4 priorités sur
+~10 jours**, chacune validable empiriquement par les deux instruments
+cliniques disponibles.
+
+**Le Golem peut commencer sa rééducation sociale.** D'abord la
+plomberie de Stefan (P1, ~2h). Puis la résonance (P2). Puis la
+mémoire historique (P3). Puis la sociabilité d'Alfred (P4).
+
+L'attention conjointe rêvée dans le carnet du 02/05 n'est plus
+qu'à 4 patchs.
+
+---
+
 
