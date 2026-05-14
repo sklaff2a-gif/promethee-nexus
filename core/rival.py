@@ -40,8 +40,12 @@ RIVAL_LOG_DIR = os.path.join(
 
 OLLAMA_GENERATE_URL = "http://localhost:11434/api/generate"
 
-# Le modèle de Stefan — gemma4 pour la profondeur, pas le fine-tune strategist
-STEFAN_MODEL = "gemma4:e4b"
+# Le modèle de Stefan — qwen3.5:9b validé par sycophancy_probe (12/05, OPP=1.00)
+# et par l'arène comparative (14/05, triple K.O. vs Gemini Flash sur tranchant
+# et fiabilité — Gemini tronque systématiquement les keywords philosophiques
+# profonds que Stefan EXIGE par construction : "authentique", "dissonante",
+# "conscience"…). Souveraineté locale + supériorité empirique mesurée.
+STEFAN_MODEL = "qwen3.5:9b"
 
 # V14.12 P2 (13/05) — Anti-boucle par hash sémantique
 # Diagnostic Étape 0 : 18/20 confrontations (90%) sur 8 mois portaient sur
@@ -247,26 +251,24 @@ class StefanEngine:
             # Construire le prompt
             prompt = self._build_prompt(promethee_text, source)
 
-            # Appel LLM — priorite Gemini pour des questions plus tranchantes
+            # V14.12 P3.2 (14/05) — Inversion du routage LLM :
+            # PRIORITÉ 1 : qwen3.5:9b LOCAL (souveraineté + supériorité empirique
+            #              mesurée le 14/05 sur arène comparative : tranchant 3/3,
+            #              fiabilité 3/3, latence ~1.4s).
+            # PRIORITÉ 2 : Gemini Flash en backup uniquement si local échoue
+            #              (rate limit Ollama, timeout, modèle décrocheé...).
+            # Avant cette inversion (commits antérieurs au 14/05) : Gemini était
+            # priorité 1, ce qui violait la doctrine sycophancy_probe du 12/05
+            # ET introduisait un risque structurel (Gemini Flash tronque
+            # systématiquement les keywords philosophiques profonds que Stefan
+            # exige par construction — "authentique", "conscience", "dissonante"…).
             logger.info(f"STEFAN: Confrontation — source={source}, texte={len(promethee_text)} chars")
             print(f"   ⚔️ STEFAN: Lecture et confrontation...")
 
             question = ""
 
-            # Essayer Gemini d'abord (reflexion plus profonde)
+            # Priorité 1 — qwen3.5:9b LOCAL via Ollama
             try:
-                from core.gemini_helper import gemini as _gemini
-                if _gemini.is_available():
-                    question = await _gemini.generate(prompt, max_tokens=300, temperature=0.8)
-                    if question:
-                        question = self._extract_question(question)
-                        if question and len(question) > 10:
-                            print(f"   ⚔️ STEFAN: via Gemini Flash")
-            except Exception:
-                pass
-
-            # Fallback local si Gemini indisponible
-            if not question or len(question) < 10:
                 import httpx
                 from core.base_agent import gpu_scheduler
                 async with gpu_scheduler.access("stefan_confront"):
@@ -277,12 +279,10 @@ class StefanEngine:
                                 "model": STEFAN_MODEL,
                                 "prompt": prompt,
                                 "stream": False,
-                                # V14.12 (13/05) — think=False : gemma4/qwen3.5 polluent
-                                # le champ `response` avec le bloc thinking quand True,
+                                # V14.12 (13/05) — think=False : qwen3.5 pollue le
+                                # champ `response` avec le bloc thinking quand True,
                                 # produisant des questions tronquées (60% troncature
-                                # observée sur 20 confrontations historiques).
-                                # Doctrine doctrine appliquée hier (11/05) sur qwen3.5
-                                # pour le sycophancy_probe — même problème ici.
+                                # observée sur 20 confrontations historiques avant P1).
                                 "think": False,
                                 "keep_alive": "30s",
                                 "options": {
@@ -294,7 +294,30 @@ class StefanEngine:
                             timeout=60,
                         )
                     if resp.status_code == 200:
-                        question = resp.json().get("response", "").strip()
+                        raw = resp.json().get("response", "").strip()
+                        if raw:
+                            question = self._extract_question(raw)
+                            if question and len(question) > 10:
+                                print(f"   ⚔️ STEFAN: via qwen3.5:9b (local)")
+            except Exception as e:
+                logger.warning(f"STEFAN P3.2: appel local qwen échoué: {e}")
+
+            # Priorité 2 — Gemini Flash en backup si local indisponible/vide
+            if not question or len(question) < 10:
+                try:
+                    from core.gemini_helper import gemini as _gemini
+                    if _gemini.is_available():
+                        raw = await _gemini.generate(prompt, max_tokens=500, temperature=0.8)
+                        if raw:
+                            question = self._extract_question(raw)
+                            if question and len(question) > 10:
+                                print(f"   ⚔️ STEFAN: via Gemini Flash (backup)")
+                                logger.warning(
+                                    "STEFAN P3.2: fallback Gemini Flash utilisé — "
+                                    "qwen3.5:9b local indisponible (à investiguer)"
+                                )
+                except Exception as e:
+                    logger.warning(f"STEFAN P3.2: appel backup Gemini échoué: {e}")
 
             if not question or len(question) < 10:
                 return {"status": "error", "result": "Stefan est resté silencieux."}
@@ -536,15 +559,18 @@ class StefanEngine:
         # Garder seulement le contenu substantiel
         raw_response = raw_response.strip().strip('"').strip("'")
 
-        # Si la réponse est trop longue, garder la première phrase interrogative
-        if len(raw_response) > 300:
+        # V14.12 P3.2 (14/05) — limite remontée 300 → 500 chars car l'arène
+        # comparative a montré que qwen3.5:9b produit des questions caustiques
+        # de 250-300 chars qui flirtaient avec le cap initial. La limite
+        # logicielle ne doit jamais castrer le tranchant du modèle.
+        if len(raw_response) > 500:
             sentences = raw_response.replace("?", "?\n").split("\n")
             for s in sentences:
                 s = s.strip()
-                if s.endswith("?") and 20 < len(s) <= 300:
+                if s.endswith("?") and 20 < len(s) <= 500:
                     return s
             # Sinon tronquer proprement
-            truncated = raw_response[:297].strip()
+            truncated = raw_response[:497].strip()
             if "?" not in truncated:
                 truncated += " ?"
             return truncated

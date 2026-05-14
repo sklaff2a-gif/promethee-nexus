@@ -80,8 +80,11 @@ class TestPersonnalite:
         assert "79 exercices" not in STEFAN_SYSTEM_PROMPT
         assert "grésillement" not in STEFAN_SYSTEM_PROMPT
 
-    def test_model_is_gemma4(self):
-        assert STEFAN_MODEL == "gemma4:e4b"
+    def test_model_is_qwen_local(self):
+        """V14.12 P3.2 (14/05) — Stefan utilise qwen3.5:9b LOCAL.
+        Validé par sycophancy_probe 12/05 (OPP=1.00) + arène 14/05
+        (triple K.O. vs Gemini Flash sur tranchant et fiabilité)."""
+        assert STEFAN_MODEL == "qwen3.5:9b"
 
     def test_system_prompt_no_lists(self):
         assert "JAMAIS de liste" in STEFAN_SYSTEM_PROMPT or "Pas deux" in STEFAN_SYSTEM_PROMPT
@@ -126,9 +129,12 @@ class TestExtractQuestion:
         assert "Thinking" not in result
 
     def test_too_long_response(self):
-        raw = "A" * 400 + "?"
+        # V14.12 P3.2 — limite remontée 300 → 500 chars pour ne pas
+        # castrer le tranchant de qwen3.5:9b (questions caustiques
+        # 250-300 chars qui flirtaient avec le cap initial).
+        raw = "A" * 600 + "?"
         result = StefanEngine._extract_question(raw)
-        assert len(result) <= 301  # 300 + possible "?"
+        assert len(result) <= 501  # 500 + possible "?"
 
     def test_strips_quotes(self):
         raw = '"Tu te mens et tu le sais ?"'
