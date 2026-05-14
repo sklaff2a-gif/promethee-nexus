@@ -732,73 +732,86 @@ class StefanEngine:
     def find_confrontation_material(self) -> Optional[Dict[str, str]]:
         """Cherche un texte récent de Prométhée qui mérite confrontation.
 
+        V14.12 P3.1 — Aligne les schémas JSON sur la réalité runtime
+        (miroir exact de _get_dynamic_context) :
+          - chat_history.json : dict {version, messages, saved_at}
+          - dream_journal.json : entries[*].narrative | reflection
+          - soliloque_state.json : history[*].insight (PAS sessions/summary)
+
         Priorité :
         1. Réponse chat récente avec affirmation sur soi
-        2. Réflexion vespérale (EVENING_REFLECTION)
-        3. Soliloque récent
-        4. Entrée dream_journal avec réflexion
+        2. Réflexion vespérale (EVENING_REFLECTION) / narrative
+        3. Soliloque récent (insight)
 
         Returns:
             dict avec 'text', 'source', 'subject' ou None
         """
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-        # 1. Chat — chercher la dernière réponse de Prométhée avec affirmation
+        # 1. Chat — chercher la dernière réponse assistant avec affirmation
+        # Format runtime : dict {version, messages, saved_at}. Rétrocompat list.
         try:
             chat_file = os.path.join(base_dir, "memory", "chat_history.json")
             if os.path.exists(chat_file):
                 with open(chat_file, "r", encoding="utf-8") as f:
-                    messages = json.load(f)
-                # Dernières réponses assistant
-                for msg in reversed(messages[-20:]):
-                    if msg.get("role") == "assistant":
-                        content = msg.get("content", "")
-                        if self._has_self_affirmation(content) and len(content) > 100:
-                            return {
-                                "text": content[:1500],
-                                "source": "chat",
-                                "subject": content[:80],
-                            }
-        except Exception:
-            pass
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    messages = data.get("messages", [])
+                else:
+                    messages = data  # legacy list
+                for msg in reversed(messages[-30:]):
+                    if msg.get("role") != "assistant":
+                        continue
+                    content = msg.get("content", "")
+                    if self._has_self_affirmation(content) and len(content) > 100:
+                        return {
+                            "text": content[:1500],
+                            "source": "chat",
+                            "subject": content[:80],
+                        }
+        except Exception as e:
+            logger.warning(f"STEFAN P3.1: lecture chat_history échouée: {e}")
 
-        # 2. Dream journal — réflexion vespérale
+        # 2. Dream journal — réflexion vespérale ou narrative
+        # Format runtime : entries[*]{date "YYYY-MM-DD", narrative, [reflection]}.
         try:
             journal_file = os.path.join(base_dir, "memory", "dream_journal.json")
             if os.path.exists(journal_file):
                 with open(journal_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 entries = data.get("entries", [])
-                if entries:
-                    last = entries[-1]
-                    reflection = last.get("reflection", "")
-                    if reflection and self._has_self_affirmation(reflection):
+                for entry in reversed(entries[-10:]):
+                    text = entry.get("reflection") or entry.get("narrative", "")
+                    if text and len(text) > 100 and self._has_self_affirmation(text):
                         return {
-                            "text": reflection,
+                            "text": text[:1500],
                             "source": "evening_reflection",
-                            "subject": reflection[:80],
+                            "subject": text[:80],
                         }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"STEFAN P3.1: lecture dream_journal échouée: {e}")
 
-        # 3. Soliloque — dernière session
+        # 3. Soliloque — dernière session avec insight self_affirmant
+        # Format runtime : {history: [{timestamp, theme, insight, ...}]}.
+        # Compat: "sessions" (legacy) puis fallback summary/reflection.
         try:
             sol_file = os.path.join(base_dir, "memory", "soliloque_state.json")
             if os.path.exists(sol_file):
                 with open(sol_file, "r", encoding="utf-8") as f:
                     sol_data = json.load(f)
-                sessions = sol_data.get("sessions", [])
-                if sessions:
-                    last_session = sessions[-1]
-                    text = last_session.get("summary", "") or last_session.get("reflection", "")
-                    if text and self._has_self_affirmation(text):
+                sessions = sol_data.get("history") or sol_data.get("sessions", [])
+                for sess in reversed(sessions[-10:]):
+                    text = (sess.get("insight")
+                            or sess.get("summary")
+                            or sess.get("reflection", ""))
+                    if text and len(text) > 100 and self._has_self_affirmation(text):
                         return {
                             "text": text[:1500],
                             "source": "soliloque",
                             "subject": text[:80],
                         }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"STEFAN P3.1: lecture soliloque_state échouée: {e}")
 
         return None
 
