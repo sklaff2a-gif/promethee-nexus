@@ -9474,8 +9474,17 @@ RAISON: <1 phrase courte>"""
         # UN contexte d'UN fichier.
         _strict_target_lock = bool(slot == "CODE_REVIEW" and target_file)
 
-        # Priorite 1 : CODE_REVIEW avec target_file → injection complete
-        if slot == "CODE_REVIEW" and target_file:
+        # P15.1 (2026-05-14) — Context Leak fix.
+        # Priorite 1 : injection complete du target_file pour TOUS les slots.
+        # Avant ce fix, la condition `slot == "CODE_REVIEW"` excluait
+        # WORKSHOP / CREATION / RESEARCH. Conséquence in-vivo (14/05) :
+        # body_schema.py target_file mais ratio=0.00 hits=0 deux WORKSHOP
+        # consécutifs. La Priorité 2 ligne ci-dessous croyait que target_file
+        # avait été couvert et skippait via `if f == target_file: continue` —
+        # vide-ordures silencieux. La règle universelle est : si un agent
+        # reçoit une mission centrée sur un fichier cible, le contexte de ce
+        # fichier doit être injecté, quel que soit son rôle.
+        if target_file:
             _add(_safe_query(target_file, n_results=6, filter_filepath=target_file))
 
         # Priorite 2 : radar sur prompt+subject pour fonctions / classes / fichiers / intents
@@ -9512,7 +9521,10 @@ RAISON: <1 phrase courte>"""
                      or _safe_query(cls, n_results=1))
             for f in list(files)[:2]:
                 if f == target_file:
-                    continue  # deja couvert
+                    # P15.1 (2026-05-14) — Désormais cohérent : la Priorité 1
+                    # ci-dessus couvre target_file pour TOUS les slots (plus
+                    # seulement CODE_REVIEW). Le skip ici est honnête.
+                    continue
                 _add(_safe_query(f, n_results=2, filter_filepath=f))
             for intent in list(intents)[:2]:
                 _add(_safe_query(intent, n_results=2))

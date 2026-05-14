@@ -553,6 +553,15 @@ class SchoolSchedule:
                 f"{challenge_ctx}"
             )
         elif slot == SLOT_WORKSHOP:
+            # P15.2 (2026-05-14) — Sandbox Honesty : injecter les contraintes
+            # bannies pour eviter les retries degrades (os/open interdits que
+            # le LLM ignorait jusqu'ici).
+            sandbox_block = ""
+            try:
+                from core.capabilities.code_sandbox import get_sandbox_constraints_block
+                sandbox_block = get_sandbox_constraints_block()
+            except Exception:
+                pass
             return (
                 f"COURS : Travaux pratiques — {theme_label}\n\n"
                 f"=============================================\n"
@@ -567,7 +576,8 @@ class SchoolSchedule:
                 f"- Contenir au moins une fonction (def) ou classe (class)\n"
                 f"- Etre syntaxiquement valide (ast.parse)\n"
                 f"- N'importer QUE des modules standard ou deja utilises dans le projet\n"
-                f"- Inclure un test minimal\n\n"
+                f"- Inclure un test minimal\n"
+                f"{sandbox_block}\n"
                 f"REGLES ABSOLUES :\n"
                 f"- Le sujet ci-dessus est ta SEULE consigne. N'en change pas.\n"
                 f"- Si l'objectif parle de logique floue, ton code doit IMPLEMENTER de la logique floue.\n"
@@ -580,6 +590,17 @@ class SchoolSchedule:
             )
         elif slot == SLOT_CREATION:
             extra = theme.get("creation_extra", "")
+            # P15.2 (2026-05-14) — Sandbox block conditionnel : injecte
+            # uniquement si CREATION cible un fichier (= livrable code).
+            # Une consigne libre (haiku, fable, poeme) n'a pas besoin
+            # des contraintes sandbox et serait juste polluee.
+            sandbox_block = ""
+            if target:
+                try:
+                    from core.capabilities.code_sandbox import get_sandbox_constraints_block
+                    sandbox_block = get_sandbox_constraints_block()
+                except Exception:
+                    pass
             return (
                 f"ATELIER CREATION — {theme_label}\n\n"
                 f"=============================================\n"
@@ -591,7 +612,8 @@ class SchoolSchedule:
                 f"Exprime-toi librement sur LA CONSIGNE CI-DESSUS.\n"
                 f"Si la consigne demande d'ameliorer un FICHIER, ton livrable doit contenir du CODE.\n"
                 f"Si la consigne demande un texte creatif, produis un texte creatif.\n"
-                f"Ne change pas de format ou de sujet.\n\n"
+                f"Ne change pas de format ou de sujet.\n"
+                f"{sandbox_block}\n"
                 f"Il n'y a pas de mauvaise reponse SUR LE BON SUJET. Sois authentique et original.\n"
                 f"Longueur : au moins 100 mots."
                 f"{challenge_ctx}"

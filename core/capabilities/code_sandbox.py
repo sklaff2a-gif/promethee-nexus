@@ -68,6 +68,43 @@ _BANNED_NAMES = frozenset({
     "eval", "exec", "compile", "__import__", "open", "input",
 })
 
+
+def get_sandbox_constraints_block() -> str:
+    """P15.2 (2026-05-14) — Sandbox Honesty.
+
+    Retourne un bloc de contraintes en langage naturel à injecter dans les
+    prompts génératifs (WORKSHOP, CREATION). Avant ce helper, le LLM ignorait
+    que `os`, `open`, `subprocess` etc. étaient interdits par le sandbox V16
+    et générait du code idiomatique qui crashait à l'AST lint — cascade de
+    retries dégradés observée le 11/05 sur memory_gatekeeper.py.
+
+    Les listes sont lues dynamiquement depuis _BANNED_MODULES et _BANNED_NAMES
+    pour que toute mise à jour du sandbox propage automatiquement au prompt.
+    """
+    modules_sorted = sorted(_BANNED_MODULES)
+    names_sorted = sorted(_BANNED_NAMES)
+    return (
+        "\n[CONTRAINTES SANDBOX — LIS AVANT D'ECRIRE]\n"
+        "Ton code sera execute dans un sandbox AST-linte. Les modules et "
+        "builtins suivants sont INTERDITS et provoqueront un rejet immediat :\n"
+        f"  - Modules bannis : {', '.join(modules_sorted)}\n"
+        f"  - Builtins bannis : {', '.join(names_sorted)}\n"
+        "Consequences si tu utilises l'un d'eux :\n"
+        "  - L'AST lint pre-execution rejette le code (banned_import detecte).\n"
+        "  - Le pipeline declenche un retry, et chaque retry degrade la qualite.\n"
+        "Strategies sures :\n"
+        "  - Pas d'I/O fichier (os, open, pathlib non en standard). Travaille\n"
+        "    sur des structures de donnees en memoire ou des chaines de caracteres.\n"
+        "  - Pas de reseau (urllib, requests, socket, httpx). Simule via des\n"
+        "    dictionnaires/listes Python natifs.\n"
+        "  - Pas de subprocess / threading / multiprocessing. Code sequentiel pur.\n"
+        "  - Pas de eval/exec/compile/__import__/input/open.\n"
+        "Modules autorises : math, re, json, collections, itertools, functools,\n"
+        "dataclasses, typing, enum, datetime (parsing/format uniquement),\n"
+        "random, statistics, hashlib, base64, decimal, fractions, copy.\n"
+    )
+
+
 DEFAULT_TIMEOUT_S = 5
 MAX_TIMEOUT_S = 30
 MAX_CODE_CHARS = 20_000  # protection payload
