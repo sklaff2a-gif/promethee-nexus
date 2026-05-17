@@ -29,6 +29,19 @@ class TestIsValidFilename:
         assert self.f._is_valid_filename("") is False
         assert self.f._is_valid_filename(None) is False
 
+    # Tests path traversal — audit security 17/05 06:49 (defense-in-depth)
+    def test_rejects_path_traversal(self):
+        """Rejette les tentatives de remontée d'arborescence."""
+        assert self.f._is_valid_filename("../../etc/passwd") is False
+        assert self.f._is_valid_filename("core/../../etc/passwd") is False
+        assert self.f._is_valid_filename("..\\..\\etc\\passwd") is False
+
+    def test_rejects_absolute_paths(self):
+        """Rejette les paths absolus Unix et Windows + UNC."""
+        assert self.f._is_valid_filename("/etc/passwd") is False
+        assert self.f._is_valid_filename("C:\\Windows\\System32\\config\\SAM") is False
+        assert self.f._is_valid_filename("\\\\?\\C:\\sensitive\\data.txt") is False
+
 
 class TestExtractFromContext:
     def setup_method(self):

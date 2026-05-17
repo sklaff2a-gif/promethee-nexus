@@ -21,7 +21,12 @@ class DivineFormatter(BaseAgent):
     def _is_valid_filename(self, filename: str) -> bool:
         """Détecte si le modèle a confondu du code (ex: shutil.copy) avec un nom de fichier."""
         if not filename: return False
-        
+
+        # PATCH path traversal canonique (audit security 17/05 06:49 — defense-in-depth)
+        from core.file_safety import is_safe_target_path
+        if not is_safe_target_path(filename):
+            return False
+
         # Liste noire de mots-clés Python souvent confondus
         # PATCH : Ajout de 'try' et 'except' pour éviter ton dernier bug
         blacklist = ["shutil", "print", "import", "def", "return", "class", "exit", "sys", "os", "copy2", "try", "except"]

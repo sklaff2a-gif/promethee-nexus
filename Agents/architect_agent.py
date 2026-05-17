@@ -196,7 +196,13 @@ FORMAT DE RÉPONSE :
                 # Propager target_file si présent (pipeline Evolution → Formatter)
                 target_file_match = re.search(r'Fichier cible:\s*(\S+)', mission)
                 if target_file_match:
-                    formatter_payload["target_file"] = target_file_match.group(1)
+                    candidate = target_file_match.group(1)
+                    # PATCH path traversal canonique (audit security 17/05 06:49 — defense-in-depth)
+                    from core.file_safety import is_safe_target_path
+                    if is_safe_target_path(candidate):
+                        formatter_payload["target_file"] = candidate
+                    else:
+                        logger.warning(f"[ARCHITECT] 🛡️ target_file rejeté (path traversal/hors sandbox) : {candidate}")
 
                 formatter_result = await orchestrator.dispatch_task("formatter", formatter_payload)
                 fmt_status = formatter_result.get("status", "error") if isinstance(formatter_result, dict) else "error"

@@ -308,3 +308,56 @@ class TestAutonomousOverrideGuard:
         assert "PROTOCOLE_AUTONOMIE" in markers
         assert "EVOLUTION_PIPELINE" in markers
         assert "MODE VEILLE" in markers
+
+
+class TestArchitectPathTraversal:
+    """Tests d'intégration audit security 17/05 06:49 — defense-in-depth path traversal.
+
+    Vérifie que l'extraction `target_file` depuis le mission filtre les chemins
+    malveillants avant propagation au Formatter via formatter_payload.
+    """
+
+    async def _run_with_target(self, mission_text):
+        """Helper : exécute l'architect avec un mission contenant Fichier cible."""
+        architect = DivineArchitect()
+        captured_payload = {}
+
+        async def _mock_validated(*args, **kwargs):
+            return "VALIDÉ — go"
+
+        with patch.object(architect, "generate_content", _mock_validated), \
+             patch.object(architect, "recall", return_value=""), \
+             patch.object(architect, "log_thought"), \
+             patch("core.orchestrator.orchestrator") as mock_orch:
+
+            async def _capture_dispatch(agent_name, payload):
+                captured_payload["agent"] = agent_name
+                captured_payload["payload"] = payload
+                return {"status": "success", "result": "CODE_CLEAN"}
+
+            mock_orch.dispatch_task = AsyncMock(side_effect=_capture_dispatch)
+            await architect.process_task({
+                "mission": mission_text,
+                "context": "import os\nfrom foo import bar\ndef run(): pass"
+            })
+        return captured_payload
+
+    @pytest.mark.asyncio
+    async def test_legit_target_file_propagated_to_formatter(self):
+        """Un target_file légitime du projet est propagé au formatter_payload."""
+        captured = await self._run_with_target(
+            "Évolution scheduled. Fichier cible: core/body_schema.py"
+        )
+        assert captured.get("agent") == "formatter"
+        assert captured["payload"].get("target_file") == "core/body_schema.py"
+
+    @pytest.mark.asyncio
+    async def test_traversal_target_file_rejected(self):
+        """Un target_file avec path traversal est rejeté (non propagé)."""
+        captured = await self._run_with_target(
+            "Évolution scheduled. Fichier cible: ../../etc/passwd"
+        )
+        # Soit pas de dispatch (rejeté très tôt), soit dispatch sans target_file
+        if captured.get("agent") == "formatter":
+            assert captured["payload"].get("target_file") is None, \
+                f"target_file ne devrait pas être propagé : {captured['payload'].get('target_file')}"
