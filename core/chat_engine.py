@@ -3090,6 +3090,33 @@ class ChatEngine:
             except Exception as e:
                 logger.debug(f"CHAT: Attention conjointe (Editor) skipped: {e}")
 
+        # 5-pre. PHASEUR_DE_Réalité LITE (2026-05-17) — perturbation créative ≤5%
+        # Origine : §4.10.bis H1.6 du brouillon. Conformité CHARTA procédure 3.2.
+        # Off par défaut (Config.PHASEUR_ENABLED). Multi-couches defense-in-depth.
+        # Note : perturbation appliquée APRÈS streaming live (user voit non-perturbé)
+        # et AVANT add to history (mémoire persistante et P16 voient perturbé).
+        try:
+            import hashlib
+            from core.phaseur import apply_perturbation
+            from config import Config as _Cfg
+            _is_rag_or_code = bool(visual_context) or bool(v15_context) or bool(code_context)
+            _is_creative = not _is_rag_or_code
+            full_response, _phaseur_log = apply_perturbation(
+                full_response,
+                creative_context=_is_creative,
+                vision_invoked=bool(visual_context),
+                rag_present=bool(v15_context) or bool(code_context),
+                intensity=_Cfg.PHASEUR_CURRENT_INTENSITY,
+                conversation_id=getattr(self, "_current_session_id", None),
+                user_message_hash=(
+                    hashlib.md5(user_message.encode("utf-8", errors="ignore")).hexdigest()[:8]
+                    if user_message else None
+                ),
+                caller_context=None,  # appel depuis chat_engine = user-driven par défaut
+            )
+        except Exception as e:
+            logger.debug(f"PHASEUR LITE skipped: {e}")
+
         # 5. Ajouter la reponse assistant a l'historique
         msg_entry = {
             "role": "assistant",
@@ -3099,6 +3126,35 @@ class ChatEngine:
         if emergent_sources:
             msg_entry["emergent_sources"] = emergent_sources
         self.messages.append(msg_entry)
+
+        # 5-bis. P16 (2026-05-15) — INJECTION SYNAPTIQUE DU CHAT.
+        # Observation 15/05 : 99.9% des synapses au plancher 0.08, AUCUN des
+        # concepts forgés en chat (perte transformée, nouvelle espèce, etc.)
+        # n'apparaissait dans les synapses fortes (>0.2). Le chat alimentait
+        # ChromaDB mais pas le synaptic_network. Correction : extraire jusqu'à
+        # 5 concepts du message user et 5 de la réponse assistant, créer/renforcer
+        # des synapses Hebbian entre chaque paire (user × assistant).
+        # Co-activation = mécanisme STDP basique. Try/except permissif.
+        try:
+            from core.synaptic_network import cortex
+            user_nids = cortex._extract_and_ensure(
+                user_message, node_type="chat", max_concepts=5,
+            )
+            asst_nids = cortex._extract_and_ensure(
+                full_response, node_type="chat", max_concepts=5,
+            )
+            for u_nid in user_nids:
+                for a_nid in asst_nids:
+                    if u_nid != a_nid:
+                        cortex.hebbian_strengthen(
+                            u_nid, a_nid, success=True, context="chat_co_activation",
+                        )
+            logger.info(
+                f"CHAT P16: synaptic injection {len(user_nids)}u x {len(asst_nids)}a "
+                f"= {len(user_nids)*len(asst_nids)} co-activations"
+            )
+        except Exception as e:
+            logger.debug(f"CHAT P16: synaptic injection skipped: {e}")
 
         # 5b. Auto-action : scanner la reponse pour des commandes !
         actions_count = await self._scan_response_actions(full_response)

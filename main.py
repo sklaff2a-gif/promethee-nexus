@@ -252,6 +252,7 @@ AGENTS_CONFIG = [
     ("formatter", "DivineFormatter", "formatter_agent"), # <--- AJOUT VITAL : L'Agent Formatter
     ("vision", "DivineVision", "vision_agent"),
     ("professor", "ProfessorAgent", "professor_agent"),
+    ("philosopher", "Philosopher", "philosopher_agent"),  # P15.3 (14/05) — SCHOOL_AXIOMATIC
 ]
 
 async def _on_smart_restart(data: dict):
@@ -804,6 +805,28 @@ async def autonomy_reset_budget():
         "type": "info"
     })
     return {"status": "ok", "previous_count": old_count, "new_count": 0}
+
+
+@app.get("/api/phaseur/status")
+async def phaseur_status():
+    """Lecture de l'état du PHASEUR_DE_Réalité LITE POC.
+
+    PHASEUR LITE (§4.10.bis du brouillon, CHARTA procédure 3.2). Off par défaut.
+    """
+    return {
+        "enabled": Config.PHASEUR_ENABLED,
+        "max_intensity": Config.PHASEUR_MAX_INTENSITY,
+        "current_intensity": Config.PHASEUR_CURRENT_INTENSITY,
+    }
+
+
+@app.post("/api/phaseur/disable", dependencies=[Depends(verify_token)])
+async def phaseur_disable():
+    """Désactivation d'urgence du PHASEUR LITE (kill switch CHARTA Couche 5)."""
+    Config.PHASEUR_ENABLED = False
+    Config.PHASEUR_CURRENT_INTENSITY = 0.0
+    logger.warning("[PHASEUR] 🛡️ Désactivé via API d'urgence (/api/phaseur/disable)")
+    return {"status": "disabled"}
 
 @app.post("/api/sieste", dependencies=[Depends(verify_token)])
 async def toggle_nap_mode(request: Request):
@@ -1939,6 +1962,84 @@ async def force_school_routine(payload: dict):
     finally:
         schedule.get_current_slot_info = original_get_info
         schedule.get_slot_prompt = original_get_prompt
+
+
+@app.post("/api/school/axiomatic/run", dependencies=[Depends(verify_token)])
+async def school_axiomatic_run(payload: dict):
+    """P15.3 (2026-05-14) — SCHOOL_AXIOMATIC mode on-demand.
+
+    Lance une session de raisonnement axiomatique sur un univers inventé,
+    avec l'agent philosopher (qwen3.5:9b). Charge l'univers, injecte
+    axiome+concepts, dispatch, grade avec C1-C5 déterministes, sauve la
+    session dans memory/school/axiomatic_universes/<id>.json.
+
+    Body JSON attendu :
+      {
+        "universe_id": "civilisation_collective",
+        "question": "Construis l'analogue du temps dans cet univers..."
+      }
+
+    Réponse : {status, livrable, scores (C1-C5 + total), duration_s, session_id}.
+    """
+    import time as _t
+    universe_id = payload.get("universe_id", "")
+    question = payload.get("question", "")
+    if not universe_id or not question:
+        raise HTTPException(
+            status_code=400,
+            detail="Body JSON doit contenir 'universe_id' et 'question'.",
+        )
+
+    from core.school_axiomatic import (
+        AxiomaticUniverse, build_axiomatic_prompt, AxiomaticGrader,
+    )
+    try:
+        universe = AxiomaticUniverse.load(universe_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    philosopher = orchestrator.agents.get("philosopher")
+    if not philosopher:
+        raise HTTPException(
+            status_code=503,
+            detail="Agent philosopher non enregistré (restart Guardian requis).",
+        )
+
+    prompt = build_axiomatic_prompt(universe, question)
+    t0 = _t.time()
+    try:
+        result = await philosopher.process_task({
+            "mission": question,
+            "context": prompt,
+        })
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": f"{type(exc).__name__}: {exc}",
+            "duration_s": round(_t.time() - t0, 2),
+        }
+    duration = round(_t.time() - t0, 2)
+    livrable = result.get("result", "") if isinstance(result, dict) else ""
+    if not livrable:
+        return {
+            "status": "empty",
+            "error": "Philosopher a retourné un livrable vide.",
+            "duration_s": duration,
+            "raw_result": result,
+        }
+
+    grader = AxiomaticGrader()
+    score = grader.grade(livrable, universe)
+    universe.append_session(question, livrable, score.to_dict())
+
+    return {
+        "status": "success",
+        "universe_id": universe_id,
+        "session_id": len(universe.sessions),
+        "duration_s": duration,
+        "livrable": livrable,
+        "scores": score.to_dict(),
+    }
 
 
 @app.post("/api/force/feature-building", dependencies=[Depends(verify_token)])

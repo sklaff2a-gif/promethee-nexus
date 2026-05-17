@@ -71,6 +71,7 @@ class Config:
         "professor": "qwen3.5:9b",       # Evaluation locale (Cloud en primaire via routing)
         "surgeon": "qwen2.5-coder:14b",  # V21 — patch SEARCH/REPLACE chirurgical
         "scrub_nurse": "qwen3.5:9b",     # V29 — checklist preservation (JSON)
+        "philosopher": "qwen3.5:9b",     # P15.3 (14/05) — SCHOOL_AXIOMATIC raisonnement pur
     }
 
     # V17 MoE (2026-04-24) — Mixture of Experts par routine scolaire.
@@ -131,6 +132,12 @@ class Config:
     }
     # Limite de taille modèle local (0 = pas de limite). Ex: 16 pour bloquer les 30b sur 16GB VRAM.
     MAX_LOCAL_MODEL_SIZE = int(os.getenv("MAX_LOCAL_MODEL_SIZE", "16"))
+
+    # PHASEUR_DE_Réalité LITE POC (§4.10.bis H1.6 du brouillon, CHARTA procédure 3.2)
+    # Off par défaut. Plafond hard non-bypassable. Kill switch via /api/phaseur/disable.
+    PHASEUR_ENABLED = os.getenv("PHASEUR_ENABLED", "false").lower() == "true"
+    PHASEUR_MAX_INTENSITY = 0.05
+    PHASEUR_CURRENT_INTENSITY = float(os.getenv("PHASEUR_INTENSITY", "0.0"))
 
     if NIGHT_MODE:
         for agent_name, night_model in NIGHT_MODE_LOCAL_MODELS.items():
