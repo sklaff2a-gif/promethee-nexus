@@ -50,10 +50,15 @@ _AUTONOMOUS_MARKERS = (
 )
 
 # Heuristique Couche 3 : keywords technique/factuel → désactive
+# v2.1 (18/05/2026) : amputation des marqueurs ambigus en français créatif
+# (\bquand\b, où est, quelle date, qui a, erreur). Conserve uniquement les
+# marqueurs univoques : patterns code (```, def, class, import) + 6 keywords
+# strictement techniques (combien, ligne, fichier, code, bug, test_).
+# Découverte First Light v2 : "Quand les mots dérivent..." matchait \bquand\b
+# et déclenchait un faux positif silencieux.
 _TECH_KEYWORDS_RE = re.compile(
     r"```|def \w+|class \w+|\bimport \w+"
-    r"|combien|quelle date|qui a |\bquand\b|où est"
-    r"|ligne |fichier |\bcode\b|\bbug\b|erreur|test_",
+    r"|combien|ligne |fichier |\bcode\b|\bbug\b|test_",
     re.IGNORECASE,
 )
 
@@ -207,9 +212,12 @@ def apply_perturbation(
         "reason": None,
     }
 
+    # v2.1 — télémétrie intégrale : TOUS les refus sont loggés JSONL pour
+    # éviter les "trous noirs architecturaux" (motif découverte First Light v2)
     # Couche 5 — kill switch global
     if not getattr(Config, "PHASEUR_ENABLED", False):
         base_log["reason"] = "globally_disabled"
+        _log_activation(base_log)
         return text, base_log
 
     # Couche 4 — refus autonomie (CHARTA 3.3)
@@ -225,21 +233,25 @@ def apply_perturbation(
     # Couche 2 — flag explicite obligatoire
     if not creative_context:
         base_log["reason"] = "not_creative_context"
+        _log_activation(base_log)
         return text, base_log
 
     # CHARTA Article 1.2 — non-hallucination visuelle
     if vision_invoked:
         base_log["reason"] = "vision_invoked_blocked"
+        _log_activation(base_log)
         return text, base_log
 
     # RAG présent → contexte factuel → refus
     if rag_present:
         base_log["reason"] = "rag_present_blocked"
+        _log_activation(base_log)
         return text, base_log
 
     # Couche 3 — détection auto désactivante
     if _detect_technical_context(text):
         base_log["reason"] = "technical_context_detected"
+        _log_activation(base_log)
         return text, base_log
 
     # Plafond hard (clamp intensity à PHASEUR_MAX_INTENSITY)
@@ -247,6 +259,7 @@ def apply_perturbation(
     effective_intensity = min(intensity, max_intensity)
     if effective_intensity <= 0:
         base_log["reason"] = "intensity_zero"
+        _log_activation(base_log)
         return text, base_log
 
     # === ACTIVATION effective (v2 conceptuel) ===
@@ -255,6 +268,7 @@ def apply_perturbation(
     all_words = _WORD_RE.findall(text)
     if not all_words:
         base_log["reason"] = "empty_text"
+        _log_activation(base_log)
         return text, base_log
 
     n_to_perturb = max(1, int(len(all_words) * effective_intensity))

@@ -239,16 +239,26 @@ class TestPhaseurHelpers:
         assert _detect_autonomous_caller("user-driven") is False
 
     def test_detect_technical_context_keywords(self):
-        """Heuristique Couche 3 : keywords code/factuel/path."""
+        """Heuristique Couche 3 v2.1 : keywords univoques uniquement (code/factuel/path)."""
         assert _detect_technical_context("def foo(): pass") is True
         assert _detect_technical_context("import re") is True
-        assert _detect_technical_context("quelle date est-ce ?") is True
+        assert _detect_technical_context("combien de lignes ?") is True  # "combien" matche
         assert _detect_technical_context("Regarde core/main.py") is True
         assert _detect_technical_context("class MyClass:") is True
+        assert _detect_technical_context("le bug du parseur") is True  # \bbug\b
+        assert _detect_technical_context("ligne 42 du code") is True  # "ligne " + \bcode\b
 
     def test_detect_technical_context_creative_pass(self):
-        """Heuristique Couche 3 : textes créatifs purs ne déclenchent pas."""
+        """Heuristique Couche 3 v2.1 : textes créatifs purs ne déclenchent pas.
+
+        v2.1 a retiré \\bquand\\b, où est, quelle date, qui a (ambigus en français créatif).
+        """
         assert _detect_technical_context("La poésie de l'âme profonde") is False
         assert _detect_technical_context("Le chaos précède toute création") is False
         assert _detect_technical_context("") is False
         assert _detect_technical_context(None) is False
+        # v2.1 : ces patterns créatifs ne doivent plus déclencher de faux positif
+        assert _detect_technical_context("Quand les mots dérivent vers l'abstraction") is False
+        assert _detect_technical_context("Où est passée la lumière ?") is False
+        assert _detect_technical_context("Quelle date pour cette douceur ?") is False
+        assert _detect_technical_context("Qui a vraiment vu l'aube ?") is False
