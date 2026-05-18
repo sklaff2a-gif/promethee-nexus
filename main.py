@@ -813,6 +813,7 @@ async def phaseur_status():
 
     PHASEUR LITE (§4.10.bis du brouillon, CHARTA procédure 3.2). Off par défaut.
     """
+    from config import Config
     return {
         "enabled": Config.PHASEUR_ENABLED,
         "max_intensity": Config.PHASEUR_MAX_INTENSITY,
@@ -823,6 +824,7 @@ async def phaseur_status():
 @app.post("/api/phaseur/disable", dependencies=[Depends(verify_token)])
 async def phaseur_disable():
     """Désactivation d'urgence du PHASEUR LITE (kill switch CHARTA Couche 5)."""
+    from config import Config
     Config.PHASEUR_ENABLED = False
     Config.PHASEUR_CURRENT_INTENSITY = 0.0
     logger.warning("[PHASEUR] 🛡️ Désactivé via API d'urgence (/api/phaseur/disable)")
@@ -836,6 +838,7 @@ async def phaseur_enable(request: Request):
     Body params:
         intensity (float, optionnel) : 0.0 à PHASEUR_MAX_INTENSITY (clamp auto, défaut 0.0)
     """
+    from config import Config
     data = await request.json() if request.headers.get("content-length", "0") != "0" else {}
     intensity = float(data.get("intensity", 0.0))
     Config.PHASEUR_ENABLED = True
