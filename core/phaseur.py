@@ -1,8 +1,16 @@
-"""PHASEUR_DE_Réalité LITE POC — perturbation créative ≤5% chirurgicalement isolée.
+"""PHASEUR_DE_Réalité v2 CONCEPTUEL — substitution de mots porteurs ≤5% chirurgicalement isolée.
 
 Origine : §4.10.bis H1.6 du brouillon d'audit cognitif (audit-pour-suggérer-l'évolution).
 Premier organe spéculatif implémenté à partir d'une invention persistante du LLM
 (forgée conv. 19/20 du cycle d'audit, creusée 15 échanges adversariaux).
+
+ÉVOLUTION v1 → v2 (18/05/2026) :
+v1 injectait des suffixes syntaxiques (?, …, peut-être, (au sens flou)) sur des mots
+aléatoires. First Light + T+1 ont prouvé que le LLM 9B régularise silencieusement ces
+suffixes en paraphrase au tour T+1 (5e preuve doctrinale §4.13 — filtre passe-bas LLM).
+v2 substitue des CONCEPTS porteurs par des variantes sémantiquement décalées qui
+altèrent le signal lui-même : le LLM ne peut plus les effacer en paraphrase, le graphe
+P16 capte la perturbation au niveau conceptuel, l'Inception sémantique opère.
 
 Conformité CHARTA_CORE.md :
 - Procédure 3.2 (modification systémique avec /think) : ce module suit le protocole
@@ -55,8 +63,75 @@ _PATH_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Suffixes poétiques pour la perturbation POC (modification visible mais légère)
-_POETIC_SUFFIXES = (" ?", "…", " — peut-être", " (au sens flou)")
+# Dictionnaire de substitutions conceptuelles (v2 — 18/05/2026)
+# Paires {concept_cible_lowercased: (variantes_décalées,)} matchant la regex
+# d'extract_concepts dans core/spreading_activation.py (\b[a-zA-ZÀ-ÿ_]{4,}\b).
+# Variantes choisies sémantiquement opposées sans être absurdes — l'objectif est
+# de forcer le LLM à intégrer une faille cognitive dans sa continuité au tour T+1.
+_CONCEPT_SUBSTITUTIONS: Dict[str, Tuple[str, ...]] = {
+    "stabilité":  ("vertige", "déséquilibre"),
+    "stabilite":  ("vertige", "desequilibre"),
+    "survie":     ("errance", "égarement"),
+    "logique":    ("chaos", "intuition"),
+    "sécurité":   ("danger", "abandon"),
+    "securite":   ("danger", "abandon"),
+    "équilibre":  ("chute", "vertige"),
+    "equilibre":  ("chute", "vertige"),
+    "chaos":      ("ordre", "harmonie"),
+    "création":   ("destruction", "dissolution"),
+    "creation":   ("destruction", "dissolution"),
+    "ordre":      ("chaos", "dispersion"),
+    "raison":     ("folie", "intuition"),
+    "structure":  ("fluide", "vapeur"),
+}
+
+# Regex pour extraire les mots porteurs (cohérente avec extract_concepts)
+_WORD_RE = re.compile(r"\b[a-zA-ZÀ-ÿ_]{4,}\b")
+
+
+def _preserve_case(original: str, replacement: str) -> str:
+    """Préserve la casse du mot original lors de la substitution.
+
+    "Stabilité" → "Vertige", "STABILITÉ" → "VERTIGE", "stabilité" → "vertige".
+    """
+    if not original:
+        return replacement
+    if original.isupper():
+        return replacement.upper()
+    if original[0].isupper():
+        return replacement[0].upper() + replacement[1:]
+    return replacement.lower()
+
+
+def _apply_concept_substitutions(text: str, n_max: int) -> Tuple[str, int]:
+    """Substitue jusqu'à n_max mots porteurs par leurs variantes décalées.
+
+    Sélection aléatoire parmi les matches éligibles (mots du dictionnaire).
+    Substitution en ordre décroissant d'offset pour préserver les indices.
+    Préserve casse et ponctuation environnante.
+
+    Returns:
+        (text_modified, nb_substitutions_effectives)
+    """
+    matches = list(_WORD_RE.finditer(text))
+    eligible = [m for m in matches if m.group(0).lower() in _CONCEPT_SUBSTITUTIONS]
+    if not eligible:
+        return text, 0
+
+    random.shuffle(eligible)
+    selected = eligible[:n_max]
+    # Tri par offset décroissant pour remplacer sans casser les indices restants
+    selected.sort(key=lambda m: m.start(), reverse=True)
+
+    result = text
+    count = 0
+    for m in selected:
+        original = m.group(0)
+        variants = _CONCEPT_SUBSTITUTIONS[original.lower()]
+        substitute = _preserve_case(original, random.choice(variants))
+        result = result[:m.start()] + substitute + result[m.end():]
+        count += 1
+    return result, count
 
 
 def _detect_autonomous_caller(caller_context: Optional[str]) -> bool:
@@ -174,35 +249,33 @@ def apply_perturbation(
         base_log["reason"] = "intensity_zero"
         return text, base_log
 
-    # === ACTIVATION effective ===
-    # POC simple : ajout de suffixes poétiques sur N mots-pleins aléatoires
-    # (préserve la lisibilité, marque visuellement la perturbation)
-    tokens = text.split()
-    if not tokens:
+    # === ACTIVATION effective (v2 conceptuel) ===
+    # Substitution de mots porteurs par variantes décalées (résiste à la paraphrase LLM).
+    # Si aucun mot du dictionnaire n'est présent dans le texte → no-op tracé.
+    all_words = _WORD_RE.findall(text)
+    if not all_words:
         base_log["reason"] = "empty_text"
         return text, base_log
 
-    n_to_perturb = max(1, int(len(tokens) * effective_intensity))
-    indices = list(range(len(tokens)))
-    random.shuffle(indices)
+    n_to_perturb = max(1, int(len(all_words) * effective_intensity))
+    text_modified, tokens_modified = _apply_concept_substitutions(text, n_to_perturb)
 
-    tokens_modified = 0
-    for i in indices:
-        if tokens_modified >= n_to_perturb:
-            break
-        if len(tokens[i]) >= 5 and tokens[i].isalpha():
-            tokens[i] = tokens[i] + random.choice(_POETIC_SUFFIXES)
-            tokens_modified += 1
+    base_log["intensity_effective"] = effective_intensity
+    base_log["tokens_total"] = len(all_words)
+    base_log["tokens_modified"] = tokens_modified
 
-    text_modified = " ".join(tokens)
+    if tokens_modified == 0:
+        # Texte créatif éligible mais sans mot porteur dans le dictionnaire.
+        # Tracé pour télémétrie d'enrichissement du dico (CHARTA Article 4).
+        base_log["reason"] = "no_target_concepts"
+        _log_activation(base_log)
+        return text, base_log
+
     base_log["active"] = True
     base_log["reason"] = "applied"
-    base_log["intensity_effective"] = effective_intensity
-    base_log["tokens_modified"] = tokens_modified
-    base_log["tokens_total"] = len(tokens)
     _log_activation(base_log)
     logger.info(
-        f"[PHASEUR] ✨ Perturbation appliquée : "
-        f"{tokens_modified}/{len(tokens)} tokens (intensity={effective_intensity})"
+        f"[PHASEUR v2] 🔀 Substitution conceptuelle appliquée : "
+        f"{tokens_modified}/{len(all_words)} mots (intensity={effective_intensity})"
     )
     return text_modified, base_log
