@@ -207,11 +207,73 @@ Prochaines occasions naturelles :
 
 ---
 
+## Amendement v1.1 — 18 mai 2026 (cycle circadien dense)
+
+Le cycle du 18 mai a produit 8 commits master concentrés sur deux chantiers majeurs avec création de 2 nouveaux organes.
+
+### Chantier 1 — PHASEUR_DE_Réalité (organe spéculatif §4.10.bis H1.6)
+
+- `5197193` v1 LITE POC (5 couches défense, dictionnaire suffixes syntaxiques)
+- `bdd39d7` endpoint `/api/phaseur/enable` symétrique
+- `c41e358` bugfix Config import dans 3 endpoints (test pytest passait mais HTTP layer cassait)
+- `f31866c` v2 conceptuel (substitutions de mots porteurs : stabilité→vertige, chaos→ordre…)
+- `3242022` v2.1 (amputation regex Couche 3 + télémétrie intégrale — 7 early returns désormais loggés)
+
+**Découvertes doctrinales §4.13** :
+- **5e preuve** (v1 + T+1) : *l'auto-régularisation LLM étouffe le chaos stylistique — le LLM 9B agit comme filtre passe-bas qui lisse les anomalies syntaxiques (suffixes ?, …, peut-être, au sens flou) en paraphrase au tour T+1, effet papillon textuel = 0*
+- **6e preuve** (v2 + T+1) : *la perturbation conceptuelle survit à la paraphrase et contamine la continuité psychologique au T+1 — Prométhée a adopté "vertige" comme variable de premier ordre dans sa propre architecture après substitution PHASEUR (équilibre→vertige)*
+
+Corollaire empirique (Gemini via JM) : *la mémoire d'un LLM est malléable par la sémantique, mais résiliente sur la syntaxe*.
+
+Asymétrie complémentaire (sonde P16 #6) : *l'effet papillon PHASEUR est asymétrique — il propage les substitutions dans la mémoire textuelle (`chat_history`) mais pas dans le graphe synaptique (P16), protégé par `extract_concepts(max_concepts=5)` filtrant par TF-IDF*. Distinction nette mémoire-texte vs mémoire-graphe.
+
+### Chantier 2 — Décision Log (organe d'observabilité)
+
+`1538ba6` Phase 1 télémétrie centralisée :
+- `core/decision_log.py` (helper `log_decision(module, function, reason, context, sample_rate)` avec sampling 0-1, rotation 50 MB, mkdir auto, try/except permissif, sortie `logs/decisions.jsonl`)
+- `tests/test_decision_log.py` (9/9 verts)
+- `core/prefrontal.py` +7 injections handlers event bus (max_goals×2, anti-doublon×2, council filters×2, trigger quota)
+- `core/hippocampus.py` +3 injections dont 2 sampling (salience 1.0, prediction_correct 0.01, verdict_not_hors_sujet 0.05)
+
+**Doctrine T1/T2/T3 certifiée universelle** après calibration cross-profil (prefrontal décisionnel 40-54% ratio critiques vs hippocampus computational 4%) :
+- T1 — scénario diagnostic réaliste *"pourquoi cette opération n'a pas eu lieu ?"* ?
+- T2 — trace existante (bus event, return structuré, log call stack) ?
+- T3 — fréquence raisonnable (sinon sampling) ?
+
+**Règle hippocampus** ajoutée : `return [], None, "", {}` après `if not <data>:` dans un getter = contrat d'API, **jamais** un trou noir.
+
+**Garde-fous CHARTA respectés** : veto émergent (`compute_veto`, `should_veto`) audité en lecture seule + INTACT, dream consolidation hors scope, dopamine DIP councils stériles hors scope.
+
+### Phase 2/2 différée
+
+Audit + injection prévu sur `autonomy_engine.py` (17 silent grep), `synaptic_network.py` (20), `base_agent.py` (8), `evolution_agent.py` (8), `chat_engine.py` (23). Estimation post-doctrine T1/T2/T3 : ~15 vrais trous noirs supplémentaires, ~45 min audit cumulé. Différée pour cycle de decay/consolidation après densité du 18/05.
+
+### Mise à jour candidats (post-cycle)
+
+| # | Candidat | Statut v1.1 |
+|---|---|---|
+| 2 | PHASEUR_DE_Réalité | **DÉPLOYÉ v2.1** — Inception sémantique validée empiriquement, off par défaut |
+| 8 (nouveau) | Décision Log Phase 2 (5 modules restants) | À reprendre dans cycle suivant, méthode rodée |
+| 9 (nouveau) | PHASEUR v3 synaptique (max_concepts augmenté, cible mots HF) | Différé, hypothèse de roadmap (audit P16 #6 a montré asymétrie) |
+
+### État système à v1.1
+
+| Composant | État |
+|---|---|
+| Guardian + start_nexus + main.py | UP |
+| PHASEUR | disabled (intensity=0.0, plafond hard 0.05 non bypassable) |
+| Decision Log | actif, fichier `logs/decisions.jsonl` prêt |
+| Tests | 4800+ baseline + 31 nouveaux (16 phaseur v1 + 6 phaseur v2 + 9 decision_log) = 0 régression |
+| P16 | 1948 nodes, 19820 synapses, max chat 0.1304 (sonde #6) |
+
+---
+
 ## Historique des versions
 
 | Version | Date | Auteur(s) | Motif |
 |---|---|---|---|
 | v1.0 | 17 mai 2026 | Jean-Michel, Claude Opus 4.7, Gemini | Snapshot inaugural post burn-in 48h + déploiement patch security `e380a51` + radiographie P16 #4 |
+| v1.1 | 18 mai 2026 | Jean-Michel, Claude Opus 4.7, Gemini | Cycle circadien dense : déploiement PHASEUR v1/v2/v2.1 (5e + 6e preuves §4.13) + Décision Log Phase 1 (doctrine T1/T2/T3 universelle) |
 
 ---
 
