@@ -18,6 +18,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Dict, Any
 
 from core.event_bus.bus import bus
+from core.decision_log import log_decision
 
 logger = logging.getLogger("hippocampus")
 
@@ -372,6 +373,10 @@ class Hippocampus:
 
         if salience < SALIENCE_THRESHOLD:
             self._stats["episodes_rejected"] += 1
+            log_decision("hippocampus", "_encode_episode", "salience_below_threshold",
+                         {"event_type": event_type, "intent": intent, "agent": agent,
+                          "salience": round(salience, 3),
+                          "threshold": SALIENCE_THRESHOLD})
             return None
 
         # Filtre tissu neural — sas avant memorisation
@@ -706,6 +711,10 @@ class Hippocampus:
         if not isinstance(data, dict):
             return
         if data.get("correct", True):
+            log_decision("hippocampus", "_on_prediction_resolved",
+                         "prediction_correct_skipped",
+                         {"prediction": str(data.get("prediction", ""))[:80]},
+                         sample_rate=0.01)
             return  # Pas d'episode pour les predictions correctes
         self._encode_episode(
             event_type="prediction_error",
@@ -814,6 +823,11 @@ class Hippocampus:
         if not isinstance(data, dict):
             return
         if data.get("verdict", "") != "HORS_SUJET":
+            log_decision("hippocampus", "_on_president_verdict",
+                         "verdict_not_hors_sujet",
+                         {"verdict": str(data.get("verdict", ""))[:30],
+                          "council_id": str(data.get("council_id", ""))},
+                         sample_rate=0.05)
             return
         self._encode_episode(
             event_type="routine_failure",

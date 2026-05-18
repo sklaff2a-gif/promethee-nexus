@@ -24,6 +24,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.event_bus.bus import bus
+from core.decision_log import log_decision
 
 logger = logging.getLogger("prefrontal")
 
@@ -284,8 +285,12 @@ class PrefrontalCortex:
         # Vérifier qu'on n'a pas déjà un goal similaire
         for g in self.goals:
             if g.status == "active" and topic.lower() in g.title.lower():
+                log_decision("prefrontal", "_on_knowledge_gap", "duplicate_topic_active",
+                             {"topic": topic, "existing_goal_id": g.id})
                 return
         if len([g for g in self.goals if g.status == "active"]) >= MAX_GOALS:
+            log_decision("prefrontal", "_on_knowledge_gap", "max_goals_reached",
+                         {"topic": topic, "max_goals": MAX_GOALS})
             return
         goal_id = uuid.uuid4().hex[:8]
         # Fix 1 Phase C : metadata pour fermeture homeostatique via
@@ -339,8 +344,14 @@ class PrefrontalCortex:
         bridge_title = f"Explorer: {concept_a} <-> {concept_b}"
         for g in self.goals:
             if g.status == "active" and concept_a in g.title and concept_b in g.title:
+                log_decision("prefrontal", "_on_eureka_bridge", "duplicate_bridge_active",
+                             {"concept_a": concept_a, "concept_b": concept_b,
+                              "existing_goal_id": g.id})
                 return
         if len([g for g in self.goals if g.status == "active"]) >= MAX_GOALS:
+            log_decision("prefrontal", "_on_eureka_bridge", "max_goals_reached",
+                         {"concept_a": concept_a, "concept_b": concept_b,
+                          "max_goals": MAX_GOALS})
             return
         goal = Goal(
             id=uuid.uuid4().hex[:8],
@@ -373,8 +384,13 @@ class PrefrontalCortex:
         consensus = data.get("final_summary", "")
         status = data.get("status", "")
         if status not in ("consensus", "max_rounds"):
+            log_decision("prefrontal", "_on_council", "invalid_status",
+                         {"status": status,
+                          "valid_statuses": ["consensus", "max_rounds"]})
             return
         if not consensus or len(consensus) < 50:
+            log_decision("prefrontal", "_on_council", "consensus_too_short",
+                         {"consensus_len": len(consensus or ""), "min_required": 50})
             return
         for g in self.goals:
             if g.status == "active" and "council" in g.source:
@@ -1255,6 +1271,10 @@ class PrefrontalCortex:
             if expired:
                 self.triggers.remove(expired[0])
             else:
+                log_decision("prefrontal", "add_trigger", "trigger_quota_exhausted",
+                             {"max_triggers": MAX_PROSPECTIVE_TRIGGERS,
+                              "condition_type": condition_type,
+                              "action_intent": action_intent})
                 return None
 
         trigger = ProspectiveTrigger(
