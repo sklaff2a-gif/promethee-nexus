@@ -828,6 +828,28 @@ async def phaseur_disable():
     logger.warning("[PHASEUR] 🛡️ Désactivé via API d'urgence (/api/phaseur/disable)")
     return {"status": "disabled"}
 
+
+@app.post("/api/phaseur/enable", dependencies=[Depends(verify_token)])
+async def phaseur_enable(request: Request):
+    """Activation à chaud du PHASEUR LITE (symétrique de /disable, pas de restart requis).
+
+    Body params:
+        intensity (float, optionnel) : 0.0 à PHASEUR_MAX_INTENSITY (clamp auto, défaut 0.0)
+    """
+    data = await request.json() if request.headers.get("content-length", "0") != "0" else {}
+    intensity = float(data.get("intensity", 0.0))
+    Config.PHASEUR_ENABLED = True
+    Config.PHASEUR_CURRENT_INTENSITY = min(intensity, Config.PHASEUR_MAX_INTENSITY)
+    logger.warning(
+        f"[PHASEUR] ✨ Activé via API (/api/phaseur/enable) — "
+        f"intensity={Config.PHASEUR_CURRENT_INTENSITY} (max={Config.PHASEUR_MAX_INTENSITY})"
+    )
+    return {
+        "status": "enabled",
+        "intensity": Config.PHASEUR_CURRENT_INTENSITY,
+        "max_intensity": Config.PHASEUR_MAX_INTENSITY,
+    }
+
 @app.post("/api/sieste", dependencies=[Depends(verify_token)])
 async def toggle_nap_mode(request: Request):
     """Active ou désactive le mode sieste (hibernation 0-GPU).
