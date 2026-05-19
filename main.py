@@ -899,6 +899,53 @@ async def subconscient_disable():
     return {"status": "disabled"}
 
 
+@app.get("/api/compressor/status")
+async def compressor_status():
+    """Lecture de l'état du Foie Cognitif (Context Compressor heuristique)."""
+    from config import Config
+    return {
+        "enabled": Config.COMPRESSOR_ENABLED,
+        "min_messages": Config.COMPRESSOR_MIN_MESSAGES,
+        "target_ratio": Config.COMPRESSOR_TARGET_RATIO,
+    }
+
+
+@app.post("/api/compressor/enable", dependencies=[Depends(verify_token)])
+async def compressor_enable(request: Request):
+    """Activation à chaud du Foie Cognitif (heuristique pré-LLM, 0 VRAM).
+
+    Body params:
+        min_messages (int, optionnel) : skip si moins de N messages dans la fenêtre
+        target_ratio (float, optionnel) : ratio cible (indicatif, non strict)
+    """
+    from config import Config
+    data = await request.json() if request.headers.get("content-length", "0") != "0" else {}
+    if "min_messages" in data:
+        Config.COMPRESSOR_MIN_MESSAGES = int(data["min_messages"])
+    if "target_ratio" in data:
+        Config.COMPRESSOR_TARGET_RATIO = float(data["target_ratio"])
+    Config.COMPRESSOR_ENABLED = True
+    logger.warning(
+        f"[COMPRESSOR] 🩺 Activé via API — "
+        f"min_messages={Config.COMPRESSOR_MIN_MESSAGES}, "
+        f"target_ratio={Config.COMPRESSOR_TARGET_RATIO}"
+    )
+    return {
+        "status": "enabled",
+        "min_messages": Config.COMPRESSOR_MIN_MESSAGES,
+        "target_ratio": Config.COMPRESSOR_TARGET_RATIO,
+    }
+
+
+@app.post("/api/compressor/disable", dependencies=[Depends(verify_token)])
+async def compressor_disable():
+    """Désactivation du Foie Cognitif (kill switch)."""
+    from config import Config
+    Config.COMPRESSOR_ENABLED = False
+    logger.warning("[COMPRESSOR] 🛡️ Désactivé via API (/api/compressor/disable)")
+    return {"status": "disabled"}
+
+
 @app.post("/api/sieste", dependencies=[Depends(verify_token)])
 async def toggle_nap_mode(request: Request):
     """Active ou désactive le mode sieste (hibernation 0-GPU).

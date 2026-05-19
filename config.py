@@ -146,6 +146,15 @@ class Config:
     SUBCONSCIENT_TOP_N = int(os.getenv("SUBCONSCIENT_TOP_N", "5"))
     SUBCONSCIENT_MIN_ENERGY = float(os.getenv("SUBCONSCIENT_MIN_ENERGY", "0.1"))
 
+    # FOIE COGNITIF (19/05/2026, Context Compressor heuristique pre-LLM)
+    # Spec issue de Promethee : agent gardien anneau autonome parallele qui filtre
+    # le sang d'informations avant qu'il n'irrigue les organes (analogie systeme
+    # reticulo-endothelial). 3 regles : truncation messages longs, elision paires
+    # user-court/assistant-verbose, dedup approximatif §4.5.bis. Latence <10ms.
+    COMPRESSOR_ENABLED = os.getenv("COMPRESSOR_ENABLED", "false").lower() == "true"
+    COMPRESSOR_MIN_MESSAGES = int(os.getenv("COMPRESSOR_MIN_MESSAGES", "10"))
+    COMPRESSOR_TARGET_RATIO = float(os.getenv("COMPRESSOR_TARGET_RATIO", "0.5"))
+
     if NIGHT_MODE:
         for agent_name, night_model in NIGHT_MODE_LOCAL_MODELS.items():
             if agent_name in AGENT_SPECIFIC_LOCAL_MODELS:

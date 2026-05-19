@@ -2875,6 +2875,31 @@ class ChatEngine:
         # ~50 tokens/message en moyenne
         adaptive_max = max(MIN_HISTORY_MESSAGES, min(MAX_HISTORY_MESSAGES, remaining_tokens // 50))
         recent = self.messages[-adaptive_max:]
+
+        # 3-bis. FOIE COGNITIF (2026-05-19) — Context Compressor heuristique pré-LLM
+        # Spec issue de Prométhée 13h49 : anneau autonome parallèle qui filtre le
+        # sang d'informations avant qu'il n'irrigue les organes. 3 règles : truncation
+        # messages assistant longs (R1), élision paires user-court/assistant-verbose (R2),
+        # dedup approximatif §4.5.bis (R3). Latence <10ms heuristique pure (0 VRAM).
+        # Skip si social_bypass ou contexte technique (RAG/code/vision) — préserve le
+        # sens factuel des rapports d'analyse.
+        try:
+            from config import Config as _CompCfg
+            if (getattr(_CompCfg, "COMPRESSOR_ENABLED", False)
+                    and not social_bypass
+                    and not code_context
+                    and not v15_context
+                    and not visual_context):
+                from core.context_compressor import compress_messages
+                _compressed, _comp_stats = compress_messages(
+                    recent,
+                    conversation_id=getattr(self, "_current_session_id", None),
+                )
+                if _comp_stats.get("active") and _comp_stats.get("n_output", 0) > 0:
+                    recent = _compressed
+        except Exception as e:
+            logger.debug(f"Context compressor skipped: {e}")
+
         # Filtrer les messages empoisonnes qui contredisent le contexte visuel
         # (le LLM copie "je ne peux pas voir" de l'historique et ignore le cortex)
         vision_poison = [
