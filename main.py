@@ -853,6 +853,52 @@ async def phaseur_enable(request: Request):
         "max_intensity": Config.PHASEUR_MAX_INTENSITY,
     }
 
+@app.get("/api/subconscient/status")
+async def subconscient_status():
+    """Lecture de l'état du Pont Subconscient (médiation P16 → LLM, 8e preuve §4.13)."""
+    from config import Config
+    return {
+        "enabled": Config.SUBCONSCIENT_ENABLED,
+        "top_n": Config.SUBCONSCIENT_TOP_N,
+        "min_energy": Config.SUBCONSCIENT_MIN_ENERGY,
+    }
+
+
+@app.post("/api/subconscient/enable", dependencies=[Depends(verify_token)])
+async def subconscient_enable(request: Request):
+    """Activation à chaud du Pont Subconscient (lecture observationnelle P16).
+
+    Body params:
+        top_n (int, optionnel) : nombre max de concepts énergisés (défaut Config)
+        min_energy (float, optionnel) : seuil énergie minimum (défaut Config)
+    """
+    from config import Config
+    data = await request.json() if request.headers.get("content-length", "0") != "0" else {}
+    if "top_n" in data:
+        Config.SUBCONSCIENT_TOP_N = int(data["top_n"])
+    if "min_energy" in data:
+        Config.SUBCONSCIENT_MIN_ENERGY = float(data["min_energy"])
+    Config.SUBCONSCIENT_ENABLED = True
+    logger.warning(
+        f"[SUBCONSCIENT] 🌉 Activé via API — "
+        f"top_n={Config.SUBCONSCIENT_TOP_N}, min_energy={Config.SUBCONSCIENT_MIN_ENERGY}"
+    )
+    return {
+        "status": "enabled",
+        "top_n": Config.SUBCONSCIENT_TOP_N,
+        "min_energy": Config.SUBCONSCIENT_MIN_ENERGY,
+    }
+
+
+@app.post("/api/subconscient/disable", dependencies=[Depends(verify_token)])
+async def subconscient_disable():
+    """Désactivation du Pont Subconscient (kill switch)."""
+    from config import Config
+    Config.SUBCONSCIENT_ENABLED = False
+    logger.warning("[SUBCONSCIENT] 🛡️ Désactivé via API (/api/subconscient/disable)")
+    return {"status": "disabled"}
+
+
 @app.post("/api/sieste", dependencies=[Depends(verify_token)])
 async def toggle_nap_mode(request: Request):
     """Active ou désactive le mode sieste (hibernation 0-GPU).

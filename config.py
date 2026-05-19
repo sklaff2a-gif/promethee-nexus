@@ -139,6 +139,13 @@ class Config:
     PHASEUR_MAX_INTENSITY = 0.05
     PHASEUR_CURRENT_INTENSITY = float(os.getenv("PHASEUR_INTENSITY", "0.0"))
 
+    # PONT SUBCONSCIENT (19/05/2026, médiation P16 → LLM, 8e preuve §4.13)
+    # Lecture observationnelle du synaptic_network pour injecter les concepts
+    # énergisés dans le system_prompt avant call Ollama. Off par défaut, opt-in.
+    SUBCONSCIENT_ENABLED = os.getenv("SUBCONSCIENT_ENABLED", "false").lower() == "true"
+    SUBCONSCIENT_TOP_N = int(os.getenv("SUBCONSCIENT_TOP_N", "5"))
+    SUBCONSCIENT_MIN_ENERGY = float(os.getenv("SUBCONSCIENT_MIN_ENERGY", "0.1"))
+
     if NIGHT_MODE:
         for agent_name, night_model in NIGHT_MODE_LOCAL_MODELS.items():
             if agent_name in AGENT_SPECIFIC_LOCAL_MODELS:

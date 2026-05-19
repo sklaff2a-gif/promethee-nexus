@@ -2842,6 +2842,30 @@ class ChatEngine:
                                  f"Si une fonction n'est pas dans cette liste, elle N'EXISTE PAS."
             if v15_context:
                 system_prompt += f"\n\n{v15_context}"
+
+        # 3-pre. PONT SUBCONSCIENT (2026-05-19) — médiation P16 → LLM, 8e preuve §4.13
+        # Lecture observationnelle du synaptic_network pour énergiser les concepts
+        # associés au message user et les injecter en suffixe du system_prompt.
+        # Off par défaut (Config.SUBCONSCIENT_ENABLED). Skip si social_bypass ou
+        # contexte technique (RAG/code) — pas de pollution sur prompts factuels.
+        try:
+            from config import Config as _SubCfg
+            if (getattr(_SubCfg, "SUBCONSCIENT_ENABLED", False)
+                    and user_message
+                    and not social_bypass
+                    and not code_context
+                    and not v15_context
+                    and not visual_context):
+                from core.subconscient_bridge import bridge_activate
+                echo = bridge_activate(
+                    user_message,
+                    conversation_id=getattr(self, "_current_session_id", None),
+                )
+                if echo:
+                    system_prompt = f"{system_prompt}\n\n{echo}"
+        except Exception as e:
+            logger.debug(f"Subconscient bridge skipped: {e}")
+
         ollama_messages = [{"role": "system", "content": system_prompt}]
         # Fenetre de contexte adaptative : plus le prompt systeme est long,
         # moins on garde de messages d'historique (pour ne pas depasser num_ctx)
