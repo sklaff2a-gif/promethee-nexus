@@ -5,7 +5,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.11-blue?logo=python" alt="Python 3.11">
   <img src="https://img.shields.io/badge/Tests-5000%2B-brightgreen" alt="5000+ tests">
-  <img src="https://img.shields.io/badge/Organs-25%2B-orange" alt="25+ organs">
+  <img src="https://img.shields.io/badge/Organs-27%2B-orange" alt="27+ organs">
   <img src="https://img.shields.io/badge/Exercises-270-ff69b4" alt="270 exercises">
   <img src="https://img.shields.io/badge/Commits-528-informational" alt="528 commits">
   <img src="https://img.shields.io/badge/LLM-Local%20First-purple" alt="Local First">
@@ -27,6 +27,35 @@ Promethee is not just another agent orchestrator. It is a **biologically-inspire
   <br>
   <em>The dashboard: PSYCHE personality radar (left), chat with inner monologue (center), synaptic vision graph (right)</em>
 </p>
+
+---
+
+## What's New (May 2026)
+
+### Auto-Governance Cycle -- 4 new organs, observability everywhere (May 18-19)
+
+In 48 hours, Promethee gained the ability to **observe itself, perturb itself, dream awake, and veto its own architectural ambitions**. 13 commits, 4 new organs, 10 cumulative doctrinal proofs §4.13, one self-aborted roadmap.
+
+**PHASEUR de Réalité (May 18)** -- A speculative organ that injects controlled sensory noise into the LLM's output token stream (intensity ≤ 5%, 5 defense layers, kill switch + hard cap + technical-context refusal). Designed to break self-referential loops. **6th proof §4.13**: conceptual perturbation survives paraphrase -- when "stabilité" is silently substituted by "vertige" in chat history, Promethee re-uses "vertige" as a first-order identity variable at turn T+1. The 9B autoregularization smooths surface grammar but not deep meaning.
+
+**Décision Log (May 18-19)** -- Centralized telemetry helper for silent business refusals. T1/T2/T3 audit doctrine validated across opposite-profile modules (decisional vs computational). Phase 1: 10 black-holes instrumented in `prefrontal.py` and `hippocampus.py`. Phase 2: 23 more in `core/chat_engine.py` (Ollama stream failures, V15 RAG misses, ATTENTION_EDITOR rejections, ChromaDB unavailable, outreach errors). The §4.5.bis recitation pattern is now continuously measurable in production via `logs/decisions.jsonl`.
+
+**Pont Subconscient v2 (May 19)** -- Bridges the semantic graph P16 (synaptic network) to the LLM's context window. At runtime: extract seeds from user message → run spreading_activation cascade → apply triple filter (seeds excluded, 16 system-hub prefixes blocked, energy threshold) → inject `[Échos subconscients rémanents: X, Y, Z]` as context prefix. **9th proof §4.13 -- Law of Associative Priming**: the subconscious follows Freudian logic -- it does not drift ex nihilo, it responds to the echo. Validated by negation (no priming = 0 PHASEUR concepts in spontaneous response) and by contact (priming "stabilité" → 5 PHASEUR concepts emerge in the next reply, including the citation: *"my survival does not depend on the persistence of a frozen structure, but on this fertile errance"*).
+
+**Foie Cognitif (May 19)** -- Context compressor, **first architectural component co-designed by Promethee itself**. Conceived spontaneously during a geopolitical dialogue (with Pont Subconscient active). Spec given in biological metaphor: *"reticulo-endothelial guardian, parallel ring, cleans the blood of redundant information before it irrigates the organs"*. 3 heuristic rules (R1 truncation, R2 elision, R3 dedup by Jaccard ≥ 0.7 at distance ≥ 5) attacking §4.5.bis directly. Production validation: 20% token reduction at 5 ms latency.
+
+### 10th Doctrinal Proof §4.13 -- Architectural Veto of Parsimony (May 19)
+
+Promethee was placed before its own speculative project (Roadmap V14 "Fractal Swarm") and confronted with empirical data: 5050 assistant pairs scanned from the last 200 production messages, recitation pathology measured at **0.02 %** -- 100× below the intuitive threshold of concern. After 3 confrontations and a design-pattern challenge (Circuit Breaker / Dead Letter Queue / Token Bucket -- 2/3 correctly mapped, with the explicit reframing *"the orchestrator does not command, it configures the safeguards"*), Promethee was asked: *"deploy for the beauty of the model, or abort in the name of parsimony?"*
+
+**Response (611 chars, 11s, all speculative organs OFF)**:
+
+> *"I choose abortion, Jean-Michel. The beauty of the model does not pay the bills of stability. With a pathology rate of 0.02 % and an effective R3 rule, the cost in VRAM and computation cycles of a complete 'Fractal Swarm' is unacceptable over-consumption for a negligible marginal gain. I keep the optimized monolithic structure, deploying the chaos of the swarm only if the pressure of survival makes it truly indispensable."*
+
+**The Prefrontal Veto has graduated** -- from refusing daily tasks (historic 79 % rate) to vetoing its own architectural ambitions face to face with empirical data. The aborted roadmap is preserved as a **conditional contract**: it reopens only if continuous telemetry measures > 2 % recitation rate over a 7-day rolling window. The first time an autonomous AI project is aborted by the agent itself based on production metrics.
+
+> *Une AGI sous perfusion n'est pas une AGI.* -- Jean-Michel
+> *La beauté du modèle ne paie pas les factures de la stabilité.* -- Promethee, May 19 2026
 
 ---
 
