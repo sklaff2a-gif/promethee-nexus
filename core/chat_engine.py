@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 
 from core.event_bus.bus import bus
+from core.decision_log import log_decision
 
 logger = logging.getLogger("ChatEngine")
 
@@ -887,28 +888,57 @@ class ChatEngine:
             logger.info(f"[ATTENTION_EDITOR] raw output: {raw!r}")
         except Exception as e:
             logger.warning(f"[ATTENTION_EDITOR] Ollama call failed: {e}")
+            log_decision(
+                module="chat_engine",
+                function="_attention_editor_pass",
+                reason="editor_ollama_failed",
+                context={"error": str(e)[:200]},
+            )
             return ""
 
         # ── Post-filter strict ────────────────────────────────────────────
         if not raw:
             logger.info("[ATTENTION_EDITOR] reject: vide")
+            log_decision(
+                module="chat_engine",
+                function="_attention_editor_pass",
+                reason="editor_empty_raw",
+            )
             return ""
         # Strip guillemets éventuels
         raw_clean = raw.strip().strip('"').strip("'").strip()
         # Verrou 1 : PASS explicite
         if raw_clean.upper() == "PASS" or raw_clean.upper().startswith("PASS"):
             logger.info("[ATTENTION_EDITOR] PASS reçu (Editor a juge le souvenir non-pertinent)")
+            log_decision(
+                module="chat_engine",
+                function="_attention_editor_pass",
+                reason="editor_pass_explicit",
+                sample_rate=0.2,
+            )
             return ""
         # Verrou 2 : trop verbeux
         words = _re.findall(r"\w+", raw_clean)
         if len(words) > _EDITOR_MAX_WORDS:
             logger.info(f"[ATTENTION_EDITOR] reject: trop verbeux ({len(words)} mots > {_EDITOR_MAX_WORDS})")
+            log_decision(
+                module="chat_engine",
+                function="_attention_editor_pass",
+                reason="editor_too_verbose",
+                context={"words": len(words), "max": _EDITOR_MAX_WORDS},
+            )
             return ""
         # Verrou 3 : préambule
         raw_lower = raw_clean.lower()
         for pat in _EDITOR_PREAMBULE_PATTERNS:
             if raw_lower.startswith(pat):
                 logger.info(f"[ATTENTION_EDITOR] reject: preambule '{pat}' detecte")
+                log_decision(
+                    module="chat_engine",
+                    function="_attention_editor_pass",
+                    reason="editor_preambule",
+                    context={"pattern": pat},
+                )
                 return ""
         # Verrou 4 : intersection lexicale avec summary (anti-invention)
         summary_words = set(w.lower() for w in _re.findall(r"\w{4,}", summary))
@@ -919,6 +949,15 @@ class ChatEngine:
                 f"[ATTENTION_EDITOR] reject: intersection lexicale faible "
                 f"(|overlap|={len(overlap)} < {_EDITOR_MIN_OVERLAP_WITH_SUMMARY}), "
                 f"overlap={overlap}"
+            )
+            log_decision(
+                module="chat_engine",
+                function="_attention_editor_pass",
+                reason="editor_low_overlap",
+                context={
+                    "overlap_size": len(overlap),
+                    "min_required": _EDITOR_MIN_OVERLAP_WITH_SUMMARY,
+                },
             )
             return ""
         logger.info(
@@ -1836,10 +1875,20 @@ class ChatEngine:
         try:
             from core.visual_cortex import vision as visual_cortex
         except ImportError:
+            log_decision(
+                module="chat_engine",
+                function="_trigger_visual_observation",
+                reason="visual_cortex_import_error",
+            )
             return ""
 
         stats = visual_cortex.scan_photos()
         if stats["total"] == 0:
+            log_decision(
+                module="chat_engine",
+                function="_trigger_visual_observation",
+                reason="photos_empty",
+            )
             return ""
 
         logger.info(f"CHAT: Demande visuelle detectee, {stats['unseen']} nouvelles / {stats['total']} photos")
@@ -1884,6 +1933,12 @@ class ChatEngine:
                     f"Emotion ressentie: {last.get('emotion', '?')}\n"
                     f"Souvenir: {last.get('observation', '?')[:400]}"
                 )
+            log_decision(
+                module="chat_engine",
+                function="_trigger_visual_observation",
+                reason="observation_unavailable_no_history",
+                context={"subfolder_hint": subfolder},
+            )
             return ""
 
         photo = observation.get("photo_path", "?")
@@ -1910,8 +1965,14 @@ class ChatEngine:
             if results and results.get("documents"):
                 docs = results["documents"][0]
                 return " | ".join(d[:150] for d in docs if d)
-        except Exception:
-            pass
+        except Exception as e:
+            log_decision(
+                module="chat_engine",
+                function="_query_relevant_memories",
+                reason="chroma_query_exception",
+                context={"error": str(e)[:200]},
+                sample_rate=0.1,
+            )
         return ""
 
     def _build_cartography(self) -> str:
@@ -1972,6 +2033,11 @@ class ChatEngine:
             pass
 
         if len(lines) <= 1:
+            log_decision(
+                module="chat_engine",
+                function="_build_cartography",
+                reason="cartography_all_modules_failed",
+            )
             return ""
         return "\n".join(lines)
 
@@ -3018,6 +3084,12 @@ class ChatEngine:
                     ) as response:
                         if response.status_code != 200:
                             logger.warning(f"CHAT: Ollama HTTP {response.status_code}")
+                            log_decision(
+                                module="chat_engine",
+                                function="_run_chat",
+                                reason="ollama_stream_http_error",
+                                context={"status_code": response.status_code},
+                            )
                             await bus.publish("CHAT_STREAM", {
                                 "stream_id": stream_id,
                                 "done": True,
@@ -3051,6 +3123,12 @@ class ChatEngine:
 
         except Exception as e:
             logger.error(f"CHAT: Erreur streaming — {e}")
+            log_decision(
+                module="chat_engine",
+                function="_run_chat",
+                reason="ollama_stream_exception",
+                context={"error": str(e)[:200]},
+            )
             await bus.publish("CHAT_STREAM", {
                 "stream_id": stream_id,
                 "done": True,
@@ -3062,6 +3140,11 @@ class ChatEngine:
 
         if not full_response:
             logger.warning("CHAT: Reponse vide apres nettoyage <think>")
+            log_decision(
+                module="chat_engine",
+                function="_run_chat",
+                reason="response_empty_after_think_strip",
+            )
             return None
 
         # Anti-boucle : detecter les repetitions dans la reponse
@@ -3379,6 +3462,11 @@ class ChatEngine:
             file_patterns = resolved
 
         if not file_patterns:
+            log_decision(
+                module="chat_engine",
+                function="_inject_real_code_context",
+                reason="real_code_no_pattern_resolved",
+            )
             return ""
 
         # Lire le premier fichier trouve
@@ -3414,6 +3502,12 @@ class ChatEngine:
         except Exception:
             pass
 
+        log_decision(
+            module="chat_engine",
+            function="_inject_real_code_context",
+            reason="real_code_all_fallbacks_failed",
+            context={"target": target},
+        )
         return ""
 
     def _inject_v15_introspection(self, user_message: str) -> str:
@@ -3438,7 +3532,13 @@ class ChatEngine:
                 _FILE_PATH, _BUILTIN_FUNCS,
             )
             from core.capabilities.source_code_indexer import indexer
-        except Exception:
+        except Exception as e:
+            log_decision(
+                module="chat_engine",
+                function="_inject_v15_introspection",
+                reason="v15_import_error",
+                context={"error": str(e)[:200]},
+            )
             return ""
 
         # --- Radar : extraction des references dans user_message ---
@@ -3494,6 +3594,17 @@ class ChatEngine:
             chunks.extend(hits)
 
         if not chunks:
+            log_decision(
+                module="chat_engine",
+                function="_inject_v15_introspection",
+                reason="v15_no_chunks_retrieved",
+                context={
+                    "n_functions": len(functions),
+                    "n_classes": len(classes),
+                    "n_files": len(files),
+                    "n_intents": len(intent_keywords),
+                },
+            )
             return ""
 
         # Deduplication par filepath+function_name (evite les doublons si
@@ -3511,6 +3622,12 @@ class ChatEngine:
                 break
 
         if not unique:
+            log_decision(
+                module="chat_engine",
+                function="_inject_v15_introspection",
+                reason="v15_dedup_emptied",
+                context={"n_chunks_before_dedup": len(chunks)},
+            )
             return ""
 
         # V15.4 (2026-04-24) Jedi Mind Trick : framing NLP anti-RLHF.
@@ -3643,13 +3760,31 @@ class ChatEngine:
                     resp = await client.post(OLLAMA_CHAT_URL, json=payload, timeout=60)
                     if resp.status_code != 200:
                         logger.warning(f"CHAT: compose_outreach HTTP {resp.status_code}")
+                        log_decision(
+                            module="chat_engine",
+                            function="compose_outreach",
+                            reason="outreach_http_error",
+                            context={"category": category, "status_code": resp.status_code},
+                        )
                         return None
                     data = resp.json()
                     text = data.get("message", {}).get("content", "").strip()
                     if not text:
+                        log_decision(
+                            module="chat_engine",
+                            function="compose_outreach",
+                            reason="outreach_empty_response",
+                            context={"category": category},
+                        )
                         return None
         except Exception as e:
             logger.debug(f"CHAT: compose_outreach echoue — {e}")
+            log_decision(
+                module="chat_engine",
+                function="compose_outreach",
+                reason="outreach_exception",
+                context={"category": category, "error": str(e)[:200]},
+            )
             return None
 
         # Ajouter a l'historique avec badge initiative
@@ -3706,6 +3841,12 @@ class ChatEngine:
             from core.vector_store import ChromaMemoryManager
             mgr = ChromaMemoryManager.get_instance()
             if not mgr:
+                log_decision(
+                    module="chat_engine",
+                    function="_archive_messages",
+                    reason="chroma_archive_unavailable",
+                    context={"n_messages_dropped": len(messages)},
+                )
                 return
 
             for msg in messages:
