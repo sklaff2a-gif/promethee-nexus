@@ -1,12 +1,19 @@
 import asyncio
 import json
 import logging
+import re
 from typing import Dict, Any, List
 from core.base_agent import BaseAgent
 from core.capabilities.web_surfer import WebSurfer
 from core.prompt_templates import AUTONOMY_GUARDRAIL
+from core.decision_log import log_decision
 
 logger = logging.getLogger("researcher")
+
+# Seuil critique de longueur de requête (garde-fou terminal — circuit breaker
+# du moteur de recherche). Une vraie requête de sujet fait 20-80 chars ; au-dela
+# de ce seuil, on a forcement embarque du prompt parasite -> on tronque.
+_MAX_QUERY_CHARS = 200
 
 class DivineResearcher(BaseAgent):
     """
@@ -38,24 +45,7 @@ class DivineResearcher(BaseAgent):
 
         # --- 2. MODE RECHERCHE WEB (Par défaut ou explicite) ---
         # Si la mission contient des mots de recherche OU si aucune autre action n'est détectée
-        
-        # Nettoyage de la requête — Fix D (Trio Adversarial 2026-04-16)
-        # Le prompt école contient des sections (CONTRAINTE SECONDAIRE, REGLES
-        # ABSOLUES, etc.) qui polluent le moteur de recherche si elles sont
-        # envoyees comme query. On extrait uniquement le sujet principal.
-        query = mission.replace("Researcher:", "").replace("Scanne le web pour", "").replace("Cherche", "").strip()
-        # Tronquer aux delimiteurs de structure connus (garde uniquement le sujet)
-        for delimiter in [
-            "[CONTRAINTE SECONDAIRE",
-            "REGLES ABSOLUES",
-            "CAHIER DE BROUILLON",
-            "CONTENU REEL DU FICHIER",
-            "DIRECTION DU MENTOR",
-            "DEFI DU MENTOR",
-        ]:
-            idx = query.find(delimiter)
-            if idx > 0:
-                query = query[:idx].strip()
+        query = self._extract_search_query(mission)
 
         self.log_thought(f"🌍 Lancement WebSurfer Hybride : {query[:30]}...", "info")
         
@@ -75,8 +65,87 @@ class DivineResearcher(BaseAgent):
         
         # Sauvegarde en mémoire pour le futur (RAG)
         self.remember(text=f"VEILLE '{query}': {synthesis}", metadata={"source": "web_search", "query": query})
-        
+
         return {"status": "success", "result": synthesis}
+
+    # Préfixes d'instruction connus à retirer en mode non-scolaire.
+    _QUERY_PREFIXES = (
+        "researcher:", "scanne le web pour", "cherche", "recherche",
+        "[school_slot:", "veille sur", "fais une veille sur",
+    )
+
+    def _extract_search_query(self, mission: str) -> str:
+        """Extrait une requête de recherche PURE depuis une mission (cascade 3 niveaux).
+
+        Remplace la blacklist fragile (Fix D 2026-04-16) qui ne reconnaissait plus
+        le format école actuel (PROTOCOLE_SCOLAIRE / SUJET DU JOUR), laissant partir
+        2000+ chars de prompt comme query -> SERP vide -> hallucination par carence
+        (incident RESEARCH 2026-05-20 01h07).
+
+        Cascade :
+          1. SCOLAIRE : si la balise "SUJET DU JOUR (PRIORITE ABSOLUE)" est présente,
+             on capture le bloc entre cette balise et le séparateur "====" / double saut.
+          2. NON-SCOLAIRE : sinon, on retire les préfixes d'instruction connus et on
+             garde la PREMIÈRE LIGNE NON-VIDE (= le sujet dans les missions libres).
+          3. GARDE-FOU TERMINAL : si la query dépasse _MAX_QUERY_CHARS, on tronque
+             (circuit breaker du moteur de recherche). query vide -> trace + "".
+        """
+        if not mission or not mission.strip():
+            log_decision(
+                module="researcher_agent",
+                function="_extract_search_query",
+                reason="query_empty",
+                context={"cause": "mission_vide"},
+            )
+            return ""
+
+        query = None
+
+        # --- Niveau 1 : extraction scolaire (whitelist regex) ---
+        m = re.search(
+            r"SUJET DU JOUR\s*\(PRIORITE ABSOLUE\)\s*:\s*\n(.+?)(?:\n\s*=+|\n\s*\n)",
+            mission,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if m:
+            query = m.group(1).strip()
+
+        # --- Niveau 2 : fallback non-scolaire (première ligne non-vide nettoyée) ---
+        if not query:
+            cleaned = mission.strip()
+            low = cleaned.lower()
+            for prefix in self._QUERY_PREFIXES:
+                if low.startswith(prefix):
+                    cleaned = cleaned[len(prefix):].strip()
+                    low = cleaned.lower()
+            # Première ligne non-vide
+            for line in cleaned.splitlines():
+                if line.strip():
+                    query = line.strip()
+                    break
+            if not query:
+                query = cleaned.strip()
+
+        # --- Niveau 3 : garde-fou terminal (circuit breaker longueur) ---
+        if query and len(query) > _MAX_QUERY_CHARS:
+            log_decision(
+                module="researcher_agent",
+                function="_extract_search_query",
+                reason="query_too_long",
+                context={"original_len": len(query), "truncated_to": _MAX_QUERY_CHARS},
+            )
+            query = query[:_MAX_QUERY_CHARS].strip()
+
+        if not query:
+            log_decision(
+                module="researcher_agent",
+                function="_extract_search_query",
+                reason="query_empty",
+                context={"cause": "extraction_vide"},
+            )
+            return ""
+
+        return query
 
     async def _run_ingestion_routine(self):
         """Sous-routine pour analyser les fichiers de la dropzone via le pipeline intelligent."""

@@ -13,6 +13,12 @@ try:
 except ImportError:
     class Config: SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
 
+try:
+    from core.decision_log import log_decision
+except ImportError:
+    def log_decision(*args, **kwargs):  # no-op si module indisponible (tests isolés)
+        return False
+
 # ─── Quota SERP API ──────────────────────────────────────────────────────────
 # 250 appels/mois → ~8 appels/jour pour tenir 30 jours
 SERP_DAILY_QUOTA = int(os.getenv("SERP_DAILY_QUOTA", "8"))
@@ -133,6 +139,12 @@ class WebSurfer:
                     # SerpAPI a répondu mais sans résultats (quota serveur épuisé, etc.)
                     error_msg = results.get("error", "pas de organic_results")
                     self.logger.warning(f"SERP: reponse sans resultats ({error_msg}), fallback DDG")
+                    log_decision(
+                        module="web_surfer",
+                        function="search",
+                        reason="serp_empty_results",
+                        context={"query_len": len(query), "error": str(error_msg)[:120]},
+                    )
 
             except Exception as e:
                 self.logger.warning(f"SERP: erreur ({e}), fallback DDG")
@@ -144,6 +156,12 @@ class WebSurfer:
         try:
             ddg_results = DDGS().text(query, max_results=max_results + 3)  # sur-fetch pour filtrer
             if not ddg_results:
+                log_decision(
+                    module="web_surfer",
+                    function="search",
+                    reason="ddg_empty_results",
+                    context={"query_len": len(query)},
+                )
                 return "Aucun résultat trouvé (ni Google, ni DDG)."
 
             # Pré-filtrage : vérifier pertinence avant d'envoyer au LLM
