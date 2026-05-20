@@ -9,3 +9,7 @@ _FACTORY_HISTORY.txt
 log run copie/
 logs/
 .claude/settings.local.json
+# Scripts de debogage jetables (sessions d'analyse, jamais versionnes)
+tmp_*.py
+# Flux bruts et logs de runtime (hors versioning)
+data/raw_flux/
