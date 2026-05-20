@@ -1824,50 +1824,44 @@ class ChatEngine:
                            "feedback", "session", "bilan", "note :", "/10",
                            "jouer", "jeu", "partie", "alfred", "morpion", "puissance",
                            "echecs", "thomas", "divorce", "ami", "cafe"]
-        if sum(1 for ex in tech_exclusions if ex in msg_lower) >= 1:
+        # Fix collision de sous-chaine (2026-05-20) : "ami" ne doit plus matcher "famille",
+        # "jeu" ne doit plus matcher "jeudi", "code" ne doit plus matcher "decode". Les tokens
+        # simples [\w-] sont verifies aux frontieres de mot ; les patterns complexes
+        # (espaces, ":", "/" comme "option a", "note :", "/10") restent en sous-chaine.
+        def _excl_present(ex: str) -> bool:
+            if re.fullmatch(r"[\w-]+", ex):
+                return re.search(r"\b" + re.escape(ex) + r"\b", msg_lower) is not None
+            return ex in msg_lower
+        if any(_excl_present(ex) for ex in tech_exclusions):
             return False
 
-        # Mots-cles visuels — utiliser des frontieres de mot pour eviter
-        # les faux positifs (ex: "observables" ne doit pas matcher "observe")
-        import re
-        # Exclure "voir" et "vois" si utilises au sens figure
-        figurative_voir = ["voir les chose", "voir sous", "voir un", "voir le monde",
-                           "voir comment", "voir si", "voir ce que", "vois pas",
-                           "voir les jeux", "voir les partie", "vois ce que"]
-        is_figurative = any(fv in msg_lower for fv in figurative_voir)
+        # Mots-cles visuels — separation FORT/FAIBLE (fix faux positifs polysemie 2026-05-20).
+        # Les mots polysemiques (image/voir/regarde/montre/vision/famille) ne declenchent
+        # JAMAIS seuls : "une image neuve" (metaphore), "regarde ce que tu fais" (considere),
+        # "voir des solutions" (concevoir) sont des emplois figures ultra-courants qui
+        # provoquaient des observations photo parasites (incidents dialogue creativite 20/05,
+        # echanges 8 et 14). Un mot FORT (univoque) est desormais requis pour valider.
+        STRONG_VISUAL = ["photo", "dropzone", "visuel", "selfie", "picture",
+                         "cliche", "cliché", "observe", "montre-moi"]
+        WEAK_VISUAL = ["image", "voir", "vois", "regarde", "montre", "vision", "famille"]
 
-        visual_keywords = ["photo", "image", "regarde", "observe", "dropzone", "visuel"]
-        if not is_figurative:
-            visual_keywords.extend(["voir", "vois", "montre", "vision"])
-        photo_keywords = ["famille", "picture", "selfie", "cliche", "cliché"]
-        action_keywords = ["essayer", "essaie", "tente", "teste", "montre-moi",
-                           "fais-le", "vas-y", "go"]
-        # Compter avec frontieres de mot (evite "observe" dans "observables")
-        count = sum(1 for kw in visual_keywords
-                    if re.search(r'\b' + re.escape(kw) + r'\b', msg_lower))
-        count += sum(1 for kw in photo_keywords
-                     if re.search(r'\b' + re.escape(kw) + r'\b', msg_lower))
-        if count >= 2:
+        strong_hits = [w for w in STRONG_VISUAL
+                       if re.search(r'\b' + re.escape(w) + r'\b', msg_lower)]
+        # Regle stricte : la detection n'est validee QUE si au moins un mot FORT est present.
+        # Un seul mot fort suffit (signal univoque : "photo", "observe", "dropzone"...).
+        if strong_hits:
             return True
-        # Contexte conversationnel : exiger au moins 1 mot-cle visuel DANS LE MESSAGE
-        # (avant: followup seul suffisait, causant des faux positifs)
-        followup_keywords = ["suivante", "prochaine",
-                             "décris", "decris", "décrit", "decrit"]
-        followup_trigger = any(kw in msg_lower for kw in followup_keywords)
-        if count >= 1 or followup_trigger:
-            # Verifier le contexte recent (messages USER uniquement,
-            # exclure les messages qui parlaient de "stop photo" etc.)
-            recent_user = [m["content"].lower() for m in self.messages[-5:]
-                          if m.get("role") == "user"
-                          and not any(r in m["content"].lower() for r in rejection_patterns)]
-            recent_text = " ".join(recent_user)
-            photo_in_context = any(
-                re.search(r'\b' + re.escape(kw) + r'\b', recent_text)
-                for kw in ["photo", "image", "regarde", "voir", "famille",
-                           "paysage", "observe"]
+
+        # Mots faibles seuls (sens figure tres probable) -> abstention tracee (telemetrie Phase 3).
+        weak_hits = [w for w in WEAK_VISUAL
+                     if re.search(r'\b' + re.escape(w) + r'\b', msg_lower)]
+        if weak_hits:
+            log_decision(
+                module="chat_engine",
+                function="_is_visual_request",
+                reason="visual_skipped_weak_only",
+                context={"weak_hits": weak_hits},
             )
-            if photo_in_context and count >= 1:
-                return True
         return False
 
     async def _trigger_visual_observation(self, user_message: str) -> str:
