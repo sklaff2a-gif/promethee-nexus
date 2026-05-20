@@ -121,6 +121,47 @@ _FILE_PATH = re.compile(r'\b((?:core|Agents|tests|config|docs)/[\w/]+\.py)')
 _CODE_BLOCK = re.compile(r'```(?:python|py)?\s*\n?(.*?)\n?```', re.DOTALL)
 
 
+# V4.5 (2026-04-25) — Whitelist stdlib Python.
+# Diagnostic 24/04 23:23 : le veto Bloom V4.2 a bloque l'audit de
+# core/bullshit_detector.py parce que le fichier importe `json`. Le
+# Bloom a extrait "json" comme une fonction inconnue ("Ressource
+# inconnue : la fonction 'json' est introuvable dans le projet"),
+# alors que c'est un module de la bibliotheque standard Python.
+# Fix : whitelist en dur des modules stdlib les plus utilises +
+# 3rd-party omnipresents dans le projet PROMETHEE. Ces noms sont
+# fusionnes systematiquement avec la whitelist locale dans
+# check_prompt, garantissant qu'aucun import standard ne declenche
+# un veto. Permet enfin l'audit de TOUT fichier qui importe `json`,
+# `os`, `re`, `asyncio`, etc. — soit la quasi-totalite du projet.
+_PYTHON_STDLIB_NAMES = frozenset({
+    # Modules core ultra-frequents
+    "json", "re", "os", "sys", "time", "datetime", "math",
+    "typing", "logging", "asyncio", "ast", "io", "pathlib",
+    # Containers et utilitaires
+    "collections", "functools", "itertools", "operator", "string",
+    "random", "hashlib", "uuid", "base64", "pickle", "copy",
+    "weakref", "warnings", "traceback", "abc", "enum",
+    "dataclasses", "contextlib", "inspect",
+    # Concurrence
+    "threading", "concurrent", "multiprocessing", "queue",
+    # Subprocess et FS
+    "subprocess", "tempfile", "shutil",
+    # Reseau et formats
+    "socket", "http", "urllib", "html", "csv", "xml", "sqlite3",
+    "email", "mimetypes",
+    # Bas niveau
+    "ctypes", "platform", "struct", "array", "gc", "atexit",
+    "signal", "select", "selectors",
+    # Numerique
+    "decimal", "fractions", "statistics", "secrets",
+    # CLI
+    "argparse", "getopt", "shlex", "textwrap", "unicodedata",
+    # 3rd party omnipresents dans PROMETHEE
+    "pytest", "httpx", "fastapi", "pydantic", "chromadb",
+    "ollama", "uvicorn", "starlette", "anyio",
+})
+
+
 class BloomFilter:
     """Bloom filter avec double-hashing BLAKE2b."""
 
@@ -196,6 +237,26 @@ class BloomIndexManager:
         self._build_stats: Dict[str, int] = {}
         self._veto_count = 0
         self._skip_count = 0
+        # V20b (2026-04-25) : whitelist contextuelle. Les CODE_REVIEW poussent
+        # ici les parametres locaux (ast.arg) du target_file en debut de tir
+        # via set_session_whitelist(). Permet a un audit de bullshit_detector
+        # de citer 'min_last_section_words' (param de d2_truncation) sans
+        # declencher un veto Bloom (le param n'est pas dans l'index global).
+        # La whitelist est cleared en finally apres chaque tir CODE_REVIEW.
+        self._session_whitelist: Set[str] = set()
+
+    def set_session_whitelist(self, names) -> None:
+        """V20b : enregistre une whitelist contextuelle pour le tir en cours.
+
+        A appeler en debut de _code_review_map_reduce avec les ast.arg du
+        target_file. Le set persiste jusqu a clear_session_whitelist() OU
+        un nouvel appel set_session_whitelist().
+        """
+        self._session_whitelist = set(names) if names else set()
+
+    def clear_session_whitelist(self) -> None:
+        """V20b : efface la whitelist contextuelle (a appeler en finally)."""
+        self._session_whitelist = set()
 
     @classmethod
     def reset_singleton(cls):
@@ -456,8 +517,12 @@ class BloomIndexManager:
             self._skip_count += 1
             return None
 
-        # V9.0 : normaliser la whitelist pour matchs efficaces
-        wl = whitelist or set()
+        # V9.0 : normaliser la whitelist pour matchs efficaces.
+        # V4.5 (2026-04-25) : fusionner avec la stdlib Python.
+        # V20b (2026-04-25) : fusionner aussi avec self._session_whitelist
+        # qui contient les parametres locaux du target_file pendant un
+        # CODE_REVIEW. Ces 3 sources de tolerance se cumulent.
+        wl = (whitelist or set()) | _PYTHON_STDLIB_NAMES | self._session_whitelist
 
         # Seuil strict : premier faux negatif = veto
         for func in refs["functions"]:

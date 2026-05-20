@@ -2638,6 +2638,103 @@ class TestForcedFailureThreshold:
         assert saved_state["forced_failure_counts"] == {"REFACTOR_RANDOM": 2}
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  V34.4 — Le Rebond Neutre (skipped sur chemin FORCED)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestRebondNeutreV34_4:
+    """Un retour status=skipped sur chemin FORCED ne doit ni infliger de DIP
+    dopaminergique, ni incrementer _forced_failure_counts, ni satisfaire la
+    pulsion (frigo vide != faim assouvie). Il doit notifier le router via
+    mark_intent_skipped pour declencher la glissade au candidat n+1."""
+
+    @pytest.fixture(autouse=True)
+    def setup_engine(self, tmp_path):
+        self.state_path = str(tmp_path / "state.json")
+        with patch("core.autonomy_engine.STATE_FILE", self.state_path):
+            with patch("core.autonomy_engine.AutonomyStatePersistence.load",
+                       return_value=copy.deepcopy(AutonomyStatePersistence.DEFAULT_STATE)):
+                self.engine = AutonomyEngine(idle_threshold_seconds=300)
+        # Reset router state pour eviter pollution entre tests
+        from core.motivational_router import reset_router_state
+        reset_router_state()
+        yield
+        reset_router_state()
+
+    @pytest.mark.asyncio
+    async def test_forced_skipped_does_not_increment_failure_counter(self):
+        """Un retour skipped ne doit PAS incrementer _forced_failure_counts."""
+        routine = {"agent": "coder", "intent": "REFACTOR_RANDOM", "mission": "test"}
+        health = _make_health("GO")
+        with patch.object(self.engine, "_execute_refactor_random", new_callable=AsyncMock,
+                          return_value={"status": "skipped", "reason": "no_target"}), \
+             patch.object(self.engine, "_persist_state"), \
+             patch("core.autonomy_engine.bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+            await self.engine._execute_forced_routine(routine, health)
+        # Aucune incrementation
+        assert "REFACTOR_RANDOM" not in self.engine._forced_failure_counts
+        # error_streak inchange
+        assert self.engine.error_streak == 0
+        # daily_count inchange (pas de budget consomme)
+        assert self.engine.daily_count == 0
+
+    @pytest.mark.asyncio
+    async def test_forced_skipped_calls_mark_intent_skipped(self):
+        """Un retour skipped doit notifier le router via mark_intent_skipped
+        pour que le prochain cycle glisse au candidat n+1 du mapping pulsion."""
+        routine = {"agent": "vision", "intent": "REFACTOR_RANDOM", "mission": "test"}
+        health = _make_health("GO")
+        from core.motivational_router import _state as router_state
+        with patch.object(self.engine, "_execute_refactor_random", new_callable=AsyncMock,
+                          return_value={"status": "skipped", "reason": "no_target"}), \
+             patch.object(self.engine, "_persist_state"), \
+             patch("core.autonomy_engine.bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+            await self.engine._execute_forced_routine(routine, health)
+        # Le router connait maintenant le skip
+        import core.motivational_router as _mr
+        assert "REFACTOR_RANDOM" in _mr._state.recently_skipped
+
+    @pytest.mark.asyncio
+    async def test_forced_skipped_resets_v34_pending_drive(self):
+        """Un retour skipped reset _v34_pending_drive (pulsion non assouvie,
+        mais ne doit pas se faire crediter par un succes ulterieur sur autre intent)."""
+        self.engine._v34_pending_drive = "CURIOSITE"
+        routine = {"agent": "vision", "intent": "REFACTOR_RANDOM", "mission": "test"}
+        health = _make_health("GO")
+        with patch.object(self.engine, "_execute_refactor_random", new_callable=AsyncMock,
+                          return_value={"status": "skipped", "reason": "no_target"}), \
+             patch.object(self.engine, "_persist_state"), \
+             patch("core.autonomy_engine.bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+            await self.engine._execute_forced_routine(routine, health)
+        # _v34_pending_drive reset
+        assert self.engine._v34_pending_drive == ""
+        # mais mark_drive_satisfied PAS appele (faim non assouvie)
+        # → on verifie via le router state : pas d'entree last_satisfied
+        import core.motivational_router as _mr
+        assert "CURIOSITE" not in _mr._state.last_satisfied
+
+    @pytest.mark.asyncio
+    async def test_forced_skipped_records_routine_with_skipped_status(self):
+        """Le retour skipped est trace dans routine_history avec le bon status."""
+        routine = {"agent": "vision", "intent": "REFACTOR_RANDOM", "mission": "test"}
+        health = _make_health("GO")
+        with patch.object(self.engine, "_execute_refactor_random", new_callable=AsyncMock,
+                          return_value={"status": "skipped", "reason": "no_target"}), \
+             patch.object(self.engine, "_persist_state"), \
+             patch("core.autonomy_engine.bus") as mock_bus:
+            mock_bus.publish = AsyncMock()
+            await self.engine._execute_forced_routine(routine, health)
+        # routine_history contient l'entree avec status=skipped
+        skipped_entries = [
+            h for h in self.engine.routine_history
+            if h["intent"] == "REFACTOR_RANDOM" and h["status"] == "skipped"
+        ]
+        assert len(skipped_entries) == 1
+
+
 class TestPostBudgetCooldownAssoupli:
     """Tests du cooldown assoupli des routines post-budget (fenetre 3 au lieu de 5)."""
 

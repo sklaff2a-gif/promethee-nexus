@@ -68,7 +68,14 @@ def verify_code_review(result: str, target_file: str) -> Tuple[bool, str]:
 
 
 def _extract_real_names(filepath: str) -> List[str]:
-    """Extrait les noms de classes et fonctions d'un fichier Python via AST."""
+    """Extrait les noms de classes, fonctions ET parametres d'un fichier Python via AST.
+
+    V20a (2026-04-25) : ajout des `ast.arg` (parametres de fonctions). Sans
+    ca, le verify_code_review rejetait les livrables qui citaient des params
+    legitimes comme `min_last_section_words` (parametre de d2_truncation
+    dans bullshit_detector.py) en les classant "inventes". Une CODE_REVIEW
+    serieuse DOIT pouvoir citer les arguments des fonctions analysees.
+    """
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             source = f.read()
@@ -77,6 +84,18 @@ def _extract_real_names(filepath: str) -> List[str]:
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 names.append(node.name)
+                # V20a : tous les parametres de la signature sont des "realites"
+                args = node.args
+                for arg in (args.args or []):
+                    names.append(arg.arg)
+                for arg in (args.kwonlyargs or []):
+                    names.append(arg.arg)
+                for arg in (args.posonlyargs or []):
+                    names.append(arg.arg)
+                if args.vararg:
+                    names.append(args.vararg.arg)
+                if args.kwarg:
+                    names.append(args.kwarg.arg)
             elif isinstance(node, ast.ClassDef):
                 names.append(node.name)
         return names
