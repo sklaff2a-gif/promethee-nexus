@@ -199,6 +199,7 @@ class TestConfrontation:
         assert "flamme" in result["question"] or "douleur" in result["question"]
         assert engine.confrontation_count == 1
 
+    # TODO: Mocker l'appel réseau Gemini Flash pour éviter les faux positifs quand Ollama est saturé localement.
     @pytest.mark.asyncio
     async def test_confront_empty_response(self, engine):
         engine.last_confrontation = 0.0  # Reset cooldown
