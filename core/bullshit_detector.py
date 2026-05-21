@@ -49,7 +49,7 @@ D1_SKIP_SLOTS = frozenset({"BULLETIN", "CREATION"})
 # par nature : ~50 mots). Le test 2 de d2_truncation (derniere section
 # < 100 mots) est ignore pour ces slots. Le test 1 (phrase finale
 # interrompue) reste actif pour TOUS les slots.
-_NARRATIVE_LENGTH_SKIP = frozenset({"BULLETIN", "CREATION"})
+_NARRATIVE_LENGTH_SKIP = frozenset({"BULLETIN", "CREATION", "RESEARCH"})
 
 # ─── D5 (03/05/2026) — Subject Drift sémantique ──────────────────────────
 # Couverture orthogonale a D3 (qui flag uniquement target_file Python pour
