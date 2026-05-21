@@ -3479,12 +3479,25 @@ class AutonomyEngine:
             _time_since_last = (time.time() - min(_last_closure_times)) if _last_closure_times else float("inf")
             EPISTEMIC_FAMINE_THRESHOLD_S = 86400.0  # 24h
             EPISTEMIC_FAMINE_MULTIPLIER = 3.0
+            # SURVIVAL_MODE (2026-05-21) : au-dela de 72h de famine, on EXCLUT les
+            # cours de generation de code (crashables : IndentationError, SyntaxError)
+            # du boost, pour privilegier les cours de lecture/synthese a closure
+            # quasi-garantie. Combine au bridage de difficulte (school_schedule),
+            # ca casse le cercle vicieux de famine auto-entretenue.
+            EPISTEMIC_SURVIVAL_THRESHOLD_S = 72 * 3600.0  # 72h
+            _survival = _time_since_last > EPISTEMIC_SURVIVAL_THRESHOLD_S
+            _CODE_SLOTS = {"SCHOOL_WORKSHOP", "SCHOOL_CODE_REVIEW"}
             if _time_since_last > EPISTEMIC_FAMINE_THRESHOLD_S:
                 _famine_effects = []
                 for i, (routine, s) in enumerate(scored):
-                    if routine["intent"].startswith("SCHOOL_"):
+                    _intent = routine["intent"]
+                    if _intent.startswith("SCHOOL_"):
+                        if _survival and _intent in _CODE_SLOTS:
+                            continue  # SURVIVAL : pas de boost sur les cours de code
                         scored[i] = (routine, s * EPISTEMIC_FAMINE_MULTIPLIER)
-                        _famine_effects.append(routine["intent"])
+                        _famine_effects.append(_intent)
+                if _survival:
+                    print("   🪫 SURVIVAL_MODE: famine >72h -> cours de code exclus du boost (frugalite)")
                 if _famine_effects:
                     _hours = _time_since_last / 3600.0
                     print(f"   🍞 FAMINE EPISTEMIQUE: {_hours:.0f}h sans closure -> "

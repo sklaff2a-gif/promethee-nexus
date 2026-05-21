@@ -13,7 +13,19 @@ from datetime import datetime, date
 from typing import Optional, Dict, List, Any
 from pathlib import Path
 
+try:
+    from core.decision_log import log_decision
+except ImportError:
+    def log_decision(*args, **kwargs):  # no-op si module indisponible (tests isolés)
+        return False
+
 logger = logging.getLogger("SchoolSchedule")
+
+# SURVIVAL_MODE (2026-05-21) — Loi de survie metabolique. Au-dela de ce seuil
+# de famine epistemique, la difficulte des cours est bridee a 1.0 pour garantir
+# une closure et casser le cercle vicieux (cours trop dur -> echec -> pas de
+# closure -> famine monte -> cours encore plus boost -> echec...).
+SURVIVAL_FAMINE_THRESHOLD_S = 72 * 3600.0  # 72h
 
 # ── Fichiers de persistance ─────────────────────────────────────────────────
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -410,7 +422,34 @@ class SchoolSchedule:
         return len(intersection) >= 2 or jaccard >= 0.20
 
     def get_difficulty(self, slot: str) -> float:
-        """P1: Retourne la difficulte actuelle via le curriculum du professeur."""
+        """P1: Retourne la difficulte actuelle via le curriculum du professeur.
+
+        SURVIVAL_MODE (2026-05-21) : si la famine epistemique depasse 72h, la
+        difficulte est bridee a 1.0 (minimale) -- frugalite cognitive forcee --
+        pour garantir une note de closure et casser le cercle vicieux de famine
+        auto-entretenue (diagnostic WORKSHOP 1.57/10 du 21/05).
+        """
+        # --- SURVIVAL_MODE : famine critique -> plafond de difficulte abaisse ---
+        try:
+            from core.synaptic_network import SynapticNetwork
+            _last = list(getattr(SynapticNetwork(), "_epistemic_last_closure", {}).values())
+            if _last:
+                _famine_s = time.time() - min(_last)
+                if _famine_s > SURVIVAL_FAMINE_THRESHOLD_S:
+                    log_decision(
+                        module="school_schedule",
+                        function="get_difficulty",
+                        reason="famine_survival_mode_engaged",
+                        context={"slot": slot, "famine_hours": round(_famine_s / 3600.0, 1)},
+                    )
+                    logger.warning(
+                        f"[SURVIVAL_MODE] famine {_famine_s / 3600.0:.1f}h > 72h "
+                        f"-> difficulte bridee a 1.0 pour {slot} (frugalite cognitive)"
+                    )
+                    return 1.0
+        except Exception:
+            pass
+
         try:
             curriculum_file = os.path.join(_PROJECT_ROOT, "memory", "school", "curriculum.json")
             if os.path.exists(curriculum_file):
