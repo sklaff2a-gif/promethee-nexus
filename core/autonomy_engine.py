@@ -9807,6 +9807,22 @@ RAISON: <1 phrase courte>"""
                 return response
 
             code = testable[0]
+            # Code Engine V4 (2026-05-21) : parseur deterministe black AVANT la
+            # sandbox. black ne REPARE pas, il PARSE : sur une SyntaxError
+            # (IndentationError incluse), il leve InvalidInput avec une position
+            # precise -> message chirurgical pour le retry, au lieu d'un traceback
+            # d'execution flou (qui faisait s'enteter le 14b sur le mauvais
+            # symptome). Si le code est valide, black le reformate (indent
+            # normalisee) avant le test.
+            _black_err = None
+            try:
+                import black as _black
+                code = _black.format_str(code, mode=_black.Mode())
+            except ImportError:
+                pass  # black absent -> comportement inchange (rollback safe)
+            except Exception as _be:
+                _black_err = f"{type(_be).__name__}: {str(_be).strip()[:300]}"
+                logger.warning(f"[V16 BLACK] {slot} parse rejete: {_black_err}")
             sbx_result = _sandbox.run_python(code)
 
             if sbx_result.success:
@@ -9838,6 +9854,19 @@ RAISON: <1 phrase courte>"""
             # correction etait dispatchee vers promethee-security (9b). Un
             # modele moins competent corrigeant un autre = boucle sterile.
             # Fix : forcer le meme routing MoE sur chaque iteration.
+            # Code Engine V4 : si black a detecte une erreur de parse, on injecte
+            # un diagnostic syntaxique chirurgical (position precise) en plus du
+            # traceback d'execution, pour casser la boucle aveugle du 14b.
+            _black_hint = ""
+            if _black_err:
+                _black_hint = (
+                    f"\n[ANALYSE SYNTAXIQUE DETERMINISTE — black]\n"
+                    f"Le formateur black a REJETE ton code AVANT toute execution :\n"
+                    f"  {_black_err}\n"
+                    f"C'est une erreur de SYNTAXE (indentation incoherente ou bloc/structure\n"
+                    f"non ferme). Ne corrige pas une ligne au hasard : relis la STRUCTURE\n"
+                    f"globale de tes blocs (def/if/for/dict/parentheses) avant de re-soumettre.\n"
+                )
             correction_prompt = (
                 f"[SCHOOL_SLOT: {slot}]\n"
                 f"{original_prompt}\n\n"
@@ -9845,7 +9874,8 @@ RAISON: <1 phrase courte>"""
                 f"Ton code precedent a ete teste automatiquement dans un subprocess\n"
                 f"Python isole et a echoue. Voici le code teste :\n\n"
                 f"```python\n{code[:1500]}\n```\n\n"
-                f"{sbx_result.format_traceback(max_chars=1500)}\n\n"
+                f"{sbx_result.format_traceback(max_chars=1500)}\n"
+                f"{_black_hint}\n"
                 f"Produis a nouveau le livrable complet avec le code corrige.\n"
                 f"Meme format (markdown + bloc ```python```). Ne repete pas\n"
                 f"l'analyse theorique si elle etait juste, corrige uniquement le code."
@@ -10297,6 +10327,59 @@ RAISON: <1 phrase courte>"""
             "duration_s": duration_s,
         }
 
+    async def _biphasic_codegen(
+        self, agent_name: str, mission: str, context_str: str, intent: str, slot: str
+    ) -> dict:
+        """Code Engine V4 (2026-05-21) — generation de code biphasee.
+
+        Separe les preoccupations cognitives saturees d'un modele 14b :
+          Phase 1 (Architecte) : produit une SPECIFICATION (plan, pseudo-code),
+            zero Python -> 100% de l'attention sur l'abstraction et le sujet.
+          Phase 2 (Ouvrier)    : traduit la spec en code Python brut -> 100% de
+            l'attention sur la syntaxe (l'IndentationError s'effondre).
+        Le livrable final combine la spec (ancre le sujet contre le subject drift)
+        et le code (dans un bloc python pour la sandbox V16).
+        """
+        try:
+            from config import Config as _Cfg
+            arch_sys = _Cfg.BIPHASIC_ARCHITECT_PROMPT
+            work_sys = _Cfg.BIPHASIC_WORKER_PROMPT
+        except Exception:
+            # Securite : si la config manque, on retombe sur le monolithique.
+            return await orchestrator.dispatch_task(agent_name, {
+                "mission": mission, "context": context_str,
+                "force_local": True, "intent": intent,
+            })
+
+        # --- Phase 1 : Architecte (specification, code interdit) ---
+        arch_resp = await orchestrator.dispatch_task(agent_name, {
+            "mission": f"[SCHOOL_SLOT: {slot}]\n{arch_sys}\n\n=== SUJET A SPECIFIER ===\n{mission}",
+            "context": context_str, "force_local": True, "intent": intent,
+        })
+        spec = str(arch_resp.get("result", "")) if isinstance(arch_resp, dict) else str(arch_resp or "")
+        if not spec.strip():
+            logger.warning(f"[BIPHASIC] {slot} Phase 1 vide -> fallback monolithique")
+            return await orchestrator.dispatch_task(agent_name, {
+                "mission": mission, "context": context_str,
+                "force_local": True, "intent": intent,
+            })
+        logger.info(f"[BIPHASIC] {slot} Phase 1 (Architecte) : spec {len(spec)}c")
+
+        # --- Phase 2 : Ouvrier (code brut depuis la spec) ---
+        work_resp = await orchestrator.dispatch_task(agent_name, {
+            "mission": f"[SCHOOL_SLOT: {slot}]\n{work_sys}\n\n=== SPECIFICATION A TRADUIRE EN PYTHON ===\n{spec}",
+            "context": context_str, "force_local": True, "intent": intent,
+        })
+        code_part = str(work_resp.get("result", "")) if isinstance(work_resp, dict) else str(work_resp or "")
+        logger.info(f"[BIPHASIC] {slot} Phase 2 (Ouvrier) : code {len(code_part)}c")
+
+        # Garantir un bloc ```python pour que la sandbox V16 l'extraie.
+        if "```" not in code_part and code_part.strip():
+            code_part = f"```python\n{code_part.strip()}\n```"
+
+        combined = f"{spec.rstrip()}\n\n## Implementation\n\n{code_part.strip()}"
+        return {"status": "success", "result": combined, "biphasic": True}
+
     async def _execute_school_class(self, routine: dict, intent: str) -> dict:
         """Execute un cours scolaire : dispatch agent + evaluation professeur."""
         try:
@@ -10480,12 +10563,28 @@ RAISON: <1 phrase courte>"""
         # Fallback : dispatch classique pour les autres cas (autre slot, ou
         # CODE_REVIEW sans chunks disponibles)
         if response is None:
-            response = await orchestrator.dispatch_task(agent_name, {
-                "mission": mission_with_full_context,
-                "context": context_str,  # conserve pour compat sous-classes
-                "force_local": True,
-                "intent": intent,
-            })
+            # Code Engine V4 (2026-05-21) — pipeline biphasé pour les slots de
+            # generation de code (WORKSHOP/CREATION) : separe l'Architecte (spec)
+            # de l'Ouvrier (code). Derriere le flag BIPHASIC_CODEGEN_ENABLED.
+            try:
+                from config import Config as _CfgBiph
+                _biphasic = (
+                    getattr(_CfgBiph, "BIPHASIC_CODEGEN_ENABLED", False)
+                    and slot in getattr(_CfgBiph, "BIPHASIC_CODEGEN_SLOTS", set())
+                )
+            except Exception:
+                _biphasic = False
+            if _biphasic:
+                response = await self._biphasic_codegen(
+                    agent_name, mission_with_full_context, context_str, intent, slot
+                )
+            else:
+                response = await orchestrator.dispatch_task(agent_name, {
+                    "mission": mission_with_full_context,
+                    "context": context_str,  # conserve pour compat sous-classes
+                    "force_local": True,
+                    "intent": intent,
+                })
 
         # Normaliser response en dict
         if not isinstance(response, dict):

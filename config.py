@@ -92,6 +92,34 @@ class Config:
         # RESEARCH / BULLETIN / autres : fallback default (9b generique)
     }
 
+    # === Code Engine V4 — Pipeline biphasé (2026-05-21) ===
+    # Diagnostic WORKSHOP 1.57/10 : qwen2.5-coder:14b sature sa bande passante
+    # d'attention quand il doit penser l'abstraction ET produire la syntaxe
+    # dans le meme souffle -> IndentationError en boucle. Fix : separer les
+    # preoccupations cognitives en 2 appels (Architecte = quoi, Ouvrier = comment).
+    # Flag opt-in : rollback instantane en le passant a False.
+    BIPHASIC_CODEGEN_ENABLED = True
+    BIPHASIC_CODEGEN_SLOTS = {"WORKSHOP", "CREATION"}  # CODE_REVIEW garde son map-reduce
+
+    BIPHASIC_ARCHITECT_PROMPT = (
+        "Tu es un ARCHITECTE LOGICIEL. On te confie un sujet, parfois abstrait.\n"
+        "Ta mission : concevoir la LOGIQUE — structures de donnees, algorithme,\n"
+        "responsabilites de chaque fonction — sous forme de PLAN DETAILLE ou de\n"
+        "PSEUDO-CODE commente. Reste fidele au sujet impose (cite ses termes-cles).\n"
+        "INTERDICTION ABSOLUE d'ecrire du code Python executable ou des blocs ```python.\n"
+        "Tu produis une SPECIFICATION, pas une implementation. Concentre 100% de ton\n"
+        "attention sur le QUOI, jamais sur la syntaxe."
+    )
+    BIPHASIC_WORKER_PROMPT = (
+        "Tu es un COMPILATEUR PYTHON STRICT. On te donne une specification detaillee.\n"
+        "Ta seule mission : la traduire en code Python VALIDE et executable.\n"
+        "REGLES ABSOLUES :\n"
+        "- AUCUNE explication, AUCUN commentaire conceptuel, AUCun texte hors-code.\n"
+        "- UN SEUL bloc ```python contenant tout le code, rien d'autre avant ou apres.\n"
+        "- Indentation rigoureuse (4 espaces), toutes les structures fermees.\n"
+        "Tu ne reflechis plus au QUOI (c'est fait), uniquement au COMMENT syntaxique."
+    )
+
     # Contexte par agent (override le num_ctx du Modelfile si besoin)
     AGENT_NUM_CTX = {
         "coder": 16384,
