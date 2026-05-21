@@ -57,8 +57,9 @@ class TestBiphasicPipeline:
 
     @pytest.mark.asyncio
     async def test_phase1_empty_falls_back_monolithic(self, engine):
-        """Si l'Architecte renvoie une spec vide -> fallback monolithique (1 appel)."""
-        with patch("core.autonomy_engine.orchestrator") as orch:
+        """Si l'Architecte renvoie une spec vide -> fallback monolithique + telemetrie."""
+        with patch("core.autonomy_engine.orchestrator") as orch, \
+             patch("core.autonomy_engine.log_decision") as mock_log:
             orch.dispatch_task = AsyncMock(side_effect=[
                 {"status": "success", "result": "   "},  # Phase 1 vide
                 {"status": "success", "result": "```python\nx = 1\n```"},  # fallback
@@ -70,6 +71,10 @@ class TestBiphasicPipeline:
         # le 2e appel est le fallback monolithique (mission = sujet brut, pas le prompt Ouvrier)
         m2 = orch.dispatch_task.call_args_list[1].args[1]["mission"]
         assert "COMPILATEUR PYTHON STRICT" not in m2
+        # Telemetrie Phase 3 : l'echec de l'Architecte est trace
+        mock_log.assert_called_once()
+        assert mock_log.call_args.kwargs["reason"] == "biphasic_phase1_empty_fallback"
+        assert mock_log.call_args.kwargs["context"]["slot"] == "WORKSHOP"
 
     @pytest.mark.asyncio
     async def test_worker_code_wrapped_in_block(self, engine):

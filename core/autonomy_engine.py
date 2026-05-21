@@ -13,6 +13,12 @@ from core.orchestrator import orchestrator
 from core.event_bus.bus import bus
 from core.prompt_templates import AUTONOMY_GUARDRAIL
 
+try:
+    from core.decision_log import log_decision
+except ImportError:
+    def log_decision(*args, **kwargs):  # no-op si module indisponible (tests isolés)
+        return False
+
 logger = logging.getLogger("AutonomyEngine")
 
 # Limite quotidienne de routines autonomes
@@ -10359,6 +10365,14 @@ RAISON: <1 phrase courte>"""
         spec = str(arch_resp.get("result", "")) if isinstance(arch_resp, dict) else str(arch_resp or "")
         if not spec.strip():
             logger.warning(f"[BIPHASIC] {slot} Phase 1 vide -> fallback monolithique")
+            # Telemetrie Phase 3 : tracer l'echec exceptionnel de l'Architecte
+            # (la spec attendue n'a pas ete produite). T1 oui / T2 non / T3 rare.
+            log_decision(
+                module="autonomy_engine",
+                function="_biphasic_codegen",
+                reason="biphasic_phase1_empty_fallback",
+                context={"slot": slot, "agent": agent_name},
+            )
             return await orchestrator.dispatch_task(agent_name, {
                 "mission": mission, "context": context_str,
                 "force_local": True, "intent": intent,
