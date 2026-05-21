@@ -3456,11 +3456,9 @@ class ChatEngine:
             file_patterns = resolved
 
         if not file_patterns:
-            log_decision(
-                module="chat_engine",
-                function="_inject_real_code_context",
-                reason="real_code_no_pattern_resolved",
-            )
+            # Cas NOMINAL (message sans reference de fichier) : pas un trou noir.
+            # Retrait du log_decision le 21/05 — il generait 80% de bruit dans
+            # decisions.jsonl (94/117 entrees) en loggant un flux normal comme anomalie.
             return ""
 
         # Lire le premier fichier trouve
