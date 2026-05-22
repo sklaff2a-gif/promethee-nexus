@@ -129,7 +129,7 @@ class Config:
     # IMMUNE_SYSTEM_DRY_RUN=True : observe et logue les fantomes SANS supprimer
     # (valider sur les cas reels avant d'armer la suppression).
     IMMUNE_SYSTEM_ENABLED = True
-    IMMUNE_SYSTEM_DRY_RUN = True
+    IMMUNE_SYSTEM_DRY_RUN = False  # armé le 22/05 après validation locale (5 fantômes confirmés en observe)
 
     # Contexte par agent (override le num_ctx du Modelfile si besoin)
     AGENT_NUM_CTX = {
