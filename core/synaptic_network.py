@@ -586,6 +586,52 @@ class SynapticNetwork:
         for key in to_remove:
             del self.synapses[key]
 
+    def _purge_phantom_referents(self) -> int:
+        """Système immunitaire : supprime les noeuds dont le concept designe un
+        fichier source (core/*.py, Agents/*.py, tests/*.py) qui N'EXISTE PAS sur
+        disque. Verite POSIX (os.path.exists), zero jugement semantique. Ne touche
+        JAMAIS les namespaces semantiques (reflex:/pulsion:/trait:/zone: sont
+        legitimes — cf. reflex:shed = vrai reflexe reptilien). Opt-in ; mode
+        observe (log sans supprimer) par defaut."""
+        try:
+            from config import Config
+            if not getattr(Config, "IMMUNE_SYSTEM_ENABLED", False):
+                return 0
+            dry_run = getattr(Config, "IMMUNE_SYSTEM_DRY_RUN", True)
+        except Exception:
+            return 0
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        phantoms = []
+        for nid, node in self.nodes.items():
+            concept = node.get("concept", "")
+            # Referent-fichier = chemin source pur (sans texte parasite)
+            if (concept.startswith(("core/", "Agents/", "tests/"))
+                    and concept.endswith(".py") and " " not in concept):
+                abs_path = os.path.join(root, concept.replace("/", os.sep))
+                if not os.path.exists(abs_path):
+                    phantoms.append(nid)
+
+        if not phantoms:
+            return 0
+
+        for nid in phantoms:
+            concept = self.nodes[nid].get("concept", "")
+            logger.warning(
+                f"[IMMUNE] Fichier-fantome: {concept!r}"
+                + (" (DRY-RUN: conserve)" if dry_run else " -> PURGE")
+            )
+        if dry_run:
+            return 0
+
+        for nid in phantoms:
+            self._remove_node_synapses(nid)
+            del self.nodes[nid]
+        logger.warning(
+            f"[IMMUNE] {len(phantoms)} fichier(s)-fantome(s) purge(s) + aretes nettoyees."
+        )
+        return len(phantoms)
+
     # --- Apprentissage Hebbien ---
 
     def hebbian_strengthen(self, src_id: str, tgt_id: str,
@@ -2335,6 +2381,10 @@ class SynapticNetwork:
 
         # 6. Normalisation homeostatique
         self.homeostatic_normalize()
+
+        # 6c. IMMUNITE — purge des fichiers-fantomes (referents POSIX morts)
+        # AVANT le couperet, pour liberer de la place au profit des synapses saines.
+        report["phantoms_purged"] = self._purge_phantom_referents()
 
         # Enforce limits
         self._enforce_synapse_limit()

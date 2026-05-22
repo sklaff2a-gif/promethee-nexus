@@ -120,6 +120,17 @@ class Config:
         "Tu ne reflechis plus au QUOI (c'est fait), uniquement au COMMENT syntaxique."
     )
 
+    # --- Système immunitaire P16 : GC des fichiers-fantômes ---
+    # Supprime, en fin de dream_consolidation, les noeuds dont le concept designe
+    # un fichier source (core/*.py, Agents/*.py, tests/*.py) ABSENT du disque
+    # (verite POSIX). Cible les references mortes / typos / fichiers renommes.
+    # Ne touche JAMAIS les namespaces semantiques (reflex:/pulsion:/trait:/zone:
+    # sont legitimes — leçon reflex:shed du 22/05). Opt-in.
+    # IMMUNE_SYSTEM_DRY_RUN=True : observe et logue les fantomes SANS supprimer
+    # (valider sur les cas reels avant d'armer la suppression).
+    IMMUNE_SYSTEM_ENABLED = True
+    IMMUNE_SYSTEM_DRY_RUN = True
+
     # Contexte par agent (override le num_ctx du Modelfile si besoin)
     AGENT_NUM_CTX = {
         "coder": 16384,
