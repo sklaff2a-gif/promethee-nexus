@@ -5,6 +5,7 @@ Remplace le quality_control_listener : Factory écrit du code → Coder génère
 """
 import ast
 import asyncio
+import json
 import logging
 import os
 import re
@@ -195,9 +196,47 @@ def _rollback(filepath: str) -> bool:
     if os.path.exists(filepath):
         os.remove(filepath)
         logger.info(f"[ROLLBACK] {filepath} supprimé (fichier nouveau, pas de .bak)")
+        # Si le fichier etait dans core/grimoire/, retirer aussi l'entree d'index
+        # orpheline (sinon l'index derive : recette listee mais .py absent).
+        # Decouvert le 23/05 lors de la validation en acte de la spec 1 grimoire->CI.
+        _cleanup_grimoire_index_orphan(filepath)
         return True
     logger.warning(f"[ROLLBACK] Pas de .bak trouvé pour {filepath}")
     return False
+
+
+def _cleanup_grimoire_index_orphan(filepath: str) -> None:
+    """Retire l'entree orpheline de grimoire_index.json apres rollback d'une recette neuve.
+
+    Appele uniquement quand _rollback a SUPPRIME (pas restaure) un fichier dans
+    core/grimoire/. Garantit que l'index ne derive pas. Invalide aussi le cache
+    du Router pour que le routage reflete l'index nettoye.
+    """
+    try:
+        normalized = filepath.replace("\\", "/")
+        if "/core/grimoire/" not in normalized:
+            return  # Pas une recette grimoire, rien a faire
+        slug = os.path.splitext(os.path.basename(filepath))[0]
+        index_path = os.path.join(os.path.dirname(filepath), "grimoire_index.json")
+        if not os.path.exists(index_path):
+            return
+        with open(index_path, "r", encoding="utf-8") as f:
+            index = json.load(f)
+        original_len = len(index)
+        index = [e for e in index if e.get("slug") != slug]
+        if len(index) == original_len:
+            return  # Aucune entree trouvee (pas d'orphelin a nettoyer)
+        with open(index_path, "w", encoding="utf-8") as f:
+            json.dump(index, f, indent=2, ensure_ascii=False)
+        logger.info(f"[ROLLBACK] Entree index orpheline retiree : slug={slug}")
+        # Invalider le cache Router (l'index a change)
+        try:
+            from core.router import RouterAgent
+            RouterAgent.invalidate_grimoire_cache()
+        except ImportError:
+            pass
+    except Exception as e:
+        logger.warning(f"[ROLLBACK] Echec nettoyage index orphelin : {e}")
 
 
 # --- Mémoire CI/CD ---

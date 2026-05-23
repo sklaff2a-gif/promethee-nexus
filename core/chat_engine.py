@@ -692,31 +692,21 @@ class ChatEngine:
         except SyntaxError as e:
             return f"Erreur generation code agent : {e}"
 
-        # Ecrire le fichier
-        agent_path = os.path.join(self._GRIMOIRE_DIR, f"{slug}.py")
-        try:
-            with open(agent_path, "w", encoding="utf-8") as f:
-                f.write(agent_code)
-        except Exception as e:
-            return f"Erreur ecriture fichier : {e}"
-
-        # Mettre a jour l'index
-        index.append({
-            "slug": slug,
-            "name": class_name,
-            "description": description[:200],
-            "keywords": keywords,
-            "file": f"{slug}.py",
-        })
-        try:
-            self._save_grimoire_index(index)
-        except Exception as e:
-            # Rollback : supprimer le fichier
-            try:
-                os.remove(agent_path)
-            except Exception:
-                pass
-            return f"Erreur mise a jour index : {e}"
+        # Delegation a GrimoireWriter.write_recipe = point de verite unique
+        # (Single Source of Truth, debat 1/4 du 23/05). write_recipe gere :
+        # ecriture fichier .py + maj index + invalidation cache Router
+        # + publication ARTIFACT_CREATED sur le bus -> reveille la CI auto.
+        # Le bypass historique de _execute_craft_command esquivait ces 3 etapes.
+        from core.grimoire_writer import GrimoireWriter
+        result = GrimoireWriter.write_recipe(
+            slug=slug,
+            name=class_name,
+            description=description[:200],
+            keywords=keywords,
+            code=agent_code,
+        )
+        if result.get("status") != "success":
+            return f"Erreur GrimoireWriter : {result.get('message', 'inconnue')}"
 
         logger.info(f"CRAFT: Nouvel agent '{slug}' cree dans le Grimoire ({len(keywords)} keywords)")
 

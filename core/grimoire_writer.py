@@ -99,10 +99,13 @@ class GrimoireWriter:
             from core.event_bus.bus import bus
             try:
                 loop = asyncio.get_running_loop()
+                # Schema canonique aligne sur factory_agent.py:318 (filepath/filename).
+                # ci_pipeline._on_artifact_created lit ces 2 cles explicitement.
                 loop.create_task(bus.publish("ARTIFACT_CREATED", {
-                    "file_path": file_path,
-                    "slug": slug,
+                    "filepath": file_path,
+                    "filename": f"{slug}.py",
                     "source": "grimoire_writer",
+                    "slug": slug,
                 }))
             except RuntimeError:
                 # Pas d'event loop running (write_recipe appelee hors contexte async)
