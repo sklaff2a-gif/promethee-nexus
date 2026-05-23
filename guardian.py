@@ -9,6 +9,15 @@ RESTORE_SCRIPT = "emergency_restore.py"
 MAX_RETRIES = 5  # Sécurité anti-boucle infinie
 CRASH_WINDOW = 30 # Si ça plante en moins de 30s, c'est un crash de démarrage (mauvais code)
 
+# --- Détection de GEL via heartbeat-fichier (debat 4/4 du 23/05) ---
+# main.py écrit memory/heartbeat.txt toutes les 30s. Si l'âge dépasse
+# HEARTBEAT_MAX_AGE, c'est un gel (process vivant mais boucle morte) -> kill+restart.
+HEARTBEAT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory", "heartbeat.txt")
+HEARTBEAT_MAX_AGE = 300          # 5 min : seuil de détection du gel
+HEARTBEAT_CHECK_INTERVAL = 10    # poll toutes les 10s pendant surveillance
+GEL_RESTART_WINDOW = 1800        # 30 min : fenêtre du circuit breaker
+GEL_RESTART_MAX = 3              # max 3 gel-restarts par fenêtre, sinon escalation
+
 def log(message, type="INFO"):
     prefix = {"INFO": "🛡️ [GUARDIAN]", "WARN": "⚠️ [GUARDIAN]", "ERROR": "🚑 [GUARDIAN]"}
     print(f"{prefix.get(type, 'INFO')} {message}")
@@ -25,26 +34,66 @@ def run_restore():
 
 def main():
     retries = 0
-    
+    gel_count = 0
+    gel_window_start = time.time()
+
     log("Démarrage du système de surveillance...")
     log(f"Cible : {NEXUS_SCRIPT}")
 
     while True:
         start_time = time.time()
-        
+        gel_detected = False
+
         try:
             # 1. Lancement de Nexus
             log("Lancement de Prométhée...", "INFO")
             process = subprocess.Popen([sys.executable, NEXUS_SCRIPT])
-            
-            # 2. Surveillance
+
+            # 2. Surveillance : crash (process.poll) OU gel (heartbeat trop vieux).
             try:
-                process.wait() # On attend qu'il finisse (ou plante)
+                while True:
+                    rc = process.poll()
+                    if rc is not None:
+                        break  # process terminé (crash ou exit normal)
+                    if os.path.exists(HEARTBEAT_PATH):
+                        age = time.time() - os.path.getmtime(HEARTBEAT_PATH)
+                        if age > HEARTBEAT_MAX_AGE:
+                            log(f"GEL DETECTE : heartbeat vieux de {age:.0f}s (> {HEARTBEAT_MAX_AGE}s) -> kill+restart", "WARN")
+                            process.terminate()
+                            try:
+                                process.wait(timeout=10)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                            gel_detected = True
+                            break
+                    time.sleep(HEARTBEAT_CHECK_INTERVAL)
             except KeyboardInterrupt:
                 # Si VOUS faites Ctrl+C, on arrête tout proprement
                 log("Arrêt manuel demandé.", "WARN")
                 process.terminate()
                 break
+
+            # 2.5 — gel détecté : circuit breaker avant restart
+            if gel_detected:
+                if time.time() - gel_window_start > GEL_RESTART_WINDOW:
+                    gel_window_start = time.time()
+                    gel_count = 0
+                gel_count += 1
+                if gel_count > GEL_RESTART_MAX:
+                    log(f"CIRCUIT BREAKER : {gel_count} gels en {GEL_RESTART_WINDOW//60}min — ESCALATION HUMAINE", "ERROR")
+                    log("Le systeme se gele de maniere recurrente. Verification manuelle requise.", "ERROR")
+                    try:
+                        from core.outreach import outreach as _outreach
+                        _outreach.send_alert(
+                            "GUARDIAN CIRCUIT BREAKER",
+                            f"{gel_count} gels en {GEL_RESTART_WINDOW//60}min. Intervention requise."
+                        )
+                    except Exception as _e:
+                        log(f"Notification escalation echouee (outreach) : {_e}", "WARN")
+                    break
+                log(f"Redemarrage apres gel #{gel_count}/{GEL_RESTART_MAX} dans 3s...", "INFO")
+                time.sleep(3)
+                continue
 
             # 3. Analyse de la mort
             return_code = process.returncode

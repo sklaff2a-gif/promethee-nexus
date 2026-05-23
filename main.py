@@ -625,6 +625,25 @@ async def lifespan(app: FastAPI):
 
     _autonomy_task = asyncio.create_task(autonomy.start_loop())
     _autonomy_task.add_done_callback(_on_autonomy_done)
+
+    # --- HEARTBEAT (watchdog externe) : ecrit memory/heartbeat.txt toutes les 30s.
+    # Permet a guardian.py de detecter un gel (process vivant mais boucle morte).
+    # Voir debat 4/4 du 23/05 (gel autonome 13h du 22/05).
+    async def _heartbeat_loop():
+        import time as _time
+        hb_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "memory", "heartbeat.txt"
+        )
+        while True:
+            try:
+                with open(hb_path, "w", encoding="utf-8") as f:
+                    f.write(f"{_time.time():.0f}\n")
+            except Exception as e:
+                logger.warning(f"[HEARTBEAT] echec ecriture : {e}")
+            await asyncio.sleep(30)
+
+    _heartbeat_task = asyncio.create_task(_heartbeat_loop())
     yield
     ci_pipeline.stop()
     talk_logger.stop()

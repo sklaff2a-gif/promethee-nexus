@@ -90,5 +90,25 @@ class GrimoireWriter:
         except ImportError:
             pass
 
+        # 8. Publication ARTIFACT_CREATED -> declenche le CI auto via le bus.
+        # Branche l'Unite de validation : ci_pipeline._on_artifact_created
+        # va lancer run_pipeline sur la recette, impact_analyzer ecoute
+        # le verdict pour invalidation eventuelle. Voir debat 1/4 du 23/05.
+        try:
+            import asyncio
+            from core.event_bus.bus import bus
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(bus.publish("ARTIFACT_CREATED", {
+                    "file_path": file_path,
+                    "slug": slug,
+                    "source": "grimoire_writer",
+                }))
+            except RuntimeError:
+                # Pas d'event loop running (write_recipe appelee hors contexte async)
+                logger.debug("GrimoireWriter: pas d'event loop, ARTIFACT_CREATED non publie")
+        except Exception as e:
+            logger.warning(f"GrimoireWriter: ARTIFACT_CREATED publish failed : {e}")
+
         logger.info(f"📜 [GRIMOIRE] Nouvelle recette écrite : {slug} ({name})")
         return {"status": "success", "message": f"Recette '{slug}' ajoutée au Grimoire."}
