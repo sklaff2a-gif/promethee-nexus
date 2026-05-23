@@ -2,6 +2,7 @@ import subprocess
 import time
 import sys
 import os
+from collections import deque
 
 # CONFIGURATION
 NEXUS_SCRIPT = "start_nexus.py"
@@ -22,6 +23,43 @@ def log(message, type="INFO"):
     prefix = {"INFO": "🛡️ [GUARDIAN]", "WARN": "⚠️ [GUARDIAN]", "ERROR": "🚑 [GUARDIAN]"}
     print(f"{prefix.get(type, 'INFO')} {message}")
 
+
+def _send_telegram_alert(text: str) -> bool:
+    """Envoie une alerte Telegram directement via l'API Bot, sans dépendance lourde.
+    Lit TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID depuis .env (parsing manuel).
+    Guardian tourne dans un process séparé : il ne peut PAS utiliser le bus
+    event-driven d'outreach (qui vit dans la RAM de main.py). D'où cette voie
+    directe, autonome, fonctionnelle même si tout le reste est gelé.
+    Retourne True si l'envoi a réussi (HTTP 200), False sinon.
+    """
+    import urllib.request
+    import json as _json
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    token = chat_id = None
+    try:
+        if os.path.exists(env_path):
+            with open(env_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("TELEGRAM_BOT_TOKEN="):
+                        token = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    elif line.startswith("TELEGRAM_CHAT_ID="):
+                        chat_id = line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        return False
+    if not token or not chat_id:
+        return False
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = _json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=data, headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
 def run_restore():
     """Exécute le script de restauration des backups."""
     log("DÉTECTION D'UNE CORRUPTION CRITIQUE. Lancement du protocole de restauration...", "ERROR")
@@ -34,8 +72,10 @@ def run_restore():
 
 def main():
     retries = 0
-    gel_count = 0
-    gel_window_start = time.time()
+    # Sliding window des timestamps de restart pour cause "gel" (validation
+    # simulateur 23/05). Une fenetre fixe avec reset etait moins rigoureuse :
+    # elle permettait 6 gels en 50min sans declencher le breaker.
+    gel_restart_timestamps: deque = deque()
 
     log("Démarrage du système de surveillance...")
     log(f"Cible : {NEXUS_SCRIPT}")
@@ -73,25 +113,28 @@ def main():
                 process.terminate()
                 break
 
-            # 2.5 — gel détecté : circuit breaker avant restart
+            # 2.5 — gel détecté : circuit breaker AVEC FENETRE GLISSANTE
             if gel_detected:
-                if time.time() - gel_window_start > GEL_RESTART_WINDOW:
-                    gel_window_start = time.time()
-                    gel_count = 0
-                gel_count += 1
-                if gel_count > GEL_RESTART_MAX:
-                    log(f"CIRCUIT BREAKER : {gel_count} gels en {GEL_RESTART_WINDOW//60}min — ESCALATION HUMAINE", "ERROR")
+                now = time.time()
+                # Nettoie les timestamps sortis de la fenetre glissante
+                while gel_restart_timestamps and now - gel_restart_timestamps[0] > GEL_RESTART_WINDOW:
+                    gel_restart_timestamps.popleft()
+                gel_restart_timestamps.append(now)
+                count = len(gel_restart_timestamps)
+                if count > GEL_RESTART_MAX:
+                    log(f"CIRCUIT BREAKER : {count} gels dans la fenetre glissante de {GEL_RESTART_WINDOW//60}min — ESCALATION HUMAINE", "ERROR")
                     log("Le systeme se gele de maniere recurrente. Verification manuelle requise.", "ERROR")
-                    try:
-                        from core.outreach import outreach as _outreach
-                        _outreach.send_alert(
-                            "GUARDIAN CIRCUIT BREAKER",
-                            f"{gel_count} gels en {GEL_RESTART_WINDOW//60}min. Intervention requise."
-                        )
-                    except Exception as _e:
-                        log(f"Notification escalation echouee (outreach) : {_e}", "WARN")
+                    alert_msg = (
+                        f"🚨 GUARDIAN CIRCUIT BREAKER\n"
+                        f"{count} gels dans les {GEL_RESTART_WINDOW//60} dernières min sur Prométhée.\n"
+                        f"Redémarrage automatique suspendu. Intervention manuelle requise."
+                    )
+                    if _send_telegram_alert(alert_msg):
+                        log("Alerte Telegram envoyée à Jean-Michel.", "INFO")
+                    else:
+                        log("Alerte Telegram non envoyée (token/chat_id manquants ou reseau KO).", "WARN")
                     break
-                log(f"Redemarrage apres gel #{gel_count}/{GEL_RESTART_MAX} dans 3s...", "INFO")
+                log(f"Redemarrage apres gel #{count}/{GEL_RESTART_MAX} dans 3s...", "INFO")
                 time.sleep(3)
                 continue
 
