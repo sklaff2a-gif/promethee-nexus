@@ -258,27 +258,39 @@ class SeedsEngine:
                     error="no_concepts_extracted"
                 )
 
-            # 2) Activate concepts -> co-activation naturelle -> STDP capture
-            try:
-                from core.synaptic_network import cortex
-                for c in concepts:
-                    cortex.activate_concept(c, intensity=ACTIVATION_INTENSITY)
-            except Exception as e:
-                logger.warning(f"SeedsEngine: activate_concept failed: {e}")
-
-            # 3) Query associations -> mesure heuristique pure (0 token LLM)
+            # 2-3) Activate + query DANS UN BATCH (cortex.batch_mutations)
+            # Save unique a la sortie au lieu de 3 saves bloquantes pendant la
+            # cascade. Diagnostic profilage 25/05 : 5 activate_concept declenchaient
+            # 3 saves passees du throttle (10 mutations × 3) = ~2.3s d'I/O bloquant
+            # sur graphe runtime 8 MB. Le context manager batch_mutations utilise
+            # le flag _seeding deja eprouve par _seed_organ_nodes.
             energy_sum = 0.0
             kept_count = 0
             try:
                 from core.synaptic_network import cortex
-                assocs = cortex.query_associations(
-                    concepts, top_k=TOP_K_QUERY, use_resonance=True
-                )
-                # Plafonnement anti-saturation (garde-fou Gemini)
-                energy_sum = min(MAX_ENERGY_CAP, sum(e for _, e in assocs))
-                kept_count = sum(1 for _, e in assocs if e > 0.1)
+                with cortex.batch_mutations():
+                    # Activate concepts -> co-activation naturelle -> STDP capture
+                    for c in concepts:
+                        try:
+                            cortex.activate_concept(c, intensity=ACTIVATION_INTENSITY)
+                        except Exception as e:
+                            logger.warning(
+                                f"SeedsEngine: activate_concept failed for {c!r}: {e}"
+                            )
+                    # Query associations -> mesure heuristique pure (0 token LLM)
+                    try:
+                        assocs = cortex.query_associations(
+                            concepts, top_k=TOP_K_QUERY, use_resonance=True
+                        )
+                        # Plafonnement anti-saturation (garde-fou Gemini)
+                        energy_sum = min(MAX_ENERGY_CAP, sum(e for _, e in assocs))
+                        kept_count = sum(1 for _, e in assocs if e > 0.1)
+                    except Exception as e:
+                        logger.warning(
+                            f"SeedsEngine: query_associations failed: {e}"
+                        )
             except Exception as e:
-                logger.warning(f"SeedsEngine: query_associations failed: {e}")
+                logger.warning(f"SeedsEngine: cortex batch failed: {e}")
 
             latency_ms = round((time.perf_counter() - t_start) * 1000, 2)
             return self._record_recall(seed, energy_sum, kept_count, latency_ms)

@@ -10,6 +10,7 @@ import math
 import os
 import random
 import time
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("SynapticNetwork")
@@ -2667,6 +2668,38 @@ class SynapticNetwork:
             return  # Pas de save pendant le seed (save explicite après)
         if self._mutations_since_save >= 10:
             self.save()
+
+    @contextmanager
+    def batch_mutations(self):
+        """Context manager : suspend _auto_save pendant un batch de mutations.
+
+        Commit explicite a la fin via self.save() — la save bloquante (8 MB
+        JSON sur graphe runtime, ~750ms) ne se fait qu'UNE fois a la sortie
+        au lieu de plusieurs fois pendant les activations cascade.
+
+        Diagnostic 25/05 (profilage cProfile sur seeds_engine.recall) :
+        sans ce context, 5 activate_concept declenchent 3 saves passees du
+        throttle (10 mutations × 3) = ~2.3s I/O bloquant.
+
+        Reentrance : si _seeding etait deja True (batch parent), le commit
+        final est saute (sera fait par le parent).
+
+        Usage:
+            with cortex.batch_mutations():
+                for c in concepts:
+                    cortex.activate_concept(c, intensity=0.5)
+                cortex.query_associations(concepts, top_k=10)
+        """
+        prev = getattr(self, '_seeding', False)
+        self._seeding = True
+        try:
+            yield
+        finally:
+            self._seeding = prev
+            # Save explicite seulement si on est le batch racine
+            if not prev:
+                self._mutations_since_save = 0
+                self.save()
 
 
 # --- Singleton global ---
