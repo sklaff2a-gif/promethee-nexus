@@ -168,6 +168,9 @@ class ChatEngine:
         "  !dashboard               — Tableau de bord compact\n"
         "  !invoke <slug> [mission] — Invoquer un specialiste du Grimoire\n"
         "  !craft <nom> <desc>      — Creer un outil ephemere a la volee\n"
+        "  !seed-ok [phrase]        — Signer la derniere graine proposee (ou phrase exacte)\n"
+        "  !seed-remove <id>        — Retirer une graine obsolete\n"
+        "  !seed-list               — Lister graines validees + propositions pending\n"
         "  !antibodies              — Anticorps anti-bugs + scan\n"
         "  !consciousness            — Benchmarks de conscience (C-Score)\n"
         "  !ethics                   — Etat ethique (valeurs PSYCHE)\n"
@@ -468,7 +471,69 @@ class ChatEngine:
         if cmd == "craft":
             return await self._execute_craft_command(args)
 
+        if cmd == "seed-ok":
+            return self._execute_seed_ok_command(args)
+
+        if cmd == "seed-remove":
+            return self._execute_seed_remove_command(args)
+
+        if cmd == "seed-list":
+            return self._execute_seed_list_command()
+
         return f"Commande inconnue : !{cmd}\n{self._COMMAND_HELP}"
+
+    # --- Commandes Seeds (chantier 25/05, Two-Key Turn JM-only) ---
+
+    def _execute_seed_ok_command(self, args: List[str]) -> str:
+        """Signe la derniere graine proposee. Args optionnels = phrase exacte (fallback TTL)."""
+        from core.seeds_engine import seeds_engine
+        phrase = " ".join(args).strip() if args else None
+        try:
+            seed = seeds_engine.validate(phrase=phrase)
+        except ValueError as e:
+            return f"❌ {e}"
+        next_recall_short = seed["next_recall"][:16].replace("T", " ")
+        return (
+            f"🌱 Graine scellee et ajoutee au cycle d'Ebbinghaus.\n"
+            f"  id        : {seed['id']}\n"
+            f"  phrase    : {seed['phrase'][:120]}\n"
+            f"  source    : {seed.get('source_debat') or '(non renseignee)'}\n"
+            f"  prochain rappel : {next_recall_short} (J+3)\n"
+            f"  ladder    : 0/2 (J+3 -> J+5 -> J+7 max)"
+        )
+
+    def _execute_seed_remove_command(self, args: List[str]) -> str:
+        """Retire une graine obsolete par son id."""
+        if not args:
+            return "Usage : !seed-remove <seed_id>"
+        from core.seeds_engine import seeds_engine
+        seed_id = args[0].strip()
+        if seeds_engine.remove(seed_id):
+            return f"🌱 Graine {seed_id} retiree du cycle."
+        return f"❌ Graine inconnue : {seed_id}"
+
+    def _execute_seed_list_command(self) -> str:
+        """Liste les graines validees + propositions pending."""
+        from core.seeds_engine import seeds_engine
+        seeds = seeds_engine.list_seeds()
+        pending = seeds_engine.get_pending()
+        lines = [f"🌱 Graines validees : {len(seeds)}"]
+        for s in seeds[:10]:
+            next_r = s["next_recall"][:16].replace("T", " ")
+            lines.append(
+                f"  {s['id']} | ladder={s['ladder_index']} | next={next_r} | "
+                f"'{s['phrase'][:70]}...'"
+            )
+        if len(seeds) > 10:
+            lines.append(f"  ... ({len(seeds) - 10} de plus)")
+        if pending:
+            lines.append(f"\nPropositions pending : {len(pending)}")
+            for p in pending[:5]:
+                lines.append(
+                    f"  {p['proposal_id']} | age={int(p['age_seconds'])}s | "
+                    f"'{p['phrase'][:70]}...'"
+                )
+        return "\n".join(lines)
 
     def _execute_vision_command(self) -> str:
         """Declenche une observation visuelle et retourne le resultat."""

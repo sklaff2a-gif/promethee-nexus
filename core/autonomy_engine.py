@@ -31,7 +31,7 @@ DAILY_BUDGET_POINTS = 200
 BUDGET_RESERVE_POINTS = 20
 
 # Routines 0-LLM qui continuent même quand le budget est épuisé
-POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE", "SELF_INSPECT", "PARAM_EXPERIMENT", "EVENING_REFLECTION", "AUDIT_SURVIE", "REFACTORING_AUDIT", "CI_PIPELINE_RUN"}
+POST_BUDGET_INTENTS = {"AUDIT_STRUCTURE", "MEMORY_CLEANUP", "NEURAL_COMPILE", "SELF_INSPECT", "PARAM_EXPERIMENT", "EVENING_REFLECTION", "AUDIT_SURVIE", "REFACTORING_AUDIT", "CI_PIPELINE_RUN", "SEED_RECALL"}
 
 # --- AUDIT_SURVIE (cours S1-S12 : absence résistance au changement) ---
 # Routine 0-LLM qui vérifie périodiquement les constantes vitales du système :
@@ -431,7 +431,7 @@ INTROSPECTIVE_INTENTS = {
     "EVENING_REFLECTION",
     "MEMORY_CLEANUP", "MEMORY_CONSOLIDATION", "AUDIT_STRUCTURE",
     "REFACTOR_RANDOM", "SECURITY_AUDIT", "EXPANSION_CODE", "EXPANSION_CATALOG",
-    "PARAM_EXPERIMENT",
+    "PARAM_EXPERIMENT", "SEED_RECALL",
 }
 EXTROVERTED_INTENTS = {
     "VEILLE_SILENCIEUSE", "VEILLE_IA", "DROPZONE_SCAN", "ROADMAP_RESEARCH", "ROADMAP_SPEC",
@@ -754,6 +754,7 @@ CONTEXT_KEYWORDS = {
     "SELF_INSPECT": ["github", "code source", "repo", "inspection", "miroir", "auto-analyse"],
     "SELF_ANALYSIS": ["diagnostic", "analyse", "problème", "anomalie", "qualité", "routine", "performance", "rapport"],
     "EVENING_REFLECTION": ["introspection", "réflexion", "journée", "question", "graine", "écart", "vécu", "bilan"],
+    "SEED_RECALL": ["graine", "rappel", "consolidation", "axiome", "résonance", "ebbinghaus", "mantra"],
     "AUTO_FUZZING": ["fuzz", "test", "edge case", "crash", "robustesse", "exception", "bug"],
     "CREATIVE_PLAY": ["créatif", "association", "analogie", "exploration", "idée", "hypothèse"],
     "GRIMOIRE_EVOLVE": ["grimoire", "prompt", "mutation", "amélioration", "formulation", "optimiser"],
@@ -2045,6 +2046,8 @@ class AutonomyEngine:
             {"agent": "_evening_reflection", "intent": "EVENING_REFLECTION",
              "mission": self._build_dynamic_mission("EVENING_REFLECTION",
                 "Introspection vesperale : relire les moments forts de la journee et identifier les questions ouvertes.")},
+            {"agent": "_seed_recall", "intent": "SEED_RECALL",
+             "mission": "Reveil d'une graine due : activation co-Hebbian + mesure resonance (Ebbinghaus J+3/J+5/J+7)."},
             {"agent": "_coffee_break", "intent": "COFFEE_BREAK", "mission": "Pause café avec Alfred — conversation amicale et décontractée."},
             {"agent": "_stefan_confrontation", "intent": "STEFAN_CONFRONTATION", "mission": "Confrontation avec Stefan — une question que Prométhée a évitée."},
         ]
@@ -3898,6 +3901,8 @@ class AutonomyEngine:
             response = await self._execute_param_experiment()
         elif intent == "EVENING_REFLECTION":
             response = await self._execute_evening_reflection()
+        elif intent == "SEED_RECALL":
+            response = await self._execute_seed_recall()
         elif intent == "IMMERSION_DOMAIN":
             response = await self._execute_immersion_domain()
         elif intent == "GRIMOIRE_EVOLVE":
@@ -4524,6 +4529,8 @@ class AutonomyEngine:
             response = await self._execute_param_experiment()
         elif intent == "EVENING_REFLECTION":
             response = await self._execute_evening_reflection()
+        elif intent == "SEED_RECALL":
+            response = await self._execute_seed_recall()
         elif intent == "IMMERSION_DOMAIN":
             response = await self._execute_immersion_domain()
         elif intent == "GRIMOIRE_EVOLVE":
@@ -5827,6 +5834,8 @@ class AutonomyEngine:
                     response = await self._execute_evening_reflection()
                 else:
                     continue  # Deja fait aujourd'hui
+            elif intent == "SEED_RECALL":
+                response = await self._execute_seed_recall()
             if response is None:
                 continue
             # Tracking (coût 0 — budget intact)
@@ -11654,6 +11663,64 @@ RAISON: <1 phrase courte>"""
 
         except Exception as e:
             return {"status": "error", "result": f"Introspection echouee: {e}"}
+
+    # Cooldown SEED_RECALL : max 1 rappel toutes les 10 min (anti-matraquage)
+    _last_seed_recall_ts: float = 0.0
+    _SEED_RECALL_COOLDOWN: float = 10 * 60  # 10 minutes
+
+    async def _execute_seed_recall(self) -> dict:
+        """Reveille une graine due : active concepts P16 + mesure resonance heuristique.
+
+        Routine 0-LLM (post-budget). Cooldown 10 min entre 2 rappels.
+        Calendrier T0 -> J+3 -> J+5 -> J+7 max (cf. seeds_repetition_design 23-25/05).
+
+        Garde-fou Gemini : try/except large pour ne JAMAIS crasher la boucle d'autonomie.
+        Si seeds_engine plante, on log et on retourne skipped.
+        """
+        try:
+            now = time.time()
+            if now - self._last_seed_recall_ts < self._SEED_RECALL_COOLDOWN:
+                remaining = int(self._SEED_RECALL_COOLDOWN - (now - self._last_seed_recall_ts))
+                return {
+                    "status": "skipped",
+                    "result": f"SEED_RECALL en cooldown ({remaining}s restantes)",
+                }
+
+            from core.seeds_engine import seeds_engine
+            due = seeds_engine.get_due()
+            if not due:
+                return {
+                    "status": "skipped",
+                    "result": "Aucune graine due actuellement (rappel trop tot ou stock vide)",
+                }
+
+            # On rappelle la graine la plus en retard (premiere de la liste triee)
+            seed = due[0]
+            self._last_seed_recall_ts = now
+            result = seeds_engine.recall(seed["id"])
+
+            if result.get("error"):
+                return {
+                    "status": "error",
+                    "result": (
+                        f"SEED_RECALL [{seed['id']}] echec : {result['error']}"
+                    ),
+                }
+
+            flag = "OK" if result["success"] else "KO"
+            return {
+                "status": "success",
+                "result": (
+                    f"SEED_RECALL [{flag}] {seed['id']} : "
+                    f"energy={result['energy']} kept={result['kept_count']} "
+                    f"-> J+{result['interval_days']} (idx={result['ladder_index']}, "
+                    f"stab={result['stability_score']}) [{result['latency_ms']}ms]"
+                ),
+            }
+
+        except Exception as e:
+            logger.warning(f"[SEED_RECALL] Exception capturee (boucle preservee) : {e}")
+            return {"status": "error", "result": f"SEED_RECALL crash gracieux : {e}"}
 
     async def _execute_veille_ia(self, routine: dict) -> dict:
         """Veille IA active : recherche web + surveillance technologique GitHub.

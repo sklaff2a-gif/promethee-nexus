@@ -1966,6 +1966,84 @@ async def chat_clear():
     chat_engine.clear_history()
     return {"status": "ok", "message": "Historique efface"}
 
+# --- SEEDS (Spaced Repetition, chantier 25/05) ---
+# Two-Key Turn : Claude propose (POST /propose) -> JM signe (POST /validate)
+# Voir memory/seeds_repetition_design_2026_05_23.md
+
+@app.get("/api/seed", dependencies=[Depends(verify_token)])
+async def seed_list():
+    """Liste les graines validees + propositions pending."""
+    from core.seeds_engine import seeds_engine
+    return {
+        "seeds": seeds_engine.list_seeds(),
+        "pending": seeds_engine.get_pending(),
+    }
+
+
+@app.post("/api/seed/propose", dependencies=[Depends(verify_token)])
+async def seed_propose(request: Request):
+    """Claude (mentor) propose une graine. JM signera ensuite via /seed-ok ou validate."""
+    from core.seeds_engine import seeds_engine
+    data = await request.json()
+    phrase = data.get("phrase", "")
+    source_debat = data.get("source_debat")
+    try:
+        proposal_id = seeds_engine.propose(phrase, source_debat=source_debat)
+        return {
+            "status": "pending",
+            "proposal_id": proposal_id,
+            "phrase": phrase.strip(),
+            "ttl_seconds": 900,
+            "message": "Proposition enregistree. Signe avec /seed-ok ou POST /api/seed/validate.",
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/seed/validate", dependencies=[Depends(verify_token)])
+async def seed_validate(request: Request):
+    """JM signe une graine. 3 modes : proposal_id explicite / phrase fallback / sans arg."""
+    from core.seeds_engine import seeds_engine
+    data = await request.json()
+    proposal_id = data.get("proposal_id")
+    phrase = data.get("phrase")
+    source_debat = data.get("source_debat")
+    try:
+        seed = seeds_engine.validate(
+            proposal_id=proposal_id,
+            phrase=phrase,
+            source_debat=source_debat,
+        )
+        return {"status": "ok", "seed": seed}
+    except ValueError as e:
+        msg = str(e)
+        # Map semantique HTTP : phrase vide ou doublon -> 400, proposal expire -> 410
+        if "expire" in msg.lower() or "aucune proposition" in msg.lower():
+            raise HTTPException(status_code=410, detail=msg)
+        raise HTTPException(status_code=400, detail=msg)
+
+
+@app.delete("/api/seed/{seed_id}", dependencies=[Depends(verify_token)])
+async def seed_remove(seed_id: str):
+    """Retire une graine obsolete."""
+    from core.seeds_engine import seeds_engine
+    removed = seeds_engine.remove(seed_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Graine inconnue : {seed_id}")
+    return {"status": "removed", "seed_id": seed_id}
+
+
+@app.post("/api/seed/recall/{seed_id}", dependencies=[Depends(verify_token)])
+async def seed_recall(seed_id: str):
+    """Force un recall manuel (utile pour test en acte, normalement la routine SEED_RECALL s'en charge)."""
+    from core.seeds_engine import seeds_engine
+    try:
+        result = seeds_engine.recall(seed_id)
+        return {"status": "ok", "recall": result}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 # --- SALARY (Photo Salary) ---
 
 @app.get("/api/salary/status", dependencies=[Depends(verify_token)])
