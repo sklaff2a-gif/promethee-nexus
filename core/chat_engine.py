@@ -185,17 +185,45 @@ class ChatEngine:
     _DISPATCH_COOLDOWN: float = 60.0  # 60s entre deux dispatch
 
     def _parse_command(self, message: str) -> Optional[Tuple[str, List[str]]]:
-        """Detecte si le message commence par !, retourne (commande, args) ou None."""
+        """Detecte si le message commence par !, retourne (commande, args) ou None.
+
+        Utilise shlex.split (POSIX) pour respecter les guillemets dans les arguments :
+        `!grep "def extract_concepts" core/syn.py` parse correctement comme
+        [grep, "def extract_concepts", "core/syn.py"] — le pattern multi-mots garde
+        ses espaces ET les guillemets sont retires du contenu.
+
+        Avant ce fix : stripped.split() laissait les guillemets dans args[0],
+        causant des `!grep "pattern"` qui cherchaient la chaine litterale
+        `"pattern"` (avec quotes) -> "Aucun resultat" errone. Observe 4 fois
+        pendant la session 4 debats 25/05, source d'illusions de competence
+        sur les outils.
+
+        Sur guillemets desequilibres : shlex leve ValueError -> on retourne
+        un pseudo-cmd `__invalid_command__` avec un message clair (au lieu
+        de crasher en HTTP 500).
+        """
+        import shlex
         stripped = message.strip()
         if not stripped.startswith("!"):
             return None
-        parts = stripped.split()
+        try:
+            parts = shlex.split(stripped, posix=True)
+        except ValueError as e:
+            return ("__invalid_command__", [f"Syntaxe invalide (guillemets desequilibres ?) : {e}"])
+        if not parts or not parts[0].startswith("!"):
+            return None
         cmd = parts[0][1:].lower()  # retire le '!'
         args = parts[1:]
         return (cmd, args)
 
     async def _execute_command(self, cmd: str, args: List[str]) -> str:
         """Execute une commande d'introspection ou de dispatch. Retourne le texte resultat."""
+
+        # Rejet semantique pour les commandes mal formees (guillemets desequilibres
+        # detectes par shlex.split dans _parse_command). Evite un crash HTTP 500
+        # et permet a l'utilisateur de corriger sa syntaxe.
+        if cmd == "__invalid_command__":
+            return args[0] if args else "Syntaxe de commande invalide."
 
         if cmd == "aide":
             return self._COMMAND_HELP
@@ -1722,6 +1750,24 @@ class ChatEngine:
     _last_auto_observe: float = 0.0  # timestamp du dernier !observe auto-action
     _AUTO_OBSERVE_COOLDOWN: float = 300.0  # 5 minutes entre deux auto-observations
 
+    def _split_action_args(self, args: str) -> list:
+        """Parse les arguments d'une auto-action avec shlex POSIX.
+
+        Respecte les guillemets : `!grep "def extract_concepts" core/syn.py`
+        donne ["def extract_concepts", "core/syn.py"] au lieu de
+        ['"def', 'extract_concepts"', 'core/syn.py'] (bug du 25/05).
+
+        Fallback sur split() simple si shlex echoue (guillemets desequilibres) —
+        on prefere une commande partielle a un crash silencieux.
+        """
+        import shlex
+        if not args:
+            return []
+        try:
+            return shlex.split(args, posix=True)
+        except ValueError:
+            return args.strip().split()
+
     async def _scan_response_actions(self, response: str) -> int:
         """Scanne la reponse du LLM pour des commandes ! et les execute.
 
@@ -1758,17 +1804,17 @@ class ChatEngine:
                 if cmd_lower == "status":
                     result = self._execute_status_command()
                 elif cmd_lower == "read":
-                    read_args = args.strip().split() if args else []
+                    read_args = self._split_action_args(args)
                     result = self._execute_read_command(read_args)
                 elif cmd_lower == "grep":
-                    grep_args = args.strip().split() if args else []
+                    grep_args = self._split_action_args(args)
                     result = self._execute_grep_command(grep_args)
                 elif cmd_lower == "github":
                     result = self._execute_github_command()
                 elif cmd_lower == "audit":
                     result = self._execute_audit_command()
                 elif cmd_lower == "antibodies":
-                    ab_args = args.strip().split() if args else []
+                    ab_args = self._split_action_args(args)
                     result = self._execute_antibodies_command(ab_args)
                 elif cmd_lower == "consciousness":
                     result = self._execute_consciousness_command()
@@ -1782,7 +1828,7 @@ class ChatEngine:
                         logger.info(f"CHAT AUTO-ACTION: !observe ignore (cooldown {remaining}s)")
                         result = None
                     else:
-                        obs_args = args.strip().split() if args else []
+                        obs_args = self._split_action_args(args)
                         result = await self._execute_observe_command(obs_args)
                         if result:
                             self._last_auto_observe = now
@@ -1796,16 +1842,16 @@ class ChatEngine:
                     if method:
                         result = method()
                 elif cmd_lower == "diff":
-                    diff_args = args.strip().split() if args else []
+                    diff_args = self._split_action_args(args)
                     result = self._execute_diff_command(diff_args)
                 elif cmd_lower == "test":
-                    test_args = args.strip().split() if args else []
+                    test_args = self._split_action_args(args)
                     result = await self._execute_test_command(test_args)
                 elif cmd_lower == "invoke":
-                    invoke_args = args.strip().split() if args else []
+                    invoke_args = self._split_action_args(args)
                     result = await self._execute_invoke_command(invoke_args)
                 elif cmd_lower == "craft":
-                    craft_args = args.strip().split() if args else []
+                    craft_args = self._split_action_args(args)
                     result = await self._execute_craft_command(craft_args)
                 else:
                     # Dispatch via les memes mecanismes que les commandes utilisateur
