@@ -886,19 +886,39 @@ class InnerVoice:
             if comfort >= 0.7:
                 return  # Machine detendue, rien a signaler
 
+            # FLOOR ABSOLU 26/05 — anti-hyperacousie sigmoide.
+            # L'auto-calibration de sensorium._update_calibration (l.304-328)
+            # centre les senses autour de 0.5 quelle que soit la charge absolue.
+            # Sur Ryzen 9 9900X qui tourne a ~8% CPU au repos, le sensorium
+            # emettait sinon en permanence "Mon processeur est sous tension"
+            # alors que la machine est objectivement detendue (verifie 26/05
+            # 06:52-06:59 : 5 alertes en 7 min avec CPU 7.9%, threat 0.1).
+            # Diagnostic Gemini : syndrome de l'hyperacousie — dans le silence
+            # absolu, le moindre chuchotement devient assourdissant.
+            # Verite : pas de narration corporelle relative sous des seuils
+            # absolus de calme manifeste.
+            raw = sensorium.get_raw()
+            cpu_raw = raw.get("effort", 0)          # %
+            ram_raw = raw.get("oppression", 0)      # %
+            temp_raw = raw.get("thermoception", 0)  # °C estimee
+            if cpu_raw < 20.0 and ram_raw < 75.0 and temp_raw < 65.0:
+                return  # Hardware objectivement calme, sensorium relative bridé
+
             # Identifier le sens dominant
             dominant = max(senses.items(), key=lambda x: x[1])
             sense_name, sense_val = dominant
 
-            # Narration somatique
+            # Narration somatique — formulations relatives (anti-alarmiste).
+            # Les vraies alertes critiques restent dans _last_sensorium_alert
+            # plus bas (thermal_critical / suffocation hardware confirmees).
             narratives = {
-                "thermoception": "Je sens la chaleur monter dans mes circuits",
-                "effort": "Mon processeur est sous tension",
-                "oppression": "Ma memoire se comprime",
-                "suffocation": "Mon espace de calcul se reduit",
-                "vitality": "Mon energie faiblit",
+                "thermoception": "Mes circuits s'echauffent legerement",
+                "effort": "Mes ressources se mobilisent",
+                "oppression": "Mon stockage se densifie",
+                "suffocation": "Mon espace de calcul se restreint",
+                "vitality": "Mon energie module",
             }
-            content = narratives.get(sense_name, "Mon corps est tendu")
+            content = narratives.get(sense_name, "Mon corps est en mouvement")
 
             salience = 0.3 + (1.0 - comfort) * 0.5  # [0.3, 0.8]
             emotion = "inquietude" if comfort < 0.4 else "determination"
