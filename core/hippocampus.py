@@ -707,20 +707,109 @@ class Hippocampus:
                 )
 
     def _on_prediction_resolved(self, data):
-        """Handler INNER_VOICE_PREDICTION_RESOLVED — si prediction incorrecte."""
+        """Handler INNER_VOICE_PREDICTION_RESOLVED.
+
+        Avant 26/05 : ne creait un episode QUE pour les predictions incorrectes
+        (asymetrie qui bloquait precision predictive a 10%). De plus, le check
+        `data.get("correct", True)` etait un bug latent — le publisher utilise
+        `is_surprise`, pas `correct`, donc le check defaulteait toujours a True
+        et skippait silencieusement TOUT.
+
+        Apres 26/05 :
+        - Succes confirmes -> route vers prediction_memory.record_success() avec
+          context_signature 3-dim (concepts P16 + goals prefrontal + emotion).
+        - Echecs -> garde l'episode hippocampe + record_failure() pour
+          decristallisation rapide si une PredictionStrategy existait.
+
+        Chantier 26/05 (Pilote/Ingenieur debat asymetrie hippocampe).
+        """
         if not isinstance(data, dict):
             return
-        if data.get("correct", True):
+
+        # Payload reel publie par inner_voice.py:1381 : prediction_id, outcome,
+        # error, content, is_surprise, surprise_magnitude. Pas de `correct`.
+        is_surprise = data.get("is_surprise", False)
+        content = str(data.get("content", data.get("prediction", "")))[:200]
+        outcome = data.get("outcome", "")
+
+        # --- Capture du contexte 3-dim (signature) ---
+        # Best-effort : si une dimension echoue, on garde les autres
+        sig = ""
+        try:
+            from core.prediction_memory import context_signature_for_prediction
+            concepts = self._capture_top_concepts()
+            goals = self._capture_active_goals()
+            emotion = self._capture_dominant_emotion()
+            sig = context_signature_for_prediction(
+                concepts=concepts, goals=goals, emotion=emotion
+            )
+        except Exception as e:
+            logger.debug(f"hippocampus prediction context capture failed: {e}")
+
+        if not is_surprise:
+            # Prediction CONFIRMEE -> renforce prediction_memory (au lieu de skip)
+            try:
+                from core.prediction_memory import prediction_memory
+                if sig and content:
+                    prediction_memory.record_success(sig, content)
+            except Exception as e:
+                logger.debug(f"prediction_memory.record_success failed: {e}")
             log_decision("hippocampus", "_on_prediction_resolved",
-                         "prediction_correct_skipped",
-                         {"prediction": str(data.get("prediction", ""))[:80]},
+                         "prediction_correct_recorded",
+                         {"prediction": content[:80], "sig": sig[:8]},
                          sample_rate=0.01)
-            return  # Pas d'episode pour les predictions correctes
+            return
+
+        # Prediction VIOLEE -> episode hippocampe (comme avant) +
+        # decristallisation eventuelle de PredictionStrategy
         self._encode_episode(
             event_type="prediction_error",
-            intent=data.get("prediction", ""),
-            detail=f"outcome={data.get('outcome', '')}",
+            intent=content,
+            detail=f"outcome={outcome}",
         )
+        try:
+            from core.prediction_memory import prediction_memory
+            if sig and content:
+                prediction_memory.record_failure(sig, content)
+        except Exception as e:
+            logger.debug(f"prediction_memory.record_failure failed: {e}")
+
+    # --- Helpers capture contexte 3-dim (utilises par _on_prediction_resolved) ---
+
+    def _capture_top_concepts(self, top_n: int = 5):
+        """Top N concepts les plus actives dans P16, par energie."""
+        try:
+            from core.synaptic_network import cortex
+            if not cortex.nodes:
+                return []
+            nodes_sorted = sorted(
+                cortex.nodes.values(),
+                key=lambda n: n.get("energy", 0.0),
+                reverse=True,
+            )[:top_n]
+            return [n.get("concept", "") for n in nodes_sorted if n.get("concept")]
+        except Exception:
+            return []
+
+    def _capture_active_goals(self, top_n: int = 2):
+        """Goals actifs en working memory du prefrontal."""
+        try:
+            from core.prefrontal import prefrontal
+            wm = getattr(prefrontal, "working_memory", [])
+            return [
+                getattr(g, "title", "") or getattr(g, "goal_title", "")
+                for g in wm[:top_n]
+            ]
+        except Exception:
+            return []
+
+    def _capture_dominant_emotion(self):
+        """Identity tone actuel de l'inner_voice."""
+        try:
+            from core.inner_voice import voice
+            return getattr(voice, "identity_tone", None) or None
+        except Exception:
+            return None
 
     def _on_tissue_pattern(self, data):
         """Handler TISSUE_PATTERN_EMERGED — pattern cellulaire emergent."""
