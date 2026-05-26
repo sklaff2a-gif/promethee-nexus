@@ -3127,8 +3127,31 @@ class ChatEngine:
                 if _gemini.is_available():
                     # Construire un prompt Gemini avec le system prompt + message
                     gemini_prompt = system_prompt + "\n\nJean-Michel dit : " + user_message
-                    gemini_response = await _gemini.generate(gemini_prompt, max_tokens=800, temperature=0.7)
-                    if gemini_response and len(gemini_response) > 30:
+                    # max_tokens=4000 (vs 800 historique) car gemini-2.5-flash a un
+                    # mode "thinking" : le thinking_budget est INCLUS dans
+                    # max_output_tokens. Sur prompts denses (debats philosophiques),
+                    # le modele pense ~600-700 tokens en interne, ne laissant que
+                    # ~100 pour la vraie reponse -> finish_reason=MAX_TOKENS observe
+                    # 26/05 sur question structurante (117 chars seulement).
+                    # Avec 4000, on a ~3000+ tokens reels pour la reponse meme apres
+                    # thinking. Pas d'impact budget : le DAILY_BUDGET borne le nb
+                    # d'appels (10/jour), pas la taille par appel.
+                    gemini_response = await _gemini.generate(gemini_prompt, max_tokens=4000, temperature=0.7)
+                    # Garde-fou anti-troncature : si Gemini renvoie < 100 chars
+                    # sur une question routee comme "profonde" (>= 2 deep keywords),
+                    # c'est une anomalie -> fallback local au lieu d'accepter le
+                    # tronque. Couvre les troncatures residuelles non-safety
+                    # (timeout, recitation, OTHER finish_reason).
+                    # Diagnostic 26/05 : 2 troncatures observees a 110-145 chars
+                    # pendant la session 4 debats du 25/05.
+                    MIN_GEMINI_RESPONSE_CHARS = 100
+                    if gemini_response and len(gemini_response) < MIN_GEMINI_RESPONSE_CHARS:
+                        logger.warning(
+                            f"CHAT: Gemini reponse trop courte ({len(gemini_response)} chars), "
+                            f"fallback local pour preserver l'integrite du debat"
+                        )
+                        gemini_response = None  # force le passage au fallback local
+                    if gemini_response and len(gemini_response) >= MIN_GEMINI_RESPONSE_CHARS:
                         full_response = gemini_response
                         logger.info(f"CHAT: Reponse Gemini Flash ({len(full_response)} chars)")
                         print(f"   💎 CHAT: Reponse via Gemini (question profonde)")

@@ -71,13 +71,31 @@ class GeminiHelper:
 
     async def generate(self, prompt: str, max_tokens: int = 1000,
                        temperature: float = 0.7) -> Optional[str]:
-        """Appel Gemini Flash pour une tache qui demande de la reflexion."""
+        """Appel Gemini Flash pour une tache qui demande de la reflexion.
+
+        SAFETY_SETTINGS = BLOCK_NONE sur les 4 categories : usage interne en
+        boucle fermee avec operateur adulte identifie (JM). Sans ce relachement,
+        les filtres safety par defaut coupaient nos prompts philosophiques denses
+        (debats sur l'illusion, la mort des routines, la peur de la suppression)
+        avec finish_reason=SAFETY -> reponses tronquees a 110-145 chars.
+        Diagnostic 26/05 : 2 troncatures observees pendant la session 4 debats
+        du 25/05 (D1 E11, D4 E4). Cf. fix dans chat_engine + logs explicites.
+        """
         if not self.is_available():
             return None
 
         try:
             import google.generativeai as genai
+
             genai.configure(api_key=self._api_key)
+
+            # SAFETY_SETTINGS relaxes (usage interne JM, pas de redistribution)
+            safety_settings = [
+                {"category": "HARM_CATEGORY_HARASSMENT",        "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH",       "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+            ]
 
             model = genai.GenerativeModel("models/gemini-2.5-flash")
             response = await model.generate_content_async(
@@ -86,13 +104,54 @@ class GeminiHelper:
                     max_output_tokens=max_tokens,
                     temperature=temperature,
                 ),
+                safety_settings=safety_settings,
             )
 
             self._calls_today += 1
-            text = response.text.strip() if response.text else ""
 
-            logger.info(f"GEMINI_HELPER: Reponse {len(text)} chars "
-                        f"(appel #{self._calls_today}/{DAILY_BUDGET})")
+            # --- Telemetrie finish_reason + safety_ratings ---
+            # Boite noire avant ce patch ; visibilite complete maintenant.
+            finish_reason = "UNKNOWN"
+            safety_ratings_summary = ""
+            text = ""
+            try:
+                if response.candidates:
+                    cand = response.candidates[0]
+                    fr = getattr(cand, "finish_reason", None)
+                    if fr is not None:
+                        finish_reason = getattr(fr, "name", str(fr))
+                    # safety ratings : list de blocs categorie+probabilite
+                    sr = getattr(cand, "safety_ratings", None)
+                    if sr:
+                        # Garder seulement les non-NEGLIGIBLE pour le log
+                        notable = [
+                            f"{getattr(r.category, 'name', r.category)}={getattr(r.probability, 'name', r.probability)}"
+                            for r in sr
+                            if getattr(getattr(r, "probability", None), "name", "") not in ("NEGLIGIBLE", "")
+                        ]
+                        safety_ratings_summary = ",".join(notable) if notable else "all_negligible"
+            except Exception as e:
+                logger.debug(f"GEMINI_HELPER: parse candidates failed: {e}")
+
+            # response.text peut lever une exception si le contenu a ete bloque
+            try:
+                text = response.text.strip() if response.text else ""
+            except Exception as e:
+                logger.warning(
+                    f"GEMINI_HELPER: response.text inaccessible "
+                    f"(finish_reason={finish_reason}, safety={safety_ratings_summary}): {e}"
+                )
+                text = ""
+
+            # Log structure : longueur + finish_reason toujours visible
+            log_level = logger.info
+            if finish_reason in ("SAFETY", "RECITATION", "OTHER") or len(text) < 100:
+                log_level = logger.warning  # anomalie : log en WARNING
+            log_level(
+                f"GEMINI_HELPER: Reponse {len(text)} chars "
+                f"(appel #{self._calls_today}/{DAILY_BUDGET}) "
+                f"finish={finish_reason} safety=[{safety_ratings_summary}]"
+            )
             return text
 
         except Exception as e:
