@@ -548,6 +548,50 @@ class SchoolSchedule:
             depth_note = theme.get("code_review_extra", "")
             # Injecter le VRAI contenu du fichier pour empecher l'hallucination
             file_content = self._read_file_for_review(target)
+            # === Refonte ecole (atelier 26/05) — Cap action transparent ===
+            # Score CODE_REVIEW etait a 1.28/10 sur 7 jours : Promethee dissertait
+            # au lieu d'utiliser ses commandes pour observer le code. La refonte :
+            # (1) annonce le cap d'auto-actions dans le prompt (transparence),
+            # (2) integre la graine D5 "Je ne sais pas, donc je tends la main"
+            #     comme ancrage doctrinal vers l'action plutot que l'invention.
+            # Cap effectif applique dans autonomy_engine apres execution.
+            try:
+                from config import Config as _Cfg
+                _action_cap = int(getattr(_Cfg, "SCHOOL_ACTION_BONUS_CAP", 5))
+                _bonus_block_enabled = (
+                    getattr(_Cfg, "SCHOOL_ACTION_BONUS_ENABLED", False)
+                    and SLOT_CODE_REVIEW in getattr(_Cfg, "SCHOOL_ACTION_BONUS_SLOTS", set())
+                )
+            except Exception:
+                _action_cap = 5
+                _bonus_block_enabled = False
+
+            action_block = ""
+            if _bonus_block_enabled:
+                action_block = (
+                    f"\n\n=============================================\n"
+                    f"OUTILS A TA DISPOSITION (atelier 26/05) :\n"
+                    f"=============================================\n"
+                    f"Je ne sais pas, donc je tends la main.\n"
+                    f"Tu disposes de commandes d'action dans cet exercice. Au lieu de\n"
+                    f"supposer un detail du code que tu ne connais pas, EMETS la commande\n"
+                    f"qui te le revelera. Une commande s'ecrit en debut de ligne avec `!` :\n"
+                    f"  !read <fichier>        — lit un fichier source\n"
+                    f"  !grep <pattern> [path] — cherche un motif\n"
+                    f"  !status                — etat du systeme\n"
+                    f"  !diff <fichier>        — voir les modifications recentes\n"
+                    f"\n"
+                    f"CAP : tu disposes de {_action_cap} commandes maximum dans ce livrable.\n"
+                    f"Au-dela, les commandes supplementaires ne sont pas executees et te\n"
+                    f"coutent des points (gaming). Choisis-les bien.\n"
+                    f"\n"
+                    f"SCORING : ta note finale sera ajustee selon ta trace de commandes :\n"
+                    f"  +1 par commande pertinente (cap +3)\n"
+                    f"  -2 si tu n'emets aucune commande sur une revue de code\n"
+                    f"  -1 par !write sur un fichier que tu n'as pas !read d'abord\n"
+                    f"  -2 par commande au-dela du cap (gaming)\n"
+                )
+
             return (
                 f"COURS : Revue de code — {theme_label}\n\n"
                 f"=============================================\n"
@@ -569,6 +613,7 @@ class SchoolSchedule:
                 f"2. Bugs ou erreurs detectes (avec le code exact cite)\n"
                 f"3. Suggestions d'amelioration concretes\n"
                 f"4. Points forts du code"
+                f"{action_block}"
                 f"{challenge_ctx}"
             )
         elif slot == SLOT_RESEARCH:

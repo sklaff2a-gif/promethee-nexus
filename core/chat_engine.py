@@ -110,6 +110,41 @@ def _detect_message_source(content: str) -> str:
     return "external"
 
 
+def compute_logic_score(sequence) -> float:
+    """Score de coherence sequentielle des auto-actions (atelier 26/05).
+
+    Penalise un !write sur un fichier qui n'a pas ete prealablement lu :
+    -1.0 par write aveugle. Les !grep comptent comme une lecture transverse
+    du dossier mais pas du fichier specifique (grep != ouvrir).
+
+    Args:
+        sequence: liste de tuples (cmd, target) dans l'ordre chronologique
+                  d'execution (output de scan_for_exercise()["sequence"]).
+
+    Returns:
+        Penalty <= 0. Zero si aucune incoherence detectee.
+
+    Exemples :
+        [("read","core/foo.py"), ("write","core/foo.py")]    -> 0.0
+        [("write","core/foo.py"), ("read","core/foo.py")]    -> -1.0  (aveugle)
+        [("grep","pattern","core/"), ("write","core/foo.py")] -> -1.0
+    """
+    seen_reads = set()
+    penalty = 0.0
+    for entry in sequence:
+        if not isinstance(entry, (tuple, list)) or len(entry) < 2:
+            continue
+        cmd, target = entry[0], entry[1]
+        if cmd == "write":
+            if not target or target not in seen_reads:
+                penalty -= 1.0
+        elif cmd == "read":
+            if target:
+                seen_reads.add(target)
+        # grep, status, etc. : ne creditent pas une lecture specifique
+    return penalty
+
+
 class ChatEngine:
     """Moteur de conversation directe humain <-> Promethee."""
     _instance = None
@@ -1768,26 +1803,70 @@ class ChatEngine:
         except ValueError:
             return args.strip().split()
 
-    async def _scan_response_actions(self, response: str) -> int:
+    async def _scan_response_actions(self, response: str,
+                                      max_actions: int = 4) -> int:
         """Scanne la reponse du LLM pour des commandes ! et les execute.
 
         Permet a Promethee d'AGIR depuis ses propres reponses.
         Retourne le nombre d'actions executees (pour la boucle agentique).
-        Max 4 actions par reponse. Cooldown 60s. Anti-reentrance.
+        Cooldown 60s. Anti-reentrance.
+
+        Args:
+            response: texte du LLM a parser
+            max_actions: cap d'execution (default 4 pour chat normal,
+                         5 pour mode exercice ecole — atelier 26/05)
+
+        La trace structuree de la passe est stockee dans self._last_scan_trace :
+            {
+                "max_actions": int,
+                "parsed_count": int,      # total de commandes detectees (whitelist)
+                "executed": list[dict],   # cmds executees [{cmd, args, target}, ...]
+                "rejected_cap": list[dict], # cmds au-dela du cap (non executees)
+                "sequence": list[tuple],  # ordre chronologique [(cmd, target), ...]
+            }
+        Le slot ecole lit cette trace via scan_for_exercise().
         """
-        if getattr(self, "_auto_action_in_progress", False):
-            return 0
+        # Initialiser la trace (toujours, meme en early return).
+        # parsed_count + rejected_cap sont calcules MEME quand l'execution est
+        # bloquee : c'est une metrique d'observation de l'INTENTION du LLM,
+        # qui doit etre disponible pour le scorer ecole independamment de
+        # l'anti-reentrance.
+        import re
+        self._last_scan_trace = {
+            "max_actions": max_actions,
+            "parsed_count": 0,
+            "executed": [],
+            "rejected_cap": [],
+            "sequence": [],
+        }
+
         if not response:
             return 0
 
-        import re
         # Detecter les lignes commencant par ! (debut de ligne)
         # Support des commandes avec ET sans arguments (!status vs !research sujet)
         matches = re.findall(r"^!(\w+)(?:\s+(.+))?", response, re.MULTILINE)
         if not matches:
             return 0
 
-        # Executer les commandes autorisees (max 4 par reponse)
+        # Pre-filtre whitelist pour parsed_count (sinon !foo bogus compte aussi)
+        valid_matches = [(c, a) for c, a in matches if c.lower() in self._AUTO_ACTION_WHITELIST]
+        self._last_scan_trace["parsed_count"] = len(valid_matches)
+
+        # Si plus de commandes valides que le cap : tagguer les surplus comme rejected
+        if len(valid_matches) > max_actions:
+            for cmd, args in valid_matches[max_actions:]:
+                self._last_scan_trace["rejected_cap"].append({
+                    "cmd": cmd.lower(),
+                    "args": (args or "")[:120],
+                    "target": self._extract_action_target(cmd.lower(), args),
+                })
+
+        # Anti-reentrance : la trace est remplie mais aucune execution
+        if getattr(self, "_auto_action_in_progress", False):
+            return 0
+
+        # Executer les commandes autorisees (cap parametrable)
         actions_executed = 0
         for cmd, args in matches:
             cmd_lower = cmd.lower()
@@ -1874,15 +1953,58 @@ class ChatEngine:
                     })
                     logger.info(f"CHAT AUTO-ACTION: Resultat ajoute ({len(result)} chars)")
                     actions_executed += 1
+                    # Trace structuree pour le scorer ecole (atelier 26/05)
+                    _target = self._extract_action_target(cmd_lower, args)
+                    self._last_scan_trace["executed"].append({
+                        "cmd": cmd_lower,
+                        "args": (args or "")[:120],
+                        "target": _target,
+                    })
+                    self._last_scan_trace["sequence"].append((cmd_lower, _target))
             except Exception as e:
                 logger.warning(f"CHAT AUTO-ACTION erreur: {e}")
             finally:
                 self._auto_action_in_progress = False
 
-            if actions_executed >= 4:  # Max 4 actions par reponse
+            if actions_executed >= max_actions:
                 break
 
         return actions_executed
+
+    @staticmethod
+    def _extract_action_target(cmd: str, args: str) -> str:
+        """Extrait la cible d'une commande pour le scorer logique (atelier 26/05).
+
+        Exemples :
+            !read core/foo.py -> "core/foo.py"
+            !grep pattern core/ -> "core/"
+            !write core/bar.py contenu... -> "core/bar.py"
+        Pour les commandes sans cible (status, who, phi), retourne "".
+        """
+        if not args:
+            return ""
+        args = args.strip()
+        if cmd in ("read", "write", "diff"):
+            return args.split()[0] if args else ""
+        if cmd == "grep":
+            # !grep pattern [path] -> cible = path si fournie, sinon "."
+            parts = args.split()
+            return parts[1] if len(parts) >= 2 else "."
+        # Pour les autres commandes, pas de cible fichier
+        return ""
+
+    async def scan_for_exercise(self, response: str,
+                                  max_actions: int = 5) -> dict:
+        """Mode exercice ecole — execute jusqu'a max_actions commandes du livrable
+        et retourne la trace structuree pour le scorer (atelier 26/05).
+
+        Wrapper sur _scan_response_actions qui expose la trace via dict au lieu
+        d'un simple int. Le scorer ecole (autonomy_engine) consomme cette trace
+        pour calculer bonus/malus + logic_score.
+        """
+        await self._scan_response_actions(response, max_actions=max_actions)
+        # _last_scan_trace est toujours rempli (meme si 0 actions)
+        return dict(self._last_scan_trace)
 
     def _is_visual_request(self, message: str) -> bool:
         """Detecte si le message demande d'observer des photos.

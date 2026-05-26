@@ -141,6 +141,25 @@ class Config:
     SILENT_FAILURES_ENABLED = True
     SILENT_FAILURES_DRY_RUN = True  # mode OBSERVE — log sans bloquer le veto
 
+    # --- Refonte ecole : bonus action sur les slots techniques (chantier 26/05) ---
+    # Diagnostic empirique : CODE_REVIEW moyenne 1.28/10 et BULLETIN 3.09/10 sur
+    # 7 jours, alors que CREATION (texte libre) tourne a 6.05/10. Le pattern :
+    # Promethee disserte au lieu d'emettre !read/!grep/!write quand le challenge
+    # le demande explicitement. La refonte note la TRACE d'auto-actions emises
+    # dans le livrable et applique un bonus/malus :
+    #   +1 par auto-action executee (cap +3)
+    #   -2 si zero auto-action sur un slot technique
+    #   -2 par commande rejetee au-dela du cap (gaming)
+    #   logic_score : -1 par !write F avant !read F (sequence aveugle)
+    # Approche "Patient Zero" : on commence par CODE_REVIEW seul, observation 24h,
+    # extension a WORKSHOP/RESEARCH si le score remonte au-dessus de 5/10.
+    SCHOOL_ACTION_BONUS_ENABLED = True
+    SCHOOL_ACTION_BONUS_SLOTS = frozenset({"CODE_REVIEW"})  # extensible plus tard
+    SCHOOL_ACTION_BONUS_CAP = 5            # max commandes executees par livrable
+    SCHOOL_ACTION_BONUS_MAX = 3            # bonus +1/cmd plafonne a +3
+    SCHOOL_ACTION_BONUS_ZERO_PENALTY = 2   # malus si 0 action sur slot technique
+    SCHOOL_ACTION_BONUS_GAMING_PENALTY = 2 # malus par commande au-dela du cap
+
     # Contexte par agent (override le num_ctx du Modelfile si besoin)
     AGENT_NUM_CTX = {
         "coder": 16384,

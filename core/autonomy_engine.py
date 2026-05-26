@@ -10826,6 +10826,43 @@ RAISON: <1 phrase courte>"""
                             _v31_target_for_factuality = _v31_subject_rec.get("target_file", "") or ""
                     except Exception:
                         pass
+                    # === Bonus action ecole (Patient Zero CODE_REVIEW, atelier 26/05) ===
+                    # Si le slot est dans SCHOOL_ACTION_BONUS_SLOTS, on execute jusqu'a
+                    # CAP commandes du livrable et on ajuste la note selon la trace :
+                    # +1/cmd executee (capped MAX), -ZERO_PENALTY si 0 action,
+                    # -GAMING_PENALTY * len(rejected_cap), + logic_score (negatif).
+                    action_trace = None
+                    try:
+                        from config import Config as _Cfg
+                        if (getattr(_Cfg, "SCHOOL_ACTION_BONUS_ENABLED", False)
+                                and slot in getattr(_Cfg, "SCHOOL_ACTION_BONUS_SLOTS", set())):
+                            from core.chat_engine import chat_engine, compute_logic_score
+                            cap = int(getattr(_Cfg, "SCHOOL_ACTION_BONUS_CAP", 5))
+                            action_trace = await chat_engine.scan_for_exercise(
+                                deliverable, max_actions=cap
+                            )
+                            n_exec = len(action_trace.get("executed", []))
+                            n_rej = len(action_trace.get("rejected_cap", []))
+                            bonus_max = int(getattr(_Cfg, "SCHOOL_ACTION_BONUS_MAX", 3))
+                            zero_pen = int(getattr(_Cfg, "SCHOOL_ACTION_BONUS_ZERO_PENALTY", 2))
+                            gaming_pen = int(getattr(_Cfg, "SCHOOL_ACTION_BONUS_GAMING_PENALTY", 2))
+                            action_bonus = min(bonus_max, n_exec)
+                            if n_exec == 0:
+                                action_bonus -= zero_pen
+                            action_bonus -= gaming_pen * n_rej
+                            logic_pen = compute_logic_score(action_trace.get("sequence", []))
+                            total_adjust = action_bonus + logic_pen
+                            old_grade = eval_result["grade"]
+                            eval_result["grade"] = max(0.0, min(10.0, old_grade + total_adjust))
+                            logger.info(
+                                f"[SCHOOL_ACTION_BONUS] slot={slot} n_exec={n_exec} "
+                                f"n_rejected={n_rej} bonus={action_bonus:+.1f} "
+                                f"logic={logic_pen:+.1f} grade {old_grade:.2f} -> "
+                                f"{eval_result['grade']:.2f}"
+                            )
+                    except Exception as e:
+                        logger.warning(f"[SCHOOL_ACTION_BONUS] erreur: {e}")
+
                     schedule.record_deliverable(slot, intent, {
                         "grade": eval_result["grade"],
                         "feedback": eval_result["feedback"],
@@ -10833,6 +10870,7 @@ RAISON: <1 phrase courte>"""
                         "full_content": deliverable,
                         "result_preview": deliverable[:200],
                         "target_file_override": _v31_target_for_factuality,
+                        "action_trace": action_trace,  # observabilite : None ou trace
                     })
                     grade = eval_result["grade"]
                     # Injecter la note dans la response pour que _score_result_quality la voie
