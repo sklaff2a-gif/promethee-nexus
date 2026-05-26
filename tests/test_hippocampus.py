@@ -723,18 +723,23 @@ class TestHandlersEdgeCases:
         assert h._last_cognitive_state == "flow"
 
     def test_prediction_correct_ignored(self, reset_hippocampus):
-        """Les predictions correctes ne sont pas encodees."""
+        """Les predictions confirmees ne sont pas encodees en episode (chantier 26/05).
+
+        Apres le fix asymetrie hippocampe, le payload utilise is_surprise (pas
+        `correct`). Une prediction non-surprise est routee vers prediction_memory,
+        pas vers les episodes hippocampe.
+        """
         h = _make_hippocampus()
-        h._on_prediction_resolved({"correct": True, "prediction": "test"})
+        h._on_prediction_resolved({"is_surprise": False, "content": "test"})
         assert len(h._episodes) == 0
 
     def test_prediction_incorrect_encoded(self, reset_hippocampus):
-        """Les predictions incorrectes sont encodees."""
+        """Les predictions violees (is_surprise=True) sont encodees en episode."""
         h = _make_hippocampus()
         with patch.object(h, "_capture_affect", return_value=_mock_affect()):
             h._on_prediction_resolved({
-                "correct": False,
-                "prediction": "test_pred",
+                "is_surprise": True,
+                "content": "test_pred",
                 "outcome": "echec",
             })
         assert len(h._episodes) == 1

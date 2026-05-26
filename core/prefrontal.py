@@ -1085,6 +1085,92 @@ class PrefrontalCortex:
 
     # ─── 4. INHIBITION (vmPFC) ───────────────────────────────────────
 
+    def _maybe_grant_silent_failure_amnesty(self, intent: str,
+                                              reason: str) -> Optional[Dict]:
+        """Filtre pre-veto — Journal des Echecs Silencieux (atelier 26/05).
+
+        Si un sursis est deja actif sur cet intent OU si une hypothese similaire
+        a recemment ete tuee par veto emotionnel : accorde un sursis de
+        curiosite 5 min (action=allow). Sinon : journalise l'echec silencieux
+        et renvoie None (laisse le veto continuer).
+
+        En mode SILENT_FAILURES_DRY_RUN : journalise mais n'accorde PAS de
+        sursis (preserve le comportement emergent du veto prefrontal).
+        """
+        try:
+            from config import Config
+            if not getattr(Config, "SILENT_FAILURES_ENABLED", False):
+                return None
+            dry_run = getattr(Config, "SILENT_FAILURES_DRY_RUN", True)
+
+            from core.silent_failures import (
+                SilentFailuresJournal,
+                compute_current_signature,
+            )
+            # Recupere le singleton COURANT (pattern dynamique : evite la
+            # capture de l'OLD instance en environnement de test avec reset)
+            journal = SilentFailuresJournal()
+
+            # 1. Sursis deja actif ?
+            if journal.is_under_amnesty(intent):
+                if not dry_run:
+                    self._narrate("amnesty", f"Sursis actif sur '{intent}'")
+                    return {
+                        "action": "allow",
+                        "reason": "Sursis de curiosité actif",
+                        "override_target": "",
+                    }
+                else:
+                    logger.info(f"[SILENT_FAILURES][DRY_RUN] sursis ACTIF "
+                                f"aurait laisse passer intent='{intent[:40]}'")
+
+            # 2. Tenter d'accorder un nouveau sursis
+            sig, concepts, goals, emotion = compute_current_signature()
+            from core.silent_failures import capture_physiology
+            physiology = capture_physiology()
+            cause = journal.qualify_cause_de_mort(reason, physiology)
+
+            amnesty_reason, entry_used = journal.try_grant_amnesty(
+                intent=intent,
+                context_signature_hash=sig,
+                concepts=concepts,
+                goals=goals,
+                emotion=emotion,
+                cause_de_mort=cause,
+                dry_run=dry_run,
+            )
+
+            if amnesty_reason is not None:
+                if not dry_run:
+                    self._narrate("amnesty",
+                                  f"Sursis accordé sur '{intent}' — {amnesty_reason}")
+                    return {
+                        "action": "allow",
+                        "reason": amnesty_reason,
+                        "override_target": "",
+                    }
+                else:
+                    logger.info(
+                        f"[SILENT_FAILURES][DRY_RUN] AURAIT accorde sursis "
+                        f"intent='{intent[:40]}' → {amnesty_reason}"
+                    )
+
+            # 3. Pas de sursis : enregistrer l'echec silencieux et laisser veto
+            journal.record_silent_failure(
+                intent=intent,
+                reason=reason,
+                context_signature_hash=sig,
+                concepts=concepts,
+                goals=goals,
+                emotion=emotion,
+                physiology=physiology,
+                cause_de_mort=cause,
+            )
+            return None
+        except Exception as e:
+            logger.warning(f"silent_failures filter error: {e}")
+            return None
+
     def compute_inhibition(self, intent: str, veto_source: str = "") -> Dict:
         """Arbitrage avec les couches inférieures.
         Retourne {action, reason, override_target}.
@@ -1151,6 +1237,19 @@ class PrefrontalCortex:
                     break
 
             if not intent_in_any_goal:
+                # === Filtre pre-veto (Journal des Echecs Silencieux, atelier 26/05) ===
+                # Avant d'inhiber, consulter le journal : si une hypothese similaire
+                # a deja ete tuee recemment par veto emotionnel, accorder un sursis
+                # de curiosite 5 min. "Empecher de tuer a nouveau ce qui n'a pas
+                # encore vecu." — Prometheus, E4.
+                amnesty_action = self._maybe_grant_silent_failure_amnesty(
+                    intent=intent,
+                    reason=f"Distraction: focus sur '{primary.title}' ({primary.progress:.0%})",
+                )
+                if amnesty_action is not None:
+                    # Sursis accorde -> bloque le veto, laisse l'exploration
+                    return amnesty_action
+
                 self.stats["inhibitions_applied"] += 1
                 self._narrate("inhibition",
                               f"Distraction inhibée: {intent} (focus sur '{primary.title}')")

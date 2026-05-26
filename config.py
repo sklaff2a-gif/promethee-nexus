@@ -131,6 +131,16 @@ class Config:
     IMMUNE_SYSTEM_ENABLED = True
     IMMUNE_SYSTEM_DRY_RUN = False  # armé le 22/05 après validation locale (5 fantômes confirmés en observe)
 
+    # --- Journal des Échecs Silencieux (atelier créatif 26/05) ---
+    # Filtre pré-veto qui détecte les hypothèses tuées par veto émotionnel répété
+    # et accorde un "sursis de curiosité" 5 min sur celles qui n'ont jamais vraiment
+    # été explorées. Ne ressuscite PAS les morts, empêche de tuer à nouveau ce qui
+    # n'a pas vécu. Spec issue dialogue Prométhée E1-E7 (26/05).
+    # MODE OBSERVE par défaut : journalise les inscriptions et les détections sans
+    # accorder de sursis. Armer SILENT_FAILURES_DRY_RUN=False après 24h de logs.
+    SILENT_FAILURES_ENABLED = True
+    SILENT_FAILURES_DRY_RUN = True  # mode OBSERVE — log sans bloquer le veto
+
     # Contexte par agent (override le num_ctx du Modelfile si besoin)
     AGENT_NUM_CTX = {
         "coder": 16384,
