@@ -264,6 +264,12 @@ class SynapticNetwork:
         # et timestamp du dernier renforcement par categorie (cooldown).
         self._epistemic_history: Dict[str, List[float]] = {}
         self._epistemic_last_closure: Dict[str, float] = {}
+        # PERF (27/05/2026, post-deadlock 9min sensorium->hebbian->normalize) :
+        # index inverse source -> {synapse_keys}. _normalize_outgoing_weights
+        # passe d'O(synapses ~20000) a O(degree). Construit lazy au 1er appel,
+        # maintenu sur creation Hebbian/STDP, auto-heal sur clefs stale au read.
+        self._outgoing_by_source: Dict[str, set] = {}
+        self._outgoing_index_built: bool = False
         self._load()
 
     # --- Init & Reset ---
@@ -653,6 +659,8 @@ class SynapticNetwork:
             if is_new:
                 syn = _make_synapse(src_id, tgt_id, 0.1, "hebbian", context)
                 self.synapses[key] = syn
+                if self._outgoing_index_built:
+                    self._outgoing_by_source.setdefault(src_id, set()).add(key)
                 self._enforce_synapse_limit()
             syn = self.synapses[key]
             dw = HEBBIAN_LEARNING_RATE * e_src * e_tgt * (1.0 - syn["weight"])
@@ -700,6 +708,8 @@ class SynapticNetwork:
         if key not in self.synapses:
             syn = _make_synapse(earlier_id, later_id, 0.1, "temporal", "STDP")
             self.synapses[key] = syn
+            if self._outgoing_index_built:
+                self._outgoing_by_source.setdefault(earlier_id, set()).add(key)
             self._enforce_synapse_limit()
 
         syn = self.synapses[key]
@@ -720,11 +730,34 @@ class SynapticNetwork:
         Inspire AttnRes (Moonshot AI, mars 2026) : renforcer une synapse
         affaiblit proportionnellement les autres — competition synaptique.
         Biologiquement : les ressources synaptiques sont limitees.
+
+        PERF (27/05/2026) : utilise self._outgoing_by_source pour O(degree)
+        au lieu d'O(synapses). Avant : scan complet de ~20000 synapses a
+        chaque appel depuis _on_sensorium_update -> gel event loop quand un
+        hub a degree eleve et le sensorium publiait apres fin d'hysteresis.
+        Build lazy au 1er appel + auto-heal des clefs stale au read.
         """
-        outgoing = [
-            (k, s) for k, s in self.synapses.items()
-            if s["source"] == node_id
-        ]
+        if not self._outgoing_index_built:
+            self._outgoing_by_source.clear()
+            for k, s in self.synapses.items():
+                src = s.get("source")
+                if src:
+                    self._outgoing_by_source.setdefault(src, set()).add(k)
+            self._outgoing_index_built = True
+        keys = self._outgoing_by_source.get(node_id)
+        if not keys:
+            return
+        outgoing = []
+        stale = []
+        for k in keys:
+            s = self.synapses.get(k)
+            if s is None or s.get("source") != node_id:
+                stale.append(k)
+            else:
+                outgoing.append((k, s))
+        if stale:
+            for k in stale:
+                keys.discard(k)
         if not outgoing:
             return
         total = sum(s["weight"] for _, s in outgoing)
