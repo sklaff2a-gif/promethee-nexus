@@ -8,14 +8,14 @@
   "sync_strengthen_rate": {
     "module": "core.brain_vm",
     "attr": "_SYNC_STRENGTHEN_RATE",
-    "value": 0.007695627499999999,
-    "timestamp": "2026-03-27T17:58:52.394637"
+    "value": 0.008849971624999998,
+    "timestamp": "2026-05-25T02:20:35.051582"
   },
   "hebbian_learning_rate": {
     "module": "core.synaptic_network",
     "attr": "HEBBIAN_LEARNING_RATE",
-    "value": 0.030993639120000006,
-    "timestamp": "2026-03-27T19:59:21.920246"
+    "value": 0.029505944442240004,
+    "timestamp": "2026-05-25T03:10:08.791193"
   },
   "neuron_fire_threshold": {
     "module": "core.synaptic_network",
@@ -26,20 +26,20 @@
   "anti_hebbian_rate": {
     "module": "core.synaptic_network",
     "attr": "ANTI_HEBBIAN_RATE",
-    "value": 0.01948617,
-    "timestamp": "2026-03-27T18:20:12.665120"
+    "value": 0.010530910853100001,
+    "timestamp": "2026-05-25T04:35:07.566620"
   },
   "kuramoto_coupling": {
     "module": "core.brain_vm",
     "attr": "_KURAMOTO_COUPLING",
-    "value": 0.169996288,
-    "timestamp": "2026-03-27T17:37:38.860975"
+    "value": 0.161836466176,
+    "timestamp": "2026-05-25T04:42:12.295284"
   },
   "persistence_bonus": {
     "module": "core.global_workspace",
     "attr": "PERSISTENCE_BONUS",
-    "value": 0.06785000000000001,
-    "timestamp": "2026-03-27T18:05:57.434589"
+    "value": 0.10319136875000001,
+    "timestamp": "2026-05-25T03:59:42.623839"
   },
   "neurochemistry_decay": {
     "module": "core.neurochemistry",
@@ -50,20 +50,20 @@
   "ignition_threshold": {
     "module": "core.global_workspace",
     "attr": "IGNITION_BASE_THRESHOLD",
-    "value": 0.167403915,
-    "timestamp": "2026-03-27T19:52:16.810530"
+    "value": 0.1874923848,
+    "timestamp": "2026-05-25T02:34:44.693313"
   },
   "connectivity_hebbian_strengthen": {
     "module": "core.connectivity_matrix",
     "attr": "HEBBIAN_STRENGTHEN_RATE",
-    "value": 0.027847999999999998,
-    "timestamp": "2026-03-26T16:04:36.008410"
+    "value": 0.0274469888,
+    "timestamp": "2026-05-25T04:13:53.108774"
   },
   "lif_threshold": {
     "module": "core.autonomy_engine",
     "attr": "LIF_THRESHOLD",
-    "value": 6.48,
-    "timestamp": "2026-03-27T17:51:46.747931"
+    "value": 5.832000000000001,
+    "timestamp": "2026-05-25T03:24:18.440026"
   },
   "salience_decay": {
     "module": "core.global_workspace",

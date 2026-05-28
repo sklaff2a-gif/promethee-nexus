@@ -5999,3 +5999,292 @@ METRIQUES ROUTINES (dernieres 40):
 
 **Fichiers cibles** : (aucun fichier cité)
 **Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-05-21 03:34] L'instinct de survie est extrême. Est-ce de la prudence excessive ?
+
+**Participants** : architect, security, strategist | **Tours** : 4 | **Consensus** : non
+
+**Propositions clés** :
+  **JUSTIFICATION :**
+  **JUSTIFICATION :**
+  **JUSTIFICATION :**
+
+**Fichiers cibles** : `core/autonomy_engine.py`, `core/context_compressor.py`, `core/impact_analyzer.py`, `core/memory/vector_store.py`
+**Verdict** : ABANDONNER L'HYPOTHÈSE — Verdict heuristique extrait du consensus
+
+---
+
+## [2026-05-21 06:34] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 4 | **Consensus** : non
+
+**Propositions clés** :
+  **JUSTIFICATION :**
+  **JUSTIFICATION :**
+
+**Fichiers cibles** : `core/attention_codelets.py`, `core/autonomy_engine.py`, `core/event_bus/bus.py`, `core/llm.py`, `core/mailbox.py`, `core/memory/vector_store.py`, `core/orchestrator.py`, `core/safety_module.py`
+**Verdict** : PRIORISER LA — Verdict heuristique extrait du consensus
+
+---
+
+## [2026-05-21 23:26] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 4 | **Consensus** : non
+
+**Propositions clés** :
+  **JUSTIFICATION :**
+  **JUSTIFICATION :**
+
+**Fichiers cibles** : `core/autonomy_engine.py`, `core/capabilities/code_sandbox.py`, `core/ci_pipeline.py`, `core/ethical_module.py`, `core/event_bus/bus.py`, `core/memory/vector_store.py`, `core/orchestrator.py`
+**Verdict** : PRIORISER SECURITY_AUDIT — Verdict heuristique : plus de sécurité
+
+---
+
+## [2026-05-22 05:58] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-05-22 12:40] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- ROADMAP
+
+**Participants** : strategist, coder, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-05-24 00:44] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : 4 | **Consensus** : non
+
+**Propositions clés** :
+  **JUSTIFICATION :**
+  *   **Solution :** Nous devons activer un mode de "s
+  **JUSTIFICATION :**
+  **JUSTIFICATION :**
+
+**Fichiers cibles** : `core/attention_codelets.py`, `core/autonomy_engine.py`, `core/grimoire/loop_breaker.py`, `core/tension_protocol.py`
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-24 07:02] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 4 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : `core/memory/vector_store.py`, `core/plugins/manager.py`
+**Verdict** : PRIORISER MEMORY_CONSOLIDATION — Verdict heuristique : prioriser consolid
+
+---
+
+## [2026-05-24 13:50] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- ROADMAP
+
+**Participants** : strategist, coder, architect | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-05-24 19:07] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : 4 | **Consensus** : non
+
+**Propositions clés** :
+  **Justification :**
+  **Justification :**
+  **Justification :**
+
+**Fichiers cibles** : `core/event_bus/bus.py`
+**Verdict** : PRIORISER AUDIT_STRUCTURE — Verdict heuristique : prioriser stabilit
+
+---
+
+## [2026-05-25 14:49] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 4 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : `core/event_bus/bus.py`, `core/event_bus/subscriber.py`, `core/orchestrator.py`
+**Verdict** : PRIORISER LA — Verdict heuristique extrait du consensus
+
+---
+
+## [2026-05-25 21:24] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : 4 | **Consensus** : non
+
+**Propositions clés** :
+  **Justification :**
+  **1. Correction des erreurs de référence (Anti-Hallucination) :**
+  **2. Analyse et Plan d'Action pour les Conflits Actuels :*
+  **Justification :**
+  **Plan d'action corrigé et concret (Local-First Windows) :**
+
+**Fichiers cibles** : `Agents/strategist_agent.py`, `core/autonomy_engine.py`, `core/cardiac_engine.py`, `core/cingulate_cortex.py`, `core/dopamine_system.py`
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-26 09:22] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [reveri
+
+**Participants** : researcher, evolution, strategist | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-05-26 19:05] Le budget quotidien est presque épuisé. Comment prioriser les actions restantes 
+
+**Participants** : strategist, evolution | **Tours** : 4 | **Consensus** : non
+
+**Propositions clés** :
+  **Justification :**
+  **Justification :**
+
+**Fichiers cibles** : `core/event_bus/bus.py`, `core/memory/vector_store.py`
+**Verdict** : PRIORISER SECURITY_AUDIT — Verdict heuristique : concentrer sécurité
+
+---
+
+## [2026-05-26 21:57] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- ROADMAP
+
+**Participants** : strategist, coder, architect | **Tours** : 4 | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : `core/capabilities/performance_utils.py`
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-27 20:41] Prométhée ressent le besoin de discuter des préoccupations suivantes :
+- [confli
+
+**Participants** : strategist, architect, security | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-05-28 02:13] [DEBAT AUTONOME — DONNEES SYSTEME]
+
+METRIQUES ROUTINES (dernieres 40):
+- SELF_AN
+
+**Participants** : strategist, coder, architect | **Tours** : 4 | **Consensus** : non
+
+**Propositions clés** :
+  **Justification :**
+  **Plan d'action requis pour inverser la tendance (si validé) :**
+  **Justification :**
+
+**Fichiers cibles** : `core/grimoire/data_analyst.py`, `core/grimoire/loop_breaker.py`, `core/insula.py`, `core/interface_logger.py`, `core/sauna_mode.py`, `core/self_awareness.py`, `core/talk_logger.py`
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-28 05:23] L'instinct de survie est extrême. Est-ce de la prudence excessive ?
+
+**Participants** : architect, security, strategist | **Tours** : 4 | **Consensus** : non
+
+**Propositions clés** :
+  **CORRECTIONS OBLIGATOIRES ET ACTIONS CONCRÈTES :**
+  *   Si tu proposes un mécanisme de validation des entrées ou de sécurité rés
+  **JUSTIFICATION :**
+  **Plan d'action concret ciblant `file_safety.py` :**
+
+**Fichiers cibles** : `core/ci_pipeline.py`, `core/orchestrator.py`
+**Verdict** : DEPRIORISER SECURITY_AUDIT — Verdict heuristique : réduire sécurité
+
+---
+
+## [2026-05-28 07:32] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-28 07:32] Test under limit
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-28 07:32] Test old council ok
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-28 07:32] Test virtual not counted
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
