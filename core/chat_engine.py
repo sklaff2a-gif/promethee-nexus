@@ -2064,9 +2064,13 @@ class ChatEngine:
         # "voir des solutions" (concevoir) sont des emplois figures ultra-courants qui
         # provoquaient des observations photo parasites (incidents dialogue creativite 20/05,
         # echanges 8 et 14). Un mot FORT (univoque) est desormais requis pour valider.
+        # 27/05/2026 : "montre-moi" retire de STRONG (syncope E6 atelier audace
+        # sur "Montre-moi la derive" — boucle DMN sur photo aleatoire). Reste
+        # couvert : "montre-moi cette photo" matche via "photo" qui est strong.
+        # "montre-moi" seul est metaphorique 90% du temps -> bascule en WEAK.
         STRONG_VISUAL = ["photo", "dropzone", "visuel", "selfie", "picture",
-                         "cliche", "cliché", "observe", "montre-moi"]
-        WEAK_VISUAL = ["image", "voir", "vois", "regarde", "montre", "vision", "famille"]
+                         "cliche", "cliché", "observe"]
+        WEAK_VISUAL = ["image", "voir", "vois", "regarde", "montre", "montre-moi", "vision", "famille"]
 
         strong_hits = [w for w in STRONG_VISUAL
                        if re.search(r'\b' + re.escape(w) + r'\b', msg_lower)]
