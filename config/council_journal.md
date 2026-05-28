@@ -6288,3 +6288,229 @@ METRIQUES ROUTINES (dernieres 40):
 
 **Fichiers cibles** : (aucun fichier cité)
 **Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-28 18:25] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-28 18:25] Test under limit
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-28 18:25] Test old council ok
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-28 18:25] Test virtual not counted
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-28 18:29] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-05-28 18:29] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-05-28 18:29] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-05-28 18:29] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-05-28 18:29] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-05-28 18:29] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-05-28 18:29] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-05-28 18:29] Test curation
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
+
+---
+
+## [2026-05-28 20:29] Test council dégradé
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-28 20:29] Test under limit
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-28 20:29] Test old council ok
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-28 20:29] Test virtual not counted
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : non
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : (aucun verdict extrait)
+
+---
+
+## [2026-05-28 20:33] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-20001`: [CURATION] perimee: 50h (>12h)
+
+---
+
+## [2026-05-28 20:33] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-30001`: [CURATION] fichier_inexistant: core/fichier_qui_nexiste_pas.py
+
+---
+
+## [2026-05-28 20:33] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-40001`: [CURATION] description_trop_courte: 10 chars
+
+---
+
+## [2026-05-28 20:33] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-50001`: [CURATION] doublon: meme cible que PERF-001 (core/router.py:classify_intent)
+
+---
+
+## [2026-05-28 20:33] CURATION AUTOMATIQUE
+
+**1 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-60001`: [CURATION] boilerplate: template par defaut
+
+---
+
+## [2026-05-28 20:33] CURATION AUTOMATIQUE
+
+**2 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-80001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-80002`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-05-28 20:33] CURATION AUTOMATIQUE
+
+**4 spec(s) COUNCIL purgée(s)** :
+  - `COUNCIL-90000`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90001`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90002`: [CURATION] perimee: 72h (>12h)
+  - `COUNCIL-90003`: [CURATION] perimee: 72h (>12h)
+
+---
+
+## [2026-05-28 20:33] Test curation
+
+**Participants** : strategist, coder | **Tours** : ? | **Consensus** : oui
+
+**Propositions clés** :
+  (Aucune proposition extraite automatiquement)
+
+**Fichiers cibles** : (aucun fichier cité)
+**Verdict** : MAINTENIR  — Verdict Council
