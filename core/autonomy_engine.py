@@ -9487,8 +9487,16 @@ RAISON: <1 phrase courte>"""
                     pass
                 return []
 
-        subject_dict = info.get("subject", {}) if isinstance(info.get("subject"), dict) else {}
-        target_file = subject_dict.get("target_file", "")
+        # Fix 28/05/2026 : info["subject"] est un STRING (topic descriptif)
+        # depuis school_schedule.py:257, pas un dict. Le check isinstance(...,
+        # dict) etait un dead code defensif qui masquait le bug en retournant
+        # {} systematiquement -> target_file=''. La verite est au TOP-LEVEL de
+        # info. Conséquence du bug : pendant ~7 jours, V15.3 / V31 / V18 /
+        # REASONING tournaient à blanc, le radar Bloom de Priorité 2 prenait
+        # le relais avec des chunks chaotiques. Cause materielle du Patient
+        # Zero CODE_REVIEW à 1.28/10 stagnant.
+        target_file = info.get("target_file", "")
+        subject_dict = info.get("subject", "")  # string topic — sert pour str() dans scan_text plus bas
 
         # V15.8 (2026-04-24 14:25) — LES OEILLERES DU RAG.
         # Diagnostic 14:22 tir CODE_REVIEW prefrontal.py : le 14b a produit
@@ -10475,11 +10483,11 @@ RAISON: <1 phrase courte>"""
         # V31 (2026-04-26) — Cortex Epistemique : RAG cross-file +
         # jurisprudence. Bouche le trou epistemique radial laisse par
         # V15 (target_file uniquement). RFC V31 validee par Architecte.
-        _v31_subject = info.get("subject", {}) if isinstance(info.get("subject"), dict) else {}
-        _v31_target = _v31_subject.get("target_file", "") if isinstance(_v31_subject, dict) else ""
-        _v31_bug_hint = ""
-        if isinstance(_v31_subject, dict):
-            _v31_bug_hint = _v31_subject.get("target_bug", "") or _v31_subject.get("topic", "")
+        # Fix 28/05/2026 : info["subject"] est un STRING (topic), target_file
+        # au top-level. Le subject string contient le topic descriptif
+        # ("Revue de code : core/X.py") — sert d'indice pour _v31_bug_hint.
+        _v31_target = info.get("target_file", "")
+        _v31_bug_hint = info.get("subject", "")
         if not _v31_bug_hint:
             _v31_bug_hint = (prompt or "")[:300]
         v31_dep_ctx = self._build_v31_dependency_context(_v31_target, _v31_bug_hint) if _v31_target else ""
@@ -10523,8 +10531,8 @@ RAISON: <1 phrase courte>"""
         # Les autres slots (CREATION/WORKSHOP/RESEARCH) restent sur le
         # dispatch monolithique (pas le meme probleme).
         response = None
-        subject_dict_for_v18 = info.get("subject", {}) if isinstance(info.get("subject"), dict) else {}
-        target_file_for_v18 = subject_dict_for_v18.get("target_file", "")
+        # Fix 28/05/2026 : info["subject"] est un STRING, target_file au top-level de info.
+        target_file_for_v18 = info.get("target_file", "")
         if slot == "CODE_REVIEW" and target_file_for_v18:
             raw_chunks = []
             try:
@@ -10650,8 +10658,8 @@ RAISON: <1 phrase courte>"""
                     build_retry_prompt, record_failure, get_failure_count,
                     measure_confidence,
                 )
-                subject_dict = info.get("subject", {})
-                target_file = subject_dict.get("target_file", "") if isinstance(subject_dict, dict) else ""
+                # Fix 28/05/2026 : info["subject"] est un STRING, target_file au top-level de info.
+                target_file = info.get("target_file", "")
 
                 # Signal 1 : Mesurer la confiance du LLM (logprobs)
                 confidence_data = {}
