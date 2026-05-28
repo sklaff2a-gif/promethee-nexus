@@ -517,6 +517,17 @@ class Hypothalamus:
         # Idem AVANT compute_errors pour que la nouvelle valeur soit prise.
         relief_report = self._apply_stress_relief()
 
+        # Atrophy Monitor (atelier audace 27/05) — Pilier 2 (orthogonal aux
+        # Piliers 1 et 1bis qui poussent sleep_pressure). Lit desire_engine
+        # (STABILITE.privation vs CROISSANCE.privation) et publie ATROPHY_ALARM
+        # si la stabilite etouffe la croissance. Mode OBSERVE par defaut
+        # (Config.ATROPHY_DRY_RUN=True logue sans publier).
+        try:
+            from core.atrophy_monitor import atrophy_monitor
+            await atrophy_monitor.check_balance()
+        except Exception as e:
+            logger.debug(f"[HYPOTHALAMUS] Atrophy check: {e}")
+
         self.error_signals = self._compute_all_errors()
 
         corrections = []

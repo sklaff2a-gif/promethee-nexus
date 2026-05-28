@@ -131,6 +131,10 @@ class PsycheEngine:
         self.history: List[Dict[str, Any]] = []
         self.last_decay_day: Optional[str] = None
         self._subscribed = False
+        # Atrophy Monitor (atelier audace 27/05) : flag set par bus
+        # ATROPHY_ALARM/CANCEL. Lu dans _on_sensorium_update pour rediriger
+        # la cible EMA audace vers BOOST_TARGET au lieu de la cible basse.
+        self._atrophy_active: bool = False
 
     # --- Init & Reset ---
 
@@ -311,6 +315,9 @@ class PsycheEngine:
         bus.subscribe("AUTONOMY_ROUTINE_COMPLETE", self._on_routine_complete)
         # Sensorium hardware (Sprint 4 Sensorium)
         bus.subscribe("SENSORIUM_UPDATE", self._on_sensorium_update)
+        # Atrophy Monitor (atelier audace 27/05) — change la cible EMA audace
+        bus.subscribe("ATROPHY_ALARM", self._on_atrophy_alarm)
+        bus.subscribe("ATROPHY_CANCEL", self._on_atrophy_cancel)
 
     async def _on_sensorium_update(self, event: dict):
         """Hardware stress → modulation survie/audace."""
@@ -335,11 +342,38 @@ class PsycheEngine:
         # equilibre dynamique base sur le stress. Lissage exponentiel :
         # audace = audace * alpha + target * (1 - alpha)
         # Stress eleve → target bas (30). Stress faible → target = baseline (50).
+        # Atrophy override (atelier audace 27/05) : si ATROPHY_ALARM active,
+        # la cible bascule vers BOOST_TARGET (typiquement 65) au lieu de la
+        # cible basse stress-dependante. Permet a l'audace de monter quand
+        # la STABILITE est repue et la CROISSANCE affamee.
         ema_alpha = 0.95  # Inertie moderee (convergence en ~20 ticks = ~10 min)
-        stress_target = max(30.0, 50.0 * (1.0 - stress_factor))
+        if self._atrophy_active:
+            from config import Config
+            stress_target = getattr(Config, "ATROPHY_AUDACE_BOOST_TARGET", 65.0)
+        else:
+            stress_target = max(30.0, 50.0 * (1.0 - stress_factor))
         for agent_name, traits in self.agents.items():
             current_audace = traits.get("audace", BASELINES["audace"])
             traits["audace"] = round(current_audace * ema_alpha + stress_target * (1 - ema_alpha), 2)
+
+    async def _on_atrophy_alarm(self, event: dict):
+        """Atelier audace 27/05 : set le flag pour rediriger la cible EMA
+        audace vers BOOST_TARGET au prochain tick sensorium. Logue le passage."""
+        self._atrophy_active = True
+        logger.info(
+            f"PSYCHE: ATROPHY_ALARM recu — cible EMA audace -> BOOST "
+            f"(stab_dep={event.get('stab_deprivation', '?')}, "
+            f"crois_dep={event.get('crois_deprivation', '?')})"
+        )
+
+    async def _on_atrophy_cancel(self, event: dict):
+        """Atelier audace 27/05 : coupe-circuit (rumination/timeout). Restaure
+        la cible EMA stress-dependante au prochain tick sensorium."""
+        self._atrophy_active = False
+        logger.info(
+            f"PSYCHE: ATROPHY_CANCEL recu — cible EMA audace -> normale "
+            f"(reason={event.get('reason', '?')})"
+        )
 
     async def _on_council_end(self, event: dict):
         participants = event.get("participants", [])

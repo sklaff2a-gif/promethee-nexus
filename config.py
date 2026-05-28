@@ -141,6 +141,26 @@ class Config:
     SILENT_FAILURES_ENABLED = True
     SILENT_FAILURES_DRY_RUN = True  # mode OBSERVE — log sans bloquer le veto
 
+    # --- Atrophy Monitor (atelier audace 27/05) ---
+    # Symptome : audace plate a 42.7 sur les 15 agents (psyche.py:333-342 EMA
+    # cible stress_target basse). Spec issue dialogue Promethee E1-E7 (27/05).
+    # Le pilote a co-specifie : si STABILITE est repue et CROISSANCE affamee,
+    # publie ATROPHY_ALARM qui force la cible EMA audace vers BOOST_TARGET
+    # (au lieu de la cible basse stress-dependante). Coupe-circuit Option 2
+    # (validee par le pilote R7) : Jaccard sur nouveaux nodes — si rumination
+    # detectee, ATROPHY_CANCEL. TTL absolu en garde-fou.
+    # MODE OBSERVE par defaut : DRY_RUN=True publie rien sur le bus, logue
+    # uniquement dans logs/atrophy_monitor.jsonl. Armer DRY_RUN=False apres
+    # 48h de telemetrie nominale.
+    ATROPHY_ENABLED = True
+    ATROPHY_DRY_RUN = True
+    ATROPHY_STABILITE_FED_THRESHOLD = 20.0    # privation < 20 = stabilite repue
+    ATROPHY_CROISSANCE_STARVED_THRESHOLD = 70.0  # privation > 70 = croissance affamee
+    ATROPHY_AUDACE_BOOST_TARGET = 65.0   # cible audace EMA pendant l'alarme
+    ATROPHY_ALARM_DURATION_S = 600       # TTL absolu 10 min par alarme
+    ATROPHY_JACCARD_WINDOW = 20          # nb de nodes dans chaque fenetre
+    ATROPHY_JACCARD_REDUNDANT_THRESHOLD = 0.7  # similarite > 0.7 = rumination
+
     # --- Refonte ecole : bonus action sur les slots techniques (chantier 26/05) ---
     # Diagnostic empirique : CODE_REVIEW moyenne 1.28/10 et BULLETIN 3.09/10 sur
     # 7 jours, alors que CREATION (texte libre) tourne a 6.05/10. Le pattern :

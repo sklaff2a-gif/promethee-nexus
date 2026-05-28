@@ -544,6 +544,13 @@ async def lifespan(app: FastAPI):
     hypothalamus.init()
     print(f"   🌡️ HYPOTHALAMUS: Régulateur homéostatique actif (stabilité={hypothalamus._compute_stability_score():.2f}).")
 
+    # --- ATROPHY MONITOR (atelier audace 27/05 — Pilier 2 hypothalamique) ---
+    from core.atrophy_monitor import atrophy_monitor
+    from config import Config as _AtrophyConfig
+    atrophy_monitor.init()
+    _atrophy_mode = "ARMÉ" if not _AtrophyConfig.ATROPHY_DRY_RUN else "OBSERVE"
+    print(f"   🩸 ATROPHY MONITOR: Détecteur d'atrophie cognitive actif (mode={_atrophy_mode}).")
+
     # --- INSULA (Conscience Intéroceptive) ---
     from core.insula import insula
     insula.init()
