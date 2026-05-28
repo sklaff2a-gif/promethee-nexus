@@ -45,6 +45,30 @@ class TestSummoner:
 # ROUTER - NIVEAU 0.5 (GRIMOIRE-FIRST)
 # ============================================================
 
+
+# Fix 28/05/2026 : le test_grimoire_before_n1_log (ainsi que data_analyst /
+# log_analyst dans test_grimoire_recipes.py) lisait le VRAI grimoire_index.json
+# de prod, qui évolue en runtime (Prométhée écrit dedans via GrimoireWriter).
+# Une entrée csv_parser avec keyword générique "analyse" écrasait les routages
+# précis vers log_analyst / data_analyst. Cette fixture injecte un index
+# contrôlé pour isoler les tests du runtime.
+@pytest.fixture
+def isolated_grimoire(monkeypatch):
+    controlled_index = [
+        {"slug": "log_analyst", "name": "LogAnalyst",
+         "description": "Analyse de logs systeme",
+         "keywords": ["logs", "log", "syslog", "journal"],
+         "file": "log_analyst.py"},
+        {"slug": "data_analyst", "name": "DataAnalyst",
+         "description": "Analyse de donnees CSV",
+         "keywords": ["csv", "donnees", "statistiques"],
+         "file": "data_analyst.py"},
+    ]
+    monkeypatch.setattr(RouterAgent, "_grimoire_index_cache", controlled_index)
+    yield
+    RouterAgent._grimoire_index_cache = None
+
+
 class TestRouterGrimoireFirst:
     """Le Grimoire est maintenant consulté AVANT les mots-clés N1."""
 
@@ -64,7 +88,7 @@ class TestRouterGrimoireFirst:
         assert result == "git_keeper"
 
     @pytest.mark.asyncio
-    async def test_grimoire_before_n1_log(self):
+    async def test_grimoire_before_n1_log(self, isolated_grimoire):
         """'logs' matche log_analyst (Grimoire N0.5) et non researcher."""
         result = await RouterAgent.classify_intent("analyse les logs système")
         assert result == "log_analyst"

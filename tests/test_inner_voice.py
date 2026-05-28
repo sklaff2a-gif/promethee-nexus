@@ -1362,6 +1362,14 @@ class TestSensoriumPerception:
             "thermoception": 0.9, "effort": 0.5,
             "oppression": 0.3, "suffocation": 0.2, "vitality": 0.4,
         }
+        # Fix 28/05/2026 : depuis le commit 2d63fce (sensorium floor
+        # anti-hyperacousie), _perceive_sensorium bypass aussi via get_raw()
+        # si cpu<20 ∧ ram<75 ∧ temp<65. Le test doit fournir des valeurs raw
+        # cohérentes avec le stress thermique simulé (sinon MagicMock.get_raw
+        # retourne un truthy → return prématuré → pas d'entrée workspace).
+        mock_sensorium.get_raw.return_value = {
+            "effort": 50.0, "oppression": 60.0, "thermoception": 75.0,
+        }
         with patch.dict("sys.modules", {"core.sensorium": MagicMock(sensorium=mock_sensorium)}):
             voice._perceive_sensorium()
 
@@ -1369,7 +1377,10 @@ class TestSensoriumPerception:
         assert len(sensorium_entries) == 1
         entry = sensorium_entries[0]
         assert entry.raw_signal["dominant"] == "thermoception"
-        assert "chaleur" in entry.raw_signal["content"]
+        # Fix 28/05/2026 : vocabulaire mis à jour post-2d63fce (formulations
+        # relatives anti-alarmistes : "Mes circuits s'echauffent legerement"
+        # au lieu de "chaleur monte"). "echauffent" est le mot-clé stable.
+        assert "echauffent" in entry.raw_signal["content"]
         assert entry.raw_signal["emotion"] == "inquietude"
         assert entry.salience >= 0.5
 
@@ -1396,6 +1407,11 @@ class TestSensoriumPerception:
             "thermoception": 0.95, "effort": 0.3,
             "oppression": 0.2, "suffocation": 0.1, "vitality": 0.3,
         }
+        # Fix 28/05/2026 : alerte thermique critique → temp_raw au-dessus du
+        # plancher 65°C pour ne pas être bypass par le floor 2d63fce.
+        mock_sensorium.get_raw.return_value = {
+            "effort": 30.0, "oppression": 40.0, "thermoception": 85.0,
+        }
         with patch.dict("sys.modules", {"core.sensorium": MagicMock(sensorium=mock_sensorium)}):
             voice._perceive_sensorium()
 
@@ -1414,9 +1430,17 @@ class TestSensoriumPerception:
             "thermoception": 0.3, "effort": 0.8,
             "oppression": 0.2, "suffocation": 0.1, "vitality": 0.2,
         }
+        # Fix 28/05/2026 : effort dominant → cpu_raw au-dessus du plancher 20%
+        # pour ne pas être bypass par le floor 2d63fce.
+        mock_sensorium.get_raw.return_value = {
+            "effort": 80.0, "oppression": 50.0, "thermoception": 50.0,
+        }
         with patch.dict("sys.modules", {"core.sensorium": MagicMock(sensorium=mock_sensorium)}):
             voice._perceive_sensorium()
 
         sensorium_entries = [e for e in voice.workspace if e.source == "sensorium"]
         assert len(sensorium_entries) == 1
-        assert "processeur" in sensorium_entries[0].raw_signal["content"]
+        # Fix 28/05/2026 : vocabulaire mis à jour post-2d63fce (narratives
+        # relatives : "Mes ressources se mobilisent" au lieu de "processeur
+        # sous tension"). "ressources" est le mot-clé stable pour effort.
+        assert "ressources" in sensorium_entries[0].raw_signal["content"]

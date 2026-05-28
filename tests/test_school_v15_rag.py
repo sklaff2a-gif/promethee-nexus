@@ -26,7 +26,15 @@ class TestV15SchoolContextBuilder:
 
     def test_code_review_target_file_triggers_filter(self):
         """CODE_REVIEW avec target_file → query filter_filepath=target."""
-        info = {"subject": {"target_file": "core/prefrontal.py"}}
+        # Fix 28/05/2026 : info["subject"] est un STRING (topic descriptif)
+        # depuis school_schedule.py:247-263, target_file au TOP-LEVEL.
+        # L'ancien format {"subject": {"target_file": ...}} ne reflète plus
+        # la réalité du runtime — le test passait pour la mauvaise raison
+        # (radar Bloom Priorité 2 prenait le relais sans déclencher l'erreur).
+        info = {
+            "subject": "Revue de code : core/prefrontal.py",
+            "target_file": "core/prefrontal.py",
+        }
         with patch("core.capabilities.source_code_indexer.indexer") as mock:
             mock.query.return_value = [{
                 "code": "class Prefrontal: pass",
@@ -161,7 +169,12 @@ class TestV15SchoolContextBuilder:
         Priorite 2 les ajouterait au contexte (pollution multi-fichiers).
         AVEC V15.8, seul target_file est query, le radar est skippe.
         """
-        info = {"subject": {"target_file": "core/prefrontal.py"}}
+        # Fix 28/05/2026 : nouveau format post-migration school_schedule
+        # (target_file au top-level d'info, subject = string topic).
+        info = {
+            "subject": "Revue de code : core/prefrontal.py",
+            "target_file": "core/prefrontal.py",
+        }
         prompt = (
             "Revue de code core/prefrontal.py\n"
             "Mentionne aussi core/meta_observer.py, core/cingulate.py,\n"

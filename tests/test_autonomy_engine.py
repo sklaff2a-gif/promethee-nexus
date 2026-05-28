@@ -492,8 +492,13 @@ class TestAutonomyEngineV24:
     @pytest.mark.asyncio
     async def test_health_go_dispatches_routine(self):
         health = _make_health("GO")
+        # Fix 28/05/2026 : _should_veto consulte maintenant prefrontal.compute_inhibition
+        # qui retourne "inhibit" dès qu'un goal STABILITE est actif → veto bloque dispatch.
+        # Le test mocke dispatch_task pour vérifier qu'il EST appelé, donc on neutralise
+        # le veto en amont.
         with patch("core.autonomy_engine.orchestrator") as mock_orch, \
-             patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer:
+             patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
+             patch.object(self.engine, "_should_veto", return_value=""):
             mock_orch.dispatch_task = AsyncMock(return_value={"status": "success"})
             mock_scorer.return_value = [(_get_routines()[0], 2.0)]
             await self.engine._execute_scored_routine(health)
@@ -531,8 +536,10 @@ class TestAutonomyEngineV24:
     def test_error_streak_increments(self):
         self.engine.error_streak = 0
         health = _make_health("GO")
+        # Fix 28/05/2026 : bypass du veto préfrontal (cf test_health_go_dispatches_routine)
         with patch("core.autonomy_engine.orchestrator") as mock_orch, \
-             patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer:
+             patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
+             patch.object(self.engine, "_should_veto", return_value=""):
             mock_orch.dispatch_task = AsyncMock(return_value={"status": "error"})
             mock_scorer.return_value = [(_get_routines()[0], 2.0)]
             asyncio.get_event_loop().run_until_complete(
@@ -543,8 +550,10 @@ class TestAutonomyEngineV24:
     def test_error_streak_resets_on_success(self):
         self.engine.error_streak = 3
         health = _make_health("GO")
+        # Fix 28/05/2026 : bypass du veto préfrontal (cf test_health_go_dispatches_routine)
         with patch("core.autonomy_engine.orchestrator") as mock_orch, \
-             patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer:
+             patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
+             patch.object(self.engine, "_should_veto", return_value=""):
             mock_orch.dispatch_task = AsyncMock(return_value={
                 "status": "success",
                 "result": "Analyse complete du systeme avec recommandations detaillees pour ameliorer les performances globales du projet Promethee."
@@ -803,9 +812,11 @@ class TestGrimoireInvokeRoutine:
         health = _make_health("GO")
         grimoire_routine = {"agent": "_grimoire", "intent": "GRIMOIRE_INVOKE", "mission": "test"}
 
+        # Fix 28/05/2026 : bypass du veto préfrontal pour vérifier le dispatch grimoire.
         with patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
              patch.object(self.engine, "_execute_grimoire_routine", new_callable=AsyncMock,
-                         return_value={"status": "success"}) as mock_grimoire:
+                         return_value={"status": "success"}) as mock_grimoire, \
+             patch.object(self.engine, "_should_veto", return_value=""):
             mock_scorer.return_value = [(grimoire_routine, 5.0)]
             await self.engine._execute_scored_routine(health)
             mock_grimoire.assert_called_once()
@@ -1169,9 +1180,11 @@ class TestAdaptiveScoringIntegration:
         mock_awareness = MagicMock()
         mock_awareness.compute_adaptive_scoring.side_effect = RuntimeError("boom")
 
+        # Fix 28/05/2026 : bypass du veto préfrontal (cf test_health_go_dispatches_routine)
         with patch("core.autonomy_engine.orchestrator") as mock_orch, \
              patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
-             patch.dict("sys.modules", {"core.self_awareness": MagicMock(awareness=mock_awareness)}):
+             patch.dict("sys.modules", {"core.self_awareness": MagicMock(awareness=mock_awareness)}), \
+             patch.object(self.engine, "_should_veto", return_value=""):
             mock_orch.dispatch_task = AsyncMock(return_value={
                 "status": "success",
                 "result": "Analyse complete du systeme avec recommandations detaillees."
@@ -1735,11 +1748,13 @@ class TestAwakeningFrustration:
         mock_desires.drives = {"CURIOSITE": drive}
 
         health = _make_health("GO")
+        # Fix 28/05/2026 : bypass du veto préfrontal (cf test_health_go_dispatches_routine)
         with patch("core.autonomy_engine.orchestrator") as mock_orch, \
              patch("core.autonomy_engine.RoutineScorer.score_routines") as mock_scorer, \
              patch.dict("sys.modules", {"core.desire_engine": MagicMock(
                  desires=mock_desires,
-             )}):
+             )}), \
+             patch.object(self.engine, "_should_veto", return_value=""):
             mock_orch.dispatch_task = AsyncMock(return_value={
                 "status": "success",
                 "result": "Analyse complete " * 10,
@@ -1802,7 +1817,15 @@ class TestVetoProactif:
         for _ in range(5):
             self.engine._record_routine("evolution", "EXPANSION_CODE", "error")
         self.engine._record_routine("evolution", "EXPANSION_CODE", "success")
-        reason = self.engine._should_veto("EXPANSION_CODE", "evolution")
+        # Fix 28/05/2026 : _should_veto consulte prefrontal.compute_inhibition
+        # (ajout étape 3, autonomy_engine.py:4776-4785). En contexte test, le
+        # préfrontal réel renvoie "inhibit" sur Distraction goal STABILITE,
+        # masquant le check qu'on veut tester (échecs vs succès). On neutralise
+        # explicitement cette source de veto orthogonale.
+        mock_prefrontal = MagicMock()
+        mock_prefrontal.compute_inhibition.return_value = {"action": "allow", "reason": ""}
+        with patch.dict("sys.modules", {"core.prefrontal": MagicMock(prefrontal=mock_prefrontal)}):
+            reason = self.engine._should_veto("EXPANSION_CODE", "evolution")
         assert reason == ""
 
     def test_veto_blocks_nogo_expansion(self):
@@ -1820,7 +1843,12 @@ class TestVetoProactif:
 
     def test_veto_no_history_no_block(self):
         """Historique vide → pas de veto."""
-        reason = self.engine._should_veto("EXPANSION_CODE", "evolution")
+        # Fix 28/05/2026 : neutralise prefrontal.compute_inhibition (cf
+        # test_veto_allows_with_success pour explication détaillée).
+        mock_prefrontal = MagicMock()
+        mock_prefrontal.compute_inhibition.return_value = {"action": "allow", "reason": ""}
+        with patch.dict("sys.modules", {"core.prefrontal": MagicMock(prefrontal=mock_prefrontal)}):
+            reason = self.engine._should_veto("EXPANSION_CODE", "evolution")
         assert reason == ""
 
 

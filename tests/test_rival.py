@@ -212,9 +212,16 @@ class TestConfrontation:
         mock_gpu.access.return_value.__aexit__ = AsyncMock()
         mock_client_instance = MagicMock(post=AsyncMock(return_value=mock_response))
 
+        # Fix 28/05/2026 : depuis le commit 02b2748, Stefan bascule sur Gemini
+        # Flash quand qwen3.5:9b retourne vide (rival.py:308-310). Sans mocker
+        # le Gemini fallback, le test obtenait status=success (vrai appel
+        # réseau Google répondait). On désactive Gemini explicitement pour
+        # tester le vrai cas "tout est muet" — silencieux après les 2 canaux.
         with patch("core.base_agent.gpu_scheduler", mock_gpu), \
              patch("httpx.AsyncClient") as mock_client_cls, \
-             patch("core.event_bus.bus.bus", MagicMock(publish=AsyncMock())):
+             patch("core.event_bus.bus.bus", MagicMock(publish=AsyncMock())), \
+             patch("core.gemini_helper.gemini") as mock_gemini:
+            mock_gemini.is_available.return_value = False
             mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client_instance)
             mock_client_cls.return_value.__aexit__ = AsyncMock()
             result = await engine.confront(

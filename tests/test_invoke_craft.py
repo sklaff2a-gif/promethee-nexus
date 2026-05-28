@@ -27,7 +27,7 @@ def chat():
 
 
 @pytest.fixture
-def tmp_grimoire(tmp_path):
+def tmp_grimoire(tmp_path, monkeypatch):
     """Grimoire temporaire pour tester !craft sans toucher le vrai."""
     grimoire_dir = tmp_path / "grimoire"
     grimoire_dir.mkdir()
@@ -48,6 +48,14 @@ def tmp_grimoire(tmp_path):
             "file": "dr_debug.py",
         },
     ]), encoding="utf-8")
+    # Fix 28/05/2026 : depuis le commit 4ef97e4 (23/05), _execute_craft_command
+    # délègue à GrimoireWriter.write_recipe qui utilise ses propres constantes
+    # statiques GrimoireWriter.GRIMOIRE_DIR et INDEX_PATH (chat_engine.py:828+,
+    # grimoire_writer.py:22-23, 51-78). On override ces constantes pour que
+    # l'écriture soit redirigée vers le grimoire temporaire au lieu du repo.
+    from core.grimoire_writer import GrimoireWriter
+    monkeypatch.setattr(GrimoireWriter, "GRIMOIRE_DIR", str(grimoire_dir))
+    monkeypatch.setattr(GrimoireWriter, "INDEX_PATH", str(index_path))
     return grimoire_dir, str(index_path)
 
 

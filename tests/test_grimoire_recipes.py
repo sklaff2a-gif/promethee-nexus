@@ -46,6 +46,35 @@ class TestRecipeLoading:
 # ROUTAGE NIVEAU 0.5 (GRIMOIRE KEYWORDS)
 # ============================================================
 
+
+# Fix 28/05/2026 : voir test_grimoire.py — fixture isolated_grimoire injecte
+# un index contrôlé pour éviter contamination par csv_parser (keyword "analyse"
+# générique) qui mange les routages vers data_analyst / log_analyst.
+@pytest.fixture
+def isolated_grimoire(monkeypatch):
+    controlled_index = [
+        {"slug": "git_keeper", "name": "GitKeeper",
+         "description": "Gestion git",
+         "keywords": ["commit", "git", "merge"],
+         "file": "git_keeper.py"},
+        {"slug": "doc_writer", "name": "DocWriter",
+         "description": "Generation documentation",
+         "keywords": ["readme", "documentation"],
+         "file": "doc_writer.py"},
+        {"slug": "data_analyst", "name": "DataAnalyst",
+         "description": "Analyse de donnees CSV",
+         "keywords": ["csv", "donnees", "statistiques"],
+         "file": "data_analyst.py"},
+        {"slug": "log_analyst", "name": "LogAnalyst",
+         "description": "Analyse de logs systeme",
+         "keywords": ["logs", "log", "syslog", "journal"],
+         "file": "log_analyst.py"},
+    ]
+    monkeypatch.setattr(RouterAgent, "_grimoire_index_cache", controlled_index)
+    yield
+    RouterAgent._grimoire_index_cache = None
+
+
 class TestRecipeRouting:
 
     def setup_method(self):
@@ -65,7 +94,7 @@ class TestRecipeRouting:
         assert result == "doc_writer"
 
     @pytest.mark.asyncio
-    async def test_route_data_analyst(self):
+    async def test_route_data_analyst(self, isolated_grimoire):
         """Mission avec mot-clé 'csv' -> data_analyst."""
         result = await RouterAgent.classify_intent("analyse ce csv de ventes")
         assert result == "data_analyst"
@@ -78,7 +107,7 @@ class TestRecipeRouting:
         assert result == "task_scheduler"
 
     @pytest.mark.asyncio
-    async def test_route_log_analyst(self):
+    async def test_route_log_analyst(self, isolated_grimoire):
         """Mission avec mot-clé 'logs' -> log_analyst."""
         result = await RouterAgent.classify_intent("analyse les logs d'erreur")
         assert result == "log_analyst"
