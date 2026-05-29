@@ -67,12 +67,18 @@ class AtrophyMonitor:
         self._initialized = True
         self._alarm_active: bool = False
         self._alarm_started_at: float = 0.0
+        # Schmitt trigger pour detection de stase soutenue (recalibrage 29/05).
+        # 0.0 = pas en stase. Sinon = timestamp d'entree en stase. L'alarme n'est
+        # publiee que si time.time() - _stasis_started_at >= STASIS_DURATION_S.
+        self._stasis_started_at: float = 0.0
         # Fenêtre glissante de nouveaux nodes (pour Jaccard rumination)
         self._win_old: List[str] = []   # plus ancienne moitié
         self._win_new: List[str] = []   # plus récente moitié
         self._subscribed: bool = False
         self._stats = {
             "checks": 0,
+            "stasis_detections": 0,  # nb d'entrees en stase (seuil franchi)
+            "stasis_breaks": 0,      # nb de ruptures avant atteindre la duree
             "alarms_published": 0,
             "alarms_cancelled_rumination": 0,
             "alarms_cancelled_timeout": 0,
@@ -113,7 +119,13 @@ class AtrophyMonitor:
         return True
 
     async def check_balance(self):
-        """Tick. Appelé par hypothalamus.regulate() (ou autre tick périodique)."""
+        """Tick. Appelé par hypothalamus.regulate() (ou autre tick périodique).
+
+        Recalibrage 29/05 — Schmitt trigger sur les privations + timer de stase :
+        - Entrée en stase : STAB > 80 ET CROIS < 10 (seuils stricts)
+        - Sortie de stase : STAB < 75 OU CROIS > 15 (hystérésis, zone morte 5pts)
+        - Alarme publiée si stase soutenue >= STASIS_DURATION_S (45 min)
+        """
         try:
             from config import Config
         except Exception:
@@ -134,18 +146,52 @@ class AtrophyMonitor:
         if not stab or not crois:
             return
 
-        fed_threshold = getattr(Config, "ATROPHY_STABILITE_FED_THRESHOLD", 20.0)
-        starved_threshold = getattr(Config, "ATROPHY_CROISSANCE_STARVED_THRESHOLD", 70.0)
-        fed = stab.deprivation < fed_threshold
-        starved = crois.deprivation > starved_threshold
+        stab_dep = stab.deprivation
+        crois_dep = crois.deprivation
 
+        # Si une alarme est active, on enchaine sur le coupe-circuit (Jaccard/TTL)
         if self._alarm_active:
-            # Vérifications coupe-circuit (TTL ou rumination)
             await self._check_burst_quality()
             return
 
-        if fed and starved:
-            await self._publish_alarm(stab.deprivation, crois.deprivation)
+        # Sinon, Schmitt trigger : evaluer les conditions de stase
+        if self._stasis_started_at == 0.0:
+            # Pas en stase : verifier l'ENTREE (seuils stricts)
+            entry_stab = getattr(Config, "ATROPHY_STABILITE_HEGEMONIC_ENTRY_THRESHOLD", 80.0)
+            entry_crois = getattr(Config, "ATROPHY_CROISSANCE_MECHANICAL_ENTRY_THRESHOLD", 10.0)
+            if stab_dep > entry_stab and crois_dep < entry_crois:
+                # Entree en stase confirmee
+                self._stasis_started_at = time.time()
+                self._stats["stasis_detections"] += 1
+                self._log_event("stasis_detected", {
+                    "stab_deprivation": round(stab_dep, 2),
+                    "crois_deprivation": round(crois_dep, 2),
+                    "entry_thresholds": [entry_stab, entry_crois],
+                })
+            return
+
+        # Deja en stase : verifier la SORTIE (seuils permissifs = hysteresis)
+        exit_stab = getattr(Config, "ATROPHY_STABILITE_HEGEMONIC_EXIT_THRESHOLD", 75.0)
+        exit_crois = getattr(Config, "ATROPHY_CROISSANCE_MECHANICAL_EXIT_THRESHOLD", 15.0)
+        if stab_dep < exit_stab or crois_dep > exit_crois:
+            # Rupture metabolique reelle (sortie de zone morte)
+            duration = time.time() - self._stasis_started_at
+            self._stats["stasis_breaks"] += 1
+            self._log_event("stasis_broken", {
+                "duration_s": round(duration, 1),
+                "stab_deprivation": round(stab_dep, 2),
+                "crois_deprivation": round(crois_dep, 2),
+                "exit_thresholds": [exit_stab, exit_crois],
+            })
+            self._stasis_started_at = 0.0
+            return
+
+        # Toujours en stase dans la zone morte : verifier si duree atteinte
+        stasis_duration = getattr(Config, "ATROPHY_STASIS_DURATION_S", 2700)
+        elapsed = time.time() - self._stasis_started_at
+        if elapsed >= stasis_duration:
+            # Stase soutenue confirmee -> publier alarme
+            await self._publish_alarm(stab_dep, crois_dep)
 
     # ---- Mécanique interne ----
 
@@ -156,6 +202,9 @@ class AtrophyMonitor:
 
         self._alarm_active = True
         self._alarm_started_at = time.time()
+        # Reset timer de stase : apres expiration du TTL alarme, il faudra
+        # 45 min de nouvelle stase soutenue pour redeclencher.
+        self._stasis_started_at = 0.0
         self._win_old.clear()
         self._win_new.clear()
         self._stats["alarms_published"] += 1

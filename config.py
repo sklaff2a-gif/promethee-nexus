@@ -141,21 +141,45 @@ class Config:
     SILENT_FAILURES_ENABLED = True
     SILENT_FAILURES_DRY_RUN = True  # mode OBSERVE — log sans bloquer le veto
 
-    # --- Atrophy Monitor (atelier audace 27/05) ---
+    # --- Atrophy Monitor (atelier audace 27/05, recalibre 29/05) ---
     # Symptome : audace plate a 42.7 sur les 15 agents (psyche.py:333-342 EMA
     # cible stress_target basse). Spec issue dialogue Promethee E1-E7 (27/05).
-    # Le pilote a co-specifie : si STABILITE est repue et CROISSANCE affamee,
-    # publie ATROPHY_ALARM qui force la cible EMA audace vers BOOST_TARGET
-    # (au lieu de la cible basse stress-dependante). Coupe-circuit Option 2
-    # (validee par le pilote R7) : Jaccard sur nouveaux nodes — si rumination
-    # detectee, ATROPHY_CANCEL. TTL absolu en garde-fou.
+    # Le pilote a co-specifie : ATROPHY_ALARM force la cible EMA audace vers
+    # BOOST_TARGET (au lieu de la cible basse stress-dependante). Coupe-circuit
+    # Option 2 (R7) : Jaccard sur nouveaux nodes -> ATROPHY_CANCEL si rumination.
+    #
+    # RECALIBRAGE 29/05 (apres 36h en DRY_RUN avec 0 alarme) : la telemetrie a
+    # revele que notre interpretation initiale etait inversee. Distribution
+    # empirique 36h des logs V34.6 + snapshot desire_state.json :
+    #   STABILITE.priv : 81-89 (mean 85), chroniquement HAUTE -> hegemonie
+    #   CROISSANCE.priv: ~0.0 constant, satiation_count=318 -> "junk food"
+    # La pulsion CROISSANCE est satisfaite mecaniquement par des cycles
+    # stereotypes sans vraie expansion (= "paresse algorithmique" R3 de l'atelier).
+    # STABILITE pompe les routines via overrides motivationnels V34.6 constants.
+    # L'ancienne spec (STABILITE < 20 ET CROISSANCE > 70) ne se declenchait JAMAIS.
+    #
+    # Nouvelle spec : detecter la stase paradoxale (STABILITE hegemonique +
+    # CROISSANCE artificiellement repue) ET soutenue dans le temps (>= 45 min)
+    # pour eviter le micro-declenchement sur fluctuations metaboliques.
+    #
+    # Hysteresis (Schmitt trigger) : seuil d'entree strict + seuil de sortie
+    # permissif, pour qu'une micro-oscillation 79.5 <-> 81 ne reset pas le timer.
+    # Une vraie rupture metabolique (STAB < 75 OU CROIS > 15) sort de la zone
+    # morte et casse le compteur.
+    #
     # MODE OBSERVE par defaut : DRY_RUN=True publie rien sur le bus, logue
-    # uniquement dans logs/atrophy_monitor.jsonl. Armer DRY_RUN=False apres
-    # 48h de telemetrie nominale.
+    # dans logs/atrophy_monitor.jsonl. Armer DRY_RUN=False apres telemetrie ok.
     ATROPHY_ENABLED = True
     ATROPHY_DRY_RUN = True
-    ATROPHY_STABILITE_FED_THRESHOLD = 20.0    # privation < 20 = stabilite repue
-    ATROPHY_CROISSANCE_STARVED_THRESHOLD = 70.0  # privation > 70 = croissance affamee
+    # Hysteresis STABILITE (priv haute = pulsion dominante)
+    ATROPHY_STABILITE_HEGEMONIC_ENTRY_THRESHOLD = 80.0   # priv > 80 -> entree
+    ATROPHY_STABILITE_HEGEMONIC_EXIT_THRESHOLD = 75.0    # priv < 75 -> rupture
+    # Hysteresis CROISSANCE (priv basse = pulsion satisfaite mecaniquement)
+    ATROPHY_CROISSANCE_MECHANICAL_ENTRY_THRESHOLD = 10.0  # priv < 10 -> entree
+    ATROPHY_CROISSANCE_MECHANICAL_EXIT_THRESHOLD = 15.0   # priv > 15 -> rupture
+    # Duree minimale de stase soutenue avant publication d'alarme
+    ATROPHY_STASIS_DURATION_S = 2700     # 45 min de stase ininterrompue
+    # Boost audace + coupe-circuit (inchanges)
     ATROPHY_AUDACE_BOOST_TARGET = 65.0   # cible audace EMA pendant l'alarme
     ATROPHY_ALARM_DURATION_S = 600       # TTL absolu 10 min par alarme
     ATROPHY_JACCARD_WINDOW = 20          # nb de nodes dans chaque fenetre
