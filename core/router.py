@@ -98,6 +98,25 @@ class RouterAgent:
             logger.info(f"🧠 ROUTER: Chunking SOAR match -> {chunked.upper()} (règle apprise)")
             return chunked
 
+        # --- NIVEAU 0.4 : STRONG_KEYWORDS (court-circuit anti-pollution Grimoire) ---
+        # 29/05/2026 : promotion des mots-cles critiques (infra hardware +
+        # security) AVANT la consultation Grimoire. Garantit que les routages
+        # vitaux ne sont jamais detournes par une recette ephemere qui aurait
+        # extrait un keyword generique. Doctrine : aucun outil cree
+        # dynamiquement ne doit pouvoir intercepter le trafic "secu/faille/
+        # cpu/ram" — ce sont des urgences infrastructurelles ou de securite.
+        # Les listes ci-dessous DUPLIQUENT volontairement celles du Niveau 1
+        # (lignes ~125 et ~131 plus bas) pour rester coherentes meme quand
+        # Niveau 0.5 est court-circuite par cette priorite. Cas concret qui a
+        # motive cette promotion : keyword generique "analyse" de csv_parser
+        # mangait les routages vers security et log_analyst.
+        if any(x in m_low for x in ["cpu", "ram", "gpu", "vram", "status", "santé", "check system"]):
+            logger.info(f"⚡ ROUTER: Strong keyword (infra) -> INFRA")
+            return "infra"
+        if any(x in m_low for x in ["secu", "faille", "attack", "protect"]):
+            logger.info(f"⚡ ROUTER: Strong keyword (security) -> SECURITY")
+            return "security"
+
         # --- NIVEAU 0.5 : CONSULTATION DU GRIMOIRE (Spécialistes éphémères) ---
         # Les recettes Grimoire sont spécialisées et matchent avant les mots-clés génériques.
         grimoire_match = RouterAgent._check_grimoire_index(m_low)

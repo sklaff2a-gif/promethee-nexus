@@ -66,13 +66,15 @@ class TestRouterLevel1Keywords:
 
     @pytest.mark.asyncio
     async def test_keyword_secu(self):
-        # Fix 28/05/2026 : l'ancienne phrase "analyse secu du serveur"
-        # matche maintenant csv_parser (keyword "analyse") via le Niveau 0.5
-        # grimoire AVANT les checks hardcodés Niveau 1.5. Bug architectural en
-        # prod à régler séparément (priorité grimoire vs mots-clés "forts" comme
-        # secu/gpu/ram). Pour le test : utiliser une phrase qui matche
-        # uniquement le check security ligne 125.
-        assert await RouterAgent.classify_intent("vérifie la secu du serveur") == "security"
+        # Fix 29/05/2026 : restauration de la phrase originale "analyse secu".
+        # Le bug architectural (collision csv_parser sur "analyse") est
+        # maintenant resolu par la Priorite 0.4 STRONG_KEYWORDS dans
+        # router.py:101-117 qui court-circuite le Niveau 0.5 Grimoire pour
+        # les mots-cles vitaux (secu/faille/attack/protect -> security).
+        # Si ce test echoue a nouveau, c'est que quelqu'un a touche a la
+        # Priorite 0.4 ou ajoute "analyse" dans les keywords d'un agent
+        # Grimoire qui passerait avant.
+        assert await RouterAgent.classify_intent("analyse secu du serveur") == "security"
 
     @pytest.mark.asyncio
     async def test_keyword_article(self):

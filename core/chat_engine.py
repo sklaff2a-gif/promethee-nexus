@@ -773,9 +773,26 @@ class ChatEngine:
         # Extraire des keywords depuis la description (mots de 4+ lettres)
         import re
         words = re.findall(r"[a-zA-ZÀ-ÿ]{4,}", description.lower())
-        # Deduplier et prendre les 6 premiers mots significatifs
-        stopwords = {"dans", "pour", "avec", "depuis", "entre", "cette", "comme",
-                     "tout", "plus", "moins", "aussi", "outil", "faire"}
+        # Deduplier et prendre les 6 premiers mots significatifs.
+        # 29/05/2026 : elargissement des stopwords pour bloquer les keywords
+        # generiques techniques (verbes d'action + noms generiques) qui
+        # capturaient le trafic d'agents core. Cas concret : csv_parser
+        # avait extrait "analyse" comme keyword -> mangait tout routage vers
+        # security, log_analyst, data_analyst en runtime. La doctrine est :
+        # un keyword Grimoire doit decrire le DOMAINE specifique (csv,
+        # tableur, statistiques), pas le MOYEN ou l'intention globale.
+        stopwords = {
+            # Stopwords originaux (mots-liens grammaticaux)
+            "dans", "pour", "avec", "depuis", "entre", "cette", "comme",
+            "tout", "plus", "moins", "aussi", "outil", "faire",
+            # Verbes d'action genericiques (= intention, pas domaine)
+            "analyse", "analyser", "traite", "traiter", "gere", "gerer",
+            "utilise", "utiliser", "permet", "permettre", "lance", "lancer",
+            "execute", "executer", "genere", "generer",
+            # Noms generiques techniques (= moyen, pas domaine)
+            "fichier", "fichiers", "donnees", "code", "systeme", "module",
+            "gestion", "methode", "simple", "service", "processus",
+        }
         keywords = []
         seen = set()
         for w in words:
