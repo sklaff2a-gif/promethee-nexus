@@ -1,21 +1,20 @@
 """Tests pour core/atrophy_monitor.py.
 
-Spec atelier audace 27/05 (Option 2 — Détecteur de Bruit), recalibrée
-29/05 avec Schmitt trigger + timer de stase (cf doctrine "junk food
-cognitive" dans config.py).
+Spec atelier audace 27/05 (Option 2 — Détecteur de Bruit), refondue
+29/05 v3 sur détection de compulsion V34 (cf doctrine "reward hacking"
+dans config.py — la valeur instantanée de STAB.priv ne pouvait jamais
+rester au-dessus de 80 pendant 45 min car V34 reset toutes les 13 min).
 
-Couverture :
-1. Pas de stase si STAB <= 80 (entrée)
-2. Pas de stase si CROIS >= 10 (entrée)
-3. Stase détectée si STAB > 80 ET CROIS < 10 (entrée stricte)
-4. Pas d'alarme avant STASIS_DURATION_S (45 min)
-5. Alarme publiée si stase soutenue >= 45 min
+Couverture (9 cas) :
+1. Pas d'alarme si peu de V34_RELIEF (< seuil)
+2. Pas d'alarme si CROISSANCE active (garde-fou constitutionnel)
+3. Alarme si compulsion V34 + CROISSANCE en coma
+4. Purge des reliefs > fenêtre 24h
+5. Seuls les reliefs STABILITE sont comptés (CURIOSITE ignorée)
 6. DRY_RUN — alarme calculée mais pas de bus.publish
-7. Hystérésis : micro-drop dans zone morte 75-80 ne casse pas le timer
-8. Hystérésis : chute < 75 casse vraiment le timer
-9. Jaccard rumination détectée → cancel alarme
-10. Jaccard nodes diversifiés → alarme persiste
-11. Sanity Jaccard helper
+7. Coupe-circuit Jaccard : rumination détectée → cancel
+8. Coupe-circuit Jaccard : nodes diversifiés → alarme persiste
+9. Sanity Jaccard helper
 """
 
 import time
@@ -41,84 +40,64 @@ def isolate_monitor(tmp_path, monkeypatch):
 
 @pytest.fixture
 def config_default(monkeypatch):
-    """Config par défaut (mode OBSERVE = DRY_RUN True) avec seuils Schmitt
-    recalibres 29/05."""
+    """Config par défaut (mode OBSERVE = DRY_RUN True) avec seuils V34
+    de la refonte 29/05 v3."""
     from config import Config
     monkeypatch.setattr(Config, "ATROPHY_ENABLED", True, raising=False)
     monkeypatch.setattr(Config, "ATROPHY_DRY_RUN", True, raising=False)
-    monkeypatch.setattr(Config, "ATROPHY_STABILITE_HEGEMONIC_ENTRY_THRESHOLD", 80.0, raising=False)
-    monkeypatch.setattr(Config, "ATROPHY_STABILITE_HEGEMONIC_EXIT_THRESHOLD", 75.0, raising=False)
+    monkeypatch.setattr(Config, "ATROPHY_V34_RELIEF_WINDOW_S", 86400, raising=False)
+    monkeypatch.setattr(Config, "ATROPHY_V34_RELIEF_THRESHOLD", 4, raising=False)
     monkeypatch.setattr(Config, "ATROPHY_CROISSANCE_MECHANICAL_ENTRY_THRESHOLD", 10.0, raising=False)
-    monkeypatch.setattr(Config, "ATROPHY_CROISSANCE_MECHANICAL_EXIT_THRESHOLD", 15.0, raising=False)
-    monkeypatch.setattr(Config, "ATROPHY_STASIS_DURATION_S", 2700, raising=False)
     monkeypatch.setattr(Config, "ATROPHY_ALARM_DURATION_S", 600, raising=False)
-    monkeypatch.setattr(Config, "ATROPHY_JACCARD_WINDOW", 5, raising=False)  # petit pour tests
+    monkeypatch.setattr(Config, "ATROPHY_JACCARD_WINDOW", 5, raising=False)
     monkeypatch.setattr(Config, "ATROPHY_JACCARD_REDUNDANT_THRESHOLD", 0.7, raising=False)
 
 
-def _mock_drives(stab_dep: float, crois_dep: float):
-    """Construit un mock pour desire_engine.drives."""
+def _mock_drives(crois_dep: float):
+    """Construit un mock pour desire_engine.drives (seul CROISSANCE compte v3)."""
     drives = {
-        "STABILITE": MagicMock(deprivation=stab_dep),
         "CROISSANCE": MagicMock(deprivation=crois_dep),
     }
     return MagicMock(drives=drives)
 
 
-# ---------- Tests — Entrée Schmitt ----------
+async def _emit_v34_relief(monitor: AtrophyMonitor, drive: str = "STABILITE"):
+    """Helper : simule un event V34_RELIEF_APPLIED via le handler direct."""
+    await monitor._on_v34_relief({"drive": drive, "quality": 0.8, "delta": -12.0})
+
+
+# ---------- Tests — Détection par fréquence ----------
 
 
 @pytest.mark.asyncio
-async def test_no_stasis_when_stab_below_entry(config_default, isolate_monitor):
-    """Cas 1 : STAB=70 (< 80) → pas d'entrée en stase."""
+async def test_no_alarm_when_few_reliefs(config_default, isolate_monitor):
+    """Cas 1 : 2 V34_RELIEF (< seuil 4) → pas d'alarme."""
     monitor = AtrophyMonitor()
+    for _ in range(2):
+        await _emit_v34_relief(monitor)
     with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-        desire_engine=_mock_drives(stab_dep=70.0, crois_dep=5.0)
+        desire_engine=_mock_drives(crois_dep=2.0)
     )}):
         await monitor.check_balance()
-    assert monitor._stasis_started_at == 0.0
-    assert monitor.get_stats()["stasis_detections"] == 0
-    assert monitor.get_stats()["alarms_published"] == 0
-
-
-@pytest.mark.asyncio
-async def test_no_stasis_when_crois_above_entry(config_default, isolate_monitor):
-    """Cas 2 : CROIS=20 (>= 10) → pas d'entrée en stase malgré STAB hegemonique."""
-    monitor = AtrophyMonitor()
-    with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-        desire_engine=_mock_drives(stab_dep=85.0, crois_dep=20.0)
-    )}):
-        await monitor.check_balance()
-    assert monitor._stasis_started_at == 0.0
-    assert monitor.get_stats()["stasis_detections"] == 0
-
-
-@pytest.mark.asyncio
-async def test_stasis_detected_when_entry_thresholds_met(config_default, isolate_monitor):
-    """Cas 3 : STAB=85 + CROIS=5 → stase détectée (timestamp posé) MAIS pas
-    d'alarme immédiate (cf timer 45 min)."""
-    monitor = AtrophyMonitor()
-    with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-        desire_engine=_mock_drives(stab_dep=85.0, crois_dep=5.0)
-    )}):
-        await monitor.check_balance()
-    assert monitor._stasis_started_at > 0.0
-    assert monitor.get_stats()["stasis_detections"] == 1
-    assert monitor.get_stats()["alarms_published"] == 0  # pas encore
     assert not monitor.is_alarm_active()
-
-
-# ---------- Tests — Timer 45 min ----------
+    assert monitor.get_stats()["alarms_published"] == 0
+    assert monitor.get_stats()["v34_reliefs_observed"] == 2
 
 
 @pytest.mark.asyncio
-async def test_no_alarm_before_stasis_duration(config_default, isolate_monitor):
-    """Cas 4 : stase détectée depuis 30 min seulement (< 45 min) → pas d'alarme."""
+async def test_no_alarm_when_croissance_active(config_default, isolate_monitor):
+    """Cas 2 — GARDE-FOU CONSTITUTIONNEL : 5 V34_RELIEF (> seuil) MAIS
+    CROISSANCE.priv=20 (vraie urgence, pas atrophie) → pas d'alarme.
+
+    Garantit qu'une vraie crise legitime ne sera pas etouffee par notre
+    bouclier d'audace : si la pulsion de croissance est encore active
+    (priv >= 10), les V34 sont legitimes, pas compulsifs.
+    """
     monitor = AtrophyMonitor()
-    # Simuler : stase entamée il y a 30 min
-    monitor._stasis_started_at = time.time() - (30 * 60)  # 1800s
+    for _ in range(5):
+        await _emit_v34_relief(monitor)
     with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-        desire_engine=_mock_drives(stab_dep=85.0, crois_dep=5.0)
+        desire_engine=_mock_drives(crois_dep=20.0)
     )}):
         await monitor.check_balance()
     assert not monitor.is_alarm_active()
@@ -126,30 +105,64 @@ async def test_no_alarm_before_stasis_duration(config_default, isolate_monitor):
 
 
 @pytest.mark.asyncio
-async def test_alarm_published_after_stasis_duration(config_default, isolate_monitor):
-    """Cas 5 : stase détectée depuis 46 min (> 45 min) → alarme publiée."""
+async def test_alarm_when_compulsion_and_dead_growth(config_default, isolate_monitor):
+    """Cas 3 : 5 V34_RELIEF (> seuil 4) + CROISSANCE.priv=2 (coma) → alarme."""
     monitor = AtrophyMonitor()
-    # Simuler : stase entamée il y a 46 min (au-delà du seuil 45 min)
-    monitor._stasis_started_at = time.time() - (46 * 60)  # 2760s
+    for _ in range(5):
+        await _emit_v34_relief(monitor)
     with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-        desire_engine=_mock_drives(stab_dep=85.0, crois_dep=5.0)
+        desire_engine=_mock_drives(crois_dep=2.0)
     )}):
         await monitor.check_balance()
     assert monitor.is_alarm_active()
     assert monitor.get_stats()["alarms_published"] == 1
-    # Apres publication, le timer de stase doit etre reset
-    assert monitor._stasis_started_at == 0.0
+
+
+@pytest.mark.asyncio
+async def test_v34_relief_window_purge(config_default, isolate_monitor):
+    """Cas 4 : un relief vieux de > 24h est purge automatiquement."""
+    monitor = AtrophyMonitor()
+    # Injecter directement un timestamp ancien dans le deque
+    now = time.time()
+    monitor._v34_relief_history.append(now - 90000)  # > 24h
+    # Et 2 reliefs récents
+    monitor._v34_relief_history.append(now - 100)
+    monitor._v34_relief_history.append(now - 50)
+    assert len(monitor._v34_relief_history) == 3
+
+    # Le check_balance doit purger les vieux
+    with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
+        desire_engine=_mock_drives(crois_dep=2.0)
+    )}):
+        await monitor.check_balance()
+    # Apres purge : seuls les 2 recents restent
+    assert len(monitor._v34_relief_history) == 2
+    assert monitor.get_stats()["v34_reliefs_purged"] == 1
+    # Pas d'alarme (2 reliefs, < seuil)
+    assert not monitor.is_alarm_active()
+
+
+@pytest.mark.asyncio
+async def test_only_stabilite_reliefs_counted(config_default, isolate_monitor):
+    """Cas 5 : reliefs sur CURIOSITE/MAITRISE/etc. ne sont pas comptes."""
+    monitor = AtrophyMonitor()
+    # 5 reliefs sur des drives non-STABILITE
+    for drive in ("CURIOSITE", "MAITRISE", "CONNEXION", "CREATION", "COMPREHENSION"):
+        await _emit_v34_relief(monitor, drive=drive)
+    assert len(monitor._v34_relief_history) == 0
+    assert monitor.get_stats()["v34_reliefs_observed"] == 0
 
 
 @pytest.mark.asyncio
 async def test_dry_run_does_not_publish_bus(config_default, isolate_monitor):
-    """Cas 6 : DRY_RUN=True → alarme calculée + log, mais bus.publish PAS appelé."""
+    """Cas 6 : DRY_RUN=True → alarme + log, mais pas de bus.publish."""
     monitor = AtrophyMonitor()
-    monitor._stasis_started_at = time.time() - 2800  # > 45 min
+    for _ in range(5):
+        await _emit_v34_relief(monitor)
     mock_bus = MagicMock()
     mock_bus.publish = AsyncMock()
     with patch.dict("sys.modules", {
-        "core.desire_engine": MagicMock(desire_engine=_mock_drives(85.0, 5.0)),
+        "core.desire_engine": MagicMock(desire_engine=_mock_drives(crois_dep=2.0)),
         "core.event_bus.bus": MagicMock(bus=mock_bus),
     }):
         await monitor.check_balance()
@@ -158,73 +171,25 @@ async def test_dry_run_does_not_publish_bus(config_default, isolate_monitor):
     mock_bus.publish.assert_not_called()
 
 
-# ---------- Tests — Hystérésis (Schmitt) ----------
-
-
-@pytest.mark.asyncio
-async def test_hysteresis_micro_drop_does_not_break(config_default, isolate_monitor):
-    """Cas 7 : stase entamée à STAB=81, micro-drop à STAB=79.5 (entre 75 et 80
-    = zone morte du Schmitt) → timer continue à courir, pas de rupture."""
-    monitor = AtrophyMonitor()
-    # Tick 1 : entrée en stase à STAB=81
-    with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-        desire_engine=_mock_drives(stab_dep=81.0, crois_dep=5.0)
-    )}):
-        await monitor.check_balance()
-    initial_stasis_ts = monitor._stasis_started_at
-    assert initial_stasis_ts > 0.0
-    # Tick 2 : micro-drop dans la zone morte (STAB=79.5, entre 75 et 80)
-    with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-        desire_engine=_mock_drives(stab_dep=79.5, crois_dep=5.0)
-    )}):
-        await monitor.check_balance()
-    # Le timer ne doit PAS être reset
-    assert monitor._stasis_started_at == initial_stasis_ts
-    assert monitor.get_stats()["stasis_breaks"] == 0
-
-
-@pytest.mark.asyncio
-async def test_hysteresis_real_drop_breaks(config_default, isolate_monitor):
-    """Cas 8 : stase entamée à STAB=85, vraie chute à STAB=74 (< 75 = sortie de
-    la zone morte) → timer reset, log stasis_broken."""
-    monitor = AtrophyMonitor()
-    # Tick 1 : entrée en stase
-    with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-        desire_engine=_mock_drives(stab_dep=85.0, crois_dep=5.0)
-    )}):
-        await monitor.check_balance()
-    assert monitor._stasis_started_at > 0.0
-    # Tick 2 : vraie chute (STAB=74 < 75)
-    with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-        desire_engine=_mock_drives(stab_dep=74.0, crois_dep=5.0)
-    )}):
-        await monitor.check_balance()
-    assert monitor._stasis_started_at == 0.0
-    assert monitor.get_stats()["stasis_breaks"] == 1
-
-
-# ---------- Tests — Coupe-circuit Jaccard (logique inchangée) ----------
+# ---------- Tests — Coupe-circuit Jaccard (inchanges) ----------
 
 
 @pytest.mark.asyncio
 async def test_jaccard_rumination_cancels_alarm(config_default, isolate_monitor):
-    """Cas 9 : alarme active + 5 nodes identiques dans 2 fenêtres glissantes
-    (Jaccard=1.0 > 0.7) → cancel rumination."""
+    """Cas 7 : alarme active + 5 nodes identiques dans 2 fenêtres → cancel."""
     monitor = AtrophyMonitor()
-    # Forcer alarme active (raccourci pour tester le coupe-circuit)
+    # Forcer alarme active
     monitor._alarm_active = True
     monitor._alarm_started_at = time.time()
 
-    # Simuler des nodes identiques dans les 2 fenêtres glissantes
     same_nodes = ["concept_X", "concept_Y", "concept_Z", "concept_W", "concept_V"]
     for nid in same_nodes:
         await monitor._on_synaptic_update({"change": "node_new", "id": nid})
     for nid in same_nodes:
         await monitor._on_synaptic_update({"change": "node_new", "id": nid})
 
-    # Tick : devrait détecter rumination et cancel
     with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-        desire_engine=_mock_drives(85.0, 5.0)
+        desire_engine=_mock_drives(crois_dep=2.0)
     )}):
         await monitor.check_balance()
     assert not monitor._alarm_active
@@ -233,19 +198,18 @@ async def test_jaccard_rumination_cancels_alarm(config_default, isolate_monitor)
 
 @pytest.mark.asyncio
 async def test_jaccard_diverse_keeps_alarm(config_default, isolate_monitor):
-    """Cas 10 : alarme active + nodes diversifiés (Jaccard=0) → alarme persiste."""
+    """Cas 8 : alarme active + nodes diversifiés → alarme persiste."""
     monitor = AtrophyMonitor()
     monitor._alarm_active = True
     monitor._alarm_started_at = time.time()
 
-    # win_old : 5 nodes ; win_new : 5 nodes complètement différents
     for i in range(5):
         await monitor._on_synaptic_update({"change": "node_new", "id": f"old_{i}"})
     for i in range(5):
         await monitor._on_synaptic_update({"change": "node_new", "id": f"new_{i}"})
 
     with patch.dict("sys.modules", {"core.desire_engine": MagicMock(
-        desire_engine=_mock_drives(85.0, 5.0)
+        desire_engine=_mock_drives(crois_dep=2.0)
     )}):
         await monitor.check_balance()
     assert monitor._alarm_active

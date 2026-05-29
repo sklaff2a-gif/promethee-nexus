@@ -459,6 +459,27 @@ def mark_drive_satisfied(drive_name: str, quality: float = 1.0) -> None:
                 f"[V34.7 RELIEF] drive={drive_name} quality={quality:.2f} "
                 f"deprivation delta={delta_applied:+.2f}"
             )
+            # 29/05/2026 : emission du signal pour ATROPHY MONITOR.
+            # V34.7 RELIEF = signature de la "junk food cognitive" decouverte
+            # par audit empirique (5 reliefs STABILITE en 9h = cycle stereotype
+            # de "reward hacking"). ATROPHY surveille la frequence de ces
+            # consommations sur 24h pour detecter une compulsion de l'instinct
+            # de survie. Publication asynchrone non-bloquante (pattern
+            # grimoire_writer.py:97-114).
+            try:
+                import asyncio
+                from core.event_bus.bus import bus
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(bus.publish("V34_RELIEF_APPLIED", {
+                        "drive": drive_name,
+                        "quality": quality,
+                        "delta": delta_applied,
+                    }))
+                except RuntimeError:
+                    pass  # Pas d'event loop (test sync ou contexte hors async)
+            except Exception as _be:
+                logger.debug(f"[V34.7 RELIEF] bus publish failed: {_be}")
     except Exception as _e:
         logger.debug(f"[V34.7 RELIEF] apply_motivational_relief crash: {_e}")
 

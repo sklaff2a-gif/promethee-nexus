@@ -4,25 +4,35 @@ ATROPHY_MONITOR — Détecteur d'atrophie cognitive.
 Né de l'atelier audace 27/05/2026 (boucle pilote/ingénieur E1-E7).
 Symptôme observé : audace plate à 42.7 sur les 15 agents, écrasée par
 psyche._on_sensorium_update qui colle un EMA cible 30-50 basée sur le stress.
-Diagnostic du pilote : l'audace est verrouillée a priori par la saturation
-de STABILITE+SURVIE à 100% — "stabilité 100% = mort thermique" (R3).
 
-Spec validée par le pilote (R7, Option 2) :
-1. Tick : si desire_engine.STABILITE est repue (privation basse) ET
-   desire_engine.CROISSANCE est affamée (privation haute) → publie
-   ATROPHY_ALARM sur le bus.
-2. psyche._on_sensorium_update lit l'état atrophy → si actif, force la
-   cible EMA de l'audace vers ATROPHY_AUDACE_BOOST_TARGET au lieu de
-   la cible basse stress-dépendante.
-3. Coupe-circuit Option 2 ("Détecteur de Bruit", validé par le pilote
-   contre l'Option 1 chronométrique) : surveille les nouveaux nodes
-   synaptiques pendant le boost. Si Jaccard(window_A, window_B) >
-   REDUNDANT_THRESHOLD → diagnostic rumination → publie ATROPHY_CANCEL.
-4. TTL absolu en garde-fou (ATROPHY_ALARM_DURATION_S).
+REFONTE 29/05 v3 (apres echec v1 inversion + v2 Schmitt+timer) :
+Le pilote l'avait dit en R3 atelier : "paresse algorithmique" stereotypee.
+Audit empirique a revele le mecanisme exact : Reward Hacking. Quand
+STABILITE.priv > 80, le motivational router declenche un AUDIT_SURVIE
+qui satisfait symboliquement la pulsion via V34.7 RELIEF (-12 pts).
+STABILITE oscille 89 -> 77 -> 89 toutes les ~13 min en cycle stereotype.
 
-Mode OBSERVE 48h : Config.ATROPHY_DRY_RUN = True publie rien sur le
-bus, logue seulement dans logs/atrophy_monitor.jsonl. Armement après
-télémétrie.
+La vraie signature de l'atrophie n'est pas une valeur instantanee, c'est
+la FREQUENCE du rituel V34. Source : motivational_router.mark_drive_satisfied
+publie V34_RELIEF_APPLIED sur le bus (1 event par cycle reussi).
+Atrophy_monitor maintient un deque des timestamps des reliefs STABILITE
+sur fenetre 24h. Si > 4 reliefs ET CROISSANCE.priv < 10 -> alarme.
+
+Garde-fou constitutionnel : la condition CROISSANCE < 10 garantit que
+les vraies urgences (instabilite legitime declenchant des V34) ne
+declenchent PAS l'alarme — l'alarme ne tape QUE sur la compulsion
+stereotypee couplee a un coma de croissance.
+
+Spec validée par le pilote (R7, Option 2 — coupe-circuit Jaccard) :
+1. Pendant l'alarme, psyche._on_sensorium_update lit is_alarm_active()
+   et force la cible EMA audace vers ATROPHY_AUDACE_BOOST_TARGET.
+2. Coupe-circuit Jaccard : surveille les nouveaux nodes synaptiques
+   pendant le boost. Si Jaccard(window_A, window_B) > REDUNDANT_THRESHOLD
+   -> diagnostic rumination -> publie ATROPHY_CANCEL.
+3. TTL absolu en garde-fou (ATROPHY_ALARM_DURATION_S = 10 min).
+
+Mode OBSERVE : Config.ATROPHY_DRY_RUN = True publie rien sur le bus,
+logue seulement dans logs/atrophy_monitor.jsonl. Armement après télémétrie.
 """
 
 import asyncio
@@ -30,6 +40,7 @@ import json
 import logging
 import os
 import time
+from collections import deque
 from typing import List, Optional
 
 logger = logging.getLogger("atrophy_monitor")
@@ -50,8 +61,8 @@ def _jaccard(set_a: set, set_b: set) -> float:
 
 
 class AtrophyMonitor:
-    """Singleton. Surveille la balance STABILITE/CROISSANCE et déclenche
-    l'alarme d'atrophie si la stabilité étouffe la croissance."""
+    """Singleton. Compte les V34_RELIEF_APPLIED STABILITE sur fenetre roulante
+    24h. Declenche ATROPHY_ALARM si compulsion + CROISSANCE en coma."""
 
     _instance = None
 
@@ -67,18 +78,19 @@ class AtrophyMonitor:
         self._initialized = True
         self._alarm_active: bool = False
         self._alarm_started_at: float = 0.0
-        # Schmitt trigger pour detection de stase soutenue (recalibrage 29/05).
-        # 0.0 = pas en stase. Sinon = timestamp d'entree en stase. L'alarme n'est
-        # publiee que si time.time() - _stasis_started_at >= STASIS_DURATION_S.
-        self._stasis_started_at: float = 0.0
+        # Fenetre roulante des V34_RELIEF_APPLIED STABILITE (timestamps).
+        # Refonte 29/05 v3 : remplace l'ancienne logique Schmitt+timer qui
+        # ne pouvait jamais se declencher dans le metabolisme nominal de
+        # Promethee (V34 reset STAB toutes les 13 min, jamais 45 min consecutives).
+        self._v34_relief_history: deque = deque()
         # Fenêtre glissante de nouveaux nodes (pour Jaccard rumination)
         self._win_old: List[str] = []   # plus ancienne moitié
         self._win_new: List[str] = []   # plus récente moitié
         self._subscribed: bool = False
         self._stats = {
             "checks": 0,
-            "stasis_detections": 0,  # nb d'entrees en stase (seuil franchi)
-            "stasis_breaks": 0,      # nb de ruptures avant atteindre la duree
+            "v34_reliefs_observed": 0,  # nb total reliefs STABILITE captes
+            "v34_reliefs_purged": 0,    # nb reliefs sortis de la fenetre 24h
             "alarms_published": 0,
             "alarms_cancelled_rumination": 0,
             "alarms_cancelled_timeout": 0,
@@ -97,8 +109,9 @@ class AtrophyMonitor:
         try:
             from core.event_bus.bus import bus
             bus.subscribe("SYNAPTIC_UPDATE", self._on_synaptic_update)
+            bus.subscribe("V34_RELIEF_APPLIED", self._on_v34_relief)
             self._subscribed = True
-            logger.info("[ATROPHY] Monitor souscrit a SYNAPTIC_UPDATE.")
+            logger.info("[ATROPHY] Monitor souscrit a SYNAPTIC_UPDATE + V34_RELIEF_APPLIED.")
         except Exception as e:
             logger.warning(f"[ATROPHY] Echec subscribe: {e}")
 
@@ -121,10 +134,12 @@ class AtrophyMonitor:
     async def check_balance(self):
         """Tick. Appelé par hypothalamus.regulate() (ou autre tick périodique).
 
-        Recalibrage 29/05 — Schmitt trigger sur les privations + timer de stase :
-        - Entrée en stase : STAB > 80 ET CROIS < 10 (seuils stricts)
-        - Sortie de stase : STAB < 75 OU CROIS > 15 (hystérésis, zone morte 5pts)
-        - Alarme publiée si stase soutenue >= STASIS_DURATION_S (45 min)
+        Refonte 29/05 v3 — Detection par frequence du rituel V34 :
+        - Compte les V34_RELIEF_APPLIED STABILITE sur 24h
+        - Si > ATROPHY_V34_RELIEF_THRESHOLD (4) ET CROISSANCE.priv < 10
+          (= coma de la pulsion de croissance) -> publish_alarm
+        - Garde-fou constitutionnel : une vraie crise (CROISSANCE active)
+          ne declenche PAS l'alarme meme avec 10 V34/24h
         """
         try:
             from config import Config
@@ -135,76 +150,74 @@ class AtrophyMonitor:
 
         self._stats["checks"] += 1
 
+        # Si une alarme est active, on enchaine sur le coupe-circuit (Jaccard/TTL)
+        if self._alarm_active:
+            await self._check_burst_quality()
+            return
+
+        # Purge des reliefs > fenetre roulante (au cas ou check_balance
+        # est appele alors qu'aucun nouveau relief n'a tire entre temps)
+        self._purge_old_reliefs()
+
+        relief_threshold = getattr(Config, "ATROPHY_V34_RELIEF_THRESHOLD", 4)
+        n_reliefs = len(self._v34_relief_history)
+
+        if n_reliefs <= relief_threshold:
+            return  # Pas assez de cycles stereotypes
+
+        # Au-dela du seuil de compulsion : check CROISSANCE pour garde-fou
         try:
             from core.desire_engine import desire_engine
         except Exception as e:
             logger.debug(f"[ATROPHY] desire_engine import: {e}")
             return
 
-        stab = desire_engine.drives.get("STABILITE")
         crois = desire_engine.drives.get("CROISSANCE")
-        if not stab or not crois:
+        if not crois:
             return
-
-        stab_dep = stab.deprivation
         crois_dep = crois.deprivation
 
-        # Si une alarme est active, on enchaine sur le coupe-circuit (Jaccard/TTL)
-        if self._alarm_active:
-            await self._check_burst_quality()
-            return
+        crois_threshold = getattr(Config, "ATROPHY_CROISSANCE_MECHANICAL_ENTRY_THRESHOLD", 10.0)
+        if crois_dep >= crois_threshold:
+            return  # Garde-fou : CROISSANCE active, ce n'est pas de l'atrophie
 
-        # Sinon, Schmitt trigger : evaluer les conditions de stase
-        if self._stasis_started_at == 0.0:
-            # Pas en stase : verifier l'ENTREE (seuils stricts)
-            entry_stab = getattr(Config, "ATROPHY_STABILITE_HEGEMONIC_ENTRY_THRESHOLD", 80.0)
-            entry_crois = getattr(Config, "ATROPHY_CROISSANCE_MECHANICAL_ENTRY_THRESHOLD", 10.0)
-            if stab_dep > entry_stab and crois_dep < entry_crois:
-                # Entree en stase confirmee
-                self._stasis_started_at = time.time()
-                self._stats["stasis_detections"] += 1
-                self._log_event("stasis_detected", {
-                    "stab_deprivation": round(stab_dep, 2),
-                    "crois_deprivation": round(crois_dep, 2),
-                    "entry_thresholds": [entry_stab, entry_crois],
-                })
-            return
+        # Compulsion confirmee + coma de croissance -> alarme
+        await self._publish_alarm(n_reliefs, crois_dep)
 
-        # Deja en stase : verifier la SORTIE (seuils permissifs = hysteresis)
-        exit_stab = getattr(Config, "ATROPHY_STABILITE_HEGEMONIC_EXIT_THRESHOLD", 75.0)
-        exit_crois = getattr(Config, "ATROPHY_CROISSANCE_MECHANICAL_EXIT_THRESHOLD", 15.0)
-        if stab_dep < exit_stab or crois_dep > exit_crois:
-            # Rupture metabolique reelle (sortie de zone morte)
-            duration = time.time() - self._stasis_started_at
-            self._stats["stasis_breaks"] += 1
-            self._log_event("stasis_broken", {
-                "duration_s": round(duration, 1),
-                "stab_deprivation": round(stab_dep, 2),
-                "crois_deprivation": round(crois_dep, 2),
-                "exit_thresholds": [exit_stab, exit_crois],
-            })
-            self._stasis_started_at = 0.0
-            return
+    # ---- Handlers bus ----
 
-        # Toujours en stase dans la zone morte : verifier si duree atteinte
-        stasis_duration = getattr(Config, "ATROPHY_STASIS_DURATION_S", 2700)
-        elapsed = time.time() - self._stasis_started_at
-        if elapsed >= stasis_duration:
-            # Stase soutenue confirmee -> publier alarme
-            await self._publish_alarm(stab_dep, crois_dep)
+    async def _on_v34_relief(self, event: dict):
+        """Capte les V34_RELIEF_APPLIED. Empile timestamp si drive == STABILITE."""
+        drive = (event.get("drive") or "").upper()
+        if drive != "STABILITE":
+            return
+        self._v34_relief_history.append(time.time())
+        self._stats["v34_reliefs_observed"] += 1
+        # Purge a chaque insertion pour garder le deque borne
+        self._purge_old_reliefs()
+
+    def _purge_old_reliefs(self):
+        """Retire les reliefs plus vieux que ATROPHY_V34_RELIEF_WINDOW_S."""
+        try:
+            from config import Config
+            window = getattr(Config, "ATROPHY_V34_RELIEF_WINDOW_S", 86400)
+        except Exception:
+            window = 86400
+        cutoff = time.time() - window
+        while self._v34_relief_history and self._v34_relief_history[0] < cutoff:
+            self._v34_relief_history.popleft()
+            self._stats["v34_reliefs_purged"] += 1
 
     # ---- Mécanique interne ----
 
-    async def _publish_alarm(self, stab_dep: float, crois_dep: float):
+    async def _publish_alarm(self, n_reliefs: int, crois_dep: float):
         from config import Config
         dry_run = getattr(Config, "ATROPHY_DRY_RUN", True)
         duration = getattr(Config, "ATROPHY_ALARM_DURATION_S", 600)
+        window = getattr(Config, "ATROPHY_V34_RELIEF_WINDOW_S", 86400)
 
         self._alarm_active = True
         self._alarm_started_at = time.time()
-        # Reset timer de stase : apres expiration du TTL alarme, il faudra
-        # 45 min de nouvelle stase soutenue pour redeclencher.
-        self._stasis_started_at = 0.0
         self._win_old.clear()
         self._win_new.clear()
         self._stats["alarms_published"] += 1
@@ -212,7 +225,8 @@ class AtrophyMonitor:
             self._stats["would_boost_dry_run"] += 1
 
         self._log_event("alarm_published", {
-            "stab_deprivation": round(stab_dep, 2),
+            "n_reliefs_24h": n_reliefs,
+            "window_s": window,
             "crois_deprivation": round(crois_dep, 2),
             "duration_s": duration,
             "dry_run": dry_run,
@@ -224,7 +238,7 @@ class AtrophyMonitor:
                 await bus.publish("ATROPHY_ALARM", {
                     "target_agent": "_global",
                     "duration_s": duration,
-                    "stab_deprivation": stab_dep,
+                    "n_reliefs_24h": n_reliefs,
                     "crois_deprivation": crois_dep,
                 })
             except Exception as e:
@@ -329,7 +343,11 @@ class AtrophyMonitor:
 
     def get_stats(self) -> dict:
         """Snapshot statistique pour télémétrie / tests."""
-        return {**self._stats, "alarm_active": self._alarm_active}
+        return {
+            **self._stats,
+            "alarm_active": self._alarm_active,
+            "v34_relief_window_size": len(self._v34_relief_history),
+        }
 
 
 # Singleton accessible
