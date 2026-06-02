@@ -617,12 +617,16 @@ class TestD5SubjectDrift:
         # 2 keywords cites sur 3-4 minimum → coverage >= 50% → pas flag
         assert not d5_subject_drift(body, subject, "RESEARCH")
 
-    def test_tous_les_slots_couverts(self):
-        """D5 doit fonctionner pour TOUS les slots (vs D3 qui était limité)."""
+    def test_d5_techniques_oui_introspectifs_non(self):
+        """V16.6 : D5 (subject-drift LEXICAL) flag les slots TECHNIQUES mais EXEMPTE
+        les introspectifs (BULLETIN/FREE_TIME) — un bilan sincere ne recite pas les
+        mots de son sujet (loi de Goodhart). La derive y est gardee par le dialogue V16.5."""
         body = "x" * 200 + " contenu hors-sujet absolument generique"
         subject = "Architectures RAG GraphRAG MemWalker pour multi-agents"
-        for slot in ("CODE_REVIEW", "RESEARCH", "WORKSHOP", "CREATION", "BULLETIN"):
+        for slot in ("CODE_REVIEW", "RESEARCH", "WORKSHOP", "CREATION"):
             assert d5_subject_drift(body, subject, slot), f"D5 doit flag pour {slot}"
+        for slot in ("BULLETIN", "FREE_TIME"):
+            assert not d5_subject_drift(body, subject, slot), f"D5 doit etre exempte pour {slot}"
 
 
 class TestD5ReproductionInVivo:

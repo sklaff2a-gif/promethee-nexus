@@ -20,6 +20,15 @@ MIN_ROUNDS_BEFORE_CONSENSUS = 3
 # Longueur minimale du contenu d'un consensus pour qu'il soit considéré substantiel
 MIN_CONSENSUS_CONTENT_LENGTH = 100
 
+# --- LE GRADIENT (V1, 2026-06-01, atelier council 31/05) ---
+# Mesure la PENTE de convergence inter-agents pour distinguer un debat FERTILE
+# (divergence qui decroit, "le pont s'approche") d'un debat STERILE (divergence
+# figee haute, "l'echo"). Decouple la valeur d'un council du simple fait d'avoir
+# tenu N tours -> tue l'opium du q=1.0 sur max_rounds. Thermometre, PAS arbitre.
+_GRADIENT_MIN_ROUNDS = 3          # < 3 tours reels : trop court pour juger une pente (fusible)
+_GRADIENT_SLOPE_EPS = 0.05        # pente <= -eps : convergence nette -> fertile
+_GRADIENT_HIGH_DIVERGENCE = 0.6   # divergence finale >= 0.6 + pente plate -> sterile (echo)
+
 # --- Président évaluateur (architect) ---
 PRESIDENT_AGENT_NAME = "architect"
 MIN_ROUNDS_BEFORE_PRESIDENT = 2
@@ -1090,6 +1099,61 @@ class Council:
             "best_argument": best_arg,
         }
 
+    def _compute_gradient(self, consensus_reached: bool) -> Dict[str, Any]:
+        """LE GRADIENT (V1) — pente de convergence inter-agents sur la duree du debat.
+
+        Distingue un debat FERTILE (divergence qui decroit tour apres tour, "le pont
+        s'approche") d'un debat STERILE (divergence figee haute, "l'echo"). Sert a
+        decoupler le score d'un council du simple fait d'avoir tenu N tours.
+        Retourne {trajectory, slope, verdict in (fertile|sterile|n/a), rounds}.
+        Thermometre, PAS arbitre : il mesure, il ne tranche pas le debat.
+        """
+        # Contributions reelles par tour (exclut etudiant et avocat)
+        rounds: Dict[int, list] = {}
+        for e in self.transcript:
+            if e.get("is_student") or e.get("is_advocate"):
+                continue
+            rounds.setdefault(e["round"], []).append(e)
+
+        # Divergence moyenne inter-agents (1 - Jaccard des mots-cles) par tour
+        trajectory: List[float] = []
+        for r in sorted(rounds):
+            entries = rounds[r]
+            if len(entries) < 2:
+                continue
+            kws = [_extract_keywords(e.get("content", ""), top_n=10) for e in entries]
+            divs = []
+            for i in range(len(kws)):
+                for j in range(i + 1, len(kws)):
+                    union = kws[i] | kws[j]
+                    jacc = (len(kws[i] & kws[j]) / len(union)) if union else 0.0
+                    divs.append(1.0 - jacc)
+            if divs:
+                trajectory.append(sum(divs) / len(divs))
+
+        # Pente : delta normalise du premier au dernier tour mesure
+        n = len(trajectory)
+        slope = (trajectory[-1] - trajectory[0]) / (n - 1) if n >= 2 else 0.0
+
+        # Verdict + fusibles
+        if consensus_reached:
+            verdict = "n/a"                                   # consensus = immunite (il a conclu)
+        elif n < _GRADIENT_MIN_ROUNDS:
+            verdict = "n/a"                                   # fusible : trop court pour juger
+        elif slope <= -_GRADIENT_SLOPE_EPS:
+            verdict = "fertile"                               # le pont s'approche
+        elif trajectory and trajectory[-1] >= _GRADIENT_HIGH_DIVERGENCE:
+            verdict = "sterile"                               # echo : divergence figee haute
+        else:
+            verdict = "fertile"                               # bienveillant : on ne punit que la stagnation prouvee
+
+        return {
+            "trajectory": [round(d, 3) for d in trajectory],
+            "slope": round(slope, 4),
+            "verdict": verdict,
+            "rounds": n,
+        }
+
     async def run(self) -> Dict[str, Any]:
         """Exécute le débat multi-tours."""
         # Validation : au moins 2 participants
@@ -1343,11 +1407,21 @@ class Council:
         agent_entries = [e for e in self.transcript if not e.get("is_student") and not e.get("is_advocate")]
         best_entry = max(agent_entries, key=lambda e: e.get("score", 0)) if agent_entries else {}
 
+        gradient = self._compute_gradient(consensus_reached)
+        # Observabilite (2026-06-01) : le Gradient ne doit pas etre un capteur muet
+        # (travers des moniteurs morts). On journalise verdict + pente + trajectoire
+        # a chaque fin de debat pour pouvoir auditer ses decisions a posteriori.
+        logger.info(
+            f"[COUNCIL {self.council_id}] GRADIENT verdict={gradient['verdict']} "
+            f"slope={gradient['slope']} rounds={gradient['rounds']} "
+            f"trajectory={gradient['trajectory']}"
+        )
         result = {
             "status": status,
             "rounds_used": rounds_used,
             "transcript": self.transcript,
             "final_summary": final_summary,
+            "gradient": gradient,
             "scoring": {
                 "avg_score": round(avg_score, 2),
                 "best_agent": best_entry.get("agent", ""),

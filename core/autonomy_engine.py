@@ -2147,6 +2147,18 @@ class AutonomyEngine:
         if analysis["is_repetition"]:
             score -= 0.4
 
+        # LE GRADIENT (V1, 2026-06-01) — anti-opium council. Un debat STERILE
+        # (pente de convergence plate a divergence haute, cf council._compute_gradient)
+        # ne merite pas q=1.0 quoi que dise son resume : on plafonne la note pour que
+        # la frustration (DIP dopamine) soit reelle et que STABILITE ne soit pas
+        # faussement rassasiee. Un debat FERTILE/conclu (verdict != sterile) garde sa
+        # note. Retrocompat : un council sans champ 'gradient' n'est jamais penalise.
+        if intent == "COUNCIL_DEBATE":
+            gradient = response.get("gradient") or {}
+            if gradient.get("verdict") == "sterile":
+                _STERILE_Q_CAP = 0.3   # debat sterile : note plafonnee -> DIP reel
+                score = min(score, _STERILE_Q_CAP)
+
         return max(0.0, min(1.0, score))
 
     def _diagnose_failure(self, response: dict, quality_score: float, intent: str) -> str:
@@ -9451,6 +9463,17 @@ RAISON: <1 phrase courte>"""
         Retourne "" si aucun chunk pertinent, sinon un bloc formatte avec
         header d'autorite [SYSTEM OVERRIDE].
         """
+        # V15.9 (2026-06-01) — Aveuglement chirurgical du radar pour les slots
+        # introspectifs. Bug prouve in-vivo (BULLETIN 04:18, famine 359h) : un
+        # auto-bilan CITE ses routines du jour (CODE_REVIEW, EXPANSION_CODE...).
+        # Le radar prenait ces noms pour des intents techniques et injectait leur
+        # CODE -> Promethee derivait vers une analyse de main() au lieu de son
+        # bilan -> D5 subject drift -> note < 4 -> pas de closure -> famine.
+        # Un creneau d'introspection (bilan, temps libre) n'a aucun besoin du
+        # code source du moteur : on le rend aveugle au radar.
+        _INTROSPECTIVE_SLOTS = {"BULLETIN", "FREE_TIME"}
+        if slot in _INTROSPECTIVE_SLOTS:
+            return ""
         import re as _re
         try:
             from core.capabilities.source_code_indexer import indexer
@@ -10620,6 +10643,30 @@ RAISON: <1 phrase courte>"""
         # Normaliser response en dict
         if not isinstance(response, dict):
             response = {"status": "success", "result": str(response)} if response else {"status": "error", "result": "Dispatch echoue."}
+
+        # === V16.5 (2026-06-02) — Coupe-circuit anti-delire du dialogue introspectif ===
+        # Les prompts BULLETIN/FREE_TIME sont desormais des DIALOGUES (le Strategist-COO
+        # interpelle Promethee, cf school_schedule V16.5). Le 9B peut halluciner la suite
+        # (fausse replique Strategist/JM/Promethee). On scalpe ce delire AVANT persistance
+        # et evaluation, et on LOGUE la troncature = capteur du taux de derapage du modele
+        # (equivalent post-generation des stop_sequences Ollama, non branchables dans
+        # generate_content). Trio Claude/Gemini/JM.
+        try:
+            from core.school_schedule import (
+                truncate_hallucinated_dialogue, SLOT_BULLETIN, SLOT_FREE_TIME,
+            )
+            if slot in (SLOT_BULLETIN, SLOT_FREE_TIME) and response.get("result"):
+                _orig = str(response["result"])
+                _clean, _was_trunc = truncate_hallucinated_dialogue(_orig)
+                if _was_trunc:
+                    response["result"] = _clean
+                    logger.warning(
+                        f"[V16.5 COUPE-CIRCUIT] {slot}: faux dialogue tronque "
+                        f"({len(_orig)}c -> {len(_clean)}c)"
+                    )
+                    print(f"   ✂️ V16.5: {slot} a tente d'halluciner la suite du dialogue -> scalpe")
+        except Exception as _trunc_e:
+            logger.debug(f"[V16.5] coupe-circuit echoue: {_trunc_e}")
 
         # === V16 (2026-04-24) : Boucle de correction Sandbox ===
         # Si le livrable contient du code Python et le slot est code-centric,

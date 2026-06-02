@@ -294,6 +294,116 @@ def compute_creation_factuality(
     return (weighted, details)
 
 
+# ============================================================
+# V3.4 Factuality ANALYTIQUE (2026-05-31, Jean-Michel + Claude)
+# ============================================================
+# Slots discursifs/analytiques (RESEARCH, BULLETIN). Diagnostic du 31/05 :
+# ces slots tombaient dans un trou de routage (factuality=-1.0) -> jamais de
+# closure -> famine epistemique 17-19j. Et appliquer la V3.3 telle quelle les
+# affamerait autrement : V1 (anti-fuite-de-code) punit un cours *sur* l'AST.
+#
+# Trois piliers (cf diagnostic_famine_epistemique_2026_05_31) :
+#   - V1 NEUTRALISÉ : la technicité n'est pas un marqueur de verite ici.
+#   - V2 ASSOUPLI   : couverture des termes-cles active des 1 key-term.
+#   - PLANCHER DE SUBSTANCE : diversite lexicale (mots significatifs distincts /
+#     total), TOUJOURS actif -> jamais de bypass -1.0, et recale le farming
+#     (repetition -> peu d'uniques + faible diversite ; dilution -> diversite KO).
+
+# Mots-outils francais frequents : exclus du calcul de substance pour mesurer
+# la richesse du vocabulaire de CONTENU, pas le bruit fonctionnel.
+_FR_STOPWORDS = frozenset({
+    "les", "des", "une", "que", "qui", "pour", "dans", "avec", "sur", "par",
+    "pas", "plus", "son", "sa", "ses", "leur", "leurs", "mon", "ma", "mes",
+    "ton", "tes", "nos", "vos", "notre", "votre", "est", "sont", "ete", "etre",
+    "suis", "sommes", "etes", "avoir", "ont", "avait", "avais", "avons", "avez",
+    "cette", "ces", "cet", "ceci", "cela", "comme", "ainsi", "alors", "puis",
+    "donc", "car", "mais", "our", "tout", "tous", "toute", "toutes", "meme",
+    "autre", "autres", "chaque", "entre", "sans", "sous", "vers", "chez",
+    "aussi", "tres", "bien", "peu", "beaucoup", "moins", "deja", "encore",
+    "lui", "elle", "elles", "ils", "nous", "vous", "leurs", "selon", "afin",
+    "lorsque", "quand", "dont", "leur", "ne", "ni", "ou", "et", "de", "du",
+    "le", "la", "un", "au", "aux", "en", "se", "ce", "il", "on", "y",
+})
+
+_ANALYTICAL_VETO_THRESHOLD = 0.6   # coherent avec les autres vecteurs
+_SUBSTANCE_MIN_UNIQUE = 30         # K : mots significatifs distincts pour saturer la richesse
+_SUBSTANCE_MIN_DIVERSITY = 0.30    # R : ratio uniques/total pour saturer l'etalement
+# Itération 2 (31/05, test in-vivo) : un cours dense (502 mots distincts) recalé
+# à 0.40 car la consigne avait pour seul key-term un verbe capitalisé ("Complétez")
+# -> coverage=0. La SUBSTANCE est le pilier (preuve du travail cognitif fourni) ;
+# V2 est un gouvernail (affine le cap), jamais une ancre qui coule un bon cours.
+_V2_ANALYTICAL_WEIGHT = 1.0        # couverture = gouvernail (affine, ne plombe pas)
+_SUBSTANCE_WEIGHT = 2.0            # substance = PILIER (densité lexicale réelle)
+
+
+def _significant_words(content: str) -> List[str]:
+    """Mots de CONTENU (>=3 lettres, hors mots-outils), minuscules."""
+    raw = re.findall(r"[a-zàâäéèêëîïôöùûüçœ]+", (content or "").lower())
+    return [w for w in raw if len(w) >= 3 and w not in _FR_STOPWORDS]
+
+
+def compute_substance(content: str) -> Tuple[float, Dict]:
+    """Plancher de substance par diversite lexicale (anti-farming).
+
+    score in [0,1] = moyenne de :
+      - richness = min(unique / K, 1)        (volume de vocabulaire reel)
+      - spread   = min(diversity / R, 1)     (non-dilution : uniques/total)
+    Repetition -> peu d'uniques + diversite effondree -> score bas.
+    """
+    sig = _significant_words(content)
+    total = len(sig)
+    if total == 0:
+        return (0.0, {"unique": 0, "total": 0, "diversity": 0.0})
+    unique = len(set(sig))
+    diversity = unique / total
+    richness = min(unique / _SUBSTANCE_MIN_UNIQUE, 1.0)
+    spread = min(diversity / _SUBSTANCE_MIN_DIVERSITY, 1.0)
+    score = (richness + spread) / 2.0
+    return (score, {
+        "unique": unique, "total": total,
+        "diversity": round(diversity, 3),
+        "richness": round(richness, 3), "spread": round(spread, 3),
+    })
+
+
+def compute_analytical_factuality(
+    content: str, challenge: str
+) -> Tuple[float, Dict]:
+    """Vecteur de factualite pour slots discursifs/analytiques (RESEARCH/BULLETIN).
+
+    V1 neutralise (pas de tech_ratio). V2 couverture (des 1 key-term, poids 1.5).
+    Plancher de substance toujours actif (poids 1.0) -> jamais de bypass -1.0 sur
+    un vrai livrable. Retourne (score, details) ; -1.0 seulement si contenu vide.
+    """
+    if not content:
+        return (-1.0, {"reason": "no_content"})
+
+    scores: List[float] = []
+    weights: List[float] = []
+    details: Dict = {"vectors": {}}
+
+    # Plancher de substance — TOUJOURS actif
+    sub_score, sub_details = compute_substance(content)
+    scores.append(sub_score)
+    weights.append(_SUBSTANCE_WEIGHT)
+    details["vectors"]["substance"] = {**sub_details, "score": round(sub_score, 3)}
+
+    # V2 couverture — assoupli : actif des 1 key-term
+    key_terms = extract_key_terms(challenge)
+    if len(key_terms) >= 1:
+        coverage = compute_coverage(content, key_terms)
+        scores.append(coverage)
+        weights.append(_V2_ANALYTICAL_WEIGHT)
+        details["vectors"]["v2_coverage"] = {
+            "key_terms": key_terms, "score": round(coverage, 3),
+        }
+
+    weighted = sum(s * w for s, w in zip(scores, weights)) / sum(weights)
+    details["final_score"] = round(weighted, 3)
+    details["active_vectors"] = len(scores)
+    return (weighted, details)
+
+
 def compute_factuality_score(
     content: str, target_file: str, project_root: str
 ) -> Tuple[float, int, Dict]:

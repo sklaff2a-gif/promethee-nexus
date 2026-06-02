@@ -183,8 +183,9 @@ class TestPromptGeneration:
 
     def test_bulletin_prompt(self, isolate_schedule):
         prompt = isolate_schedule.get_slot_prompt(SLOT_BULLETIN)
-        assert "BULLETIN" in prompt
-        assert "auto-evaluation" in prompt.lower() or "accompli" in prompt.lower()
+        # V16.5 : le BULLETIN est devenu un DIALOGUE (le Strategist interpelle Promethee)
+        assert "Strategist" in prompt
+        assert "accompli" in prompt.lower()
 
     def test_sleep_prompt_empty(self, isolate_schedule):
         prompt = isolate_schedule.get_slot_prompt(SLOT_SLEEP)
@@ -590,7 +591,8 @@ class TestFreeTimeTracking:
 
     def test_free_time_prompt_includes_choice_instruction(self, isolate_schedule):
         prompt = isolate_schedule.get_slot_prompt(SLOT_FREE_TIME)
-        assert "CHOIX" in prompt
+        # V16.5 : l'invitation au choix passe par le dialogue du Strategist
+        assert "Choisis" in prompt or "envie de faire" in prompt
 
 
 # ── V2: API today summary (P0) ──────────────────────────────────────────

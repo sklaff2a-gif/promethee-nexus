@@ -68,6 +68,17 @@ _NARRATIVE_LENGTH_SKIP = frozenset({"BULLETIN", "CREATION", "RESEARCH"})
 D5_MIN_KEYWORDS = 3
 D5_COVERAGE_THRESHOLD = 0.30
 D5_MIN_KEYWORD_LEN = 4
+# V16.6 (2026-06-02) — Slots introspectifs exemptes du subject-drift LEXICAL.
+# D5 mesure la presence des mots du sujet dans le livrable. Sain pour le technique
+# (CODE_REVIEW : le fichier cite DOIT apparaitre) mais TOXIQUE pour un BULLETIN : un
+# vrai bilan introspectif ne recite pas les jetons "bilan"/"auto-evaluation", il DIT
+# sa frustration et ses notes. Plus le bilan est sincere, moins il couvre les mots
+# meta -> faux positif (loi de Goodhart, prouve par audit du crash-test 14:32 :
+# 0/5 keywords couverts sur un bilan authentique). La derive de ces slots est deja
+# gardee EN AMONT par le dialogue V16.5 ; le D5 lexical n'y est plus qu'un bruit
+# iatrogene. Meme frontiere que d3_target_drift (technique only). Cf
+# [[atelier-mutation-attention-2026-06-02]].
+D5_SKIP_SLOTS = frozenset({"BULLETIN", "FREE_TIME"})
 
 _STOP_WORDS = frozenset({
     # FR — articles, prepositions, conjonctions, auxiliaires
@@ -146,6 +157,8 @@ def d5_subject_drift(body: str, subject: str, slot: str) -> bool:
       - Skip si body trop court (< 100 chars — autre flag actif)
       - Skip si subject vide ou None
     """
+    if slot in D5_SKIP_SLOTS:
+        return False  # introspectif : pas de cible lexicale, derive gardee par V16.5
     if not subject or not body or len(body) < 100:
         return False
     keywords = _extract_subject_keywords(subject)

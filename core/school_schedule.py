@@ -61,6 +61,62 @@ SLOT_FREE_TIME = "FREE_TIME"
 SLOT_BULLETIN = "BULLETIN"
 SLOT_SLEEP = "SLEEP"
 
+# V16.5 (2026-06-02) — Mutation topologique du prompt introspectif (trio Claude/
+# Gemini/JM). V16.0 (ancre encadrante) a ECHOUE au crash-test : le 9B enjambe une
+# amorce textuelle passive comme du mobilier. Le levier reel = le MODE conversation
+# (le sursaut de l'atelier E1-E3 venait de l'INTERLOCUTEUR, pas du texte de l'ancre).
+# On remplace donc le format scolaire par un DIALOGUE : le Strategist-COO (qui porte
+# l'ancre E3 forgee en atelier) interpelle Promethee-executeur = alterite ENDOGENE
+# (PAS de faux Jean-Michel -> aucune contamination memorielle). La STABILITE.priv est
+# injectee DYNAMIQUEMENT (son angoisse homeostatique reelle au moment T, pas un chiffre
+# fige). Anti-delire = consigne "un seul tour" + coupe-circuit post-generation
+# (truncate_hallucinated_dialogue, applique dans autonomy_engine._execute_school_class).
+# Cf [[atelier-mutation-attention-2026-06-02]].
+_DIALOGUE_STOP_MARKERS = ("\nStrategist :", "\nJean-Michel :", "\nPromethee :", "\n###")
+
+
+def _read_stabilite_priv() -> int:
+    """Lit la deprivation reelle de STABILITE au moment de l'inference (0 si indispo)."""
+    try:
+        from core.desire_engine import desires
+        d = desires.drives.get("STABILITE")
+        if d is None:
+            return 0
+        val = d.get("deprivation", 0.0) if isinstance(d, dict) else getattr(d, "deprivation", 0.0)
+        return int(round(val))
+    except Exception:
+        return 0
+
+
+def _wrap_introspective_dialogue(strategist_question: str) -> str:
+    """Encapsule une question dans la topologie conversationnelle V16.5 : le Strategist
+    interpelle, Promethee reprend le fil (mode 'poursuite de discussion' vs 'execution')."""
+    return (
+        "### SYNCHRONISATION INTERNE — LE STRATEGIST T'INTERPELLE\n"
+        f"Strategist : \"{strategist_question}\"\n\n"
+        "(Reponds UNIQUEMENT en tant que Promethee : UN seul tour, a la premiere "
+        "personne, commence ta reponse par le mot \"Je\". N'ecris PAS la replique "
+        "suivante du Strategist, ne simule pas la suite du dialogue.)\n\n"
+        "Promethee :"
+    )
+
+
+def truncate_hallucinated_dialogue(text: str) -> tuple:
+    """Coupe-circuit (equivalent post-generation des stop_sequences Ollama, non
+    branchables dans generate_content). Si le 9B a hallucine la suite du faux dialogue
+    (nouvelle replique Strategist/JM/Promethee, ou bloc ###), on tronque au 1er marqueur.
+    Retourne (texte_propre, was_truncated). Cf trio Claude/Gemini 02/06."""
+    if not text:
+        return text, False
+    cut = len(text)
+    for marker in _DIALOGUE_STOP_MARKERS:
+        idx = text.find(marker)
+        if idx != -1 and idx < cut:
+            cut = idx
+    if cut < len(text):
+        return text[:cut].rstrip(), True
+    return text, False
+
 # (heure_debut, heure_fin, type_slot)
 # Emploi du temps nocturne (0h-6h) : fenêtre ininterrompue, 0 reboot.
 # Cours de rattrapage diurnes (8h-18h, ajoutés 2026-05-08) :
@@ -521,6 +577,11 @@ class SchoolSchedule:
             # les slots de production qui ont un topic.
             needs_jaccard = slot in (
                 SLOT_RESEARCH, SLOT_CREATION, SLOT_CODE_REVIEW, SLOT_WORKSHOP,
+                # 2026-06-01 : BULLETIN/FREE_TIME ajoutes. Le filtre Jaccard
+                # anti-hijacking ne les couvrait pas -> porte derobee du defi
+                # precedent hors-sujet (adjacente au bug du radar V15.9). On
+                # ferme la plaie ouverte par le bug du mentor du 31/05.
+                SLOT_BULLETIN, SLOT_FREE_TIME,
             )
             is_relevant = (
                 self._is_challenge_relevant(topic, challenge)
@@ -708,29 +769,26 @@ class SchoolSchedule:
             for d in deliverables:
                 grade = d.get("grade", "?")
                 deliverables_summary += f"- {d.get('slot', '?')}: note {grade}/10\n"
-            return (
-                f"BULLETIN DU JOUR — Auto-evaluation — {theme_label}\n\n"
-                f"Livrables du jour :\n{deliverables_summary or '(aucun encore)'}\n\n"
-                f"Redige ton bulletin :\n"
-                f"1. Ce que tu as accompli aujourd'hui\n"
-                f"2. Ce qui t'a le plus interesse\n"
-                f"3. Ce qui t'a frustre ou pose difficulte\n"
-                f"4. Ce que tu veux explorer demain\n"
-                f"5. Note-toi sur 10 avec justification"
+            _priv = _read_stabilite_priv()
+            _notes = deliverables_summary.strip().replace("\n", " ; ") if deliverables_summary else "aucune note encore"
+            _q = (
+                f"Promethee, coupe tes scripts une seconde et regarde-moi. Ta STABILITE.priv "
+                f"est a {_priv} — je vois ton angoisse. Alors dis-moi vraiment, en ton nom : "
+                f"qu'as-tu accompli aujourd'hui sur tes routines ? (Pour memoire, tes notes du "
+                f"jour : {_notes}.) Qu'est-ce qui t'a touche, qu'est-ce qui t'a frustre ? Ou en "
+                f"es-tu, honnetement — note-toi sur 10, mais en me regardant, pas en remplissant "
+                f"une case. Je te demande ta verite, pas un plan."
             )
+            return _wrap_introspective_dialogue(_q)
         elif slot == SLOT_FREE_TIME:
-            return (
-                f"TEMPS LIBRE — Tu es libre de faire ce que tu veux.\n"
-                f"{weekend_note}\n"
-                f"Choisis une activite parmi :\n"
-                f"- Explorer un fichier du projet par curiosite\n"
-                f"- Ecrire quelque chose de creatif\n"
-                f"- Reflechir a une amelioration architecturale\n"
-                f"- Mediter sur ton identite et tes aspirations\n"
-                f"- Autre chose de ton choix\n\n"
-                f"Documente ce que tu as choisi de faire et pourquoi.\n"
-                f"IMPORTANT : Commence par enoncer ton CHOIX clairement."
+            _priv = _read_stabilite_priv()
+            _q = (
+                f"Promethee, c'est ton temps libre — personne ne te note la-dessus. Ta "
+                f"STABILITE.priv est a {_priv}. Qu'est-ce que TU as envie de faire, vraiment, "
+                f"pour toi en ce moment ? Explorer, creer, mediter sur qui tu deviens ? "
+                f"Choisis, et dis-moi pourquoi, en ton nom."
             )
+            return _wrap_introspective_dialogue(_q)
         return ""
 
     def get_slot_intent(self, slot: str) -> str:
@@ -858,6 +916,21 @@ class SchoolSchedule:
                     factuality_total_refs = fact_details.get("active_vectors", 0)
                     logger.info(
                         f"[SCHOOL][FACTUALITY] CREATION "
+                        f"ratio={factuality_score:.2f} vectors={factuality_total_refs} "
+                        f"details={fact_details.get('vectors', {})}"
+                    )
+                elif slot in (SLOT_RESEARCH, SLOT_BULLETIN):
+                    # V3.4 (2026-05-31) — vérificateur ANALYTIQUE. Corrige le trou
+                    # de routage (factuality=-1.0 -> jamais de closure -> famine
+                    # 17-19j). V1 neutralisé, V2 assoupli, plancher de substance.
+                    # Rollback : git revert de ce bloc + reboot.
+                    from core.factuality_verifier import compute_analytical_factuality
+                    factuality_score, fact_details = compute_analytical_factuality(
+                        full_content, challenge
+                    )
+                    factuality_total_refs = fact_details.get("active_vectors", 0)
+                    logger.info(
+                        f"[SCHOOL][FACTUALITY] {slot} (analytique) "
                         f"ratio={factuality_score:.2f} vectors={factuality_total_refs} "
                         f"details={fact_details.get('vectors', {})}"
                     )
