@@ -44,6 +44,13 @@ _SLOT_PATTERNS = {
 }
 _CATCH_ALL_SLOT = "*"
 
+# Créneaux à vocation introspective PROPRE (sujet auto-généré : « rédige ton
+# bilan », « temps libre »). Ils ne doivent JAMAIS hériter d'un défi/direction
+# générique du catch-all "*" — fuite prouvée in-vivo 31/05/2026 : un défi de
+# code rangé dans "*" était ramassé par un BULLETIN -> hors-sujet -> D5 flag ->
+# note < 4 -> famine. Ces slots ne consomment QUE le ciblage explicite sur eux.
+_SELF_SUBJECT_SLOTS = frozenset({"BULLETIN", "FREE_TIME"})
+
 
 def _extract_target_slot(text: str) -> str:
     """Identifie le slot cible mentionné dans une direction de mentor.
@@ -518,7 +525,8 @@ class Mentor:
             d = self._pending_directions.pop(slot)
             self._save()
             return d
-        if _CATCH_ALL_SLOT in self._pending_directions:
+        # Fix 31/05 : pas de fallback catch-all pour les créneaux auto-sujet.
+        if slot not in _SELF_SUBJECT_SLOTS and _CATCH_ALL_SLOT in self._pending_directions:
             d = self._pending_directions.pop(_CATCH_ALL_SLOT)
             self._save()
             return d
@@ -533,7 +541,8 @@ class Mentor:
             c = self._pending_challenges.pop(slot)
             self._save()
             return c
-        if _CATCH_ALL_SLOT in self._pending_challenges:
+        # Fix 31/05 : pas de fallback catch-all pour les créneaux auto-sujet.
+        if slot not in _SELF_SUBJECT_SLOTS and _CATCH_ALL_SLOT in self._pending_challenges:
             c = self._pending_challenges.pop(_CATCH_ALL_SLOT)
             self._save()
             return c
