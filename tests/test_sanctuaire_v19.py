@@ -112,3 +112,40 @@ class TestCap:
         net.dream_consolidation()
         incub = [k for k, s in net.synapses.items() if s.get("is_incubated")]
         assert len(incub) <= 2  # cap respecte : seules les 2 plus fortes gardent le passeport
+
+
+class TestMicroDopage:
+    def test_ebauche_incubee_dopee(self, net):
+        net.nodes = {"n0": _make_node("c0"), "n1": _make_node("c1")}
+        _syn(net, "n0->n1", "n0", "n1", 0.20, 15)   # incubee immature
+        net._last_dream_time = time.time() - 1        # decay negligeable
+        net.dream_consolidation()
+        # +0.08 de pousse (decay/4 negligeable) -> ~0.28
+        assert net.synapses["n0->n1"]["weight"] > 0.26
+
+    def test_tissu_sauvage_non_dope(self, net):
+        net.nodes = {"n0": _make_node("c0"), "n1": _make_node("c1")}
+        _syn(net, "n0->n1", "n0", "n1", 0.20, 3)    # formation faible -> NON incubee
+        net._last_dream_time = time.time() - 1
+        net.dream_consolidation()
+        # pas de passeport -> pas de dopage : le poids ne monte pas
+        assert net.synapses.get("n0->n1", {}).get("weight", 1.0) <= 0.21
+
+    def test_verrou_de_retenue_exclusif(self, net):
+        net.nodes = {"n0": _make_node("c0"), "n1": _make_node("c1")}
+        _syn(net, "n0->n1", "n0", "n1", 0.45, 15)   # incubee, proche maturite
+        net._last_dream_time = time.time() - 1
+        net.dream_consolidation()
+        w = net.synapses["n0->n1"]["weight"]
+        # 0.45 + 0.08 = 0.53 ; PAS de x1.05 en plus (mutuellement exclusif -> sinon 0.556)
+        assert 0.52 <= w <= 0.54
+
+    def test_au_dela_de_05_passe_au_x105(self, net):
+        net.nodes = {"n0": _make_node("c0"), "n1": _make_node("c1")}
+        # deja mature (0.6) ET formation elevee : la douane revoque (w>=0.5),
+        # le dopage ne s'applique pas, le x1.05 natif prend le relais.
+        _syn(net, "n0->n1", "n0", "n1", 0.60, 15)
+        net._last_dream_time = time.time() - 1
+        net.dream_consolidation()
+        assert net.synapses["n0->n1"]["is_incubated"] is False
+        assert net.synapses["n0->n1"]["weight"] > 0.60   # x1.05 applique

@@ -94,6 +94,7 @@ INCUBATION_FORMATION_THRESHOLD = 10   # passeport des formation_count >= 10
 INCUBATION_DECAY_DIVISOR = 4          # decay /4 pour les ebauches incubees
 INCUBATION_MATURITY_WEIGHT = 0.5      # w >= 0.5 -> mature, perd le passeport
 INCUBATION_CAP = 3000                 # max synapses incubees (15% de MAX_SYNAPSES)
+INCUBATION_BOOST = 0.08               # Phase B : +epsilon/reve tant que w < maturite
 
 MAX_PRUNE_RATIO = 0.05            # Max 5% du réseau purgé par dream (fallback)
 ADAPTIVE_PRUNE_RATIO = 0.98       # Pruning adaptatif : 98% du taux de création
@@ -2536,7 +2537,15 @@ class SynapticNetwork:
         # 4. CONSOLIDATION DES FORTES
         promoted = 0
         for syn in self.synapses.values():
-            if syn["weight"] >= 0.5:
+            # 4a. V19.0 Phase B — Micro-dopage onirique : pousse passive des
+            # ebauches incubees encore immatures (+INCUBATION_BOOST/reve). Verrou
+            # de retenue : des que w >= maturite, l'injection CESSE et le relais
+            # passe a la loi d'auto-renforcement native (x1.05). Mutuellement
+            # exclusif -> jamais de double-bonus dans un meme tick.
+            if syn.get("is_incubated") and syn["weight"] < INCUBATION_MATURITY_WEIGHT:
+                syn["weight"] = min(1.0, syn["weight"] + INCUBATION_BOOST)
+                report["incubation_doped"] = report.get("incubation_doped", 0) + 1
+            elif syn["weight"] >= 0.5:
                 syn["weight"] = min(1.0, syn["weight"] * 1.05)
                 report["strengthened"] += 1
             # 4b. PROMOTION : temporal fort → hebbian (apprentissage prouvé par l'usage)
