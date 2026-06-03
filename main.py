@@ -2149,9 +2149,29 @@ async def force_school_routine(payload: dict):
     original_get_prompt = schedule.get_slot_prompt
 
     def _forced_slot_info():
+        # V17.2 (2026-06-03) — Fix du vehicule de test : target_file DOIT etre
+        # expose au TOP-LEVEL de info. C'est la que _build_v15_school_context le
+        # lit (cf autonomy_engine ~9516 : "la verite est au top-level de info").
+        # Sans ca, le RAG V15.3 tournait a blanc (target_file='') et injectait du
+        # code CROSS-FILE parasite -> le 9B citait une fonction etrangere (ex
+        # _get_reddit) -> veto Bloom V4.2 -> generation annulee. De plus, si aucun
+        # fichier n'est fourni, on tire le sujet DETERMINISTE du jour (force
+        # organique : le scheduler designe le fichier via le hash, pas un choix
+        # souffle).
+        _tf = target_file
+        if not _tf:
+            try:
+                _tf = schedule.get_subject_for_slot(slot).get("target_file", "")
+            except Exception:
+                _tf = ""
         return {
             "slot": slot,
-            "subject": {"target_file": target_file, "topic": topic},
+            # V17.2 : "subject" DOIT etre un STRING (le topic), aligne sur le
+            # get_current_slot_info naturel (school_schedule). Du code aval fait
+            # subject.strip() -> un dict ici levait AttributeError une fois le
+            # RAG debloque (le pipeline avance plus loin qu'avant).
+            "subject": topic,
+            "target_file": _tf,
             "topic": topic,
             "is_playground": False,
         }

@@ -53,6 +53,41 @@ _IGNORE_NAMES = frozenset({
 })
 
 
+# V17.3 (2026-06-03) — Elargissement du spectre lexical. Un audit de code cite
+# legitimement des CLASSES et des CONSTANTES globales, pas seulement des `def`.
+# Sans ca, GrimoireWriter / GRIMOIRE_DIR (reels) passaient pour des hallucinations.
+_CLASS_PATTERN = re.compile(r'class\s+([A-Za-z_][A-Za-z0-9_]*)')
+_CONST_NAME_PATTERN = re.compile(r'^[A-Z_][A-Z0-9_]{2,}$')
+_CONST_ASSIGN_PATTERN = re.compile(r'^\s*([A-Z_][A-Z0-9_]{2,})\s*[:=]', re.M)
+
+# V17.3 — Scalpel temporel. Marqueurs de sections PROSPECTIVES d'un livrable
+# (suggestions / ameliorations / plan d'action / refactoring...). Les symboles
+# cites APRES ces marqueurs sont des propositions FUTURES — les valider contre
+# le passe du fichier est un faux positif structurel (l'aveuglement temporel).
+_PROSPECTIVE_MARKERS = re.compile(
+    r'(?im)^\s*#{0,4}\s*(?:\d+[.)]\s*)?\**\s*'
+    r'(?:suggestion|am[eé]lioration|recommandation|piste|refactor|'
+    r'plan\s+d|proposition|correctif|corrections?\s+propos|'
+    r'a\s+(?:faire|implementer|corriger)|todo|next\s+step)'
+)
+
+
+def _slice_prospective(text: str) -> str:
+    """V17.3 — coupe le livrable au 1er marqueur de section prospective.
+
+    La factualite STRICTE ne porte que sur l'analyse de l'EXISTANT : le futur du
+    code (propose en 'suggestions') n'a pas a etre valide contre le passe du
+    fichier. Garde-fou : on ne coupe que s'il reste un minimum d'analyse en amont
+    (>80 chars), pour ne JAMAIS transformer un livrable entier en factualite vide.
+    """
+    if not text:
+        return text
+    m = _PROSPECTIVE_MARKERS.search(text)
+    if m and m.start() > 80:
+        return text[:m.start()]
+    return text
+
+
 def extract_references(content: str) -> Dict[str, List]:
     """Extrait les references structurelles d'un livrable.
 
@@ -112,9 +147,23 @@ def verify_against_file(
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 real_funcs.add(node.name)
+            elif isinstance(node, ast.ClassDef):  # V17.3 : les classes sont reelles
+                real_funcs.add(node.name)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):  # V17.3 : constantes
+                _targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for tgt in _targets:
+                    if isinstance(tgt, ast.Name) and _CONST_NAME_PATTERN.match(tgt.id):
+                        real_funcs.add(tgt.id)
+            elif isinstance(node, ast.arg):  # V17.3.1 : parametres (name, description...)
+                if len(node.arg) >= 3 and node.arg not in ("self", "cls"):
+                    real_funcs.add(node.arg)
     except SyntaxError:
         # Fallback regex : les fichiers non-python ou syntaxe cassee
         for m in _DEF_PATTERN.finditer(source):
+            real_funcs.add(m.group(1))
+        for m in _CLASS_PATTERN.finditer(source):       # V17.3 : classes
+            real_funcs.add(m.group(1))
+        for m in _CONST_ASSIGN_PATTERN.finditer(source):  # V17.3 : constantes
             real_funcs.add(m.group(1))
 
     line_refs = refs.get("line_numbers", [])
@@ -422,9 +471,16 @@ def compute_factuality_score(
     else:
         target_path = os.path.join(project_root, target_file)
 
-    refs = extract_references(content)
+    # V17.3 — Scalpel temporel : la factualite STRICTE ne porte que sur
+    # l'analyse de l'EXISTANT (diagnostic). Les sections prospectives
+    # (suggestions / plan d'action / refactoring) citent des symboles FUTURS
+    # legitimes — on les tronque avant l'extraction pour ne pas les compter
+    # comme des hallucinations (faux positif structurel, cf V17.3).
+    analysed = _slice_prospective(content)
+    refs = extract_references(analysed)
     true_refs, total_refs, details = verify_against_file(refs, target_path)
 
+    details["sliced_prospective"] = bool(len(analysed) < len(content))
     details["refs_extracted"] = refs
     details["true_refs"] = true_refs
 

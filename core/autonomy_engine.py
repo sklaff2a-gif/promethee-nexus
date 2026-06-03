@@ -10916,7 +10916,14 @@ RAISON: <1 phrase courte>"""
                             zero_pen = int(getattr(_Cfg, "SCHOOL_ACTION_BONUS_ZERO_PENALTY", 2))
                             gaming_pen = int(getattr(_Cfg, "SCHOOL_ACTION_BONUS_GAMING_PENALTY", 2))
                             action_bonus = min(bonus_max, n_exec)
-                            if n_exec == 0:
+                            # V17.4 : le code cible est deja injecte dans le prompt
+                            # (V17.1 fournit le fichier d'office) -> exiger un !read
+                            # serait redondant. On ne punit pas son absence quand le
+                            # fichier est resolu dans le contexte. Le bonus +n_exec
+                            # reste (si le 9B explore quand meme) ; seul le malus
+                            # d'inaction (-zero_pen) est neutralise.
+                            _code_already_provided = bool(info.get("target_file"))
+                            if n_exec == 0 and not _code_already_provided:
                                 action_bonus -= zero_pen
                             action_bonus -= gaming_pen * n_rej
                             logic_pen = compute_logic_score(action_trace.get("sequence", []))

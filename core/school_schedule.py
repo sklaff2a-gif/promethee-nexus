@@ -150,6 +150,18 @@ def truncate_code_review_dialogue(text: str) -> tuple:
         return text[:cut].rstrip(), True
     return text, False
 
+
+# ---------------------------------------------------------------------------
+# V17.1 (2026-06-03) — Frontiere "fichier court / gros" pour _read_file_for_review.
+# Sous CES DEUX seuils : code INTEGRAL injecte (vraie matiere a auditer -> F5).
+# Au-dela : squelette de signatures (garde-fou du contexte 8192 tokens de l'agent
+# security). Double-cap (lignes ET chars) : une ligne longue (data/JSON inline)
+# saturerait les tokens tout en passant le seuil de lignes. Motivation : une fois
+# la derive tuee par la V17.0, qwen2.5-coder REFUSAIT d'auditer le squelette
+# ("code partiel/incomplet") au lieu d'inventer (graine D5). Il lui faut du corps.
+CODE_REVIEW_FULL_MAX_LINES = 300
+CODE_REVIEW_FULL_MAX_CHARS = 10000
+
 # (heure_debut, heure_fin, type_slot)
 # Emploi du temps nocturne (0h-6h) : fenêtre ininterrompue, 0 reboot.
 # Cours de rattrapage diurnes (8h-18h, ajoutés 2026-05-08) :
@@ -550,17 +562,30 @@ class SchoolSchedule:
         return 1.0
 
     def _read_file_for_review(self, target: str, max_lines: int = 80) -> str:
-        """Lit le fichier reel et extrait les signatures (classes, fonctions, lignes cles).
+        """Lit le fichier reel pour le prompt CODE_REVIEW (anti-hallucination).
 
-        Injecte dans le prompt pour empecher l'hallucination.
+        V17.1 (2026-06-03) : pour les fichiers COURTS (<= CODE_REVIEW_FULL_MAX_LINES
+        lignes ET <= CODE_REVIEW_FULL_MAX_CHARS chars), injecte le CODE INTEGRAL
+        (corps inclus, numerotation consecutive) — le modele a enfin de la vraie
+        matiere a auditer (factualite F5). Le squelette de signatures SEUL faisait
+        REFUSER qwen2.5-coder ("code partiel/incomplet") une fois la derive tuee
+        par la V17.0. Pour les GROS fichiers : fallback sur le squelette de
+        signatures (garde-fou du contexte 8192 tokens de l'agent security).
         """
         try:
             filepath = os.path.join(_PROJECT_ROOT, target)
             if not os.path.exists(filepath):
                 return f"# FICHIER INTROUVABLE : {target}"
             with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                lines = f.readlines()
+                content = f.read()
+            lines = content.splitlines()
 
+            # V17.1 : fichier COURT -> code INTEGRAL consecutif (vraie matiere)
+            if (len(lines) <= CODE_REVIEW_FULL_MAX_LINES
+                    and len(content) <= CODE_REVIEW_FULL_MAX_CHARS):
+                return "\n".join(f"L{i}: {line}" for i, line in enumerate(lines, 1))
+
+            # GROS fichier -> squelette de signatures (fallback herite, garde-fou)
             # Extraire : imports, classes, fonctions, lignes avec except/return/raise
             important = []
             for i, line in enumerate(lines, 1):
