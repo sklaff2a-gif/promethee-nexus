@@ -341,6 +341,92 @@ class SynapticNetwork:
 
         return {"purged_nodes": purged_nodes, "purged_synapses": purged_synapses}
 
+    def cognitive_probe(self, program: Dict[str, List[str]]) -> Dict[str, Any]:
+        """V18.0 (2026-06-03) — Sonde de gravure (READ-ONLY, ne modifie RIEN).
+
+        Mesure l'empreinte synaptique des concepts fondamentaux (le 'programme
+        scolaire' de l'apprentissage en force). Pour chaque matiere (nom -> liste
+        de mots-cles), agrege le cluster de noeuds dont le concept contient un
+        mot-cle, puis lit l'etat de leurs synapses :
+          - weight (l'escalier 0.08->0.5->1.0)
+          - formation_count (compteur de repetitions ; >=20 = promu hebbian)
+          - decay_risk (jours avant la mort au seuil PRUNING_THRESHOLD)
+        Tableau de bord pour piloter la repetition espacee (Ebbinghaus/Anki)
+        au lieu de repeter dans le vide.
+        """
+        now = time.time()
+        days_since_dream = max(0.0, (now - self._last_dream_time) / 86400.0)
+        report: Dict[str, Any] = {
+            "timestamp": now,
+            "days_since_last_dream": round(days_since_dream, 2),
+            "decay_per_day": SYNAPSE_DECAY_PER_DAY,
+            "death_threshold": PRUNING_THRESHOLD,
+            "consolidation_floor": 0.5,
+            "matieres": {},
+        }
+
+        for matiere, keywords in (program or {}).items():
+            kws = [k.strip().lower() for k in (keywords or []) if k and k.strip()]
+            cluster_ids = [
+                nid for nid, node in self.nodes.items()
+                if any(kw in node.get("concept", "") for kw in kws)
+            ]
+            if not cluster_ids:
+                report["matieres"][matiere] = {
+                    "statut": "absent", "keywords": kws, "n_nodes": 0,
+                    "n_synapses": 0, "weight_max": 0.0, "weight_mean": 0.0,
+                    "formation_total": 0, "formation_max": 0,
+                    "jours_avant_mort": 0.0, "decay_accumule": 0.0,
+                    "concepts_exemples": [],
+                }
+                continue
+
+            cid_set = set(cluster_ids)
+            cluster_syn = [
+                syn for syn in self.synapses.values()
+                if syn["source"] in cid_set or syn["target"] in cid_set
+            ]
+            weights = [s["weight"] for s in cluster_syn]
+            formations = [s["formation_count"] for s in cluster_syn]
+            last_str = max(
+                (s.get("last_strengthened", 0.0) for s in cluster_syn), default=0.0
+            )
+            w_max = max(weights) if weights else 0.0
+            w_mean = round(sum(weights) / len(weights), 3) if weights else 0.0
+            f_max = max(formations) if formations else 0
+
+            if w_max < PRUNING_THRESHOLD:
+                statut = "fragile"
+            elif w_max < 0.5:
+                statut = "en_gravure"
+            elif f_max >= 20:
+                statut = "grave"
+            else:
+                statut = "acquis"
+
+            report["matieres"][matiere] = {
+                "statut": statut,
+                "keywords": kws,
+                "n_nodes": len(cluster_ids),
+                "n_synapses": len(cluster_syn),
+                "weight_max": round(w_max, 3),
+                "weight_mean": w_mean,
+                "formation_total": sum(formations) if formations else 0,
+                "formation_max": f_max,
+                "jours_depuis_renfort": (
+                    round((now - last_str) / 86400.0, 2) if last_str else None
+                ),
+                "jours_avant_mort": round(
+                    max(0.0, (w_max - PRUNING_THRESHOLD) / SYNAPSE_DECAY_PER_DAY), 1
+                ),
+                "decay_accumule": round(SYNAPSE_DECAY_PER_DAY * days_since_dream, 3),
+                "concepts_exemples": [
+                    self.nodes[c].get("concept", "") for c in cluster_ids[:5]
+                ],
+            }
+
+        return report
+
     # --- Publication delta temps reel ---
 
     def _publish_delta(self, change_type: str, data: dict):

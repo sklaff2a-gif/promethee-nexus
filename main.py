@@ -2103,6 +2103,45 @@ async def school_deliverable(filename: str):
         return {"error": str(e)}
 
 
+# V18.0 (2026-06-03) — Programme d'apprentissage en force : les bases a graver
+# (graines des ateliers de la semaine). Mots-cles -> clusters de noeuds synaptiques.
+# A figer/ajuster avec JM apres le 1er scan a blanc.
+COGNITIVE_PROGRAM = {
+    "chaos_materiau": ["chaos", "materiau", "matiere"],
+    "chute_erreur_donnee": ["chute", "erreur", "nociception", "donnee"],
+    "gradient_pente": ["pente", "gradient", "divergence", "convergence"],
+    "audace": ["audace", "oser", "audacieux"],
+    "curiosite_positive": ["curiosite", "exploration", "nouveaute"],
+    "creativite": ["creativite", "creation", "imaginer", "imagination"],
+    "axialisateur_coherence": ["axialisateur", "axiome", "coherence"],
+    "alterite_miroir": ["alterite", "miroir", "relation", "autre"],
+}
+
+
+@app.get("/api/cognitive/probe")
+async def cognitive_probe_endpoint():
+    """V18.0 (2026-06-03) — Sonde de gravure (READ-ONLY). Empreinte synaptique
+    des concepts fondamentaux du programme d'apprentissage en force : poids
+    (escalier 0.08->0.5->1.0), formation_count, risque de decay. Tableau de bord
+    de la repetition espacee (Ebbinghaus/Anki)."""
+    try:
+        from core.synaptic_network import SynapticNetwork
+        return SynapticNetwork().cognitive_probe(COGNITIVE_PROGRAM)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+@app.post("/api/cognitive/probe", dependencies=[Depends(verify_token)])
+async def cognitive_probe_custom(payload: dict):
+    """V18.0 — variante avec programme custom : body {program: {nom: [mots-cles]}}."""
+    try:
+        from core.synaptic_network import SynapticNetwork
+        program = (payload or {}).get("program") or COGNITIVE_PROGRAM
+        return SynapticNetwork().cognitive_probe(program)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
 @app.post("/api/force/school-routine", dependencies=[Depends(verify_token)])
 async def force_school_routine(payload: dict):
     """V16 (2026-04-24) — Force une routine scolaire hors creneau.
