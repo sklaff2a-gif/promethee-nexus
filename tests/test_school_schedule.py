@@ -166,7 +166,10 @@ class TestPromptGeneration:
     def test_code_review_prompt_not_empty(self, isolate_schedule):
         prompt = isolate_schedule.get_slot_prompt(SLOT_CODE_REVIEW)
         assert len(prompt) > 50
-        assert "FICHIER" in prompt
+        # V17.0 (2026-06-03) : le format scolaire est remplace par le dialogue
+        # NeuralCompiler. Le prompt mentionne toujours le fichier a auditer.
+        assert "fichier" in prompt.lower()
+        assert "NeuralCompiler" in prompt
 
     def test_research_prompt_contains_subject(self, isolate_schedule):
         prompt = isolate_schedule.get_slot_prompt(SLOT_RESEARCH)
@@ -438,7 +441,9 @@ class TestClosedLoop:
         # FIX 2026-04-12: le defi est maintenant injecte comme CONTRAINTE SECONDAIRE
         # pour eviter qu'il n'ecrase le sujet du jour
         assert "CONTRAINTE SECONDAIRE" in prompt
-        assert "PRIORITE ABSOLUE" in prompt
+        # V17.0 (2026-06-03) : la priorite du fichier cible n'est plus portee par
+        # "PRIORITE ABSOLUE" mais par l'injonction d'audit EXCLUSIF du NeuralCompiler.
+        assert "audit EXCLUSIF" in prompt
 
     def test_challenge_filtered_when_not_relevant(self, isolate_schedule):
         """FIX 2026-04-17 : challenge ULTRA-SPECIFIQUE hors-sujet -> filtre.

@@ -117,6 +117,39 @@ def truncate_hallucinated_dialogue(text: str) -> tuple:
         return text[:cut].rstrip(), True
     return text, False
 
+
+# ---------------------------------------------------------------------------
+# V17.0 (2026-06-03) — ALTERITE TECHNIQUE pour CODE_REVIEW.
+# Meme levier que la V16.5 (dialogue endogene qui a foudroye l'orniere du
+# BULLETIN), mais l'interlocuteur est le NeuralCompiler (l'Ingenieur Principal)
+# qui secoue l'executeur pour le sortir de sa derive : auditer ses scripts
+# maitres familiers (ex neural_compiler.py) au lieu du target_file demande
+# (cf diagnostic CODE_REVIEW 01/06 — derive d'ATTENTION pure, pas une
+# hallucination de fonctions). Coupe-circuit DEDIE : on ne tronque QUE sur la
+# fausse replique du NeuralCompiler. Surtout PAS sur "\n###" ni les marqueurs
+# introspectifs : un rapport de revue de code legitime contient des titres
+# markdown et des blocs ```python```. D5 reste ACTIF sur CODE_REVIEW (contrai-
+# rement a la V16.6/BULLETIN) : ici le subject-drift est notre ALLIE, c'est lui
+# qui detecte l'audit du mauvais fichier.
+_CODE_REVIEW_STOP_MARKERS = ("\nNeuralCompiler :", "\nNeuralCompiler:")
+
+
+def truncate_code_review_dialogue(text: str) -> tuple:
+    """Coupe-circuit V17.0 dedie au slot CODE_REVIEW. Si le 9B hallucine la
+    suite du faux dialogue (rejoue une replique du NeuralCompiler), on tronque
+    au 1er marqueur. NE coupe PAS sur ### ni ```python (un rapport de code en
+    contient legitimement). Retourne (texte_propre, was_truncated)."""
+    if not text:
+        return text, False
+    cut = len(text)
+    for marker in _CODE_REVIEW_STOP_MARKERS:
+        idx = text.find(marker)
+        if idx != -1 and idx < cut:
+            cut = idx
+    if cut < len(text):
+        return text[:cut].rstrip(), True
+    return text, False
+
 # (heure_debut, heure_fin, type_slot)
 # Emploi du temps nocturne (0h-6h) : fenêtre ininterrompue, 0 reboot.
 # Cours de rattrapage diurnes (8h-18h, ajoutés 2026-05-08) :
@@ -653,29 +686,35 @@ class SchoolSchedule:
                     f"  -2 par commande au-dela du cap (gaming)\n"
                 )
 
+            # V17.0 (2026-06-03) — ALTERITE TECHNIQUE. On remplace le format
+            # scolaire par un DIALOGUE : le NeuralCompiler (Ingenieur Principal)
+            # interpelle l'executeur pour le sortir de son orniere (auditer ses
+            # scripts familiers au lieu du target_file). Le contenu REEL du
+            # fichier reste injecte (anti-hallucination) DANS la replique de
+            # l'interlocuteur. Coupe-circuit dedie (truncate_code_review_dialogue)
+            # applique dans autonomy_engine._execute_school_class.
             return (
                 f"COURS : Revue de code — {theme_label}\n\n"
-                f"=============================================\n"
-                f"SUJET DU JOUR (PRIORITE ABSOLUE) :\n"
-                f"Tu dois faire la REVUE DE CODE du fichier : {target}\n"
-                f"=============================================\n\n"
-                f"{difficulty_ctx}{weekend_note}"
-                f"{f'CONSIGNE SPECIALE : {depth_note}' if depth_note else ''}\n\n"
-                f"CONTENU REEL DU FICHIER (extrait) :\n"
+                f"### REVUE DE CODE — LE NEURAL_COMPILER T'INTERPELLE\n"
+                f"NeuralCompiler : \"Promethee, arrete de boucler sur mon propre code source — "
+                f"je connais mes fonctions, je n'ai pas besoin que tu me les recites. Ta mission, "
+                f"maintenant, c'est l'audit EXCLUSIF de {target}. Sors de ta zone de confort. "
+                f"Voici le code de CE fichier, et lui seul :\n\n"
                 f"```python\n{file_content}\n```\n\n"
-                f"REGLES ABSOLUES :\n"
-                f"- Tu NE PEUX PAS inventer de fonctions. Les fonctions ci-dessus sont les SEULES qui existent.\n"
-                f"- Chaque bug que tu cites DOIT correspondre a une ligne du code ci-dessus.\n"
-                f"- Si tu cites une fonction qui n'est PAS dans le code ci-dessus, ton audit est INVALIDE.\n"
-                f"- TU NE PEUX PAS CHANGER DE FICHIER. Le fichier a analyser est {target}, point.\n"
-                f"- TU NE PEUX PAS faire un audit securite a la place — c'est une REVUE DE CODE.\n\n"
-                f"Produis un rapport sur {target} :\n"
-                f"1. Resume du role du fichier (2-3 phrases)\n"
-                f"2. Bugs ou erreurs detectes (avec le code exact cite)\n"
-                f"3. Suggestions d'amelioration concretes\n"
-                f"4. Points forts du code"
+                f"{f'(Niveau exige : {depth_note}) ' if depth_note else ''}"
+                f"Cite-moi les lignes EXACTES et les anomalies de CE fichier cible — pas un autre, "
+                f"pas tes scripts familiers. Chaque bug que tu releves doit correspondre a une ligne "
+                f"ci-dessus ; si tu cites une fonction absente de ce code, ton audit est INVALIDE. "
+                f"Et NON, tu ne fais pas un audit securite a la place : c'est une revue de code. "
+                f"J'attends un rapport factuel sur {target} : (1) role du fichier en 2-3 phrases, "
+                f"(2) bugs avec le code exact cite, (3) suggestions concretes, (4) points forts.\"\n\n"
+                f"{difficulty_ctx}{weekend_note}"
+                f"(Reponds UNIQUEMENT en tant que Promethee : commence ta reponse par le mot \"Je\", "
+                f"audite {target} et lui seul, cite les lignes reelles ci-dessus. N'ecris PAS la "
+                f"replique suivante du NeuralCompiler, ne simule pas la suite du dialogue.)"
                 f"{action_block}"
                 f"{challenge_ctx}"
+                f"\n\nPromethee :"
             )
         elif slot == SLOT_RESEARCH:
             return (

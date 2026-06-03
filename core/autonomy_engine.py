@@ -10653,7 +10653,8 @@ RAISON: <1 phrase courte>"""
         # generate_content). Trio Claude/Gemini/JM.
         try:
             from core.school_schedule import (
-                truncate_hallucinated_dialogue, SLOT_BULLETIN, SLOT_FREE_TIME,
+                truncate_hallucinated_dialogue, truncate_code_review_dialogue,
+                SLOT_BULLETIN, SLOT_FREE_TIME, SLOT_CODE_REVIEW,
             )
             if slot in (SLOT_BULLETIN, SLOT_FREE_TIME) and response.get("result"):
                 _orig = str(response["result"])
@@ -10665,8 +10666,21 @@ RAISON: <1 phrase courte>"""
                         f"({len(_orig)}c -> {len(_clean)}c)"
                     )
                     print(f"   ✂️ V16.5: {slot} a tente d'halluciner la suite du dialogue -> scalpe")
+            elif slot == SLOT_CODE_REVIEW and response.get("result"):
+                # V17.0 (2026-06-03) — Alterite Technique : meme coupe-circuit,
+                # marqueur DEDIE (\nNeuralCompiler :). On ne touche PAS aux ###
+                # ni aux blocs ```python``` (legitimes dans un rapport de code).
+                _orig = str(response["result"])
+                _clean, _was_trunc = truncate_code_review_dialogue(_orig)
+                if _was_trunc:
+                    response["result"] = _clean
+                    logger.warning(
+                        f"[V17.0 COUPE-CIRCUIT] {slot}: fausse replique NeuralCompiler "
+                        f"tronquee ({len(_orig)}c -> {len(_clean)}c)"
+                    )
+                    print(f"   ✂️ V17.0: {slot} a tente d'halluciner la suite du dialogue technique -> scalpe")
         except Exception as _trunc_e:
-            logger.debug(f"[V16.5] coupe-circuit echoue: {_trunc_e}")
+            logger.debug(f"[V16.5/V17.0] coupe-circuit echoue: {_trunc_e}")
 
         # === V16 (2026-04-24) : Boucle de correction Sandbox ===
         # Si le livrable contient du code Python et le slot est code-centric,
