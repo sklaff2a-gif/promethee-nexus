@@ -86,6 +86,16 @@ PRUNING_THRESHOLD = 0.08
 MAX_PRUNE_RATIO = 0.05            # Max 5% du réseau purgé par dream (fallback)
 ADAPTIVE_PRUNE_RATIO = 0.98       # Pruning adaptatif : 98% du taux de création
 MIN_CONCEPT_LENGTH = 3            # Rejeter les concepts trop courts (bruit)
+
+# V18.1 (2026-06-03) — Filtre d'exclusion du bruit technique pour la sonde
+# cognitive_probe : empeche un cluster conceptuel d'absorber des identifiants de
+# CODE (test_phi_coherence, coherence_threshold...) au lieu de la substance brute.
+# Les namespaces SEMANTIQUES (pulsion:, trait:, goal:, emotion:, reflex:, zone:)
+# ne sont PAS techniques et restent inclus.
+_TECH_NOISE_MARKERS = (
+    "test_", "_threshold", "_config", "_path", "_cache", "_enabled",
+    "_score", "_count", "_ratio", "_pattern", "_limit", "__", ".py",
+)
 RESONANCE_CYCLES = 4
 STDP_MULTIPLIER = 1.5             # STDP 1.5x plus fort que Hebb classique
 STDP_BUFFER_SIZE = 15             # Taille du buffer STDP (était 50, réduit pour limiter le bruit)
@@ -341,7 +351,8 @@ class SynapticNetwork:
 
         return {"purged_nodes": purged_nodes, "purged_synapses": purged_synapses}
 
-    def cognitive_probe(self, program: Dict[str, List[str]]) -> Dict[str, Any]:
+    def cognitive_probe(self, program: Dict[str, List[str]],
+                        exclude_technical: bool = True) -> Dict[str, Any]:
         """V18.0 (2026-06-03) — Sonde de gravure (READ-ONLY, ne modifie RIEN).
 
         Mesure l'empreinte synaptique des concepts fondamentaux (le 'programme
@@ -362,6 +373,7 @@ class SynapticNetwork:
             "decay_per_day": SYNAPSE_DECAY_PER_DAY,
             "death_threshold": PRUNING_THRESHOLD,
             "consolidation_floor": 0.5,
+            "exclude_technical": exclude_technical,
             "matieres": {},
         }
 
@@ -370,6 +382,9 @@ class SynapticNetwork:
             cluster_ids = [
                 nid for nid, node in self.nodes.items()
                 if any(kw in node.get("concept", "") for kw in kws)
+                and not (exclude_technical and any(
+                    m in node.get("concept", "") for m in _TECH_NOISE_MARKERS
+                ))
             ]
             if not cluster_ids:
                 report["matieres"][matiere] = {
