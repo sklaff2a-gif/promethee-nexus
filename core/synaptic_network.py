@@ -83,6 +83,18 @@ SPIKE_TIMING_WINDOW = 300.0       # 5 min pour causalite temporelle
 HOMEOSTATIC_TARGET = 0.3
 SYNAPSE_DECAY_PER_DAY = 0.02
 PRUNING_THRESHOLD = 0.08
+
+# V19.0 (2026-06-03) — Sanctuaire des Ebauches (Incubateur Cinetique). Exception
+# CIBLEE : une synapse prouvee par l'usage (formation_count eleve) mais encore
+# immature (w < 0.5) recoit un passeport d'incubation qui la protege du churn
+# (decay /4, immunite couperet ET structural_growth) le temps de murir vers 0.5.
+# Plafonne a 15% du reseau -> le marche Hebbian commun (85%) reste intact (DIP,
+# ratio creation/elagage emergents preserves).
+INCUBATION_FORMATION_THRESHOLD = 10   # passeport des formation_count >= 10
+INCUBATION_DECAY_DIVISOR = 4          # decay /4 pour les ebauches incubees
+INCUBATION_MATURITY_WEIGHT = 0.5      # w >= 0.5 -> mature, perd le passeport
+INCUBATION_CAP = 3000                 # max synapses incubees (15% de MAX_SYNAPSES)
+
 MAX_PRUNE_RATIO = 0.05            # Max 5% du réseau purgé par dream (fallback)
 ADAPTIVE_PRUNE_RATIO = 0.98       # Pruning adaptatif : 98% du taux de création
 MIN_CONCEPT_LENGTH = 3            # Rejeter les concepts trop courts (bruit)
@@ -222,6 +234,7 @@ def _make_synapse(source: str, target: str,
         "last_strengthened": now,
         "created_at": now,
         "context": context[:200] if context else "",
+        "is_incubated": False,  # V19.0 Sanctuaire : passeport d'ebauche
     }
 
 
@@ -674,15 +687,20 @@ class SynapticNetwork:
             self._publish_delta("node_removed", {"id": node_id})
 
     def _enforce_synapse_limit(self):
-        """Supprime les synapses les plus faibles si > MAX_SYNAPSES."""
+        """Supprime les synapses les plus faibles si > MAX_SYNAPSES.
+
+        V19.0 : les ebauches incubees (Sanctuaire) sont IMMUNISEES contre le
+        couperet. On ne supprime que dans le tissu commun ; le cap d'incubation
+        (15%) garantit qu'il reste assez de non-incubes pour tenir MAX_SYNAPSES.
+        """
         if len(self.synapses) <= MAX_SYNAPSES:
             return
-        sorted_synapses = sorted(
-            self.synapses.items(),
+        common = sorted(
+            ((k, s) for k, s in self.synapses.items() if not s.get("is_incubated")),
             key=lambda kv: kv[1]["weight"]
         )
         to_remove = len(self.synapses) - MAX_SYNAPSES
-        for key, _ in sorted_synapses[:to_remove]:
+        for key, _ in common[:to_remove]:
             del self.synapses[key]
 
     def _remove_node_synapses(self, node_id: str):
@@ -898,7 +916,9 @@ class SynapticNetwork:
         network_full = len(self.synapses) >= int(MAX_SYNAPSES * STRUCTURAL_GROWTH_FILL_LIMIT)
         if network_full:
             # Trouver les synapses les plus faibles pour remplacement
-            weak = [(k, s["weight"]) for k, s in self.synapses.items() if s["weight"] < 0.1]
+            # V19.0 : les ebauches incubees (Sanctuaire) sont exclues du remplacement.
+            weak = [(k, s["weight"]) for k, s in self.synapses.items()
+                    if s["weight"] < 0.1 and not s.get("is_incubated")]
             if not weak:
                 return 0  # Pas de synapse remplacable → vraiment plein
             weak.sort(key=lambda x: x[1])
@@ -2457,6 +2477,25 @@ class SynapticNetwork:
                         )
                         report["dream_connections"] += 1
 
+        # 2c. V19.0 SANCTUAIRE — Douane d'incubation (AVANT le decay, pour que les
+        # ebauches deja matures par l'usage beneficient du sursis des ce cycle).
+        # Passeport si formation_count >= seuil ET w < maturite ; revocation si
+        # w >= maturite (rejoint le tissu commun). Cap : si trop d'incubees, les
+        # plus faibles perdent le passeport (protege MAX_SYNAPSES de l'explosion).
+        _incub = []
+        for _k, _s in self.synapses.items():
+            if _s["weight"] >= INCUBATION_MATURITY_WEIGHT:
+                _s["is_incubated"] = False
+            elif _s["formation_count"] >= INCUBATION_FORMATION_THRESHOLD:
+                _s["is_incubated"] = True
+            if _s.get("is_incubated"):
+                _incub.append((_k, _s["weight"]))
+        if len(_incub) > INCUBATION_CAP:
+            _incub.sort(key=lambda x: x[1])  # plus faibles d'abord
+            for _k, _ in _incub[:len(_incub) - INCUBATION_CAP]:
+                self.synapses[_k]["is_incubated"] = False
+        report["incubated"] = min(len(_incub), INCUBATION_CAP)
+
         # 3. PRUNING SYNAPTIQUE ADAPTATIF
         # Le pruning cible 98% du taux de création → croissance nette de 2%
         now = time.time()
@@ -2464,8 +2503,11 @@ class SynapticNetwork:
         to_prune = []
         for key, syn in self.synapses.items():
             decay = SYNAPSE_DECAY_PER_DAY * days_since_last_dream
+            if syn.get("is_incubated"):
+                decay /= INCUBATION_DECAY_DIVISOR  # V19.0 : bouclier, sursis decay /4
             syn["weight"] = max(0.0, syn["weight"] - decay)
-            if syn["weight"] < PRUNING_THRESHOLD:
+            # V19.0 : une ebauche incubee n'est JAMAIS prunee (bouclier anti-couperet).
+            if syn["weight"] < PRUNING_THRESHOLD and not syn.get("is_incubated"):
                 to_prune.append(key)
 
         # Cap adaptatif : pruning = 98% du nombre de connexions créées ce cycle
