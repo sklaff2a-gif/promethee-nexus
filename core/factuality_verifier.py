@@ -490,3 +490,63 @@ def compute_factuality_score(
 
     ratio = true_refs / total_refs
     return (ratio, total_refs, details)
+
+
+# ---------------------------------------------------------------------------
+# V20.0 (2026-06-04) — FACTUALITE DU CODE EX-NIHILO (WORKSHOP / Playground).
+# Diagnostic : le WORKSHOP-Playground genere du code SANS target_file ; il etait
+# route vers compute_factuality_score (audit AST CONTRE un fichier du disque)
+# -> `if target:` toujours faux -> factuality figee a -1.0 (defaut) -> veto de
+# closure PERMANENT malgre des notes 7.9/8.4 -> 354h de famine sur le SEUL slot
+# qui verrouillait le min() epistemique global. Jumeau du bug RESEARCH/BULLETIN
+# (corrige V3.4, 31/05) mais oublie pour WORKSHOP (reste colle a CODE_REVIEW).
+# La factualite d'un code produit ex-nihilo n'est PAS une correspondance avec le
+# disque : c'est sa REALITE SYNTAXIQUE (il compile) + sa DENSITE STRUCTURELLE.
+#   1. Bouclier syntaxique : ast.parse echoue -> 0.0 (veto dur : code non
+#      executable = non-factuel par definition).
+#   2. Plancher de substance : len(ast.walk) < MIN_AST_NODES -> ratio sabre SOUS
+#      le seuil de closure 0.6 (un `pass` / `print()` nu reste recale = anti-triche).
+#      >= MIN_AST_NODES -> 1.0 (masse critique d'instructions reelles atteinte).
+MIN_AST_NODES = 20
+_CODE_FENCE = re.compile(r"```(?:python|py)?\s*\n?(.*?)```", re.DOTALL)
+
+
+def _extract_python_code(content: str) -> str:
+    """Extrait le code Python d'un livrable. Priorite aux blocs ```python``` ; a
+    defaut (le 9B oublie parfois les fences), retourne le contenu brut — ast.parse
+    tranchera : de la prose pure levera SyntaxError -> 0.0, ce qui est correct pour
+    un WORKSHOP cense produire du code identifiable."""
+    if not content:
+        return ""
+    blocks = _CODE_FENCE.findall(content)
+    if blocks:
+        return "\n\n".join(b.strip() for b in blocks if b.strip())
+    return content.strip()
+
+
+def compute_code_factuality(
+    content: str, min_nodes: int = MIN_AST_NODES
+) -> Tuple[float, Dict]:
+    """Vecteur de factualite pour le code genere ex-nihilo (WORKSHOP/Playground).
+
+    Retourne (ratio, details). ratio in [0,1] ; -1.0 seulement si contenu vide.
+      - syntaxe invalide / aucun code parsable -> 0.0 (veto dur)
+      - code valide mais creux (< min_nodes)   -> ratio proportionnel plafonne < 0.6
+      - code valide et substantiel (>= min_nodes) -> 1.0
+    """
+    if not content:
+        return (-1.0, {"reason": "no_content", "ast_nodes": 0})
+    code = _extract_python_code(content)
+    if not code:
+        return (0.0, {"reason": "no_code", "ast_nodes": 0})
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError) as e:
+        return (0.0, {"reason": "syntax_error", "error": str(e)[:120], "ast_nodes": 0})
+    n_nodes = len(list(ast.walk(tree)))
+    if n_nodes < min_nodes:
+        # Code creux : ratio proportionnel, plafonne sous le seuil de closure (0.6)
+        # pour interdire toute micro-consolidation synaptique sur un stub vide.
+        ratio = round(min(0.5, (n_nodes / min_nodes) * 0.5), 3)
+        return (ratio, {"reason": "too_shallow", "ast_nodes": n_nodes, "threshold": min_nodes})
+    return (1.0, {"reason": "valid_substantial", "ast_nodes": n_nodes, "threshold": min_nodes})

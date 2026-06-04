@@ -1030,6 +1030,23 @@ class SchoolSchedule:
                             f"ratio={factuality_score:.2f} refs={factuality_total_refs} "
                             f"hits={fact_details.get('true_refs', 0)}"
                         )
+                    elif slot == SLOT_WORKSHOP:
+                        # V20.0 (2026-06-04) — WORKSHOP sans target = PLAYGROUND (code
+                        # ex-nihilo). On DEBRANCHE le scanner AST croise (qui exige un
+                        # fichier disque, toujours absent ici -> factuality figee a -1.0
+                        # -> 354h de famine) et on branche l'incubateur syntaxique : le
+                        # code est-il REEL (compile) et SUBSTANTIEL (>= MIN_AST_NODES) ?
+                        # NB : CODE_REVIEW sans target reste, lui, a -1.0 (il DOIT cibler
+                        # un fichier ; un audit sans cible n'a pas de sens) -> elif cible
+                        # WORKSHOP exclusivement.
+                        from core.factuality_verifier import compute_code_factuality
+                        factuality_score, fact_details = compute_code_factuality(full_content)
+                        factuality_total_refs = fact_details.get("ast_nodes", 0)
+                        logger.info(
+                            f"[SCHOOL][FACTUALITY] WORKSHOP (code ex-nihilo) "
+                            f"ratio={factuality_score:.2f} ast_nodes={factuality_total_refs} "
+                            f"reason={fact_details.get('reason', '')}"
+                        )
                 elif slot == SLOT_CREATION:
                     from core.factuality_verifier import compute_creation_factuality
                     factuality_score, fact_details = compute_creation_factuality(
