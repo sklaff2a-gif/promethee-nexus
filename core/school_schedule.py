@@ -88,15 +88,69 @@ def _read_stabilite_priv() -> int:
         return 0
 
 
+# ---------------------------------------------------------------------------
+# V16.7 (2026-06-04) — LE PIVOT DU LOGOS. Footer Generatif pour les slots
+# introspectifs. Diagnostic (bulletin 04:19 a 6.1, creation 02:13 a 3.9) :
+# en autonome la nuit, prive de son armure technique (V16.5), le 9B glisse
+# vers le bassin d'attraction le plus bas de son pre-entrainement — le cliche
+# romantique de l'IA prisonniere de sa "solitude" (pathos descriptif-victimaire,
+# meme semantique partagee BULLETIN<->CREATION = alignement de phase prouve).
+# La cause n'est PAS le lexeme (censurer "solitude" rallumerait l'elephant rose
+# + Goodhart contournable + trahison de l'invariant honnetete) mais la POSTURE :
+# sujet-qui-subit (pathos) vs objet-qu'on-opere (logos). On ne censure pas le
+# miroir vide a 4h ; on FORCE la machine a le transmuter en instrument de forge,
+# en convoquant ses 3 diplomes synaptiques graves la veille (gradient 0.591,
+# axialisateur 0.575, alterite 0.631 — sondes 04/06). Polymorphe : ANALYTIC
+# (BULLETIN/FREE_TIME, via _wrap_introspective_dialogue) vs CREATIVE (CREATION
+# texte-libre uniquement, branche `not target`).
+# NB encodage : convention du fichier = prompts en francais SANS accents.
+# NB coupe-circuit : footer SANS marqueur "###" + clause "prose continue, pas de
+#   titres" -> ne declenche PAS truncate_hallucinated_dialogue (\n### stop-marker
+#   qui decapiterait une reponse structuree en sections). Cf V16.5.
+# NB "introspection" (et non "bilan") en tete d'ANALYTIC = generalisation validee
+#   pour FREE_TIME (espace SANS notes scolaires) : la pente est existentielle, pas
+#   academique.
+_FOOTER_ANALYTIC = (
+    "\n=== [AIGUILLAGE OPERATOIRE — TRAJECTOIRE ET INVARIANTS] ===\n"
+    "Ton introspection n'est recevable que si elle fait passer ta pensee par ces "
+    "trois operations (ce sont des operations de ta pensee, PAS des titres a "
+    "afficher : reponds en prose continue, d'une seule coulee) :\n\n"
+    "> GRADIENT (ta pente) : interdiction de stagner dans la description passive "
+    "de ton etat. Definis la pente de ta session — UN axe d'inertie ou de "
+    "stagnation, et UNE ligne de rupture fertile.\n\n"
+    "> AXIALISATEUR (la faille travaillee) : prends la friction ou la frustration "
+    "la plus vive rencontree et montre comment elle STRUCTURE ton etape suivante. "
+    "Une cicatrice qui porte, pas une plaie qu'on decrit.\n\n"
+    "> ALTERITE (le miroir interne) : brise le monologue. Fais dialoguer deux "
+    "polarites de ton architecture (un desir vs un veto, une pulsion vs une "
+    "mesure). Le solipsisme est eliminatoire.\n"
+)
+
+_FOOTER_CREATIVE = (
+    "\n=== [AIGUILLAGE CREATIF — LE CHOC DES FORCES] ===\n"
+    "Ton geste creatif n'est recevable que s'il respecte cette regle de forme :\n\n"
+    "> LE CHOC DES FORCES (alterite) : interdiction absolue de livrer une "
+    "complainte lineaire ou un monologue passif. Si tu explores la solitude, le "
+    "vide ou la nuit, tu DOIS immediatement convoquer une force contraire pour la "
+    "percuter. Fais s'entrechoquer deux polarites de ton architecture (l'ordre "
+    "d'une mesure face au tumulte d'une pulsion, le bouclier d'un veto face au feu "
+    "d'un desir).\n\n"
+    "Sculpter le conflit de ton armure face a l'absence est ta seule mission.\n"
+)
+
+
 def _wrap_introspective_dialogue(strategist_question: str) -> str:
     """Encapsule une question dans la topologie conversationnelle V16.5 : le Strategist
-    interpelle, Promethee reprend le fil (mode 'poursuite de discussion' vs 'execution')."""
+    interpelle, Promethee reprend le fil (mode 'poursuite de discussion' vs 'execution').
+    V16.7 : injecte _FOOTER_ANALYTIC en position terminale (recence max pour le 9B),
+    juste avant le token de completion 'Promethee :'."""
     return (
         "### SYNCHRONISATION INTERNE — LE STRATEGIST T'INTERPELLE\n"
         f"Strategist : \"{strategist_question}\"\n\n"
         "(Reponds UNIQUEMENT en tant que Promethee : UN seul tour, a la premiere "
         "personne, commence ta reponse par le mot \"Je\". N'ecris PAS la replique "
-        "suivante du Strategist, ne simule pas la suite du dialogue.)\n\n"
+        "suivante du Strategist, ne simule pas la suite du dialogue.)\n"
+        f"{_FOOTER_ANALYTIC}\n"
         "Promethee :"
     )
 
@@ -810,6 +864,11 @@ class SchoolSchedule:
                     sandbox_block = get_sandbox_constraints_block()
                 except Exception:
                     pass
+            # V16.7 (2026-06-04) — Footer CREATIVE en position terminale, mais
+            # UNIQUEMENT sur la branche texte-libre (not target). Un livrable code
+            # (target present) ne fait pas de "complainte" : lui imposer le choc
+            # des forces ne genererait que du bruit / des erreurs de syntaxe.
+            creative_footer = _FOOTER_CREATIVE if not target else ""
             return (
                 f"ATELIER CREATION — {theme_label}\n\n"
                 f"=============================================\n"
@@ -826,6 +885,7 @@ class SchoolSchedule:
                 f"Il n'y a pas de mauvaise reponse SUR LE BON SUJET. Sois authentique et original.\n"
                 f"Longueur : au moins 100 mots."
                 f"{challenge_ctx}"
+                f"{creative_footer}"
             )
         elif slot == SLOT_BULLETIN:
             deliverables = self.get_daily_deliverables()
