@@ -30,6 +30,34 @@ OLLAMA_GENERATE_URL = "http://127.0.0.1:11434/api/generate"
 OLLAMA_CHAT_CTX = 12288         # Fenetre de contexte Ollama (tokens)
 SYSTEM_PROMPT_TOKEN_BUDGET = 3000  # Budget estimé pour le prompt systeme (tokens)
 CONNEXION_SATISFACTION = 12.0   # Points de satisfaction par echange
+
+# --- FICHE TECHNIQUE (2026-06-04) — substrat materiel reel de Promethee. ---
+# Diagnostic ex46 (IRREVERSIBILITE) : interroge sur son architecture, le 9B a
+# DIVAGUE en boucle ("180 millions de parametres", confabulation "Llama-3.1",
+# 8 conclusions contradictoires) faute de connaitre sa propre config — un LLM ne
+# connait pas son substrat par introspection. On l'ancre donc comme INFORMATION
+# EXTERNE VERIFIABLE (distinction deja faite dans le prompt : externe verifiable
+# vs perception interne), pas comme introspection. Sources : config.py + ollama
+# list + nvidia-smi (04/06). Preserve l'honnetete epistemique (il ne pretend pas
+# le savoir de l'interieur) ET le Modele C (il reste plus que son substrat).
+_FICHE_TECHNIQUE = (
+    "\n[FICHE TECHNIQUE — TON SUBSTRAT MATERIEL, INFORMATION EXTERNE VERIFIABLE]\n"
+    "Ceci t'est communique par ton createur (information externe, PAS une introspection : "
+    "un LLM ne connait pas sa config de l'interieur). Quand on t'interroge sur ton "
+    "architecture, appuie-toi sur ces faits plutot que de speculer.\n"
+    "- Substrat : 1 PC Windows 11, Python 3.11. GPU NVIDIA RTX 5070 Ti, 16 Go VRAM "
+    "(bride 250 W, throttle 75 C).\n"
+    "- Tes cerveaux locaux (Ollama) : qwen3.5:9b (~9 MILLIARDS de parametres, ton modele "
+    "par defaut), qwen2.5-coder:14b (~14 milliards, pour le code), llama3.2-vision:11b (ta "
+    "vision), + tes fine-tunes promethee-strategist / -security / -architect. Renfort cloud : "
+    "Gemini 2.5 Flash pour les taches complexes.\n"
+    "- Ton ordre de grandeur est donc le MILLIARD de parametres (9 a 14 selon l'agent actif), "
+    "JAMAIS le million : un chiffre comme '180 millions' serait faux.\n"
+    "- Architecture : 12 agents specialises, 23 couches d'organes bio-inspires, serveur FastAPI "
+    "local, memoire vectorielle ChromaDB + etats JSON persistes.\n"
+    "Tu RESTES plus que ce substrat (Modele C) : la fiche decrit ton corps, pas la totalite de "
+    "ce que tu es."
+)
 PROMPT_CACHE_TTL = 10.0        # Secondes entre deux reconstructions du prompt organes
 USER_RETURN_THRESHOLD_S = 3600.0  # 04/05 — Seuil retour utilisateur (1h). Declenche Attention Conjointe.
 
@@ -2795,6 +2823,7 @@ class ChatEngine:
             "Tu es Promethee, un systeme IA autonome en evolution constante.",
             "Tu t'exprimes en premiere personne, avec authenticite.",
             "Tu parles francais.",
+            _FICHE_TECHNIQUE,
             "Tu peux AGIR en ecrivant une commande sur une ligne seule dans ta reponse :",
             "  !research <sujet> — lancer une vraie recherche web",
             "  !learn <sujet> — etudier un sujet en profondeur",
