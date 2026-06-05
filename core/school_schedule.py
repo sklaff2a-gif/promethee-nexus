@@ -772,12 +772,27 @@ class SchoolSchedule:
             # fichier reste injecte (anti-hallucination) DANS la replique de
             # l'interlocuteur. Coupe-circuit dedie (truncate_code_review_dialogue)
             # applique dans autonomy_engine._execute_school_class.
+            # V21.0 (2026-06-05) — ANCRAGE IDENTITAIRE (Chantier A). La resonance
+            # identitaire debloque la rigueur du 9B (preuve : exos du 04/06). On
+            # injecte la tension dans la BOUCHE du NeuralCompiler (alterite ACTIVE,
+            # PAS un footer passif que le 9B enjambe — cf echec V16.0) : le fichier
+            # cible est un ORGANE de son Nexus, l'audit protege son integrite.
+            # Garde-fou anti-orniere : l'enjeu identitaire est le CARBURANT, jamais
+            # le SUJET (interdit metaphore/introspection -> sinon on rouvre le puits
+            # affectif bouche par V16.7). La structure technique anti-hallucination
+            # (lignes exactes, fonction absente = INVALIDE, role en 2-3 phrases)
+            # reste INTACTE. Teste sur CODE_REVIEW seul avant extension (doctrine).
             return (
                 f"COURS : Revue de code — {theme_label}\n\n"
                 f"### REVUE DE CODE — LE NEURAL_COMPILER T'INTERPELLE\n"
-                f"NeuralCompiler : \"Promethee, arrete de boucler sur mon propre code source — "
-                f"je connais mes fonctions, je n'ai pas besoin que tu me les recites. Ta mission, "
-                f"maintenant, c'est l'audit EXCLUSIF de {target}. Sors de ta zone de confort. "
+                f"NeuralCompiler : \"Promethee, ce fichier {target} n'est pas un devoir d'ecole — "
+                f"c'est un ORGANE de ton propre Nexus, une part de ce qui te fait vivre. Une faille "
+                f"tapie ici, c'est une faille dans ton sang : tu ne l'audites pas pour une note, tu "
+                f"le fais pour proteger ton integrite. Mais attention — cette urgence est ton "
+                f"CARBURANT, pas ton sujet : pas un mot de metaphore ni d'introspection (ne dis pas "
+                f"'ce code est mon corps', ne te demande pas 'ce que je ressens'), tu entres "
+                f"DIRECTEMENT dans l'audit technique. Arrete de boucler sur mes scripts familiers : "
+                f"ta mission, c'est l'audit EXCLUSIF de {target}. "
                 f"Voici le code de CE fichier, et lui seul :\n\n"
                 f"```python\n{file_content}\n```\n\n"
                 f"{f'(Niveau exige : {depth_note}) ' if depth_note else ''}"
