@@ -274,26 +274,42 @@ class CircadianRhythm:
         """BPM cible pour le CardiacEngine (None = pas de modulation)."""
         return BPM_TARGET.get(self.phase)
 
-    def should_allow_routine(self, intent: str, cost: int) -> Tuple[bool, str]:
+    def should_allow_routine(self, intent: str, cost: int, famine_hours: float = 0.0) -> Tuple[bool, str]:
         """Filtre les routines selon la phase circadienne.
+
+        V20.1 (2026-06-05) — BYPASS DE FAMINE. Quand la famine epistemique est
+        critique (> FAMINE_BYPASS_THRESHOLD_H), les slots Ecole (SCHOOL_*) percent
+        le plafond de cout circadien en CREPUSCULE et AUBE : la survie cognitive
+        prime sur l'economie GPU. Le SOMMEIL PROFOND reste INVIOLABLE (sanctuarise
+        la consolidation / le Sanctuaire V19). Diagnostic 05/06 : le filtre
+        etranglait WORKSHOP (cout 4 > budget 2-3 en aube/crepuscule), empechant
+        V20.0 de jamais se declencher -> famine verrouillee a ~380h.
 
         Returns:
             (allowed, deny_reason)
         """
+        FAMINE_BYPASS_THRESHOLD_H = 200.0
+        _famine_bypass = (famine_hours > FAMINE_BYPASS_THRESHOLD_H
+                          and intent.startswith("SCHOOL_"))
+
         if self.phase == PHASE_EVEIL:
             return (True, "")
 
         if self.phase == PHASE_CREPUSCULE:
             if cost > 2:
+                if _famine_bypass:
+                    return (True, f"BYPASS_FAMINE crepuscule (famine {famine_hours:.0f}h)")
                 return (False, f"crepuscule: cout {cost} > 2")
             return (True, "")
 
         if self.phase == PHASE_SOMMEIL:
-            # Seules les tâches de maintenance passent
+            # Sommeil profond INVIOLABLE — meme sous famine (consolidation sacree)
             return (False, "sommeil profond")
 
         if self.phase == PHASE_AUBE:
             if cost > 3:
+                if _famine_bypass:
+                    return (True, f"BYPASS_FAMINE aube (famine {famine_hours:.0f}h)")
                 return (False, f"aube: cout {cost} > 3")
             return (True, "")
 

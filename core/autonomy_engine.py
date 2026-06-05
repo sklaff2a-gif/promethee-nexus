@@ -3721,10 +3721,22 @@ class AutonomyEngine:
         # --- Filtrage circadien ---
         try:
             from core.circadian_rhythm import circadian
+            # V20.1 (2026-06-05) — niveau de famine epistemique, pour le BYPASS
+            # circadien des slots Ecole (la survie cognitive perce le plafond de
+            # cout en crepuscule/aube quand la famine est critique). Sans ce signal,
+            # WORKSHOP (cout 4) restait bloque chaque nuit -> V20.0 jamais declenche.
+            _famine_h = 0.0
+            try:
+                from core.synaptic_network import SynapticNetwork
+                _cl = list(getattr(SynapticNetwork(), "_epistemic_last_closure", {}).values())
+                if _cl:
+                    _famine_h = (time.time() - min(_cl)) / 3600.0
+            except Exception:
+                pass
             filtered_scored = []
             for r, s in scored:
                 cost = RESOURCE_COSTS.get(r["intent"], 2)
-                allowed, deny_reason = circadian.should_allow_routine(r["intent"], cost)
+                allowed, deny_reason = circadian.should_allow_routine(r["intent"], cost, famine_hours=_famine_h)
                 if allowed:
                     filtered_scored.append((r, s))
                 else:
