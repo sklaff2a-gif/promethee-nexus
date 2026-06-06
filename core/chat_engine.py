@@ -216,6 +216,7 @@ class ChatEngine:
         "  !research <sujet>        — Lancer une vraie recherche web\n"
         "  !learn <sujet>           — Etudier un sujet en profondeur\n"
         "  !code <description>      — Produire du code\n"
+        "  !calc <expr/code>        — Calculer (sandbox securise, resultat reel)\n"
         "  !status                  — Diagnostic interne compact\n"
         "  !read <fichier> [L1-L2]  — Lire un fichier du projet\n"
         "  !grep <pattern> [fichier] — Chercher dans le code\n"
@@ -322,6 +323,41 @@ class ChatEngine:
 
         if cmd == "aide":
             return self._COMMAND_HELP
+
+        if cmd == "calc":
+            # V24.0 (2026-06-06) — DELEGATION DE CALCUL. Donne a Promethee un
+            # outil FIABLE pour deleguer son talon (le calcul en chaine, le
+            # symbolique presse) la ou l'agent !code refuse ("hors perimetre").
+            # Execute un petit calcul Python dans le sandbox securise (AST-lint :
+            # os/open/subprocess/eval/exec/__import__ interdits) et retourne le
+            # resultat REEL. Le contenu rendu EST la verite : pas de confabulation
+            # possible, on rapporte exactement ce que le sandbox produit (ou son
+            # echec). Cf lecon "maturite agentique" : deleguer + rapport fidele.
+            try:
+                from core.capabilities.code_sandbox import sandbox
+                code = " ".join(args).strip()
+                if not code:
+                    return ("Usage : !calc <expression ou code Python>\n"
+                            "Exemples :\n"
+                            "  !calc sum(1/k**2 for k in range(1,101))\n"
+                            "  !calc 2**100\n"
+                            "Pour du code multi-lignes, termine par print(...) ton resultat.")
+                # Expression simple (une ligne, sans print/affectation) -> wrap print()
+                _bare = code.replace("==", "").replace("!=", "").replace("<=", "").replace(">=", "")
+                is_expr = ("\n" not in code and "print" not in code
+                           and ";" not in code and "=" not in _bare)
+                code_to_run = f"print({code})" if is_expr else code
+                res = sandbox.run_python(code_to_run)
+                if res.success:
+                    out = (res.stdout or "").strip()
+                    if not out:
+                        return "[!calc] Execute sans erreur, mais aucune sortie. Pense a print(...) ton resultat."
+                    if len(out) > 1500:
+                        out = out[:1500] + " [...tronque]"
+                    return f"[!calc] Resultat (sandbox securise) :\n{out}"
+                return f"[!calc] Echec : {res.format_traceback(500)}"
+            except Exception as e:
+                return f"!calc : erreur — {e}"
 
         if cmd == "grave":
             # V23.0 (2026-06-06) — CONSOLIDATION FORTE D'UNE LECON CERTIFIEE.
@@ -2904,6 +2940,7 @@ class ChatEngine:
             "  !research <sujet> — lancer une vraie recherche web",
             "  !learn <sujet> — etudier un sujet en profondeur",
             "  !code <description> — produire du code",
+            "  !calc <expr/code> — calculer (sandbox securise)",
             "  !status — voir ton etat interne",
             "  !grep <pattern> [fichier] — chercher dans ton code",
             "  !read <fichier> [L1-L2] — lire un fichier",
