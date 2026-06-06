@@ -157,6 +157,24 @@ def verify_against_file(
             elif isinstance(node, ast.arg):  # V17.3.1 : parametres (name, description...)
                 if len(node.arg) >= 3 and node.arg not in ("self", "cls"):
                     real_funcs.add(node.arg)
+            elif isinstance(node, ast.Attribute):  # V25.0 (2026-06-06) — ATTRIBUTS REELS
+                # Un audit de code cite legitimement les attributs (self.executor,
+                # self.running), les variables de classe (cls._instance) et les
+                # methodes utilisees (loop.run_in_executor). Sans ca, ils etaient
+                # comptes comme "absents" -> factualite faussement basse -> veto
+                # d'un audit POURTANT factuel (faux negatif structurel, diag 06/06).
+                if len(node.attr) >= 3:
+                    real_funcs.add(node.attr)
+            elif isinstance(node, ast.Import):  # V25.0 — modules importes (asyncio, logging)
+                for _al in node.names:
+                    _nm = (_al.asname or _al.name).split(".")[-1]
+                    if len(_nm) >= 3:
+                        real_funcs.add(_nm)
+            elif isinstance(node, ast.ImportFrom):  # V25.0 — symboles importes (ThreadPoolExecutor)
+                for _al in node.names:
+                    _nm = _al.asname or _al.name
+                    if len(_nm) >= 3:
+                        real_funcs.add(_nm)
     except SyntaxError:
         # Fallback regex : les fichiers non-python ou syntaxe cassee
         for m in _DEF_PATTERN.finditer(source):
