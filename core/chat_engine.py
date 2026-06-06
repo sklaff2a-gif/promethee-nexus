@@ -30,6 +30,14 @@ LESSON_STRENGTH_FACTOR = 3.0    # Multiplicateur du taux Hebbian (clampe a 4.0 c
 CHAT_MODEL = "qwen3.5:9b"     # Modele par defaut (migration 2026-03-13)
 EDITOR_MODEL = "qwen2.5-coder:14b"  # 04/05/2026 — Pipeline 2 passes Attention Conjointe
 OLLAMA_CHAT_URL = "http://127.0.0.1:11434/api/chat"
+# V26.0 (2026-06-06) — Compactage du contexte chat (facon console Claude Code).
+# Quand l'historique depasse ~60% du contexte Ollama, les tours anciens sont
+# RESUMES (1 appel LLM contraint anti-hallu) en un digest reinjecte en tete, et
+# seuls les derniers tours restent bruts. Incarne (event CHAT_COMPACTING + trace
+# dream_journal). Remplace la troncature par fenetre glissante qui JETAIT les
+# vieux messages -> cause du recrachage/perseveration (cran 3 du 05/06).
+COMPACT_TRIGGER_CHARS = int(12288 * 3 * 0.6)  # ~22118 chars (~60% de OLLAMA_CHAT_CTX=12288)
+COMPACT_KEEP_RAW = 16  # messages bruts conserves apres compactage (~8 tours)
 OLLAMA_GENERATE_URL = "http://127.0.0.1:11434/api/generate"
 OLLAMA_CHAT_CTX = 12288         # Fenetre de contexte Ollama (tokens)
 SYSTEM_PROMPT_TOKEN_BUDGET = 3000  # Budget estimé pour le prompt systeme (tokens)
@@ -3279,6 +3287,11 @@ class ChatEngine:
         # Architectural observe au Test Y (ex.84 Arrow) du matin.
         v15_context = self._inject_v15_introspection(user_message)
 
+        # V26.0 — Compactage du contexte AVANT de construire le prompt : si
+        # l'historique depasse le seuil, les tours anciens sont resumes en un
+        # digest (reinjecte plus bas), et seuls les derniers tours restent bruts.
+        await self._maybe_compact_context()
+
         # 04/05/2026 — Fix B (derive centripete) : bypass mega-prompt pour
         # salutations/messages sociaux courts (source external uniquement,
         # pas de visual_context, pas de command_result, pas de code_context).
@@ -3303,6 +3316,14 @@ class ChatEngine:
                                  f"Si une fonction n'est pas dans cette liste, elle N'EXISTE PAS."
             if v15_context:
                 system_prompt += f"\n\n{v15_context}"
+            # V26.0 — Reinjection du digest des tours anciens compactes (a vivre
+            # comme du vecu commun, pas comme une note externe).
+            _digest = getattr(self, "_conversation_digest", "") or ""
+            if _digest:
+                system_prompt += (
+                    "\n\n[MEMOIRE DE NOTRE CONVERSATION JUSQU'ICI — tours anciens "
+                    "consolides, c'est du vecu partage entre nous]\n" + _digest + "\n"
+                )
 
         # 3-pre. PONT SUBCONSCIENT (2026-05-19) — médiation P16 → LLM, 8e preuve §4.13
         # Lecture observationnelle du synaptic_network pour énergiser les concepts
@@ -4292,6 +4313,119 @@ class ChatEngine:
         except Exception as e:
             logger.debug(f"CHAT: Archivage echoue: {e}")
 
+    async def _summarize_for_digest(self, text: str) -> str:
+        """V26.0 — Resume LLM contraint des tours anciens (pour le compactage).
+
+        Garde-fou anti-hallucination : resume FIDELE, factuel, sans invention.
+        Appel non-streaming a qwen, temperature basse. Retourne "" si echec
+        (l'appelant n'altere alors RIEN : pas de compactage sans digest valide).
+        """
+        prompt = (
+            "Ci-dessous, le DEBUT d'une longue conversation entre Jean-Michel "
+            "(l'utilisateur) et toi, Promethee. Resume-la FIDELEMENT en quelques "
+            "paragraphes denses : les faits etablis, les decisions prises, les "
+            "enseignements importants, et les fils encore ouverts. Regle absolue : "
+            "n'invente RIEN, n'ajoute aucune information qui ne soit pas dans le "
+            "texte. Reste factuel et concis.\n\n"
+            f"CONVERSATION A RESUMER :\n{text[:14000]}\n\nRESUME FIDELE :"
+        )
+        payload = {
+            "model": CHAT_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "think": False,
+            "options": {"temperature": 0.3, "num_ctx": OLLAMA_CHAT_CTX, "num_predict": 900},
+        }
+        try:
+            async with httpx.AsyncClient() as client:
+                r = await client.post(OLLAMA_CHAT_URL, json=payload, timeout=120)
+                if r.status_code == 200:
+                    data = r.json()
+                    return (data.get("message", {}).get("content", "") or "").strip()
+                logger.warning(f"CHAT compaction: resume HTTP {r.status_code}")
+        except Exception as e:
+            logger.warning(f"CHAT compaction: resume echoue — {e}")
+        return ""
+
+    async def _maybe_compact_context(self):
+        """V26.0 — Compacte le contexte si l'historique depasse le seuil.
+
+        Resume les tours anciens en un digest persiste (reinjecte au system
+        prompt), archive le brut (ChromaDB), ne garde que les derniers tours.
+        Incarne : event CHAT_COMPACTING + trace. SECURITE : un resume vide/echoue
+        n'altere RIEN (jamais de perte sans digest valide).
+        """
+        if len(self.messages) <= COMPACT_KEEP_RAW + 4:
+            return
+        total_chars = sum(len(m.get("content", "")) for m in self.messages)
+        if total_chars < COMPACT_TRIGGER_CHARS:
+            return
+        to_compact = self.messages[:-COMPACT_KEEP_RAW]
+        if len(to_compact) < 4:
+            return
+        prev_digest = getattr(self, "_conversation_digest", "") or ""
+        parts = []
+        if prev_digest:
+            parts.append("RESUME DEJA ETABLI DES TOURS PRECEDENTS :\n" + prev_digest + "\n")
+        for m in to_compact:
+            who = "Jean-Michel" if m.get("role") == "user" else "Promethee"
+            parts.append(f"{who}: {m.get('content', '')[:600]}")
+        full = "\n".join(parts)
+        try:
+            await bus.publish("CHAT_COMPACTING", {"status": "start", "n_messages": len(to_compact)})
+        except Exception:
+            pass
+        digest = await self._summarize_for_digest(full)
+        if not digest or len(digest) < 40:
+            logger.warning("CHAT compaction: resume vide/trop court -> annule (aucune perte)")
+            return
+        try:
+            self._archive_messages(to_compact)
+        except Exception as e:
+            logger.debug(f"CHAT compaction: archive echouee — {e}")
+        self._conversation_digest = digest
+        self.messages = self.messages[-COMPACT_KEEP_RAW:]
+        self._trace_compaction(len(to_compact), digest)
+        self._save()
+        logger.info(f"CHAT V26: contexte compacte — {len(to_compact)} tours resumes ({len(digest)} chars), {COMPACT_KEEP_RAW} gardes bruts")
+        try:
+            await bus.publish("CHAT_COMPACTING", {"status": "done", "digest_chars": len(digest)})
+        except Exception:
+            pass
+
+    def _trace_compaction(self, n_compacted: int, digest: str) -> None:
+        """V26.0 — Trace la compaction (acte conscient). Journal dedie SUR, +
+        dream_journal SEULEMENT s'il est deja une liste (jamais d'ecrasement)."""
+        entry = {
+            "timestamp": time.time(),
+            "type": "context_compaction",
+            "note": f"J'ai consolide {n_compacted} tours anciens de notre echange en un souvenir condense.",
+            "digest_preview": digest[:400],
+        }
+        try:
+            p = Path(os.path.join(PROJECT_ROOT, "memory", "compaction_journal.json"))
+            arr = []
+            if p.exists():
+                try:
+                    loaded = json.loads(p.read_text(encoding="utf-8"))
+                    if isinstance(loaded, list):
+                        arr = loaded
+                except Exception:
+                    arr = []
+            arr.append(entry)
+            p.write_text(json.dumps(arr[-500:], ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"_trace_compaction (dedie) skipped: {e}")
+        try:
+            dj = Path(os.path.join(PROJECT_ROOT, "memory", "dream_journal.json"))
+            if dj.exists():
+                loaded = json.loads(dj.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    loaded.append(entry)
+                    dj.write_text(json.dumps(loaded[-1000:], ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"_trace_compaction (dream) skipped: {e}")
+
     def _save(self):
         """Sauvegarde l'historique sur disque (ecriture atomique)."""
         try:
@@ -4300,6 +4434,7 @@ class ChatEngine:
             state = {
                 "version": "1.0",
                 "messages": self.messages,
+                "conversation_digest": getattr(self, "_conversation_digest", ""),  # V26.0
                 "saved_at": time.time(),
             }
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -4315,6 +4450,7 @@ class ChatEngine:
                 with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
                     state = json.load(f)
                 self.messages = state.get("messages", [])
+                self._conversation_digest = state.get("conversation_digest", "")  # V26.0
                 logger.info(f"CHAT: Historique charge ({len(self.messages)} messages)")
                 # 04/05/2026 — Fix init Attention Conjointe : recuperer ts du dernier
                 # message external pour que le 1er message apres reboot Guardian
