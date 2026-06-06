@@ -471,12 +471,32 @@ class SchoolSchedule:
                     }
             except Exception:
                 pass
-            # Fallback : amelioration d'un fichier au hasard
-            files = _get_project_files()
-            target = files[h % len(files)]
+            # V22.0 (2026-06-06) — ATELIER DE CODE EX-NIHILO. Remplace l'ancien
+            # fallback "ameliorer un fichier au hasard" : il collait un target_file
+            # aleatoire -> branche `if target:` -> audit AST croise -> factualite ~0
+            # -> veto systematique de closure, MEME sur des livrables notes 8.0
+            # (puits de famine structurel). Sans target_file, le WORKSHOP genere du
+            # code ex-nihilo route vers `compute_code_factuality` (syntaxe + densite) :
+            # c'est ENFIN le cas d'usage que la branche V20.0 (school_schedule ~1048)
+            # attendait sans jamais le recevoir (le "playground" est le JEU Physics,
+            # is_playground=True -> _execute_school_playground, pas du code).
+            workshop_topics = [
+                "ATELIER LIBRE : concois et ecris un petit module Python original et "
+                "fonctionnel (une classe utile OU un ensemble de fonctions coherentes) "
+                "sur un sujet de ton choix. Du code REEL et executable, pas de pseudo-code.",
+                "ATELIER : ecris une structure de donnees Python complete de ton choix "
+                "(pile, file, arbre binaire, graphe, cache LRU...) avec ses methodes "
+                "principales. Code reel et fonctionnel, pas de pseudo-code.",
+                "ATELIER : implemente un petit algorithme Python de ton choix (tri, "
+                "recherche, parcours, parsing simple, distance d'edition...) sous forme "
+                "de fonctions reelles et testables. Du vrai code, pas de pseudo-code.",
+                "ATELIER : ecris un mini-utilitaire Python autonome de ton choix "
+                "(validateur, convertisseur, generateur, petit calculateur...) en code "
+                "reel et fonctionnel. Pas de pseudo-code.",
+            ]
             return {
-                "topic": f"Ameliorer : {target}",
-                "target_file": target,
+                "topic": workshop_topics[h % len(workshop_topics)],
+                "target_file": "",   # ex-nihilo -> compute_code_factuality (V20.0)
             }
         elif slot == SLOT_CREATION:
             prompt = CREATION_PROMPTS[h % len(CREATION_PROMPTS)]
