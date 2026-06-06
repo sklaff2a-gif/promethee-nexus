@@ -944,6 +944,12 @@ class AutonomyEngine:
         last_day = persisted.get("last_reset_day")
         self.last_reset_day = date.fromisoformat(last_day) if last_day else date.today()
         self.routine_history = persisted.get("routine_history", [])
+        # V27.0 — anti-repetition d'inspection : l'intention STRUCTUREE (action
+        # choisie) est stockee a la SOURCE (_execute_self_inspect), au lieu d'etre
+        # re-devinee en parsant result_preview (couplage fragile par magic-string,
+        # casse des que le label change ou que l'entry n'a pas de preview).
+        # Concretisation de la lecon auto-formulee par Promethee le 06/06.
+        self._recent_inspect_actions: list = persisted.get("recent_inspect_actions", [])
         self.error_streak = persisted.get("error_streak", 0)
         self.total_routines_executed = persisted.get("total_routines_executed", 0)
         self.last_health_check = persisted.get("last_health_check")
@@ -2059,6 +2065,7 @@ class AutonomyEngine:
             "daily_budget_used": self.daily_budget_used,
             "last_reset_day": self.last_reset_day.isoformat() if self.last_reset_day else None,
             "routine_history": self.routine_history,
+            "recent_inspect_actions": self._recent_inspect_actions[-10:],  # V27.0
             "last_health_check": self.last_health_check,
             "error_streak": self.error_streak,
             "total_routines_executed": self.total_routines_executed,
@@ -5254,6 +5261,16 @@ class AutonomyEngine:
             if reflection:
                 final_result += f"\n\n[RÉFLEXION]\n{reflection}"
 
+            # V27.0 — memoriser l'intention d'inspection a la SOURCE (action
+            # structuree) pour l'anti-repetition de _choose_inspect_target, au lieu
+            # de la re-deviner depuis result_preview. Pour read_file/list_files on
+            # garde le chemin (granularite par fichier, comme l'ancien parsing).
+            inspect_marker = action if action in ("issues", "commits", "summary") \
+                else (target.get("path") or action)
+            self._recent_inspect_actions.append(inspect_marker)
+            if len(self._recent_inspect_actions) > 10:
+                self._recent_inspect_actions = self._recent_inspect_actions[-10:]
+
             return {
                 "status": "success",
                 "result": final_result,
@@ -5277,24 +5294,33 @@ class AutonomyEngine:
             "Agents/evolution_agent.py", "Agents/coder_agent.py",
         ]
 
-        # Ce qu'on a déjà inspecté récemment (extrait du result_preview)
-        recent_inspects = []
-        for h in self.routine_history:
-            if h.get("intent") == "SELF_INSPECT":
-                preview = h.get("result_preview", "")
-                if "Issues" in preview:
-                    recent_inspects.append("issues")
-                elif "Commits" in preview:
-                    recent_inspects.append("commits")
-                elif "sumé" in preview or "summary" in preview.lower():
-                    recent_inspects.append("summary")
-                elif "Lecture" in preview or "Relecture" in preview:
-                    # Extraire le chemin du fichier
-                    for p in interesting_paths:
-                        if p in preview:
-                            recent_inspects.append(p)
-                            break
-        recent_inspects = recent_inspects[-5:]
+        # V27.0 — anti-repetition basee sur l'intention STRUCTUREE stockee a la
+        # source (_execute_self_inspect), au lieu de re-parser result_preview.
+        # Lecon gravee (06/06) : ne jamais re-deviner depuis un texte ce qu'on a
+        # soi-meme produit ; garder l'intention structuree des l'origine. (L'ancien
+        # parsing cassait des que le label changeait, et ne voyait pas les
+        # SELF_INSPECT du chemin FORCED qui n'ecrivent pas de result_preview.)
+        recent_inspects = list(getattr(self, "_recent_inspect_actions", [])[-5:])
+        # Fallback retro-compatible : si la liste structuree est vide (premier run
+        # apres deploiement, ou etat ancien), retomber sur l'ancien parsing par
+        # mots-cles pour ne pas perdre l'historique deja en memoire.
+        if not recent_inspects:
+            for h in self.routine_history:
+                if h.get("intent") == "SELF_INSPECT":
+                    preview = h.get("result_preview", "")
+                    if "Issues" in preview:
+                        recent_inspects.append("issues")
+                    elif "Commits" in preview:
+                        recent_inspects.append("commits")
+                    elif "sumé" in preview or "summary" in preview.lower():
+                        recent_inspects.append("summary")
+                    elif "Lecture" in preview or "Relecture" in preview:
+                        # Extraire le chemin du fichier
+                        for p in interesting_paths:
+                            if p in preview:
+                                recent_inspects.append(p)
+                                break
+            recent_inspects = recent_inspects[-5:]
 
         # Priorité 1 : issues ouvertes (si pas inspecté récemment)
         if "issues" not in recent_inspects:
