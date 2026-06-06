@@ -23,6 +23,10 @@ CHAT_HISTORY_FILE = Path(os.path.join(PROJECT_ROOT, "memory", "chat_history.json
 MAX_HISTORY_MESSAGES = 30       # Fenetre de contexte envoyee a Ollama (max)
 MIN_HISTORY_MESSAGES = 8        # Minimum garanti meme si prompt long
 MAX_SAVED_MESSAGES = 200        # Max messages persistes (FIFO)
+# V23.0 (2026-06-06) — Consolidation forte des lecons certifiees (cycle eleve-actif).
+LESSON_MIN_CHARS = 20           # En-deca : rien a graver
+LESSON_MAX_CONCEPTS = 8         # Concepts extraits par lecon (borne le nb de paires)
+LESSON_STRENGTH_FACTOR = 3.0    # Multiplicateur du taux Hebbian (clampe a 4.0 cote synaptic)
 CHAT_MODEL = "qwen3.5:9b"     # Modele par defaut (migration 2026-03-13)
 EDITOR_MODEL = "qwen2.5-coder:14b"  # 04/05/2026 — Pipeline 2 passes Attention Conjointe
 OLLAMA_CHAT_URL = "http://127.0.0.1:11434/api/chat"
@@ -279,6 +283,34 @@ class ChatEngine:
         args = parts[1:]
         return (cmd, args)
 
+    def _trace_lesson(self, lesson: str, concept_nids: List[str]) -> None:
+        """Trace une lecon certifiee dans memory/lessons_journal.json (V23.0).
+
+        Le journal des lecons garde le fil de ce que Promethee apprend dans le
+        dialogue (cycle eleve-actif). Complementaire de la gravure synaptique :
+        la gravure influence implicitement, la trace permet le rappel explicite.
+        """
+        try:
+            path = Path(os.path.join(PROJECT_ROOT, "memory", "lessons_journal.json"))
+            entries = []
+            if path.exists():
+                try:
+                    loaded = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, list):
+                        entries = loaded
+                except Exception:
+                    entries = []
+            entries.append({
+                "timestamp": time.time(),
+                "lesson": lesson[:2000],
+                "concepts": concept_nids,
+                "source": "chat_eleve_actif",
+            })
+            entries = entries[-500:]  # FIFO, garde les 500 dernieres
+            path.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"_trace_lesson skipped: {e}")
+
     async def _execute_command(self, cmd: str, args: List[str]) -> str:
         """Execute une commande d'introspection ou de dispatch. Retourne le texte resultat."""
 
@@ -290,6 +322,50 @@ class ChatEngine:
 
         if cmd == "aide":
             return self._COMMAND_HELP
+
+        if cmd == "grave":
+            # V23.0 (2026-06-06) — CONSOLIDATION FORTE D'UNE LECON CERTIFIEE.
+            # Cycle eleve-actif : Promethee formule sa lecon ; le professeur la
+            # certifie via `!grave <texte affine>` (sa version), ou `!grave` seul
+            # (grave la DERNIERE reponse de Promethee, certifiee par le geste).
+            # Les concepts de la lecon sont co-actives au taux FORT au lieu du 0.08
+            # du chat ordinaire (le contenu certifie EST le garde-fou anti-hallu :
+            # on ne grave fort que ce que le professeur valide). Le dream cimente.
+            try:
+                from core.synaptic_network import cortex
+                lesson = " ".join(args).strip()
+                if not lesson:
+                    for m in reversed(self.messages):
+                        if m.get("role") == "assistant":
+                            lesson = (m.get("content") or "").strip()
+                            break
+                if not lesson or len(lesson) < LESSON_MIN_CHARS:
+                    return ("!grave : aucune lecon a graver. Fournis un texte "
+                            "(`!grave <lecon>`), ou assure-toi que Promethee vient "
+                            "de formuler son enseignement juste avant.")
+                nids = cortex._extract_and_ensure(
+                    lesson, node_type="lesson", max_concepts=LESSON_MAX_CONCEPTS,
+                )
+                if not nids or len(nids) < 2:
+                    return (f"!grave : lecon trop pauvre en concepts saisissables "
+                            f"({len(nids) if nids else 0}) pour graver des associations.")
+                pairs = 0
+                for i in range(len(nids)):
+                    for j in range(i + 1, len(nids)):
+                        cortex.hebbian_strengthen(
+                            nids[i], nids[j], success=True,
+                            context="lesson_certified",
+                            strength_factor=LESSON_STRENGTH_FACTOR,
+                        )
+                        pairs += 1
+                self._trace_lesson(lesson, nids)
+                logger.info(f"CHAT V23: lecon gravee — {len(nids)} concepts, {pairs} co-activations x{LESSON_STRENGTH_FACTOR}")
+                return (f"Lecon gravee (cycle eleve-actif) : {len(nids)} concepts, "
+                        f"{pairs} co-activations renforcees au taux fort "
+                        f"(x{LESSON_STRENGTH_FACTOR}). Tracee dans le journal des "
+                        f"lecons. Le dream la cimentera les nuits suivantes.")
+            except Exception as e:
+                return f"!grave : erreur — {e}"
 
         if cmd == "synapses":
             try:

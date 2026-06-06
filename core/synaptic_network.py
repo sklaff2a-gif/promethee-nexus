@@ -762,8 +762,19 @@ class SynapticNetwork:
     # --- Apprentissage Hebbien ---
 
     def hebbian_strengthen(self, src_id: str, tgt_id: str,
-                           success: bool = True, context: str = ""):
-        """Apprentissage Hebbien classique avec anti-Hebb sur echec."""
+                           success: bool = True, context: str = "",
+                           strength_factor: float = 1.0):
+        """Apprentissage Hebbien classique avec anti-Hebb sur echec.
+
+        strength_factor (V23.0, 2026-06-06) : multiplicateur du taux pour la
+        consolidation FORTE des lecons certifiees du chat (cycle eleve-actif :
+        Promethee formule sa lecon, le professeur la certifie via !grave, on
+        grave les co-activations de concepts au taux fort au lieu de 0.08).
+        Defaut 1.0 = comportement INCHANGE (retrocompat totale). Clampe a
+        [0.0, 4.0] : le (1-w) et le SOFT_CAP limitent deja, mais on borne le
+        facteur pour ne JAMAIS forger un attracteur permanent d'un seul coup
+        (le boost SEME fort ; c'est le dream qui cimente la durabilite).
+        """
         src = self.nodes.get(src_id)
         tgt = self.nodes.get(tgt_id)
         if not src or not tgt:
@@ -774,7 +785,7 @@ class SynapticNetwork:
         e_tgt = tgt["energy"]
 
         if success:
-            # Renforcement : Dw = lr * E_src * E_tgt * (1 - w)
+            # Renforcement : Dw = lr * factor * E_src * E_tgt * (1 - w)
             is_new = key not in self.synapses
             if is_new:
                 syn = _make_synapse(src_id, tgt_id, 0.1, "hebbian", context)
@@ -783,7 +794,8 @@ class SynapticNetwork:
                     self._outgoing_by_source.setdefault(src_id, set()).add(key)
                 self._enforce_synapse_limit()
             syn = self.synapses[key]
-            dw = HEBBIAN_LEARNING_RATE * e_src * e_tgt * (1.0 - syn["weight"])
+            _factor = max(0.0, min(4.0, strength_factor))
+            dw = HEBBIAN_LEARNING_RATE * _factor * e_src * e_tgt * (1.0 - syn["weight"])
             syn["weight"] = min(1.0, syn["weight"] + dw)
             syn["formation_count"] += 1
             syn["last_strengthened"] = time.time()
