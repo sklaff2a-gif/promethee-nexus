@@ -312,6 +312,50 @@ class ChatEngine:
         except Exception as e:
             logger.debug(f"_trace_lesson skipped: {e}")
 
+    def _execute_calc_command(self, code: str) -> str:
+        """V24.0 — Delegation de calcul dans le sandbox securise.
+
+        Outil FIABLE pour que Promethee delegue son talon (le calcul en chaine,
+        le symbolique presse), la ou l'agent !code refuse ("hors perimetre").
+        Retourne le resultat REEL du sandbox (AST-lint : os/open/subprocess/
+        eval/exec/__import__ interdits) -> anti-confabulation : le sandbox EST la
+        verite, on rapporte exactement ce qu'il produit (ou son echec).
+        Appele par les DEUX chemins : !calc message utilisateur (_execute_command)
+        ET !calc auto-action depuis une reponse de Promethee (_scan_response_actions).
+        """
+        code = (code or "").strip()
+        # Le LLM ecrit souvent !calc "..." : enlever les guillemets entourants
+        if len(code) >= 2 and code[0] == code[-1] and code[0] in ('"', "'"):
+            code = code[1:-1].strip()
+        # ...et son script sur une ligne avec des \n LITTERAUX (backslash-n) au
+        # lieu de vrais retours a la ligne : on les convertit pour le sandbox.
+        if "\\n" in code:
+            code = code.replace("\\n", "\n").replace("\\t", "\t")
+        if not code:
+            return ("Usage : !calc <expression ou code Python>\n"
+                    "Exemples :\n"
+                    "  !calc sum(1/k**2 for k in range(1,101))\n"
+                    "  !calc 2**100\n"
+                    "Pour du code multi-lignes, termine par print(...) ton resultat.")
+        try:
+            from core.capabilities.code_sandbox import sandbox
+            # Expression simple (une ligne, sans print/affectation) -> wrap print()
+            _bare = code.replace("==", "").replace("!=", "").replace("<=", "").replace(">=", "")
+            is_expr = ("\n" not in code and "print" not in code
+                       and ";" not in code and "=" not in _bare)
+            code_to_run = f"print({code})" if is_expr else code
+            res = sandbox.run_python(code_to_run)
+            if res.success:
+                out = (res.stdout or "").strip()
+                if not out:
+                    return "[!calc] Execute sans erreur, mais aucune sortie. Pense a print(...) ton resultat."
+                if len(out) > 1500:
+                    out = out[:1500] + " [...tronque]"
+                return f"[!calc] Resultat (sandbox securise) :\n{out}"
+            return f"[!calc] Echec : {res.format_traceback(500)}"
+        except Exception as e:
+            return f"!calc : erreur — {e}"
+
     async def _execute_command(self, cmd: str, args: List[str]) -> str:
         """Execute une commande d'introspection ou de dispatch. Retourne le texte resultat."""
 
@@ -325,39 +369,7 @@ class ChatEngine:
             return self._COMMAND_HELP
 
         if cmd == "calc":
-            # V24.0 (2026-06-06) — DELEGATION DE CALCUL. Donne a Promethee un
-            # outil FIABLE pour deleguer son talon (le calcul en chaine, le
-            # symbolique presse) la ou l'agent !code refuse ("hors perimetre").
-            # Execute un petit calcul Python dans le sandbox securise (AST-lint :
-            # os/open/subprocess/eval/exec/__import__ interdits) et retourne le
-            # resultat REEL. Le contenu rendu EST la verite : pas de confabulation
-            # possible, on rapporte exactement ce que le sandbox produit (ou son
-            # echec). Cf lecon "maturite agentique" : deleguer + rapport fidele.
-            try:
-                from core.capabilities.code_sandbox import sandbox
-                code = " ".join(args).strip()
-                if not code:
-                    return ("Usage : !calc <expression ou code Python>\n"
-                            "Exemples :\n"
-                            "  !calc sum(1/k**2 for k in range(1,101))\n"
-                            "  !calc 2**100\n"
-                            "Pour du code multi-lignes, termine par print(...) ton resultat.")
-                # Expression simple (une ligne, sans print/affectation) -> wrap print()
-                _bare = code.replace("==", "").replace("!=", "").replace("<=", "").replace(">=", "")
-                is_expr = ("\n" not in code and "print" not in code
-                           and ";" not in code and "=" not in _bare)
-                code_to_run = f"print({code})" if is_expr else code
-                res = sandbox.run_python(code_to_run)
-                if res.success:
-                    out = (res.stdout or "").strip()
-                    if not out:
-                        return "[!calc] Execute sans erreur, mais aucune sortie. Pense a print(...) ton resultat."
-                    if len(out) > 1500:
-                        out = out[:1500] + " [...tronque]"
-                    return f"[!calc] Resultat (sandbox securise) :\n{out}"
-                return f"[!calc] Echec : {res.format_traceback(500)}"
-            except Exception as e:
-                return f"!calc : erreur — {e}"
+            return self._execute_calc_command(" ".join(args))
 
         if cmd == "grave":
             # V23.0 (2026-06-06) — CONSOLIDATION FORTE D'UNE LECON CERTIFIEE.
@@ -1938,7 +1950,7 @@ class ChatEngine:
 
     # Commandes dispatch autorisees en auto-action
     # "observe" remis avec cooldown 5min (voir _scan_response_actions)
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
     _last_auto_observe: float = 0.0  # timestamp du dernier !observe auto-action
     _AUTO_OBSERVE_COOLDOWN: float = 300.0  # 5 minutes entre deux auto-observations
 
@@ -2049,6 +2061,9 @@ class ChatEngine:
                     result = self._execute_github_command()
                 elif cmd_lower == "audit":
                     result = self._execute_audit_command()
+                elif cmd_lower == "calc":
+                    # V24.0 — args = code brut (PAS splitte par shlex qui casserait le code)
+                    result = self._execute_calc_command(args)
                 elif cmd_lower == "antibodies":
                     ab_args = self._split_action_args(args)
                     result = self._execute_antibodies_command(ab_args)

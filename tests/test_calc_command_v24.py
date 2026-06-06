@@ -58,3 +58,22 @@ async def test_calc_rejette_code_dangereux(engine):
     res = await engine._execute_command("calc", ["__import__('os').getcwd()"])
     low = res.lower()
     assert "echec" in low or "interdit" in low or "import" in low, res
+
+
+@pytest.mark.asyncio
+async def test_calc_gere_newlines_litteraux(engine):
+    # CAS REEL : Promethee ecrit son script sur une ligne avec des \n LITTERAUX
+    code = "def f(n):\\n    return sum(range(n))\\nprint(f(5))"  # 0+1+2+3+4 = 10
+    res = await engine._execute_command("calc", [code])
+    assert "10" in res, res
+
+
+@pytest.mark.asyncio
+async def test_calc_enleve_guillemets_entourants(engine):
+    res = await engine._execute_command("calc", ['"2+3"'])
+    assert "5" in res, res
+
+
+def test_calc_dans_whitelist_auto_action():
+    # sans ca, !calc emis par Promethee dans SES reponses ne s'execute pas
+    assert "calc" in ChatEngine._AUTO_ACTION_WHITELIST
