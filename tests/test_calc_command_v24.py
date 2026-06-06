@@ -77,3 +77,31 @@ async def test_calc_enleve_guillemets_entourants(engine):
 def test_calc_dans_whitelist_auto_action():
     # sans ca, !calc emis par Promethee dans SES reponses ne s'execute pas
     assert "calc" in ChatEngine._AUTO_ACTION_WHITELIST
+
+
+# ---------- V24.2 : collapse d'un !calc multi-ligne ----------
+
+def test_collapse_calc_multiligne(engine):
+    # un script ecrit sur plusieurs lignes (vrais newlines) doit devenir UNE ligne
+    response = "!calc def f(n):\n    return n*2\nprint(f(5))"
+    out = engine._collapse_multiline_calc(response)
+    assert "\n" not in out, f"vrais newlines restants : {out!r}"
+    assert "\\n" in out  # convertis en litteraux
+    assert out.startswith("!calc ")
+
+
+def test_collapse_calc_sarrete_avant_autre_commande(engine):
+    response = "!calc a=1\nprint(a)\n!read foo.py"
+    out = engine._collapse_multiline_calc(response)
+    assert "!read foo.py" in out          # l'autre commande reste intacte
+    assert out.startswith("!calc a=1\\nprint(a)")
+
+
+def test_collapse_calc_une_ligne_inchange(engine):
+    response = "!calc 2+2"
+    assert engine._collapse_multiline_calc(response) == "!calc 2+2"
+
+
+def test_collapse_sans_calc_inchange(engine):
+    response = "du texte normal\n!read foo.py"
+    assert engine._collapse_multiline_calc(response) == response

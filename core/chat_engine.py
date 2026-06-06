@@ -1980,6 +1980,27 @@ class ChatEngine:
         except ValueError:
             return args.strip().split()
 
+    def _collapse_multiline_calc(self, response: str) -> str:
+        """V24.2 (2026-06-06) — Collapse un bloc !calc multi-ligne en UNE ligne.
+
+        Le LLM ecrit parfois son script sur PLUSIEURS lignes (vrais retours a la
+        ligne). La regex de capture des auto-actions (^!cmd ...) s'arrete au 1er
+        newline -> le code etait tronque -> SyntaxError (observe 06/06). On remplace
+        les vrais newlines du bloc par des \\n LITTERAUX (que _execute_calc_command
+        reconvertit), le bloc s'etendant jusqu'a la prochaine commande !, une ligne
+        vide, ou la fin du message. Aucun impact sur les autres commandes.
+        """
+        import re as _re
+
+        def _repl(m):
+            collapsed = m.group(1).replace("\n", "\\n")
+            return "!calc " + collapsed
+
+        return _re.sub(
+            r'(?m)^!calc[ \t]+(.+?)(?=\n[ \t]*!|\n\s*\n|\Z)',
+            _repl, response, flags=_re.DOTALL,
+        )
+
     async def _scan_response_actions(self, response: str,
                                       max_actions: int = 4) -> int:
         """Scanne la reponse du LLM pour des commandes ! et les execute.
@@ -2019,6 +2040,10 @@ class ChatEngine:
 
         if not response:
             return 0
+
+        # V24.2 — collapser un !calc multi-ligne en une ligne (\n litteraux) AVANT
+        # la capture mono-ligne, sinon le code multi-ligne serait tronque.
+        response = self._collapse_multiline_calc(response)
 
         # Detecter les lignes commencant par ! (debut de ligne)
         # Support des commandes avec ET sans arguments (!status vs !research sujet)
