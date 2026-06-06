@@ -4362,8 +4362,9 @@ class ChatEngine:
             "options": {"temperature": 0.3, "num_ctx": OLLAMA_CHAT_CTX, "num_predict": 900},
         }
         try:
+            import httpx  # V26.1 — import local (httpx n'est pas module-level ici)
             async with httpx.AsyncClient() as client:
-                r = await client.post(OLLAMA_CHAT_URL, json=payload, timeout=120)
+                r = await client.post(OLLAMA_CHAT_URL, json=payload, timeout=45)
                 if r.status_code == 200:
                     data = r.json()
                     return (data.get("message", {}).get("content", "") or "").strip()
@@ -4388,6 +4389,13 @@ class ChatEngine:
         to_compact = self.messages[:-COMPACT_KEEP_RAW]
         if len(to_compact) < 4:
             return
+        # V26.1 — cooldown : ne pas re-tenter le resume (1 appel LLM) a CHAQUE
+        # message si une tentative recente a echoue/abouti. Evite d'etrangler le
+        # chat sous charge (mode=urgence) en relancant un resume a chaque tour.
+        _now = time.time()
+        if _now - getattr(self, "_last_compact_attempt", 0.0) < 120.0:
+            return
+        self._last_compact_attempt = _now
         prev_digest = getattr(self, "_conversation_digest", "") or ""
         parts = []
         if prev_digest:
