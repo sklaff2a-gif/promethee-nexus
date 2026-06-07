@@ -33,7 +33,7 @@ PROTECTED_COLLECTIONS = frozenset({
 # Greffe passive : compare l'ancien retrieval (embedder ANGLAIS par defaut) a une
 # collection temoin MULTILINGUE et logue les ecarts a froid. INVARIANT : query_documents
 # retourne TOUJOURS l'ancien resultat ; le nouveau est observe, JAMAIS injecte.
-SHADOW_READ_ENABLED = False   # KILL-SWITCH : False = ZERO overhead, comportement d'origine 100% intact
+SHADOW_READ_ENABLED = True    # ACTIVE (07/06) : double lecture passive ON ; rollback = remettre False
 SHADOW_LOG_PATH = os.path.join("memory", "shadow_read_v2.jsonl")
 SHADOW_COLLECTION_SUFFIX = "_v2_test"
 SHADOW_EMBED_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
