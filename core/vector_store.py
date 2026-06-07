@@ -29,6 +29,16 @@ PROTECTED_COLLECTIONS = frozenset({
 })
 
 
+# --- Shadow Reading (Phase 1, migration Memoire V2) — DESACTIVE PAR DEFAUT (07/06) ---
+# Greffe passive : compare l'ancien retrieval (embedder ANGLAIS par defaut) a une
+# collection temoin MULTILINGUE et logue les ecarts a froid. INVARIANT : query_documents
+# retourne TOUJOURS l'ancien resultat ; le nouveau est observe, JAMAIS injecte.
+SHADOW_READ_ENABLED = False   # KILL-SWITCH : False = ZERO overhead, comportement d'origine 100% intact
+SHADOW_LOG_PATH = os.path.join("memory", "shadow_read_v2.jsonl")
+SHADOW_COLLECTION_SUFFIX = "_v2_test"
+SHADOW_EMBED_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+
+
 class ChromaMemoryManager:
     _instances: Dict[str, "ChromaMemoryManager"] = {}
 
@@ -184,7 +194,11 @@ class ChromaMemoryManager:
                 from config import Config
                 n_results = getattr(Config, "RAG_DEFAULT_N_RESULTS", 3)
             col = self._get_collection(collection_name)
-            return col.query(query_texts=query_texts, n_results=n_results)
+            result_old = col.query(query_texts=query_texts, n_results=n_results)  # MAITRE EXCLUSIF
+            # --- GREFFE SHADOW READING (Phase 1) — fantome passif, n'altere JAMAIS result_old ---
+            if SHADOW_READ_ENABLED:
+                self._shadow_observe(query_texts, n_results, collection_name, result_old)
+            return result_old   # INVARIANT DE FLUX : on retourne TOUJOURS l'ancien, inchange
         except Exception as e:
             print(f"❌ Erreur Mémoire (Query): {e}")
             return None
@@ -203,6 +217,55 @@ class ChromaMemoryManager:
             )
         except Exception as e:
             print(f"❌ Erreur Mémoire (QueryMeta): {e}")
+            return None
+
+    # --- Shadow Reading (Phase 1) : fantomes passifs, jamais appeles si SHADOW_READ_ENABLED=False ---
+    def _shadow_observe(self, query_texts, n_results, collection_name, result_old):
+        """TRY/EXCEPT BORG : interroge la collection temoin multilingue, compare a
+        result_old, logue l'ecart en JSONL. AUCUNE exception ne remonte vers query_documents."""
+        try:
+            shadow_col = self._get_shadow_collection(collection_name + SHADOW_COLLECTION_SUFFIX)
+            if shadow_col is None:
+                return
+            import json
+            t0 = time.perf_counter()
+            result_new = shadow_col.query(query_texts=query_texts, n_results=n_results)
+            lat_new = (time.perf_counter() - t0) * 1000.0
+            old_ids = ((result_old or {}).get("ids") or [[]])[0]
+            new_ids = ((result_new or {}).get("ids") or [[]])[0]
+            rec = {
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "collection": collection_name,
+                "query": (query_texts[0] if query_texts else "")[:80],
+                "old_ids": old_ids, "new_ids": new_ids,
+                "overlap": len(set(old_ids) & set(new_ids)),
+                "mismatch": set(old_ids) != set(new_ids),
+                "lat_new_ms": round(lat_new, 2),
+            }
+            with open(SHADOW_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception as e:
+            try:   # le BORG ne laisse RIEN fuir, pas meme l'echec d'ecriture du log
+                with open(SHADOW_LOG_PATH + ".err", "a", encoding="utf-8") as f:
+                    f.write(f"[shadow] {e}\n")
+            except Exception:
+                pass
+
+    def _get_shadow_collection(self, shadow_name):
+        """Recupere/cree la collection temoin avec l'embedder MULTILINGUE. Retourne None
+        si l'embedder n'est pas dispo (le shadow s'abstient proprement, sans casser)."""
+        if not hasattr(self, "_shadow_collections"):
+            self._shadow_collections = {}
+        if shadow_name in self._shadow_collections:
+            return self._shadow_collections[shadow_name]
+        try:
+            from chromadb.utils import embedding_functions
+            ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=SHADOW_EMBED_MODEL)
+            col = self.client.get_or_create_collection(name=shadow_name, embedding_function=ef)
+            self._shadow_collections[shadow_name] = col
+            return col
+        except Exception:
+            self._shadow_collections[shadow_name] = None   # cache l'echec : pas de retry par requete
             return None
 
     def record_recall(self, doc_id: str, collection_name: str = "collective_wisdom"):
