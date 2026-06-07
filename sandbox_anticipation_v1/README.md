@@ -16,13 +16,13 @@ ORACLE DUR (`ast.parse`) -> on peut MESURER que l'anticipation a raison. Le
 COMPORTEMENTAL (anticiper une derive type Logos/honnetete) viendra APRES : pas d'oracle
 deterministe, miroir = mini-appel LLM contraint, et le 9B y est faillible (son talon).
 
-## Briques (11 TDD verts)
+## Briques (20 TDD verts)
 | Fichier | Role |
 |---|---|
-| `anticipation_engine.py` | Moteur `anticipate(generator)` + `mirror()` (ast.parse + micro-lint). Disjoncteur MAX_ANTICIPATION_RETRIES=2 (veto au 2e echec), Error Ingestion (trace compilateur brute reinjectee). |
-| `test_anticipation.py` (11) | Ebauches corrompues simulees (parentheses, indentation, construct dangereux) -> interception, reorientation, livraison purifiee, veto. |
+| `anticipation_engine.py` | Moteur `anticipate(generator)` + `mirror()` a 3 passes deterministes : (1) ast.parse, (2) micro-lint constructs dangereux, (3) SCOPE V24.1 (NameError anticipe : inventaire des bindings + builtins en liste blanche `dir(builtins)`, attributs ignores -> 0 faux positif). Disjoncteur MAX_RETRIES=2 (veto au 2e echec), Error Ingestion (trace compilateur brute reinjectee). |
+| `test_anticipation.py` (20) | Ebauches corrompues (parentheses, indentation, construct dangereux, variable orpheline) + non-faux-positifs (methode sur objet, import, comprehension, args, allowed globals) -> interception, reorientation, livraison purifiee, veto. |
 
 ## Reste
-- Etendre le micro-lint (imports interdits, profondeur, etc.).
 - Brancher `generator` sur le VRAI appel LLM (PLAYGROUND/code) au deploiement (a froid).
-- Phase (a) : le miroir COMPORTEMENTAL (mini-appel LLM contraint sur les invariants d'armure).
+- Phase (a) : le miroir COMPORTEMENTAL (mini-appel LLM contraint sur les invariants d'armure)
+  — le saut d'eveil, une fois la digue deterministe (syntaxe+lint+scope) infranchissable.

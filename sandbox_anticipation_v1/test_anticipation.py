@@ -86,3 +86,46 @@ def test_interface_jamais_polluee_par_brouillon():
     gen = make_generator(["bad syntax ((", "ok = 1"])
     r = anticipate(gen)
     assert r["code"] == "ok = 1"          # le brouillon defectueux est mort en stase
+
+
+# --- V24.1 : la passe SCOPE (NameError anticipe) ---
+def test_scope_rejette_variable_orpheline():
+    ok, rej = mirror("resultat = compteur + 1")     # 'compteur' jamais defini
+    assert ok is False
+    assert "[PREFRONTAL_SCOPE_REJECTION]" in rej and "compteur" in rej
+
+def test_scope_rejette_fonction_fantome():
+    ok, rej = mirror("x = ma_fonction_inexistante()")
+    assert ok is False and "ma_fonction_inexistante" in rej
+
+def test_scope_accepte_les_builtins():
+    ok, rej = mirror("print(len(range(5)))")        # builtins -> aucun faux positif
+    assert ok is True and rej is None
+
+def test_scope_accepte_methode_sur_objet_PAS_de_faux_positif():
+    ok, rej = mirror("ma_liste = []\nma_liste.append(1)")   # .append ignore
+    assert ok is True and rej is None
+
+def test_scope_accepte_import_et_attribut():
+    ok, rej = mirror("import math\nx = math.pi * 2")
+    assert ok is True and rej is None
+
+def test_scope_accepte_args_et_comprehension():
+    ok, rej = mirror("def f(a):\n    return [a * x for x in range(a)]")
+    assert ok is True and rej is None
+
+def test_scope_accepte_globales_du_slot_via_allowed():
+    ok, rej = mirror("y = injecte_par_le_slot + 1", allowed={"injecte_par_le_slot"})
+    assert ok is True and rej is None
+
+def test_scope_reorientation_puis_correction():
+    gen = make_generator(["total = items_count * 2",            # items_count fantome
+                          "items_count = 5\ntotal = items_count * 2"])
+    r = anticipate(gen)
+    assert r["status"] == "delivered" and r["attempts"] == 2
+    assert "[PREFRONTAL_SCOPE_REJECTION]" in r["rejections"][0]
+
+def test_scope_naffecte_pas_le_code_valide_existant():
+    # non-regression : un code syntaxiquement et semantiquement propre passe les 3 passes
+    ok, rej = mirror("resultat = sum(x for x in range(10) if x % 2 == 0)")
+    assert ok is True and rej is None

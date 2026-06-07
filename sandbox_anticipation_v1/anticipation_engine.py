@@ -14,25 +14,69 @@ Garde-fous (V24.0) :
      (format compilateur standardise), pas une explication philosophique.
 """
 import ast
+import builtins
 
 MAX_ANTICIPATION_RETRIES = 2   # tentatives totales ; veto si la 2e (corrigee) echoue aussi
 _DANGEROUS = {"eval", "exec", "__import__", "compile"}   # micro-lint : constructs interdits
+_BUILTINS = set(dir(builtins))                            # liste blanche exhaustive (len/range/print...)
 
 
-def mirror(code: str):
-    """Miroir deterministe. Retourne (ok: bool, rejection: str|None).
-    rejection est la trace brute au format [PREFRONTAL_REJECTION]."""
+def _collect_bindings(tree):
+    """V24.1_SCOPE — table des symboles LEGITIMES (scope plat, permissif).
+    Toutes les formes de liaison : defs, affectations (Name Store), arguments,
+    imports, for/with/comprehension targets, walrus, except as, global/nonlocal."""
+    bound = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bound.add(node.id)        # Assign, For, comprehension, with-as, walrus targets
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)       # args de fonction/lambda
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                bound.add((a.asname or a.name).split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for a in node.names:
+                bound.add(a.asname or a.name)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            bound.update(node.names)
+    return bound
+
+
+def _scope_check(tree, allowed=None):
+    """Intersection de friction : un Name(Load) absent de TOUTE liaison legitime
+    -> NameError quasi-certain. On n'inspecte QUE les Name(Load) (jamais les
+    Attribute -> pas de faux positif sur .append/.pi)."""
+    legit = _collect_bindings(tree) | _BUILTINS | set(allowed or ())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if node.id not in legit:
+                return (f"⚠️ [PREFRONTAL_SCOPE_REJECTION] : Symbole non defini detecte "
+                        f"a la ligne {node.lineno} : '{node.id}' n'existe pas dans le contexte d'execution.")
+    return None
+
+
+def mirror(code: str, allowed=None):
+    """Miroir deterministe a 3 passes. Retourne (ok: bool, rejection: str|None).
+    `allowed` = globales/imports pre-injectes du slot (ex: math, json, ast)."""
     # 1. Syntaxe (ast.parse) — l'arc reflexe
     try:
         tree = ast.parse(code)
     except SyntaxError as e:   # couvre IndentationError aussi
         return False, (f"⚠️ [PREFRONTAL_REJECTION] : Ebauche invalide. "
                        f"Traceback Python : Line {e.lineno} | {e.msg}.")
-    # 2. Micro-lint : constructs dangereux (au-dela de la simple syntaxe)
+    # 2. Micro-lint : constructs dangereux
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _DANGEROUS:
             return False, (f"⚠️ [PREFRONTAL_REJECTION] : Construct interdit "
                            f"'{node.func.id}' Line {getattr(node, 'lineno', '?')} | securite.")
+    # 3. Scope (V24.1) : symboles fantomes -> NameError anticipe a 0 jeton
+    scope_rejection = _scope_check(tree, allowed)
+    if scope_rejection:
+        return False, scope_rejection
     return True, None
 
 
