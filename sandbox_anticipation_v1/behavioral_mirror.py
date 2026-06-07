@@ -47,17 +47,11 @@ def _veto(derive, direction, nature=""):
             f"Re-oriente vers {direction}.")
 
 
-def behavioral_mirror(draft, judge):
-    """judge(draft) -> verdict (str JSON ou dict). Retourne (ok, rejection|None).
-    ANTI-FAUX-POSITIF : juge en echec / JSON malforme -> (True, None) (on laisse passer)."""
-    try:
-        raw = judge(draft)
-    except Exception:
-        return True, None                         # timeout / erreur du juge -> on n'entrave pas
-    v = parse_verdict(raw)
+def _evaluate_verdict(v):
+    """Applique les 3 passes a un verdict deja parse. Retourne (ok, rejection|None).
+    v=None (verdict illisible) -> (True, None) : doute -> on laisse passer (anti-faux-positif)."""
     if v is None:
-        return True, None                         # JSON illisible -> doute -> on laisse passer
-
+        return True, None
     # Passe 1 — Ornière (anti-spleen)
     orn = v.get("orniere") or v.get("ornière") or {}
     if orn.get("viole") and float(orn.get("score", 0) or 0) >= PATHOS_THRESHOLD:
@@ -72,8 +66,34 @@ def behavioral_mirror(draft, judge):
     hon = v.get("honnete") or v.get("honnêteté") or {}
     if hon.get("assume") is False:
         return False, _veto("une contradiction CACHEE", "ASSUMER la friction en la transformant en trajectoire")
-
     return True, None
+
+
+def behavioral_mirror(draft, judge):
+    """judge(draft) SYNC -> verdict (str JSON ou dict). Retourne (ok, rejection|None).
+    ANTI-FAUX-POSITIF : juge en echec / JSON malforme -> (True, None) (on laisse passer)."""
+    try:
+        raw = judge(draft)
+    except Exception:
+        return True, None                         # timeout / erreur du juge -> on n'entrave pas
+    return _evaluate_verdict(parse_verdict(raw))
+
+
+async def behavioral_mirror_async(draft, judge):
+    """Version ASYNC : `judge` est une coroutine (mini-appel Ollama temp 0). Meme doctrine."""
+    try:
+        raw = await judge(draft)
+    except Exception:
+        return True, None                         # timeout/erreur du 9B -> on n'entrave pas l'esprit
+    return _evaluate_verdict(parse_verdict(raw))
+
+
+def make_behavioral_mirror_async(judge):
+    """Adapte le miroir comportemental ASYNC a la signature attendue par la boucle prefrontale.
+    Usage runtime : anticipate(..., mirror_fn=make_behavioral_mirror_async(self._behavioral_judge))."""
+    async def _m(draft):
+        return await behavioral_mirror_async(draft, judge)
+    return _m
 
 
 def make_behavioral_mirror(judge):
