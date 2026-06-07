@@ -1502,3 +1502,45 @@ class BaseAgent:
             except RuntimeError: pass  # Pas de boucle async active, normal en dehors du serveur
         except Exception as e:
             logger.warning(f"[{self.name}] Échec publication THOUGHT_STREAM : {e}")
+
+    # ========================================================================
+    # CORTEX PREFRONTAL V25.1 — methodes auxiliaires (CODE DORMANT, non branche)
+    # Conception + 48 TDD : sandbox_anticipation_v1/. Miroirs : core/prefrontal_mirror.py.
+    # generate_content NE LES APPELLE PAS encore -> zero effet sur le flux de production.
+    # ========================================================================
+    def _route_prefrontal_mirror(self, prompt: str):
+        """Commutateur : (mirror_fn, mode) selon le marqueur de slot. code -> miroir
+        deterministe (sync) ; intro -> miroir comportemental async (judge = ce 9B)."""
+        from core.prefrontal_mirror import route_mirror
+        judge = lambda artifact: self._behavioral_judge(prompt, artifact)
+        return route_mirror(prompt, judge)
+
+    async def _behavioral_judge(self, prompt: str, artifact: str) -> str:
+        """Mini-appel Ollama ultra-bride (temp 0.0, format JSON, court) : microscope a
+        l'esprit. Retourne le JSON brut (str). Tout echec -> '' (le miroir laisse passer)."""
+        try:
+            from core.prefrontal_mirror import JUDGE_PROMPT
+            judge_prompt = JUDGE_PROMPT.replace("{draft}", (artifact or "")[:2000])
+            model = getattr(Config, "DEFAULT_LOCAL_MODEL", "qwen3.5:9b")
+            url = getattr(Config, "OLLAMA_URL", "http://localhost:11434/api/generate")
+            payload = {"model": model, "prompt": judge_prompt, "stream": False, "think": False,
+                       "format": "json", "options": {"temperature": 0.0, "num_predict": 200}}
+            async with httpx.AsyncClient() as client:
+                r = await client.post(url, json=payload, timeout=30)
+            if r.status_code == 200:
+                return r.json().get("response", "") or ""
+            return ""
+        except Exception:
+            return ""   # doctrine inverse : tout echec -> le miroir comportemental laisse passer
+
+    def _consolidate(self, prompt: str, deliverable: str, was_cloud: bool):
+        """Memorisation DEPORTEE (invariant 3) : appelee UNE fois sur le livrable retenu,
+        jamais sur une ebauche rejetee. Reprend remember + compiler + training_pair."""
+        try:
+            if was_cloud and deliverable and len(deliverable) > 50:
+                self.remember(f"Q: {prompt}\nA: {deliverable}",
+                              metadata={"source": "cloud_escalation", "trigger": "cloud_escalation"})
+            self._record_for_compiler(prompt, deliverable, was_cloud=was_cloud)
+            self._save_training_pair(prompt, deliverable, was_cloud=was_cloud)
+        except Exception as e:
+            logger.warning(f"[{self.name}] _consolidate echoue: {e}")
