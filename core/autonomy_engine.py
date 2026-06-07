@@ -2065,7 +2065,7 @@ class AutonomyEngine:
             "daily_budget_used": self.daily_budget_used,
             "last_reset_day": self.last_reset_day.isoformat() if self.last_reset_day else None,
             "routine_history": self.routine_history,
-            "recent_inspect_actions": self._recent_inspect_actions[-10:],  # V27.0
+            "recent_inspect_actions": getattr(self, "_recent_inspect_actions", [])[-10:],  # V27.0 (defensif V27.1)
             "last_health_check": self.last_health_check,
             "error_streak": self.error_streak,
             "total_routines_executed": self.total_routines_executed,
@@ -5267,6 +5267,8 @@ class AutonomyEngine:
             # garde le chemin (granularite par fichier, comme l'ancien parsing).
             inspect_marker = action if action in ("issues", "commits", "summary") \
                 else (target.get("path") or action)
+            if not hasattr(self, "_recent_inspect_actions"):  # V27.1 robustesse instances partielles
+                self._recent_inspect_actions = []
             self._recent_inspect_actions.append(inspect_marker)
             if len(self._recent_inspect_actions) > 10:
                 self._recent_inspect_actions = self._recent_inspect_actions[-10:]
