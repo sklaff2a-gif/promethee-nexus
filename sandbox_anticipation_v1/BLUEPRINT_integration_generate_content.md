@@ -78,3 +78,83 @@ Borne dure -> jamais de boucle infinie meme si le 9B s'obstine dans son orniere.
 - **Refactoring `_invoke_llm`** : extraction délicate (cascade cloud + cooldown/RPM entremelés). À faire en isolant SANS changer le comportement, valide par les 4800 tests.
 - **Coût** : +1 appel 9B (le juge) par génération introspective + jusqu'à 2 regen. Acceptable hors slots chauds ; à mesurer.
 - **Déploiement** : diff prudent + `.bak` + restart clinique + health=GO, comme la greffe shadow.
+
+## EXTRACTION DÉTAILLÉE — `async def _invoke_llm` (le verrou)
+
+**Frontière de coupe** : `setup` (988-1077, full_prompt + local_model + needs_cloud) reste dans `generate_content`,
+calculé UNE fois sur le prompt original. L'`invocation` (1082-1177) devient `_invoke_llm`, re-appelable.
+
+**Intrants** : `prompt_try` (le seul variable/tour), `local_model`, `needs_cloud` (figés hors boucle), `self`.
+**Extrants (effets de bord PRÉSERVÉS — operent sur `BaseAgent._xxx`, classe-global)** : reset journalier,
+`_record_cloud_call`, `_daily_cloud_calls_evolution`, `_activate_cloud_cooldown`. RETIRÉ : remember / training /
+compiler (-> `_consolidate`, invariant 3).
+
+```python
+async def _invoke_llm(self, prompt_try: str, local_model: str, needs_cloud: bool) -> tuple[str, bool]:
+    """Wrapper ISOLE de l'appel LLM (cascade cloud -> cooldown -> fallback local).
+    Re-appelable par la boucle prefrontale. NE consolide RIEN (memoire propre).
+    Retour unifie : (final_text, was_cloud). async : await stream local + run_in_executor cloud."""
+    # ===== CAS A : Cloud (si tache complexe) =====
+    if needs_cloud:
+        now = time.time()
+        from datetime import date
+        today = date.today()
+        if BaseAgent._daily_model_reset_day != today:        # [INCHANGE 1088-1093] reset journalier
+            BaseAgent._daily_model_calls = {}
+            BaseAgent._daily_cloud_calls_evolution = 0
+            BaseAgent._cloud_429_count_today = 0
+            BaseAgent._cloud_cooldown_until = 0.0
+            BaseAgent._daily_model_reset_day = today
+        is_evolution = (self.name == "evolution")
+        if now >= BaseAgent._cloud_cooldown_until:           # pas en cooldown -> cascade
+            for model_name in self.cloud_models:
+                if not BaseAgent._check_rpm(model_name):          continue
+                if not BaseAgent._check_daily_budget(model_name): continue
+                if is_evolution and BaseAgent._daily_cloud_calls_evolution >= BaseAgent.MAX_DAILY_EVOLUTION_CLOUD:
+                    break
+                try:
+                    client = self._get_gemini_client(model_name)
+                    if not client: continue
+                    loop = asyncio.get_running_loop()
+                    response = await loop.run_in_executor(None, client.generate_content, prompt_try)
+                    BaseAgent._record_cloud_call(model_name)              # mutation tracable
+                    if is_evolution: BaseAgent._daily_cloud_calls_evolution += 1
+                    if response.text:
+                        final = self._sanitize_response(self._strip_cot(response.text), self.name)
+                        return final, True                    # was_cloud=True ; AUCUN remember ici
+                except Exception as e:
+                    if any(k in str(e).lower() for k in ("429", "quota", "exceeded")):
+                        BaseAgent._activate_cloud_cooldown()  # mutation tracable
+                        break                                 # stop cascade -> fallback local
+                    continue
+        # cooldown actif OU cascade epuisee -> on tombe sur le local
+    # ===== CAS B : Local (simple, ou fallback cloud) =====
+    result = await self._call_ollama_stream(prompt_try, local_model)
+    final = self._sanitize_response(self._strip_cot(result), self.name)
+    final = self._quality_filter(final, prompt_try)          # VIGILANCE : etait _quality_filter(final, prompt)
+    return final, False
+```
+
+### 2 points de vigilance pour la transparence aux 4800 tests
+1. **`_quality_filter(final, prompt_try)`** : l'original passait le `prompt` NU (l.1174). `prompt_try` contient
+   full_prompt+friction. A trancher : passer le `prompt` original en 4e arg, OU accepter prompt_try (a tester).
+2. **`needs_cloud` muté localement** (cooldown -> False, l.1101) : dans le wrapper, la mutation locale n'a plus
+   besoin de remonter (le `if needs_cloud / else` est encapsule par le `return final, False` du CAS B). OK.
+
+### Récapitulatif du refactoring de `generate_content` (zone 1082-1177 -> appel unique)
+```python
+# (setup inchange : full_prompt, local_model, needs_cloud)
+# === GREFFE PREFRONTALE (remplace 1082-1177) ===
+mirror_fn, mode = self._route_prefrontal_mirror(prompt)
+friction, last, was_cloud = None, None, False
+for attempt in range(1, MAX_PREFRONTAL_RETRIES + 1):
+    prompt_try = full_prompt if friction is None else f"{full_prompt}\n\n{friction}"
+    last, was_cloud = await self._invoke_llm(prompt_try, local_model, needs_cloud)
+    verdict = mirror_fn(last)
+    if inspect.isawaitable(verdict): verdict = await verdict
+    ok, rejection = verdict
+    if ok:
+        self._consolidate(prompt, last, was_cloud); return last
+    friction = rejection
+# fail-safe asymetrique (cf squelette principal)
+```
