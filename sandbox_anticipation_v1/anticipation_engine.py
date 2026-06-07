@@ -80,22 +80,26 @@ def mirror(code: str, allowed=None):
     return True, None
 
 
-def anticipate(generator, max_retries: int = MAX_ANTICIPATION_RETRIES, on_veto=None):
+def anticipate(generator, max_retries: int = MAX_ANTICIPATION_RETRIES, on_veto=None, mirror_fn=None):
     """Boucle prefrontale : ebauche -> miroir -> reorientation OU veto.
 
-    generator(attempt: int, last_rejection: str|None) -> code (str)
+    generator(attempt: int, last_rejection: str|None) -> ebauche (str)
         Dans le runtime reel, c'est l'appel LLM ; ici une dependance injectable.
-        A la reorientation, last_rejection porte la trace a ingerer (Error Ingestion).
+        A la reorientation, last_rejection porte la friction a ingerer (Error Ingestion).
+    mirror_fn(ebauche) -> (ok: bool, rejection: str|None)
+        Defaut = `mirror` (miroir DETERMINISTE, pour le code). Pour le slot introspectif,
+        on injecte le miroir COMPORTEMENTAL (cf behavioral_mirror.py).
 
     Retourne un dict :
         {status: "delivered", code, attempts, rejections}        -> livre, purifie
         {status: "veto", code: None, attempts, rejections, reason} -> canal coupe
     """
+    mirror_fn = mirror_fn or mirror
     last_rejection = None
     rejections = []
     for attempt in range(1, max_retries + 1):
         code = generator(attempt, last_rejection)
-        ok, rejection = mirror(code)
+        ok, rejection = mirror_fn(code)
         if ok:
             return {"status": "delivered", "code": code,
                     "attempts": attempt, "rejections": rejections}
