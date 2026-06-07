@@ -1,0 +1,9 @@
+# Artefacts de run (non versionnes)
+__pycache__/
+.pytest_cache/
+*_demo.md
+*_demo.jsonl
+shadow_read_*.jsonl
+shadow_read_*.jsonl.err
+migration_checkpoint.json
+premium_review*.md
