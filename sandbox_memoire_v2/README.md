@@ -4,7 +4,7 @@ Prototypes ISOLES (ne touchent PAS le runtime live). Conception + plan de migrat
 de la Memoire V2 de Promethee, nee du debat energie/cerveau (06/06) et de la
 decouverte de la cause racine : **embedder anglais sur 5600+ entrees francaises**.
 
-## Briques (38 TDD verts)
+## Briques (48 TDD verts)
 | Fichier | Role |
 |---|---|
 | `proto_retrieval_v2.py` | A — entree semantique (embedding) + etincelle locale ; top-3 5/5 vs hash MD5 0/5 |
@@ -17,6 +17,7 @@ decouverte de la cause racine : **embedder anglais sur 5600+ entrees francaises*
 | `scan_tags.py` | Reco — scan READ-ONLY des metadonnees live (ro&immutable) |
 | `seed_premium_lessons.py` (+test, 5) | Ancre sacree — seed des 12 lecons certifiees en PREMIUM/[CERTIFIE] |
 | `benchmark_ann_scale.py` | Dry run — estime la Phase 2 : ~443 docs/s CPU -> 5709 noeuds en ~30s-2min |
+| `review_cli.py` (+test, 10) | Arme d'arbitrage du Gardien : `ReviewBoard` (logique pure) + facades argparse/REPL. status (tri priorite+erosion) / promote / purge --all-decayed / diff |
 
 ## Plan de tir a froid (geste separe, hors sandbox)
 1. Appliquer le diff Phase 1 (`SHADOW_READ_ENABLED=False`) — verifier que le code charge.
