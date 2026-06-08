@@ -1092,9 +1092,37 @@ class BaseAgent:
         # Intrants figes scelles dans un conteneur IMMUABLE, passe explicitement.
         # Zero etat d'instance, zero lock (cf revue Promethee 07/06 ; purete fonctionnelle).
         ctx = GenerationContext(local_model=local_model, needs_cloud=needs_cloud, orig_prompt=prompt)
-        final, was_cloud, source = await self._invoke_llm(full_prompt, ctx)
-        self._consolidate(prompt, final, was_cloud, source)
-        return final
+
+        # ===== GREFFE PREFRONTALE V25.5 : anticipation frugale ACTIVE =====
+        mirror_fn, mode = self._route_prefrontal_mirror(prompt)   # 3 voies : 'code' / 'intro' / 'none'
+        if mirror_fn is None:                                     # 'none' -> ISO V25.2 (fail-open direct)
+            final, was_cloud, source = await self._invoke_llm(full_prompt, ctx)
+            self._consolidate(prompt, final, was_cloud, source)
+            return final
+
+        from core.prefrontal_mirror import MAX_PREFRONTAL_RETRIES
+        friction, last, was_cloud, source = None, "", False, ""
+        for attempt in range(1, MAX_PREFRONTAL_RETRIES + 1):
+            # friction EPHEMERE : enrichit le prompt d'appel, JAMAIS self.messages / remember
+            prompt_try = full_prompt if friction is None else f"{full_prompt}\n\n[REORIENTATION PREFRONTALE]\n{friction}"
+            last, was_cloud, source = await self._invoke_llm(prompt_try, ctx)
+            verdict = mirror_fn(last)
+            if inspect.isawaitable(verdict):                     # comportemental = coroutine (juge 9B)
+                verdict = await verdict
+            ok, rejection = verdict
+            if ok:
+                self._consolidate(prompt, last, was_cloud, source)   # consolidation : 1 fois, sur le VALIDE
+                return last
+            friction = rejection
+            self._trace_prefrontal_abort(prompt, mode, attempt, rejection)   # OBSERVABILITE (diagnostic seul)
+
+        # ===== budget epuise -> FAIL-SAFE ASYMETRIQUE =====
+        if mode == "code":
+            self.log_thought("[PREFRONTAL_VETO] code non compilable apres reorientation -> canal coupe", type="warning")
+            return "[PREFRONTAL_VETO: CODE_NON_COMPILABLE]"       # avortement sec (staging area protegee)
+        degraded = f"[METABOLISME_ALERT: POSTURE_NON_CONSOLIDEE]\n{last or ''}"   # mode degrade introspectif
+        self._consolidate(prompt, degraded, was_cloud, source)
+        return degraded
 
     async def _invoke_llm(self, prompt_try: str, ctx: "GenerationContext") -> tuple:
         """Wrapper PUR de l'appel LLM (cascade Cloud -> cooldown 429 -> fallback Local).
@@ -1560,3 +1588,24 @@ class BaseAgent:
             self._save_training_pair(prompt, deliverable, was_cloud=was_cloud)
         except Exception as e:
             logger.warning(f"[{self.name}] _consolidate echoue: {e}")
+
+    def _trace_prefrontal_abort(self, prompt: str, mode: str, attempt: int, rejection: str):
+        """OBSERVABILITE V25.5 (metabolism.log) : trace l'EVENEMENT d'avortement prefrontal en
+        DIAGNOSTIC structure -- slot, mode, tentative, categorie de derive. JAMAIS le brouillon
+        ni la friction verbatim (le _veto ne porte que la POSTURE, pas le lexeme). Enveloppe borg :
+        un defaut d'I/O sur le JSONL ne fait JAMAIS crasher une inference legitime."""
+        try:
+            slot = "?"
+            m = re.search(r"\[SCHOOL_SLOT:\s*([A-Z_]+)\]", prompt or "")
+            if m:
+                slot = m.group(1)
+            entry = {
+                "ts": time.time(), "agent": self.name, "slot": slot,
+                "mode": mode, "attempt": attempt,
+                "derive": (rejection or "")[:160],   # diagnostic de POSTURE (categorie + direction)
+            }
+            path = os.path.join("memory", "prefrontal_metabolism.jsonl")
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception:
+            pass   # l'I/O JSONL ne doit JAMAIS interrompre une generation
