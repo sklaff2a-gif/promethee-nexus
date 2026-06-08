@@ -12,7 +12,7 @@ import inspect
 import warnings
 import time
 from collections import deque
-from typing import Dict, Any, List
+from typing import Dict, Any, List, NamedTuple
 
 # Setup des chemins
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +36,16 @@ except ImportError:
     ChromaMemoryManager = None
 
 logger = logging.getLogger("BaseAgent")
+
+
+class GenerationContext(NamedTuple):
+    """Intrants FIGES d'une generation, calcules une fois par generate_content (V25.2).
+    IMMUABLE (NamedTuple) -> rempart structurel contre la mutation : la future boucle
+    prefrontale ne peut PAS contaminer le contexte entre deux tentatives (faille relevee
+    par Promethee le 07/06 ; choix paralelisme libre, etat porte explicitement)."""
+    local_model: str
+    needs_cloud: bool
+    orig_prompt: str        # prompt NU (exige par _quality_filter ; != full_prompt)
 
 # ── Strip thinking tags (Qwen3.5, DeepSeek-R1, etc.) ───────────────────────
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -1078,7 +1088,24 @@ class BaseAgent:
 
         # Etape 3 : Exécution Conditionnelle
         
-        # CAS A : Tâche Complexe -> On tente le Cloud d'abord
+        # Extraction V25.2 : execution deleguee a _invoke_llm (refactoring PUR, iso-comportement).
+        # Intrants figes scelles dans un conteneur IMMUABLE, passe explicitement.
+        # Zero etat d'instance, zero lock (cf revue Promethee 07/06 ; purete fonctionnelle).
+        ctx = GenerationContext(local_model=local_model, needs_cloud=needs_cloud, orig_prompt=prompt)
+        final, was_cloud, source = await self._invoke_llm(full_prompt, ctx)
+        self._consolidate(prompt, final, was_cloud, source)
+        return final
+
+    async def _invoke_llm(self, prompt_try: str, ctx: "GenerationContext") -> tuple:
+        """Wrapper PUR de l'appel LLM (cascade Cloud -> cooldown 429 -> fallback Local).
+        Extraction du bloc terminal de generate_content (V25.2). AUCUN effet de bord d'instance,
+        AUCUN lock : re-appelable a l'infini par la boucle prefrontale sans rejouer le setup.
+        Effets de bord PRESERVES : uniquement sur BaseAgent._xxx (etat de CLASSE).
+        NE consolide RIEN (-> _consolidate, invariant 3). Retour : (final, was_cloud, source)."""
+        local_model = ctx.local_model
+        needs_cloud = ctx.needs_cloud
+
+        # CAS A : Tache complexe -> on tente le Cloud d'abord
         if needs_cloud:
             now = time.time()
 
@@ -1100,8 +1127,6 @@ class BaseAgent:
                 self.log_thought(f"⏸️ Cloud en cooldown 429 ({remaining}s restantes) -> Fallback Local", type="warning")
                 needs_cloud = False
             else:
-                cloud_response = None
-                used_model = "Aucun"
                 for model_name in self.cloud_models:
                     # Vérifier RPM pour ce modèle
                     if not BaseAgent._check_rpm(model_name):
@@ -1132,21 +1157,13 @@ class BaseAgent:
                         rpm_limit = rpm_limits.get(model_name, getattr(Config, 'CLOUD_RPM_DEFAULT', 30))
                         self.log_thought(f"🚀 Escalade Cloud : {model_name.split('/')[-1]} ({rpm_count}/{rpm_limit} RPM)...", type="thought")
                         loop = asyncio.get_running_loop()
-                        response = await loop.run_in_executor(None, client.generate_content, full_prompt)
+                        response = await loop.run_in_executor(None, client.generate_content, prompt_try)
                         BaseAgent._record_cloud_call(model_name)
                         if is_evolution:
                             BaseAgent._daily_cloud_calls_evolution += 1
                         if response.text:
-                            cloud_response = response.text
-                            used_model = model_name.split('/')[-1]
-
-                            # Si succès Cloud sur tâche complexe, on apprend
-                            if len(cloud_response) > 50:
-                                self.remember(f"Q: {prompt}\nA: {cloud_response}", metadata={"source": used_model, "trigger": "cloud_escalation"})
-                            final = self._sanitize_response(self._strip_cot(cloud_response), self.name)
-                            self._record_for_compiler(prompt, final, was_cloud=True)
-                            self._save_training_pair(prompt, final, was_cloud=True)
-                            return final
+                            final = self._sanitize_response(self._strip_cot(response.text), self.name)
+                            return final, True, model_name.split('/')[-1]   # source = modele cloud ; consolidation DEPORTEE
                     except Exception as e:
                         # Détecter les erreurs 429 (quota exceeded)
                         err_str = str(e)
@@ -1168,13 +1185,11 @@ class BaseAgent:
         else:
             self.log_thought(f"🏠 Traitement Local (Économie) : {local_model}", type="info")
 
-        # Exécution Locale (avec streaming temps réel)
-        result = await self._call_ollama_stream(full_prompt, local_model)
+        # CAS B : Local (tache simple OU fallback Cloud), streaming temps reel
+        result = await self._call_ollama_stream(prompt_try, local_model)
         final = self._sanitize_response(self._strip_cot(result), self.name)
-        final = self._quality_filter(final, prompt)
-        self._record_for_compiler(prompt, final, was_cloud=False)
-        self._save_training_pair(prompt, final, was_cloud=False)
-        return final
+        final = self._quality_filter(final, ctx.orig_prompt)   # prompt NU (fidele a l'original)
+        return final, False, local_model                       # source = modele local
 
     @classmethod
     def _activate_cloud_cooldown(cls):
@@ -1533,13 +1548,14 @@ class BaseAgent:
         except Exception:
             return ""   # doctrine inverse : tout echec -> le miroir comportemental laisse passer
 
-    def _consolidate(self, prompt: str, deliverable: str, was_cloud: bool):
+    def _consolidate(self, prompt: str, deliverable: str, was_cloud: bool, source: str = "cloud_escalation"):
         """Memorisation DEPORTEE (invariant 3) : appelee UNE fois sur le livrable retenu,
-        jamais sur une ebauche rejetee. Reprend remember + compiler + training_pair."""
+        jamais sur une ebauche rejetee. Reprend remember + compiler + training_pair.
+        `source` = nom du modele ayant repondu (granularite JM) : voyage par le RETOUR de _invoke_llm."""
         try:
             if was_cloud and deliverable and len(deliverable) > 50:
                 self.remember(f"Q: {prompt}\nA: {deliverable}",
-                              metadata={"source": "cloud_escalation", "trigger": "cloud_escalation"})
+                              metadata={"source": source, "trigger": "cloud_escalation"})
             self._record_for_compiler(prompt, deliverable, was_cloud=was_cloud)
             self._save_training_pair(prompt, deliverable, was_cloud=was_cloud)
         except Exception as e:
