@@ -415,11 +415,22 @@ class ChatEngine:
                         )
                         pairs += 1
                 self._trace_lesson(lesson, nids)
-                logger.info(f"CHAT V23: lecon gravee — {len(nids)} concepts, {pairs} co-activations x{LESSON_STRENGTH_FACTOR}")
+                # V2 (08/06) : CABLE la lecon certifiee vers le tier PREMIUM (collection temoin
+                # multilingue), pour que le gate humain alimente VRAIMENT le premium au lieu d'un
+                # seed fige. Borg : un echec du tier v2 ne casse jamais la gravure synaptique.
+                premium_id = None
+                try:
+                    from core.vector_store import ChromaMemoryManager
+                    premium_id = ChromaMemoryManager.get_instance().add_premium_lesson(lesson, concepts=nids)
+                except Exception:
+                    premium_id = None
+                logger.info(f"CHAT V23: lecon gravee — {len(nids)} concepts, {pairs} co-activations x{LESSON_STRENGTH_FACTOR}"
+                            + (f" | PREMIUM={premium_id}" if premium_id else ""))
+                _premium_suffix = " + ancree au tier PREMIUM (v2 multilingue)" if premium_id else ""
                 return (f"Lecon gravee (cycle eleve-actif) : {len(nids)} concepts, "
                         f"{pairs} co-activations renforcees au taux fort "
                         f"(x{LESSON_STRENGTH_FACTOR}). Tracee dans le journal des "
-                        f"lecons. Le dream la cimentera les nuits suivantes.")
+                        f"lecons{_premium_suffix}. Le dream la cimentera les nuits suivantes.")
             except Exception as e:
                 return f"!grave : erreur — {e}"
 

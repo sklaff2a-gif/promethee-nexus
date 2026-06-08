@@ -268,6 +268,39 @@ class ChromaMemoryManager:
             self._shadow_collections[shadow_name] = None   # cache l'echec : pas de retry par requete
             return None
 
+    def add_premium_lesson(self, text, concepts=None, origin_ts=None, lesson_id=None):
+        """V2 (08/06) — CABLE `!grave` -> tier PREMIUM. Upsert une lecon CERTIFIEE par le gate
+        humain (JM) dans la collection temoin v2 (embedder MULTILINGUE deja en RAM), avec le
+        passeport PREMIUM + label [CERTIFIE]. Immunisee contre l'oubli PASSIF, revisable par
+        preuve contraire. Borg : ne casse JAMAIS `!grave`. Ne s'active que si SHADOW_READ_ENABLED
+        (le tier v2 ne vit que tant que le canal shadow est ouvert).
+        Retourne l'id ecrit, ou None (desactive / echec / lecon trop courte)."""
+        if not SHADOW_READ_ENABLED:
+            return None
+        try:
+            if not text or len(text.strip()) < 20:
+                return None
+            col = self._get_shadow_collection("collective_wisdom" + SHADOW_COLLECTION_SUFFIX)
+            if col is None:
+                return None
+            import time as _t
+            ts = origin_ts if origin_ts is not None else _t.time()
+            pid = lesson_id or f"premium_lesson_ts_{int(float(ts))}"   # id STABLE (timestamp, pas index FIFO)
+            meta = {
+                "tier_status": "PREMIUM",
+                "is_flagged": False,
+                "injected_label": "[CERTIFIE]",
+                "source": "lesson_certified",
+                "origin_ts": str(ts),
+                "concepts": ",".join(concepts or [])[:200],
+            }
+            col.upsert(documents=[text.strip()], metadatas=[meta], ids=[pid])
+            logger.info(f"[VECTOR V2] lecon PREMIUM cablee -> {pid} (tier=PREMIUM, multilingue)")
+            return pid
+        except Exception as e:
+            logger.warning(f"[VECTOR V2] add_premium_lesson echoue (non bloquant): {e}")
+            return None
+
     def record_recall(self, doc_id: str, collection_name: str = "collective_wisdom"):
         """Incrémente le compteur de rappel d'un document."""
         try:
