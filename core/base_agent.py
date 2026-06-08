@@ -1106,15 +1106,18 @@ class BaseAgent:
             # friction EPHEMERE : enrichit le prompt d'appel, JAMAIS self.messages / remember
             prompt_try = full_prompt if friction is None else f"{full_prompt}\n\n[REORIENTATION PREFRONTALE]\n{friction}"
             last, was_cloud, source = await self._invoke_llm(prompt_try, ctx)
+            _t0 = time.perf_counter()
             verdict = mirror_fn(last)
             if inspect.isawaitable(verdict):                     # comportemental = coroutine (juge 9B)
                 verdict = await verdict
+            _lat_ms = (time.perf_counter() - _t0) * 1000.0       # AST ~0 pour 'code' / appel 9B pour 'intro'
             ok, rejection = verdict
             if ok:
+                self._trace_prefrontal(mode, attempt, "PASS", _lat_ms, prompt=prompt)        # HEARTBEAT
                 self._consolidate(prompt, last, was_cloud, source)   # consolidation : 1 fois, sur le VALIDE
                 return last
             friction = rejection
-            self._trace_prefrontal_abort(prompt, mode, attempt, rejection)   # OBSERVABILITE (diagnostic seul)
+            self._trace_prefrontal(mode, attempt, "VETO", _lat_ms, prompt=prompt, rejection=rejection)
 
         # ===== budget epuise -> FAIL-SAFE ASYMETRIQUE =====
         if mode == "code":
@@ -1589,21 +1592,25 @@ class BaseAgent:
         except Exception as e:
             logger.warning(f"[{self.name}] _consolidate echoue: {e}")
 
-    def _trace_prefrontal_abort(self, prompt: str, mode: str, attempt: int, rejection: str):
-        """OBSERVABILITE V25.5 (metabolism.log) : trace l'EVENEMENT d'avortement prefrontal en
-        DIAGNOSTIC structure -- slot, mode, tentative, categorie de derive. JAMAIS le brouillon
-        ni la friction verbatim (le _veto ne porte que la POSTURE, pas le lexeme). Enveloppe borg :
-        un defaut d'I/O sur le JSONL ne fait JAMAIS crasher une inference legitime."""
+    def _trace_prefrontal(self, mode: str, attempt: int, decision: str, lat_ms: float,
+                          prompt: str = "", rejection: str = None):
+        """TELEMETRIE V25.6 (HEARTBEAT) : trace CHAQUE evaluation du cortex -- PASS comme VETO --
+        en JSONL structure (prefrontal_metabolism.jsonl). On voit le cortex BATTRE, pas seulement
+        crasher : sans la trace PASS, un succes silencieux est indiscernable d'un contournement.
+        `lat_ms` = cout reel mesure (AST quasi 0 pour 'code' ; mini-appel 9B pour 'intro' -> budget
+        energetique). Si VETO : + diagnostic de POSTURE (categorie de derive, JAMAIS le brouillon ni
+        la friction). Enveloppe borg : un defaut d'I/O JSONL ne fait JAMAIS crasher une inference."""
         try:
             slot = "?"
             m = re.search(r"\[SCHOOL_SLOT:\s*([A-Z_]+)\]", prompt or "")
             if m:
                 slot = m.group(1)
             entry = {
-                "ts": time.time(), "agent": self.name, "slot": slot,
-                "mode": mode, "attempt": attempt,
-                "derive": (rejection or "")[:160],   # diagnostic de POSTURE (categorie + direction)
+                "ts": time.time(), "agent": self.name, "slot": slot, "mode": mode,
+                "decision": decision, "attempt": attempt, "lat_ms": round(lat_ms, 2),
             }
+            if rejection:
+                entry["derive"] = (rejection or "")[:160]   # categorie de derive, pas le lexeme
             path = os.path.join("memory", "prefrontal_metabolism.jsonl")
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
