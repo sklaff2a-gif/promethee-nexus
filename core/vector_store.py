@@ -193,12 +193,31 @@ class ChromaMemoryManager:
             if n_results is None:
                 from config import Config
                 n_results = getattr(Config, "RAG_DEFAULT_N_RESULTS", 3)
+            # --- CANARY V26.0 (Phase 3) : confine a FREE_TIME via contextvar ---
+            # Sert le temoin MULTILINGUE en EXCLUSIF (espaces vectoriels incomparables -> pas de
+            # fusion). On passe par _get_shadow_collection (embedder francais), JAMAIS par
+            # _get_collection (qui re-embedderait la requete en anglais). Filet : neuf vide/erreur
+            # -> fallback ancien ci-dessous.
+            try:
+                from core.context import canary_mem_v2
+                _canary = canary_mem_v2.get()
+            except Exception:
+                _canary = False
+            if _canary and collection_name == "collective_wisdom":
+                shadow_col = self._get_shadow_collection(collection_name + SHADOW_COLLECTION_SUFFIX)
+                if shadow_col is not None:
+                    try:
+                        result_new = shadow_col.query(query_texts=query_texts, n_results=n_results)
+                        if result_new and result_new.get("ids") and result_new["ids"] and result_new["ids"][0]:
+                            return result_new   # EXCLUSIF : 100% multilingue
+                    except Exception:
+                        pass   # neuf en echec -> on retombe sur l'ancien (securite)
             col = self._get_collection(collection_name)
-            result_old = col.query(query_texts=query_texts, n_results=n_results)  # MAITRE EXCLUSIF
+            result_old = col.query(query_texts=query_texts, n_results=n_results)  # MAITRE par defaut
             # --- GREFFE SHADOW READING (Phase 1) — fantome passif, n'altere JAMAIS result_old ---
             if SHADOW_READ_ENABLED:
                 self._shadow_observe(query_texts, n_results, collection_name, result_old)
-            return result_old   # INVARIANT DE FLUX : on retourne TOUJOURS l'ancien, inchange
+            return result_old
         except Exception as e:
             print(f"❌ Erreur Mémoire (Query): {e}")
             return None

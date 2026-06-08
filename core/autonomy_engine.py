@@ -3943,7 +3943,7 @@ class AutonomyEngine:
         elif intent == "VISUAL_OBSERVATION":
             response = await self._execute_visual_observation()
         elif intent.startswith("SCHOOL_"):
-            response = await self._execute_school_class(routine, intent)
+            response = await self._execute_school_class_confined(routine, intent)  # Canary V26.0 : confine V2 a FREE_TIME
         elif intent == "DROPZONE_SCAN" and dropzone_count == 0:
             # Dropzone vide → veille YouTube IA (rotation des sujets)
             yt_index = self.total_routines_executed % len(YOUTUBE_AI_VEILLE)
@@ -4571,7 +4571,7 @@ class AutonomyEngine:
         elif intent == "VISUAL_OBSERVATION":
             response = await self._execute_visual_observation()
         elif intent.startswith("SCHOOL_"):
-            response = await self._execute_school_class(routine, intent)
+            response = await self._execute_school_class_confined(routine, intent)  # Canary V26.0 : confine V2 a FREE_TIME
         elif intent == "DROPZONE_SCAN":
             # Dropzone vide → veille YouTube IA (fallback identique au path standard)
             try:
@@ -10473,6 +10473,24 @@ RAISON: <1 phrase courte>"""
 
         combined = f"{spec.rstrip()}\n\n## Implementation\n\n{code_part.strip()}"
         return {"status": "success", "result": combined, "biphasic": True}
+
+    async def _execute_school_class_confined(self, routine: dict, intent: str) -> dict:
+        """Canary V26.0 (Phase 3) : enveloppe _execute_school_class. Sur le slot FREE_TIME
+        (zone nocturne a bas risque metabolique), pose le token contextvar `canary_mem_v2`
+        -> query_documents sert le temoin MULTILINGUE pour CETTE routine UNIQUEMENT. Confinement
+        absolu via contextvars : le flag disparait au reset, jamais de fuite vers d'autres taches."""
+        slot = intent.replace("SCHOOL_", "")
+        if slot != "FREE_TIME":
+            return await self._execute_school_class(routine, intent)
+        try:
+            from core.context import canary_mem_v2
+        except Exception:
+            return await self._execute_school_class(routine, intent)
+        token = canary_mem_v2.set(True)
+        try:
+            return await self._execute_school_class(routine, intent)
+        finally:
+            canary_mem_v2.reset(token)
 
     async def _execute_school_class(self, routine: dict, intent: str) -> dict:
         """Execute un cours scolaire : dispatch agent + evaluation professeur."""
