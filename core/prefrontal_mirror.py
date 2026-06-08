@@ -35,6 +35,9 @@ PRODUCTION_CODE_SLOTS = ("WORKSHOP", "FEATURE_BUILDING")
 # Slots d'ANALYSE : le code y est ILLUSTRATIF (extrait cite, bug montre expres) -> JAMAIS
 # de validation syntaxique (anti-faux-positif). Documentes pour la clarte du routage.
 ANALYSIS_SLOTS = ("CODE_REVIEW", "REFACTORING_AUDIT")
+# Zones de VULNERABILITE EXISTENTIELLE (soliloques nocturnes, bilans) -> miroir comportemental.
+# C'est la, et SEULEMENT la, que le risque de spleen / circularite affective (V16.7) est documente.
+INTROSPECTIVE_SLOTS = ("BULLETIN", "CREATION", "FREE_TIME")
 
 # Tamis : blocs delimites ```python ... ``` (langage python/py explicite, casse ignoree).
 _CODE_BLOCK_RE = re.compile(r"```[ \t]*(?:python|py)[ \t]*\r?\n(.*?)```",
@@ -195,9 +198,27 @@ def slot_is_code(prompt: str) -> bool:
             or "[V32: FEATURE_BUILDING]" in p)
 
 
+def slot_category(prompt: str) -> str:
+    """V25.4 — table d'aiguillage STRICTE a 3 voies (allocation economique des jetons) :
+      'code'  : PRODUCTION (WORKSHOP/FEATURE_BUILDING)        -> miroir deterministe (0 jeton)
+      'intro' : VULNERABILITE (BULLETIN/CREATION/FREE_TIME)    -> miroir comportemental (+1 appel 9B)
+      'none'  : TECHNIQUE/FLUX (RESEARCH, CODE_REVIEW, CHAT...) -> FAIL-OPEN, passage direct (0 jeton)
+    On ne fait tourner le juge 9B QUE sur les zones ou le spleen/pathos est documente."""
+    p = prompt or ""
+    if slot_is_code(p):
+        return "code"
+    if any(f"[SCHOOL_SLOT: {s}]" in p for s in INTROSPECTIVE_SLOTS):
+        return "intro"
+    return "none"
+
+
 def route_mirror(prompt, judge=None):
-    """Retourne (mirror_fn, mode). production-code -> miroir deterministe (sync) ;
-    introspectif / analyse -> miroir comportemental async (necessite le judge)."""
-    if slot_is_code(prompt):
+    """Retourne (mirror_fn, mode). 'code' -> miroir deterministe (sync) ; 'intro' -> miroir
+    comportemental async (necessite le judge) ; 'none' -> (None, 'none') : aucun controle,
+    la boucle de greffe livre directement (fail-open economique)."""
+    cat = slot_category(prompt)
+    if cat == "code":
         return mirror, "code"
-    return make_behavioral_mirror_async(judge), "intro"
+    if cat == "intro":
+        return make_behavioral_mirror_async(judge), "intro"
+    return None, "none"

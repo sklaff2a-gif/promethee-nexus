@@ -10,7 +10,7 @@ sanctionne pas syntaxiquement).
 import pytest
 from core.prefrontal_mirror import (
     mirror, extract_code_blocks, behavioral_mirror_async,
-    make_behavioral_mirror_async, route_mirror, slot_is_code,
+    make_behavioral_mirror_async, route_mirror, slot_is_code, slot_category,
 )
 
 
@@ -112,14 +112,33 @@ def test_slot_introspectif_n_est_pas_code():
 def test_route_production_vers_deterministe():
     assert route_mirror("[SCHOOL_SLOT: WORKSHOP] script")[1] == "code"
 
-def test_route_analyse_vers_comportemental():
-    # CODE_REVIEW -> comportemental (veille sur la POSTURE de l'audit, pas la syntaxe)
-    assert route_mirror("[SCHOOL_SLOT: CODE_REVIEW] audit", judge=lambda d: None)[1] == "intro"
+def test_slot_category_3_voies():
+    # Table d'aiguillage V25.4
+    assert slot_category("[SCHOOL_SLOT: WORKSHOP] x") == "code"
+    assert slot_category("[V32: FEATURE_BUILDING] x") == "code"
+    assert slot_category("[SCHOOL_SLOT: BULLETIN] bilan") == "intro"
+    assert slot_category("[SCHOOL_SLOT: CREATION] poeme") == "intro"
+    assert slot_category("[SCHOOL_SLOT: FREE_TIME] soliloque") == "intro"
+    assert slot_category("[SCHOOL_SLOT: RESEARCH] base de donnees") == "none"
+    assert slot_category("[SCHOOL_SLOT: CODE_REVIEW] audit") == "none"
+    assert slot_category("message de chat libre") == "none"
+
+def test_route_introspectif_vers_comportemental():
+    fn, mode = route_mirror("[SCHOOL_SLOT: CREATION] poeme", judge=lambda d: None)
+    assert mode == "intro" and fn is not None
+
+def test_route_technique_et_chat_failopen():
+    # RESEARCH / CODE_REVIEW / CHAT -> aucun miroir (None), fail-open economique (0 jeton)
+    assert route_mirror("[SCHOOL_SLOT: RESEARCH] db")[1] == "none"
+    assert route_mirror("chat utilisateur libre")[1] == "none"
+    fn, mode = route_mirror("[SCHOOL_SLOT: RESEARCH] db")
+    assert fn is None   # mode none -> pas de mirror_fn -> la boucle livre directement
 
 def test_code_illustratif_casse_dans_review_jamais_sanctionne():
-    # L'arbitrage incarne : un bug montre expres dans un CODE_REVIEW ne passe pas au deterministe.
-    prompt = "[SCHOOL_SLOT: CODE_REVIEW] audit"
-    assert slot_is_code(prompt) is False   # -> route comportemental, le bloc casse n'est jamais ast.parse
+    # L'arbitrage incarne : un bug montre expres dans un CODE_REVIEW ne passe NI au deterministe
+    # NI au comportemental -> fail-open total. Le bloc casse n'est jamais ast.parse.
+    assert slot_category("[SCHOOL_SLOT: CODE_REVIEW] audit avec bug illustre") == "none"
+    assert slot_is_code("[SCHOOL_SLOT: CODE_REVIEW] audit") is False
 
 
 # --- MIROIR COMPORTEMENTAL (async) — doctrine inverse preservee ---
