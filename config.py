@@ -56,22 +56,29 @@ class Config:
 
     # Configuration Locale (Ollama)
     OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-    DEFAULT_LOCAL_MODEL = "qwen3.5:9b"  # Qwen3.5 9B — bat gpt-oss-120B, 6.6GB, 262K ctx
+    # === BASCULE MODELE GENERALISTE (08/06/2026) : qwen3.5:9b -> gemma4:12b ===
+    # gemma4:12b valide SUPERIEUR en eval comparative brut-vs-brut (Goldbach conclusif,
+    # jeu misere base correcte ≡1 mod 4, mat en 1 TROUVE = projection spatiale, HONNETETE
+    # preservee sur le mur de Landau). Multimodal texte/image/audio, 140 langues, 7.6GB (16GB VRAM ok).
+    # ROLLBACK EN UN POINT : env var LOCAL_GENERALIST_MODEL=qwen3.5:9b (sans toucher le code),
+    # OU remettre le defaut ci-dessous a "qwen3.5:9b".
+    LOCAL_GENERALIST_MODEL = os.getenv("LOCAL_GENERALIST_MODEL", "gemma4:12b")
+    DEFAULT_LOCAL_MODEL = LOCAL_GENERALIST_MODEL  # ex "qwen3.5:9b" — bascule gemma4:12b 08/06
     ROUTER_MODEL = "qwen3:4b"  # Modèle léger dédié au routage sémantique (N2)
     AGENT_SPECIFIC_LOCAL_MODELS = {
-        "coder": "qwen2.5-coder:14b",    # Spécialiste code natif (remplace promethee-coder)
-        "factory": "qwen3.5:9b",         # Upgrade de qwen3:8b — +50% benchmarks
-        "infra": "qwen3.5:9b",           # Upgrade de qwen3:8b
-        "security": "promethee-security", # Fine-tune conservé (guardrails sécurité bakés)
-        "writer": "qwen3.5:9b",          # Upgrade de promethee-general
-        "strategist": "promethee-strategist",  # Fine-tune conservé (personnalité bakée)
-        "architect": "promethee-architect",    # Fine-tune conservé (validation bakée)
-        "researcher": "qwen3.5:9b",      # Upgrade — multimodal + 262K contexte
-        "evolution": "qwen2.5-coder:14b", # Spécialiste code pour le pipeline evolution
-        "professor": "qwen3.5:9b",       # Evaluation locale (Cloud en primaire via routing)
-        "surgeon": "qwen2.5-coder:14b",  # V21 — patch SEARCH/REPLACE chirurgical
-        "scrub_nurse": "qwen3.5:9b",     # V29 — checklist preservation (JSON)
-        "philosopher": "qwen3.5:9b",     # P15.3 (14/05) — SCHOOL_AXIOMATIC raisonnement pur
+        "coder": "qwen2.5-coder:14b",    # Spécialiste code natif (CONSERVE)
+        "factory": LOCAL_GENERALIST_MODEL,         # ex qwen3.5:9b -> gemma4:12b
+        "infra": LOCAL_GENERALIST_MODEL,           # ex qwen3.5:9b
+        "security": "promethee-security", # Fine-tune fonctionnel CONSERVE (guardrails securite)
+        "writer": LOCAL_GENERALIST_MODEL,          # ex qwen3.5:9b
+        "strategist": LOCAL_GENERALIST_MODEL,  # 08/06 : fine-tune promethee-strategist ABANDONNE (resultats catastrophiques) -> generaliste
+        "architect": "promethee-architect",    # Fine-tune fonctionnel CONSERVE (validation)
+        "researcher": LOCAL_GENERALIST_MODEL,      # ex qwen3.5:9b — gemma4 multimodal natif
+        "evolution": "qwen2.5-coder:14b", # Spécialiste code pour le pipeline evolution (CONSERVE)
+        "professor": LOCAL_GENERALIST_MODEL,       # ex qwen3.5:9b
+        "surgeon": "qwen2.5-coder:14b",  # V21 — patch SEARCH/REPLACE chirurgical (CONSERVE)
+        "scrub_nurse": LOCAL_GENERALIST_MODEL,     # ex qwen3.5:9b
+        "philosopher": LOCAL_GENERALIST_MODEL,     # P15.3 — SCHOOL_AXIOMATIC raisonnement pur
     }
 
     # V17 MoE (2026-04-24) — Mixture of Experts par routine scolaire.
@@ -237,7 +244,7 @@ class Config:
     NIGHT_MODE = os.getenv("NIGHT_MODE", "0") == "1"
     NIGHT_MODE_LOCAL_MODELS = {
         "coder": "qwen2.5-coder:14b",
-        "strategist": "qwen3.5:9b",
+        "strategist": LOCAL_GENERALIST_MODEL,  # 08/06 : aligne sur le generaliste (gemma4:12b, 7.6GB ok la nuit)
     }
     # Limite de taille modèle local (0 = pas de limite). Ex: 16 pour bloquer les 30b sur 16GB VRAM.
     MAX_LOCAL_MODEL_SIZE = int(os.getenv("MAX_LOCAL_MODEL_SIZE", "16"))

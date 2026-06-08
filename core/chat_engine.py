@@ -27,7 +27,10 @@ MAX_SAVED_MESSAGES = 200        # Max messages persistes (FIFO)
 LESSON_MIN_CHARS = 20           # En-deca : rien a graver
 LESSON_MAX_CONCEPTS = 8         # Concepts extraits par lecon (borne le nb de paires)
 LESSON_STRENGTH_FACTOR = 3.0    # Multiplicateur du taux Hebbian (clampe a 4.0 cote synaptic)
-CHAT_MODEL = "qwen3.5:9b"     # Modele par defaut (migration 2026-03-13)
+# Modele du chat = modele generaliste local (bascule 2026-06-08 : qwen3.5:9b -> gemma4:12b).
+# Suit le MEME point de rollback que config.py (LOCAL_GENERALIST_MODEL).
+# Rollback : variable d'env LOCAL_GENERALIST_MODEL=qwen3.5:9b puis restart.
+CHAT_MODEL = os.getenv("LOCAL_GENERALIST_MODEL", "gemma4:12b")
 EDITOR_MODEL = "qwen2.5-coder:14b"  # 04/05/2026 — Pipeline 2 passes Attention Conjointe
 OLLAMA_CHAT_URL = "http://127.0.0.1:11434/api/chat"
 # V26.0 (2026-06-06) — Compactage du contexte chat (facon console Claude Code).
@@ -4227,6 +4230,7 @@ class ChatEngine:
                     "model": CHAT_MODEL,
                     "messages": ollama_messages,
                     "stream": False,
+                    "think": False,
                     "options": {"temperature": 0.8, "num_ctx": 4096, "num_predict": 256},
                 }
                 async with httpx.AsyncClient() as client:
