@@ -277,6 +277,7 @@ class SynapticNetwork:
         self._mutations_since_save: int = 0
         self._subscribed = False
         self._last_dream_time: float = time.time()  # Pour decay incrémental entre dreams
+        self._last_resonance_audit: dict = None  # SYNAPTIC_RESONANCE_AUDIT v2 : snapshot pour le Delta
         self._last_routine_node: str = ""  # Dernier noeud routine (pour associations sensorium)
         self._suppress_deltas: bool = False  # Batch mode : supprime les deltas individuels
         self._pending_deltas: List[dict] = []  # Deltas accumules en mode batch
@@ -2600,6 +2601,14 @@ class SynapticNetwork:
             f"{report['strengthened']} renforcees, "
             f"{report.get('promoted_to_hebbian', 0)} promues hebbian"
         )
+
+        # SYNAPTIC_RESONANCE_AUDIT v2 (atelier Darwin-Godel, 'Dynamique de Morphogenese') :
+        # audit READ-ONLY de la plasticite affect<->memoire. Ne modifie AUCUN poids (cf regle
+        # "ne pas modifier les parametres synaptiques"). Borg : ne casse jamais le dream.
+        try:
+            report["resonance_audit"] = self.resonance_audit()
+        except Exception:
+            pass
         return report
 
     def _curiosity_explore(self, max_links: int = 3) -> int:
@@ -2644,6 +2653,65 @@ class SynapticNetwork:
                 break
 
         return created
+
+    def resonance_audit(self) -> Dict[str, Any]:
+        """SYNAPTIC_RESONANCE_AUDIT v2 (atelier Darwin-Godel, 'Dynamique de Morphogenese').
+        AUDIT EN LECTURE SEULE (ne modifie AUCUN poids) appele a chaque dream. Surveille la
+        PLASTICITE des liens affect<->memoire et distingue une COURBE D'APPRENTISSAGE saine (la
+        dispersion des poids croit AVEC l'usage = formation_count) d'une DERIVE ERRATIQUE (la
+        dispersion se decouple de l'usage). Fonde sur la prediction v2 VALIDEE (variance ∝ usage).
+        Logge dans memory/resonance_audit.jsonl. Kill-switch RESONANCE_AUDIT_ENABLED=0.
+        Enveloppe borg : ne fait JAMAIS crasher le dream."""
+        import os, json
+        if os.getenv("RESONANCE_AUDIT_ENABLED", "1") == "0":
+            return {}
+        try:
+            typ = {nid: n.get("node_type", "memory") for nid, n in self.nodes.items()}
+            strong_inter = strong_affmem = 0
+            affmem = []  # (weight, formation_count) des liens affect<->memoire
+            for s in self.synapses.values():
+                a, b = s.get("source"), s.get("target")
+                if a not in typ or b not in typ:
+                    continue
+                ta, tb = typ[a], typ[b]
+                w = float(s.get("weight", 0.0)); fc = int(s.get("formation_count", 0))
+                if ta != tb and w >= 0.9:
+                    strong_inter += 1
+                    if {ta, tb} == {"affect", "memory"}:
+                        strong_affmem += 1
+                if {ta, tb} == {"affect", "memory"}:
+                    affmem.append((w, fc))
+            R = round(strong_affmem / strong_inter, 4) if strong_inter else 0.0
+            # Couplage usage<->plasticite : la dispersion croit-elle avec l'usage ? (= sain)
+            health, var_lo, var_hi, coupled = "indetermine", None, None, None
+            if len(affmem) >= 20:
+                ordered = sorted(affmem, key=lambda x: x[1])  # tri par formation_count
+                half = len(ordered) // 2
+                lo = [w for w, _ in ordered[:half]]; hi = [w for w, _ in ordered[half:]]
+
+                def _var(v):
+                    m = sum(v) / len(v)
+                    return sum((x - m) ** 2 for x in v) / len(v)
+                var_lo, var_hi = round(_var(lo), 6), round(_var(hi), 6)
+                coupled = var_hi > var_lo  # plus d'usage -> plus de plasticite = apprentissage sain
+                health = "sain_apprentissage" if coupled else "derive_a_surveiller"
+            prev = self._last_resonance_audit or {}
+            entry = {
+                "ts": time.time(), "R": R, "delta_R": round(R - prev.get("R", R), 4),
+                "n_affect_memoire": len(affmem), "ponts_forts_inter": strong_inter,
+                "var_usage_faible": var_lo, "var_usage_fort": var_hi,
+                "plasticite_couplee_usage": coupled, "health": health,
+            }
+            self._last_resonance_audit = entry
+            try:
+                with open(os.path.join("memory", "resonance_audit.jsonl"), "a", encoding="utf-8") as f:
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+            return entry
+        except Exception as e:
+            logger.warning(f"SYNAPSE: resonance_audit echoue (borg): {e}")
+            return {}
 
     def _dream_tissue_seed(self) -> int:
         """Seed la consolidation dream depuis les zones actives du tissu neural.
