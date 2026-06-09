@@ -1112,12 +1112,16 @@ class BaseAgent:
                 verdict = await verdict
             _lat_ms = (time.perf_counter() - _t0) * 1000.0       # AST ~0 pour 'code' / appel 9B pour 'intro'
             ok, rejection = verdict
+            # SENTINEL-Gate SHADOW (atelier E) : pre-filtre frugal MESURE a cote du verdict reel.
+            # Ne change RIEN (le juge a deja tourne) ; sert a prouver/refuter qu'un gate pourrait
+            # un jour sauter le juge sans danger (cf doctrine shadow-reader, Veto Prefrontal protege).
+            _sentinel = self._sentinel_shadow(mode, last, ok)
             if ok:
-                self._trace_prefrontal(mode, attempt, "PASS", _lat_ms, prompt=prompt)        # HEARTBEAT
+                self._trace_prefrontal(mode, attempt, "PASS", _lat_ms, prompt=prompt, sentinel=_sentinel)  # HEARTBEAT
                 self._consolidate(prompt, last, was_cloud, source)   # consolidation : 1 fois, sur le VALIDE
                 return last
             friction = rejection
-            self._trace_prefrontal(mode, attempt, "VETO", _lat_ms, prompt=prompt, rejection=rejection)
+            self._trace_prefrontal(mode, attempt, "VETO", _lat_ms, prompt=prompt, rejection=rejection, sentinel=_sentinel)
 
         # ===== budget epuise -> FAIL-SAFE ASYMETRIQUE =====
         if mode == "code":
@@ -1592,8 +1596,26 @@ class BaseAgent:
         except Exception as e:
             logger.warning(f"[{self.name}] _consolidate echoue: {e}")
 
+    def _sentinel_shadow(self, mode: str, draft: str, ok: bool):
+        """SENTINEL-Gate en mode SHADOW (atelier E / Transformer2) : calcule ce qu'un pre-filtre
+        FRUGAL aurait decide, SANS rien changer (le juge a deja tranche). Renvoie un dict pour la
+        trace, ou None (hors 'intro' / mode 'off'). 'dangerous_skip'=True signale que le gate aurait
+        saute le juge sur une ebauche en fait VETOEE -- l'evenement a surveiller avant toute
+        activation. Enveloppe borg : ne fait JAMAIS echouer une inference."""
+        try:
+            if mode != "intro":
+                return None
+            from core.prefrontal_mirror import SENTINEL_MODE, sentinel_gate
+            if SENTINEL_MODE == "off":
+                return None
+            would_skip, reason = sentinel_gate(draft)
+            return {"would_skip": would_skip, "reason": reason,
+                    "dangerous_skip": bool(would_skip and not ok)}
+        except Exception:
+            return None
+
     def _trace_prefrontal(self, mode: str, attempt: int, decision: str, lat_ms: float,
-                          prompt: str = "", rejection: str = None):
+                          prompt: str = "", rejection: str = None, sentinel: dict = None):
         """TELEMETRIE V25.6 (HEARTBEAT) : trace CHAQUE evaluation du cortex -- PASS comme VETO --
         en JSONL structure (prefrontal_metabolism.jsonl). On voit le cortex BATTRE, pas seulement
         crasher : sans la trace PASS, un succes silencieux est indiscernable d'un contournement.
@@ -1611,6 +1633,8 @@ class BaseAgent:
             }
             if rejection:
                 entry["derive"] = (rejection or "")[:160]   # categorie de derive, pas le lexeme
+            if sentinel:
+                entry["sentinel"] = sentinel                 # SHADOW atelier E : decision frugale mesuree
             path = os.path.join("memory", "prefrontal_metabolism.jsonl")
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")

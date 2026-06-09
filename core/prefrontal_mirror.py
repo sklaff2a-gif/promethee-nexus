@@ -20,6 +20,7 @@ PRODUCTION de code passent au deterministe ; les ANALYSES vont au comportemental
 Conception + TDD : tests/test_prefrontal_mirror.py. Module importe par core/base_agent.py.
 """
 import ast
+import os
 import re
 import json
 import builtins
@@ -42,6 +43,36 @@ INTROSPECTIVE_SLOTS = ("BULLETIN", "CREATION", "FREE_TIME")
 # Tamis : blocs delimites ```python ... ``` (langage python/py explicite, casse ignoree).
 _CODE_BLOCK_RE = re.compile(r"```[ \t]*(?:python|py)[ \t]*\r?\n(.*?)```",
                             re.DOTALL | re.IGNORECASE)
+
+
+# =========================================================================
+# SENTINEL-Gate (atelier E / Transformer2, V26) — pre-filtre frugal du juge
+# =========================================================================
+# Le juge comportemental ('intro') coute ~6.7s (mini-appel 9B). Promethee a propose
+# (atelier E) une CASCADE GRADUEE : un gate bon marche en amont qui ne mobilise le juge
+# qu'en cas de besoin. MAIS le Veto Prefrontal est un comportement emergent PROTEGE
+# ("le plus precieux, NE PAS TOUCHER"). On deploie donc d'abord en mode SHADOW (doctrine
+# du shadow-reader Memoire V2) : le gate calcule sa decision et on la LOGGE a cote du
+# verdict reel, SANS jamais faire sauter le juge. On ne pourra envisager 'active' qu'apres
+# avoir prouve par les donnees shadow que les skips proposes ne coincident JAMAIS avec un
+# vrai VETO (taux de 'dangerous_skip' = 0).
+#   SENTINEL_GATE_MODE = 'shadow' (defaut, mesure) | 'off' (desactive) | 'active' (NON branche)
+SENTINEL_MODE = os.getenv("SENTINEL_GATE_MODE", "shadow")
+SENTINEL_SKIP_MAXLEN = 280   # en-deca, une ebauche est trop breve pour un arc d'orniere developpe
+
+
+def sentinel_gate(draft: str):
+    """Pre-filtre frugal (0 jeton, deterministe) du juge comportemental.
+    Retourne (would_skip: bool, reason: str). CONSERVATEUR : would_skip=True UNIQUEMENT
+    quand l'ebauche est structurellement a trop faible risque pour le juge -- trop breve
+    pour porter une 'orniere descriptive' ou un arc de complainte. Sinon False (juge requis).
+    NON LEXICAL (cf 12e lecon : structure, jamais mots-cles). v0 a calibrer sur les donnees
+    shadow ; utilise UNIQUEMENT en mesure tant que SENTINEL_MODE != 'active'."""
+    if not draft or not draft.strip():
+        return False, "vide->juge_requis"
+    if len(draft.strip()) < SENTINEL_SKIP_MAXLEN:
+        return True, "ebauche_breve(<%d)" % SENTINEL_SKIP_MAXLEN
+    return False, "longueur_suffisante->juge_requis"
 
 
 # =========================================================================
