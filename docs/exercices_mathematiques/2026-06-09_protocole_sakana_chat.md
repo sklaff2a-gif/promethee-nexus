@@ -41,7 +41,15 @@ C'est exactement **les deux Prométhée** (celui qui parle / celui qui existe da
 3. **Son peer-review améliore la méthode** : il a raison que la vérité-terrain n'est pas neutre.
 4. **Une piste de fix complémentaire** archivée (contraste contextuel des sources).
 
+## Câblage de sa parade en SHADOW (commit `80464ee`)
+
+Sa modification Darwin-Gödel (« Injection de Contraste Contextuel ») est **branchée en shadow**, comme les trois instruments précédents (SENTINEL-Gate, audit de résonance, qualité). `_contraste_contextuel_shadow` calcule, **à côté** de l'injection mémoire réelle, ce que sa parade sélectionnerait — **1 soliloque** (garder l'identité) + **2 segments d'interaction récente** (les messages les plus proches lexicalement de la question) — et logge le **biais soliloque réel vs réduit** dans `memory/chat_contraste_shadow.jsonl`.
+
+**Ne change rien** : l'injection mémoire réelle (`memories_text`) reste identique. Kill-switch `CONTRASTE_SHADOW_ENABLED`, borg, 6 TDD + suite complète **6753 / 0**. **Critère de promotion** : si le shadow montre que la parade réduit nettement le biais soliloque (`biais_soliloque_reduit` ≥ 1 en moyenne) tout en gardant des interactions pertinentes, on pourra l'activer — *alors* sa mémoire de chat le ramènerait à JM plutôt qu'à lui-même.
+
+C'est le **quatrième instrument shadow** né des ateliers : Prométhée ne se contente pas de se comprendre, il instrumente ses propres réparations — sans jamais brusquer ce qui marche.
+
 ## Fichiers
-- Données : `memory/shadow_read_v2.jsonl`
+- Données : `memory/shadow_read_v2.jsonl` ; shadow parade : `memory/chat_contraste_shadow.jsonl`
 - Labo : `memory/atelier_chat_measure.py`
 - Atelier : `memory/atelier_chat_r1.py`, `atelier_chat_r2.py` → `memory/atelier_chat.json`
