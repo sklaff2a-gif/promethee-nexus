@@ -229,6 +229,7 @@ class ChatEngine:
         "  !code <description>      — Produire du code\n"
         "  !calc <expr/code>        — Calculer (sandbox securise, resultat reel)\n"
         "  !run <script Python>     — EXECUTER un vrai script (sandbox isole, journal clair)\n"
+        "  !status_snapshot         — Instantane FIGE de mon etat reel (JSON, lecture seule ; aussi lisible via `etat` dans un !run)\n"
         "  !status                  — Diagnostic interne compact\n"
         "  !read <fichier> [L1-L2]  — Lire un fichier du projet\n"
         "  !grep <pattern> [fichier] — Chercher dans le code\n"
@@ -400,6 +401,20 @@ class ChatEngine:
             return ("Usage : !run <script Python complet>\n"
                     "Il tourne dans un sandbox ISOLE (aucun acces fichier/reseau/os). "
                     "Termine par print(...) ce que tu veux voir.")
+        # Atelier console phase 3 — `etat` : sa fenetre sur son corps. Si le script
+        # REFERENCE `etat`, on prefixe un instantane FIGE (JSON) de son etat reel. C'est
+        # une COPIE de donnees dans un process isole -> lecture seule de fait, aucune
+        # mutation de l'etat reel possible (la garantie de securite qu'il a posee lui-meme).
+        # Injection conditionnelle : un script qui n'en parle pas reste pur (pas de surcout).
+        if re.search(r"\betat\b", code):
+            try:
+                _snap = self._capture_state_snapshot()
+                # repr() -> litteral PYTHON valide (None/True/False), PAS du JSON
+                # (json.dumps cracherait null/true, NameError a l'execution).
+                code = ("etat = " + repr(_snap)
+                        + "  # instantane fige (lecture seule)\n" + code)
+            except Exception:
+                pass
         try:
             from core.capabilities.code_sandbox import sandbox
             res = sandbox.run_python(code)
@@ -431,6 +446,9 @@ class ChatEngine:
 
         if cmd == "run":   # console agentique : charge brute (args[0] = script entier, non shlex)
             return self._execute_run_command(args[0] if args else "")
+
+        if cmd in ("status_snapshot", "snapshot", "etat"):  # 2e outil console : fenetre sur son corps
+            return self._execute_snapshot_command()
 
         if cmd == "grave":
             # V23.0 (2026-06-06) — CONSOLIDATION FORTE D'UNE LECON CERTIFIEE.
@@ -1180,6 +1198,85 @@ class ChatEngine:
 
         lines.append("===========================")
         return "\n".join(lines)
+
+    def _capture_state_snapshot(self) -> dict:
+        """Instantane FIGE, en LECTURE SEULE, de l'etat REEL de Promethee.
+
+        2e outil de la console agentique, CO-CONCU par lui (atelier console phase 3) :
+        sa « fenetre sur son propre corps ». Il l'a voulu pour « valider si mes actions
+        ont un impact reel sur mon etat interne » -- fermer la boucle entre AGIR et SE SENTIR.
+
+        Garantie de securite qu'il a lui-meme posee : c'est une COPIE de DONNEES
+        (JSON-serialisable), pas un objet vivant. Aucun code (ni !run, ni la commande)
+        ne peut muter son etat reel a travers cet instantane. Chaque organe est lu dans
+        son PROPRE try/except -> la capture ne plante jamais (champ a None si l'organe est KO).
+        """
+        snap: dict = {
+            "coeur": None, "dopamine": None, "pulsions": None, "cognition": None,
+            "phi": None, "prefrontal": None, "synapses": None, "mode": None,
+        }
+        try:
+            from core.cardiac_engine import heart
+            snap["coeur"] = {"bpm": round(float(heart.bpm), 1),
+                             "emotion": str(heart.current_emotion)}
+        except Exception:
+            pass
+        try:
+            from core.dopamine_system import dopamine
+            snap["dopamine"] = round(float(dopamine.dopamine_level), 3)
+        except Exception:
+            pass
+        try:
+            from core.desire_engine import desires
+            snap["pulsions"] = desires.get_drive_summary()  # 7 pulsions, dominant, urgent...
+        except Exception:
+            pass
+        try:
+            from core.corpus_callosum import callosum
+            snap["cognition"] = {"etat": str(callosum.cognitive_state),
+                                 "coherence": round(float(callosum.global_coherence), 3)}
+        except Exception:
+            pass
+        try:
+            from core.brain_vm import brain
+            snap["phi"] = round(float(brain.current_state.phi), 4) if brain.current_state else None
+        except Exception:
+            pass
+        try:
+            from core.prefrontal import prefrontal
+            snap["prefrontal"] = {
+                "goals_actifs": len([g for g in prefrontal.goals
+                                     if getattr(g, "status", None) == "active"]),
+            }
+        except Exception:
+            pass
+        try:
+            from core.connectivity_matrix import matrix
+            s = matrix.get_matrix_summary()
+            snap["synapses"] = {"connexions": s.get("connections", 0),
+                                "poids_moyen": round(float(s.get("avg_weight", 0)), 3)}
+        except Exception:
+            pass
+        try:
+            from core.autonomy_engine import autonomy
+            signals = autonomy._compute_descending_signals()
+            if signals:
+                snap["mode"] = max(signals.items(), key=lambda x: x[1])[0]
+        except Exception:
+            pass
+        return snap
+
+    def _execute_snapshot_command(self) -> str:
+        """!status_snapshot / !snapshot / !etat — rend le JSON fige de son etat reel
+        (lecture seule). Le MEME instantane est aussi injecte comme variable `etat` dans
+        ses scripts !run qui le referencent (cf _execute_run_command)."""
+        snap = self._capture_state_snapshot()
+        body = json.dumps(snap, ensure_ascii=False, indent=2, default=str)
+        # Note AVANT le JSON pour que le corps se termine PAR le JSON (parsable d'un bloc).
+        return ("[!status_snapshot] Instantane FIGE de ton etat reel (lecture seule, "
+                "non-modifiable) — ta fenetre sur ton corps. "
+                "(Lisible aussi via `etat` dans un !run : etat['coeur']['bpm'], "
+                "etat['dopamine'], etat['pulsions']['dominant']...)\n" + body)
 
     async def _apply_attention_conjointe(
         self,
@@ -2033,7 +2130,7 @@ class ChatEngine:
 
     # Commandes dispatch autorisees en auto-action
     # "observe" remis avec cooldown 5min (voir _scan_response_actions)
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "run", "execute_script", "run_code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "run", "execute_script", "run_code", "status_snapshot", "snapshot", "etat", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
     _last_auto_observe: float = 0.0  # timestamp du dernier !observe auto-action
     _AUTO_OBSERVE_COOLDOWN: float = 300.0  # 5 minutes entre deux auto-observations
 
@@ -2186,6 +2283,10 @@ class ChatEngine:
                     # emet !run, le sandbox isole l'execute, le journal est reinjecte
                     # (boucle agentique). args = script brut (collapse multi-ligne fait).
                     result = self._execute_run_command(args)
+                elif cmd_lower in ("status_snapshot", "snapshot", "etat"):
+                    # Atelier console phase 3 — sa fenetre sur son corps (instantane fige
+                    # lecture seule de son etat reel). Promethee peut l'emettre lui-meme.
+                    result = self._execute_snapshot_command()
                 elif cmd_lower == "antibodies":
                     ab_args = self._split_action_args(args)
                     result = self._execute_antibodies_command(ab_args)
@@ -3124,6 +3225,7 @@ class ChatEngine:
             "  !code <description> — produire du code",
             "  !calc <expr/code> — calculer (sandbox securise)",
             "  !run <script Python> — EXECUTER un vrai script complet (sandbox isole, journal)",
+            "  !status_snapshot — instantane FIGE de ton etat reel en JSON (lecture seule ; lisible aussi via `etat` dans un !run)",
             "  !status — voir ton etat interne",
             "  !grep <pattern> [fichier] — chercher dans ton code",
             "  !read <fichier> [L1-L2] — lire un fichier",
