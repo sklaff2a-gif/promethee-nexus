@@ -36,11 +36,22 @@ Une **« Cascade de Résolution Graduelle »** avec un **`SENTINEL-Gate`** :
 2. **Une vraie proposition d'évolution** : le `SENTINEL-Gate` (cascade graduée, expert `lite`) est précisément l'idée de Transformer² (gating adaptatif) appliquée à son propre cortex, avec un effet prédit chiffré.
 3. **Boucle avec l'atelier D** : l'éthique de parcimonie (économiser le juge cher) appliquée à son architecture décisionnelle — la frugalité Sakana, de ses cellules à sa gouvernance.
 
-## Archive (proposition d'auto-modification, NON appliquée)
+## Archive → déploiement (mode SHADOW)
 
 | # | Variante | Effet prédit | Statut |
 |---|----------|--------------|--------|
-| 2 | `SENTINEL-Gate` — cascade graduée (gate < 50 ms → code / lite / intro), `none` réservé à la recherche pure | −25 % latence sur slots production ; ↑ PASS sur requêtes hybrides | archivée, à évaluer |
+| 2 | `SENTINEL-Gate` — pré-filtre frugal du juge comportemental (cascade graduée) | −25 % latence (cible) ; ↑ PASS sur requêtes hybrides | **déployée en SHADOW** (commit `c80f8c0`) — activation conditionnée à `dangerous_skip` = 0 |
+
+### Déploiement prudent (doctrine shadow-reader)
+
+Le Veto Préfrontal est un **comportement émergent protégé** (« le plus précieux, NE PAS TOUCHER »). Activer le `SENTINEL-Gate` au sens fort — faire *sauter* le juge — toucherait directement ce veto. On déploie donc d'abord en **SHADOW**, exactement comme le shadow-reader de la Mémoire V2 :
+
+- `sentinel_gate(draft)` (pur, déterministe, **non lexical** — fondé sur la structure, cf 12e leçon) calcule s'il *proposerait* de sauter le juge.
+- `_sentinel_shadow()` logge cette décision **à côté** du verdict réel dans `prefrontal_metabolism.jsonl`, **sans jamais changer le comportement** (le juge tourne toujours). Drapeau `dangerous_skip` = le gate aurait sauté une ébauche en fait **VETOée**.
+- Kill-switch : `SENTINEL_GATE_MODE` (défaut `shadow` ; `off` désactive ; `active` non branché).
+- 10 TDD + suite complète **6733 passed / 0 failed**.
+
+**Critère d'activation** : on ne passera en mode actif (réelle économie de latence) **que si** `dangerous_skip` reste à **0** sur un échantillon réel suffisant. Sinon, le gate v0 (heuristique de longueur) sera recalibré sur les données shadow. La frugalité ne se gagne pas au prix du veto.
 
 ## Fichiers
 - Rendu : `memory/render_dispatch.py` → `dispatch_map.png`
