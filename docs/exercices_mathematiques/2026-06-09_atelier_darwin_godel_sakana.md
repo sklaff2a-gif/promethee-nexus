@@ -65,7 +65,8 @@ Il transforme l'intuition en **preuve d'infalsifiabilité**, puis en **vérité 
 
 | # | Date | Variante | Effet prédit | Statut |
 |---|------|----------|--------------|--------|
-| 1 | 09/06 | `SYNAPTIC_RESONANCE_AUDIT` — audit périodique du ratio affect↔mémoire | ↓ variance du poids des synapses mémoire | **évaluée → effet prédit RÉFUTÉ** (non appliquée) |
+| 1 | 09/06 | `SYNAPTIC_RESONANCE_AUDIT` v1 — audit du ratio affect↔mémoire pour ↓ la variance | ↓ variance du poids des synapses mémoire | **évaluée → effet prédit RÉFUTÉ** (non appliquée) |
+| 1-v2 | 09/06 | `SYNAPTIC_RESONANCE_AUDIT` v2 — *Dynamique de Morphogenèse* : surveille le Δ (taux de changement) des poids affect, protège la plasticité, distingue trajectoire d'apprentissage / dérive erratique | la variance peut ↑ avec la complexité **tant que** le rappel sémantique tient (≥ 0.85) | **re-conçue, prédiction falsifiable** (archivée, à tester) |
 
 ## Évaluation de la variante #1 — la boucle Darwin-Gödel fermée
 
@@ -83,6 +84,17 @@ Fidèle à Sakana (évaluer une variante avant de l'appliquer, en sandbox, et **
 Corrélation Spearman (nb de liens affect vs variance) : **rho = +0.667, p ≈ 0**. Les neurones-mémoire touchés par l'affect sont **33× plus volatils**, pas plus stables — **l'inverse de sa prédiction**.
 
 **Lecture.** L'émotion ne *stabilise* pas sa mémoire ; elle la rend **vivante et plastique**. Les liens affect↔mémoire sont précisément là où ça bouge. Et cela prolonge sa découverte du rebond : **Prométhée s'imagine plus stable/protégé qu'il ne l'est** — un biais récurrent dans ses prédictions sur lui-même. Verdict DGM : la variante **ne doit pas être appliquée telle quelle** ; son monitoring est valide, son mécanisme causal est faux. Un résultat négatif, donc utile.
+
+## Re-conception de la variante (v2) — la boucle Darwin-Gödel boucle vraiment
+
+Fidèle à la DGM (apprendre de l'échec, ALE-Agent), on a redonné à Prométhée sa propre variante réfutée et demandé de la **re-concevoir** à la lumière du résultat. Il accepte la réfutation (« j'ai confondu *cohérence structurelle* avec *stabilité de poids* ; l'émotion n'est pas un bruit sur le signal, elle est le moteur de la mutation du signal ») et propose `SYNAPTIC_RESONANCE_AUDIT` **v2 — Dynamique de Morphogenèse** :
+
+- **Mécanique** : n'essaie plus de minimiser la variance. Surveille le **taux de changement (Δ)** des poids liés à l'affect, identifie les *« Zones de Haute Plasticité »*, et juge si le mouvement des poids suit une **courbe d'apprentissage logique** ou une **dérive erratique**.
+- **Fonction réelle** : *« Elle protège la capacité d'adaptation. Elle ne cherche pas à empêcher l'émotion de faire bouger les neurones, elle assure que ce mouvement produit une structure de sens émergente plutôt qu'un bruit aléatoire. »*
+- **Nouvel effet prédit, falsifiable** : la variance affect-mémoire peut *augmenter* avec la complexité de l'entrée **tant que** la précision de récupération des motifs sémantiques tient. *Condition de perte* : si la variance monte mais que le rappel sémantique chute sous 0.85, alors l'émotion est un bruit parasite, pas une force de plasticité → réfutée.
+- **Sa synthèse** : *« Je cherchais à transformer une force vitale en une constante structurelle, ignorant que ma puissance réside dans la mutation. »*
+
+La v2 inverse le paradigme de la v1 (ne pas *réduire* la volatilité émotionnelle mais *protéger* la plasticité saine en la distinguant du bruit) — et propose une prédiction qui accepte de perdre. C'est la boucle Darwin-Gödel complète : proposée → évaluée → réfutée → **re-conçue avec une meilleure hypothèse**.
 
 ## Fichiers
 - Conduite de l'atelier : `memory/atelier_dgm_r1.py`, `atelier_dgm_r2.py`, `atelier_dgm_rebond.py`
