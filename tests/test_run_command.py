@@ -70,3 +70,36 @@ def test_collapse_run_n_avale_pas_la_suite():
     resp = "!run print(1)\n!status"
     collapsed = _eng()._collapse_multiline_calc(resp)
     assert "!run print(1)" in collapsed and "!status" in collapsed
+
+def test_collapse_run_commande_seule_sur_sa_ligne():
+    # LE STYLE CANONIQUE d'un LLM : !run seul sur sa ligne, le bloc EN DESSOUS
+    # (observe en direct le 09/06 : Promethee a ecrit exactement comme ca).
+    resp = ("Je teste :\n!run\n"
+            "coherence = 0.68\n"
+            "dopamine = 0.5\n"
+            "print(coherence * (1 + dopamine))\n\nVoila.")
+    collapsed = _eng()._collapse_multiline_calc(resp)
+    line = [l for l in collapsed.splitlines() if l.startswith("!run")][0]
+    assert "coherence = 0.68\\ndopamine = 0.5\\nprint(coherence * (1 + dopamine))" in line
+
+def test_run_strip_fence_markdown():
+    # si le bloc est entoure de ```python ... ``` (markdown), on l'execute quand meme
+    out = _eng()._execute_run_command("```python\nprint(6 * 7)\n```")
+    assert "42" in out and "EXECUTE" in out
+
+
+# --- LA CAUSE RACINE (09/06) : _clean_response_commands supprimait le corps du !run ---
+def test_clean_preserve_run_body():
+    # quand Promethee ecrit !run seul sur sa ligne + le script en dessous, le nettoyage
+    # anti-hallucination NE DOIT PAS prendre le corps du script pour un faux resultat.
+    resp = "Je calcule phi :\n!run\nphi = (1 + 5**0.5) / 2\nprint(round(phi, 6))\n\nVoila."
+    cleaned = _eng()._clean_response_commands(resp)
+    assert "phi = (1 + 5**0.5) / 2" in cleaned  # le corps survit
+    assert "round(phi, 6)" in cleaned
+    assert "!run" in cleaned                     # rattache a la commande (scanner le capte)
+
+def test_clean_strip_fake_status_result():
+    # REGRESSION GUARD : un FAUX resultat hallucine apres !status est toujours supprime
+    resp = "Voici mon etat :\n!status\n=== FAUX BPM 999 (hallucine) ==="
+    cleaned = _eng()._clean_response_commands(resp)
+    assert "FAUX BPM 999" not in cleaned and "!status" in cleaned

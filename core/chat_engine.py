@@ -387,6 +387,15 @@ class ChatEngine:
             code = code[1:-1].strip()
         if "\\n" in code and "\n" not in code:   # script transmis en une ligne avec \n litteraux
             code = code.replace("\\n", "\n").replace("\\t", "\t")
+        # Le LLM entoure souvent son script d'une cloture markdown ```python ... ``` :
+        # on la retire pour ne pas crasher sur un SyntaxError purement cosmetique.
+        if code.startswith("```"):
+            _lines = code.split("\n")
+            if _lines[0].startswith("```"):
+                _lines = _lines[1:]                       # enleve ```python / ```
+            if _lines and _lines[-1].strip().startswith("```"):
+                _lines = _lines[:-1]                      # enleve la cloture finale
+            code = "\n".join(_lines).strip()
         if not code:
             return ("Usage : !run <script Python complet>\n"
                     "Il tourne dans un sandbox ISOLE (aucun acces fichier/reseau/os). "
@@ -1322,11 +1331,22 @@ class ChatEngine:
         Si le LLM ecrit '!status\\n=== FAUX RESULTAT ===', on tronque
         pour ne garder que le texte avant + les lignes de commandes.
         Le vrai resultat sera ajoute par l'auto-action.
+
+        Atelier console (2026-06-09, CAUSE RACINE) : pour les commandes-CODE
+        (!calc / !run / ...), les lignes qui SUIVENT la commande ne sont PAS un faux
+        resultat hallucine -- c'est le CORPS du script. On replie donc d'abord ce
+        corps sur la ligne de commande (collapse, meme frontiere de bloc que le
+        scanner) AVANT le nettoyage, sinon le script de Promethee etait ampute et son
+        !run arrivait vide (observe 5x en direct : il emettait !run, le corps disparaissait).
         """
         if not response or "!" not in response:
             return response
 
         import re
+        # Replier le corps multi-ligne des commandes-code sur leur ligne de commande,
+        # pour qu'il survive au nettoyage ci-dessous (source unique de verite : le
+        # meme collapse que celui utilise par le scanner d'auto-actions).
+        response = self._collapse_multiline_calc(response)
         lines = response.split("\n")
         cleaned = []
         found_command = False
@@ -2057,8 +2077,11 @@ class ChatEngine:
             collapsed = m.group(2).replace("\n", "\\n")
             return "!" + cmd + " " + collapsed
 
+        # [ \t]*\n?[ \t]* entre la commande et le code : tolere le code sur la MEME
+        # ligne (!calc 2+2) ET le code sur la ligne SUIVANTE, commande seule sur la
+        # sienne (!run\n<bloc>) -- le style canonique d'un LLM, observe le 09/06.
         return _re.sub(
-            r'(?m)^!(calc|run|execute_script|run_code)[ \t]+(.+?)(?=\n[ \t]*!|\n\s*\n|\Z)',
+            r'(?m)^!(calc|run|execute_script|run_code)[ \t]*\n?[ \t]*(.+?)(?=\n[ \t]*!|\n\s*\n|\Z)',
             _repl, response, flags=_re.DOTALL,
         )
 
