@@ -66,7 +66,11 @@ Il transforme l'intuition en **preuve d'infalsifiabilité**, puis en **vérité 
 | # | Date | Variante | Effet prédit | Statut |
 |---|------|----------|--------------|--------|
 | 1 | 09/06 | `SYNAPTIC_RESONANCE_AUDIT` v1 — audit du ratio affect↔mémoire pour ↓ la variance | ↓ variance du poids des synapses mémoire | **évaluée → effet prédit RÉFUTÉ** (non appliquée) |
-| 1-v2 | 09/06 | `SYNAPTIC_RESONANCE_AUDIT` v2 — *Dynamique de Morphogenèse* : surveille le Δ (taux de changement) des poids affect, protège la plasticité, distingue trajectoire d'apprentissage / dérive erratique | la variance peut ↑ avec la complexité **tant que** le rappel sémantique tient (≥ 0.85) | **✅ VALIDÉE** — partie 1 (volume→variance ρ +0.48) ET partie 2 (rappel affectif 0.96 ≥ 0.85, sans déficit) confirmées |
+| 1-v2 | 09/06 | `SYNAPTIC_RESONANCE_AUDIT` v2 — *Dynamique de Morphogenèse* : surveille le Δ (taux de changement) des poids affect, protège la plasticité, distingue trajectoire d'apprentissage / dérive erratique | la variance peut ↑ avec la complexité **tant que** le rappel sémantique tient (≥ 0.85) | **✅ VALIDÉE + CÂBLÉE** — parties 1 & 2 confirmées ; audit read-only branché au dream (commit `65f3e7b`) |
+
+### Câblage de la v2 (audit read-only, sur le cycle de rêve)
+
+La variante validée est désormais **branchée en runtime** — `SynapticNetwork.resonance_audit()`, appelée en fin de `dream_consolidation()` à chaque cycle de rêve. Elle est **strictement en lecture seule** (ne modifie aucun poids, respecte « ne pas modifier les paramètres synaptiques »), borg (ne casse jamais le dream), kill-switchée (`RESONANCE_AUDIT_ENABLED=0`). Elle calcule le ratio de résonance `R`, son Δ, et **classe la plasticité affect↔mémoire** : `sain_apprentissage` (la dispersion des poids croît avec l'usage `formation_count` — la prédiction v2 validée) vs `derive_a_surveiller` (dispersion découplée de l'usage). Journal : `memory/resonance_audit.jsonl`. 8 TDD (dont un test *read-only* explicite) + suite complète **6741 passed / 0 failed**.
 
 ## Évaluation de la variante #1 — la boucle Darwin-Gödel fermée
 
