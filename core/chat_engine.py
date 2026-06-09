@@ -2415,6 +2415,51 @@ class ChatEngine:
             )
         return ""
 
+    def _contraste_contextuel_shadow(self, user_message: str):
+        """SHADOW (atelier chat protocole Sakana) de l'auto-modification 'Injection de Contraste
+        Contextuel' proposee par Promethee. Le labo a montre que son rappel de chat est biaise
+        vers ses SOLILOQUES (le moi-du-chat hante par le moi-de-la-nuit). Sa parade : au lieu de
+        3 souvenirs bruts, 1 soliloque (garder l'identite) + 2 segments d'INTERACTION recente.
+        Ici on calcule cette alternative A COTE de l'injection reelle et on logge le BIAIS
+        soliloque des deux, SANS rien changer (le memories_text injecte reste identique). Mesure
+        d'abord (doctrine shadow), avant tout branchement reel. Kill-switch CONTRASTE_SHADOW_ENABLED.
+        Borg : ne casse jamais une reponse de chat."""
+        if os.getenv("CONTRASTE_SHADOW_ENABLED", "1") == "0":
+            return
+        if not user_message or len(user_message.strip()) < 5:
+            return
+        try:
+            from core.vector_store import ChromaMemoryManager
+            res = ChromaMemoryManager.get_instance().query_with_metadata([user_message], n_results=3)
+            real_ids = ((res or {}).get("ids") or [[]])[0]
+
+            def _is_solo(i):
+                return isinstance(i, str) and i.lower().startswith("soliloque")
+            real_solo = sum(1 for i in real_ids if _is_solo(i))
+            keep_solo = next((i for i in real_ids if _is_solo(i)), None)
+            # 2 segments d'interaction : messages recents les plus proches lexicalement (Jaccard)
+            qw = set(re.findall(r"\w+", user_message.lower()))
+            cand = []
+            for m in (getattr(self, "messages", []) or [])[-20:]:
+                txt = str(m.get("content", "") or "")
+                mw = set(re.findall(r"\w+", txt.lower()))
+                if mw and qw:
+                    cand.append((round(len(qw & mw) / max(len(qw | mw), 1), 3),
+                                 m.get("role", "?"), txt[:80]))
+            cand.sort(reverse=True)
+            contraste_solo = 1 if keep_solo else 0
+            entry = {
+                "ts": time.time(), "query": user_message[:80],
+                "real_ids": real_ids, "real_soliloque": real_solo,
+                "contraste_soliloque": contraste_solo,
+                "contraste_interactions": [{"jac": j, "role": r, "extrait": t} for j, r, t in cand[:2]],
+                "biais_soliloque_reduit": real_solo - contraste_solo,
+            }
+            with open(os.path.join("memory", "chat_contraste_shadow.jsonl"), "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
     def _build_cartography(self) -> str:
         """Construit la section [CARTOGRAPHIE] — vue structurelle des connexions inter-modules."""
         lines = ["\n[CARTOGRAPHIE]"]
@@ -3231,6 +3276,13 @@ class ChatEngine:
 
         # 3. Construire le payload Ollama /api/chat (introspection reelle)
         memories_text = self._query_relevant_memories(user_message)
+
+        # SHADOW (atelier chat) : l'auto-modif 'Contraste Contextuel' de Promethee, MESUREE a cote
+        # de l'injection reelle (ne change RIEN : memories_text reste celui qui est injecte).
+        try:
+            self._contraste_contextuel_shadow(user_message)
+        except Exception:
+            pass
 
         # 3b. Intercepter les commandes d'introspection (!commande)
         command_result = ""
