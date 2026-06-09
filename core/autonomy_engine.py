@@ -2168,6 +2168,50 @@ class AutonomyEngine:
 
         return max(0.0, min(1.0, score))
 
+    def _quality_substance_shadow(self, response: dict, intent: str):
+        """FIX METRIQUE q -- SHADOW (atelier protocole Sakana). La metrique reelle
+        (_score_result_quality) ne penalise que le GARBAGE -> elle sature a 1.0 pour la
+        maintenance (aveugle a la valeur reelle). Ici on calcule, EN LECTURE SEULE, un score
+        de SUBSTANCE plus fin : diversite lexicale (type-token) + concretude (chiffres,
+        entites) + structure + longueur graduee. Sert a MESURER si une metrique discriminante
+        est possible la ou q sature. Ne change RIEN. Kill-switch QUALITY_SHADOW_ENABLED. Borg."""
+        import os, re
+        if os.getenv("QUALITY_SHADOW_ENABLED", "1") == "0":
+            return None
+        try:
+            text = str((response or {}).get("result", "")).strip() if isinstance(response, dict) else ""
+            words = re.findall(r"\w+", text.lower())
+            if len(words) < 5:
+                return 0.0
+            ttr = len(set(words)) / len(words)                       # diversite lexicale
+            digits = len(re.findall(r"\d", text)) / max(len(text), 1)  # densite chiffres
+            caps = len(re.findall(r"\b[A-Z][a-zA-Z_]{2,}", text)) / max(len(words), 1)  # entites/struct
+            structure = text.count("\n") / max(len(words), 1)        # mise en forme
+            length = min(1.0, len(words) / 600.0)                    # longueur (saturation douce)
+            score = (0.40 * ttr + 0.20 * min(1.0, digits * 30) +
+                     0.15 * min(1.0, caps * 5) + 0.10 * min(1.0, structure * 20) +
+                     0.15 * length)
+            return round(max(0.0, min(1.0, score)), 4)
+        except Exception:
+            return None
+
+    def _log_quality_shadow(self, intent: str, agent: str, real_q: float, response: dict):
+        """Logge (intent, agent, q_reel, q_substance_shadow, ecart) dans
+        memory/quality_shadow.jsonl. Mesure SHADOW pour le fix de la metrique q : AUCUN effet
+        sur le comportement (le q reel pilote toujours dopamine/selection). Borg."""
+        import os, json, time
+        shadow = self._quality_substance_shadow(response, intent)
+        if shadow is None:
+            return
+        try:
+            entry = {"ts": time.time(), "intent": intent, "agent": agent,
+                     "q_reel": round(float(real_q), 3), "q_substance": shadow,
+                     "ecart": round(shadow - float(real_q), 3)}
+            with open(os.path.join("memory", "quality_shadow.jsonl"), "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
     def _diagnose_failure(self, response: dict, quality_score: float, intent: str) -> str:
         """Diagnostique le TYPE d'échec : hallucination, repetition, ignorance, technical."""
         if not response or not isinstance(response, dict):
@@ -4115,6 +4159,14 @@ class AutonomyEngine:
 
         # === SNAPSHOT PHI × QUALITY — protocole expérimental ===
         self._log_routine_phi_snapshot(intent, agent, quality_score)
+
+        # FIX METRIQUE q (SHADOW, atelier protocole Sakana) : la substance discriminante est
+        # mesuree A COTE du q reel (ne change RIEN : le q reel pilote toujours dopamine/selection).
+        # On teste si une metrique non-aveugle est possible la ou _score_result_quality sature a 1.0.
+        try:
+            self._log_quality_shadow(intent, agent, quality_score, response)
+        except Exception:
+            pass
 
         # MASTER_PROMPT : vérifier si l'agent sous-performe (3 échecs → optimiser prompt)
         try:
