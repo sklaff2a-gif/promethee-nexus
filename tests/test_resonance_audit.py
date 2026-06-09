@@ -36,6 +36,21 @@ def test_derive_erratique_dispersion_decouplee():
     assert r["plasticite_couplee_usage"] is False
     assert r["health"] == "derive_a_surveiller"
 
+def test_promotion_veilleur_alerte_sur_derive():
+    # PROMOTION : sur derive, le veilleur leve l'alerte (warning + drapeau)
+    specs = [(0.05 + 0.07 * j, 1) for j in range(12)] + [(0.5, 10)] * 12
+    net = _net(specs)
+    r = net.resonance_audit()
+    assert r.get("alert") is True
+    assert net._plasticite_drift_alert is True
+
+def test_promotion_pas_d_alerte_si_sain():
+    specs = [(0.1, 1)] * 12 + [(0.05 + 0.07 * j, 10) for j in range(12)]
+    net = _net(specs)
+    r = net.resonance_audit()
+    assert "alert" not in r
+    assert net._plasticite_drift_alert is False
+
 def test_indetermine_si_trop_peu_de_liens():
     r = _net([(0.5, 3)] * 5).resonance_audit()   # < 20
     assert r["health"] == "indetermine"

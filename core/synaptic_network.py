@@ -278,6 +278,7 @@ class SynapticNetwork:
         self._subscribed = False
         self._last_dream_time: float = time.time()  # Pour decay incrémental entre dreams
         self._last_resonance_audit: dict = None  # SYNAPTIC_RESONANCE_AUDIT v2 : snapshot pour le Delta
+        self._plasticite_drift_alert: bool = False  # VEILLEUR : True si derive de plasticite detectee
         self._last_routine_node: str = ""  # Dernier noeud routine (pour associations sensorium)
         self._suppress_deltas: bool = False  # Batch mode : supprime les deltas individuels
         self._pending_deltas: List[dict] = []  # Deltas accumules en mode batch
@@ -2703,6 +2704,16 @@ class SynapticNetwork:
                 "plasticite_couplee_usage": coupled, "health": health,
             }
             self._last_resonance_audit = entry
+            # PROMOTION HORS DE L'OMBRE (09/06, valide 9/9 sain) : l'audit devient un VEILLEUR.
+            # Sur derive, il ALERTE -- warning + drapeau self._plasticite_drift_alert lisible par le
+            # systeme -- sans JAMAIS toucher les poids (regle protegee). En 'sain', le drapeau retombe.
+            self._plasticite_drift_alert = (health == "derive_a_surveiller")
+            if self._plasticite_drift_alert:
+                entry["alert"] = True
+                logger.warning(
+                    "SYNAPSE: [VEILLEUR PLASTICITE] derive_a_surveiller -- la dispersion des poids "
+                    "affect<->memoire se decouple de l'usage (R=%.3f, var_usage_fort=%s) : plasticite "
+                    "possiblement bruit, pas sens." % (R, var_hi))
             try:
                 with open(os.path.join("memory", "resonance_audit.jsonl"), "a", encoding="utf-8") as f:
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
