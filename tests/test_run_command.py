@@ -49,3 +49,24 @@ def test_run_vide_usage():
 
 def test_run_sans_sortie():
     assert "aucune sortie" in _eng()._execute_run_command("x = 5").lower()
+
+
+# --- boucle agentique : Promethee emet !run LUI-MEME (auto-action) ---
+def test_run_dans_whitelist_auto_action():
+    # sans ca, le scanner ignore le !run que Promethee ecrit dans sa reponse
+    wl = ChatEngine._AUTO_ACTION_WHITELIST
+    assert "run" in wl and "execute_script" in wl and "run_code" in wl
+
+def test_collapse_run_multiligne():
+    # un script est multi-ligne par nature : la capture mono-ligne du scanner le
+    # tronquerait -> SyntaxError. Le collapse doit replier !run comme il replie !calc.
+    resp = "Je teste :\n!run a = 10\nb = 32\nprint(a + b)\n\nVoila."
+    collapsed = _eng()._collapse_multiline_calc(resp)
+    line = [l for l in collapsed.splitlines() if l.startswith("!run")][0]
+    assert "a = 10\\nb = 32\\nprint(a + b)" in line
+
+def test_collapse_run_n_avale_pas_la_suite():
+    # le bloc s'arrete a la prochaine commande / ligne vide
+    resp = "!run print(1)\n!status"
+    collapsed = _eng()._collapse_multiline_calc(resp)
+    assert "!run print(1)" in collapsed and "!status" in collapsed

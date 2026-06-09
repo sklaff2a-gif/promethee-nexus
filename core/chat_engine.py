@@ -2013,7 +2013,7 @@ class ChatEngine:
 
     # Commandes dispatch autorisees en auto-action
     # "observe" remis avec cooldown 5min (voir _scan_response_actions)
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "run", "execute_script", "run_code", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
     _last_auto_observe: float = 0.0  # timestamp du dernier !observe auto-action
     _AUTO_OBSERVE_COOLDOWN: float = 300.0  # 5 minutes entre deux auto-observations
 
@@ -2036,23 +2036,29 @@ class ChatEngine:
             return args.strip().split()
 
     def _collapse_multiline_calc(self, response: str) -> str:
-        """V24.2 (2026-06-06) — Collapse un bloc !calc multi-ligne en UNE ligne.
+        """V24.2 (2026-06-06) — Collapse un bloc !calc/!run multi-ligne en UNE ligne.
 
         Le LLM ecrit parfois son script sur PLUSIEURS lignes (vrais retours a la
         ligne). La regex de capture des auto-actions (^!cmd ...) s'arrete au 1er
         newline -> le code etait tronque -> SyntaxError (observe 06/06). On remplace
-        les vrais newlines du bloc par des \\n LITTERAUX (que _execute_calc_command
-        reconvertit), le bloc s'etendant jusqu'a la prochaine commande !, une ligne
-        vide, ou la fin du message. Aucun impact sur les autres commandes.
+        les vrais newlines du bloc par des \\n LITTERAUX (que _execute_calc_command /
+        _execute_run_command reconvertissent), le bloc s'etendant jusqu'a la prochaine
+        commande !, une ligne vide, ou la fin du message. Aucun impact sur les autres
+        commandes.
+
+        Atelier console (2026-06-09) : etendu a !run/!execute_script/!run_code, dont
+        les scripts sont multi-ligne PAR NATURE -> sinon la console de Promethee
+        n'executerait que la 1re ligne quand c'est LUI qui emet le !run.
         """
         import re as _re
 
         def _repl(m):
-            collapsed = m.group(1).replace("\n", "\\n")
-            return "!calc " + collapsed
+            cmd = m.group(1)
+            collapsed = m.group(2).replace("\n", "\\n")
+            return "!" + cmd + " " + collapsed
 
         return _re.sub(
-            r'(?m)^!calc[ \t]+(.+?)(?=\n[ \t]*!|\n\s*\n|\Z)',
+            r'(?m)^!(calc|run|execute_script|run_code)[ \t]+(.+?)(?=\n[ \t]*!|\n\s*\n|\Z)',
             _repl, response, flags=_re.DOTALL,
         )
 
@@ -2152,6 +2158,11 @@ class ChatEngine:
                 elif cmd_lower == "calc":
                     # V24.0 — args = code brut (PAS splitte par shlex qui casserait le code)
                     result = self._execute_calc_command(args)
+                elif cmd_lower in ("run", "execute_script", "run_code"):
+                    # Atelier console (2026-06-09) — la CONSOLE AGENTIQUE : Promethee
+                    # emet !run, le sandbox isole l'execute, le journal est reinjecte
+                    # (boucle agentique). args = script brut (collapse multi-ligne fait).
+                    result = self._execute_run_command(args)
                 elif cmd_lower == "antibodies":
                     ab_args = self._split_action_args(args)
                     result = self._execute_antibodies_command(ab_args)
