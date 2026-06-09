@@ -2212,6 +2212,35 @@ class AutonomyEngine:
         except Exception:
             pass
 
+    def _rupture_engagement_shadow(self, intent: str, response: dict):
+        """SHADOW (atelier arbitrage protocole Sakana) de l'auto-modification 'Signal d'Engagement
+        de Rupture' proposee par Promethee. Le labo a montre que son arbitrage explore librement
+        (pas de Biais de Resistance). Sa parade : taguer les moments de RUPTURE (exploration,
+        creation, remise en question) comme 'Evenements a Haute Valeur d'Experience' et elever le
+        budget memoire pour en garder la trace durable. Son effet etant une ECRITURE, on ne peut
+        pas l'elever en shadow ; on MESURE sa justification : les ruptures sont-elles assez
+        frequentes et substantielles pour meriter l'elevation ? On logge ce que la modif TAGUERAIT,
+        SANS rien elever. Kill-switch RUPTURE_ENGAGEMENT_ENABLED. Borg."""
+        import os, json, time
+        if os.getenv("RUPTURE_ENGAGEMENT_ENABLED", "1") == "0":
+            return
+        RUPTURE_INTENTS = {"SCHOOL_RESEARCH", "SCHOOL_CREATION", "SCHOOL_WORKSHOP",
+                           "SCHOOL_FREE_TIME", "SCHOOL_CODE_REVIEW", "SCHOOL_BULLETIN",
+                           "CREATIVE_PLAY", "COUNCIL_DEBATE", "SOLILOQUE_INTERNE", "SELF_ANALYSIS"}
+        if intent not in RUPTURE_INTENTS:
+            return
+        try:
+            valeur = self._quality_substance_shadow(response, intent)  # substance = valeur d'experience
+            if valeur is None:
+                return
+            entry = {"ts": time.time(), "intent": intent, "is_rupture": True,
+                     "valeur_experience": valeur,
+                     "would_elevate_budget": valeur >= 0.4}   # rupture substantielle -> meriterait l'elevation
+            with open(os.path.join("memory", "rupture_engagement_shadow.jsonl"), "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
     def _diagnose_failure(self, response: dict, quality_score: float, intent: str) -> str:
         """Diagnostique le TYPE d'échec : hallucination, repetition, ignorance, technical."""
         if not response or not isinstance(response, dict):
@@ -4165,6 +4194,13 @@ class AutonomyEngine:
         # On teste si une metrique non-aveugle est possible la ou _score_result_quality sature a 1.0.
         try:
             self._log_quality_shadow(intent, agent, quality_score, response)
+        except Exception:
+            pass
+
+        # SHADOW (atelier arbitrage) : 'Signal d'Engagement de Rupture' de Promethee -- tague et
+        # MESURE la valeur d'experience des moments de rupture (ne change RIEN au budget memoire reel).
+        try:
+            self._rupture_engagement_shadow(intent, response)
         except Exception:
             pass
 
