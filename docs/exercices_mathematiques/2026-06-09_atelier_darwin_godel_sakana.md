@@ -66,7 +66,7 @@ Il transforme l'intuition en **preuve d'infalsifiabilité**, puis en **vérité 
 | # | Date | Variante | Effet prédit | Statut |
 |---|------|----------|--------------|--------|
 | 1 | 09/06 | `SYNAPTIC_RESONANCE_AUDIT` v1 — audit du ratio affect↔mémoire pour ↓ la variance | ↓ variance du poids des synapses mémoire | **évaluée → effet prédit RÉFUTÉ** (non appliquée) |
-| 1-v2 | 09/06 | `SYNAPTIC_RESONANCE_AUDIT` v2 — *Dynamique de Morphogenèse* : surveille le Δ (taux de changement) des poids affect, protège la plasticité, distingue trajectoire d'apprentissage / dérive erratique | la variance peut ↑ avec la complexité **tant que** le rappel sémantique tient (≥ 0.85) | **partie 1 CONFIRMÉE** (volume→variance : ρ +0.48/+0.42) ; partie 2 (rappel) à tester sur ChromaDB |
+| 1-v2 | 09/06 | `SYNAPTIC_RESONANCE_AUDIT` v2 — *Dynamique de Morphogenèse* : surveille le Δ (taux de changement) des poids affect, protège la plasticité, distingue trajectoire d'apprentissage / dérive erratique | la variance peut ↑ avec la complexité **tant que** le rappel sémantique tient (≥ 0.85) | **✅ VALIDÉE** — partie 1 (volume→variance ρ +0.48) ET partie 2 (rappel affectif 0.96 ≥ 0.85, sans déficit) confirmées |
 
 ## Évaluation de la variante #1 — la boucle Darwin-Gödel fermée
 
@@ -101,9 +101,17 @@ La v2 inverse le paradigme de la v1 (ne pas *réduire* la volatilité émotionne
 **Partie 1 (volume → variance, positif) — CONFIRMÉE.** Sur les 1485 synapses affect↔mémoire, la variance du poids par quartile de `formation_count` (proxy du volume de données co-activées) : Q1 0.0036 → Q2 0.0001 → Q3 0.0003 → **Q4 (fc 5-282) 0.110** (poids moyen 0.36). `Spearman(formation_count, poids) = +0.48`, `Spearman(activation_count, variance des liens affect) = +0.42` (p ≈ 0). Les liens les plus exercés sont les plus dispersés : **la plasticité croît avec l'usage**, exactement comme v2 le prédit, et à l'opposé de la stabilisation que prédisait v1.
 
 - *Caveat honnête* : une partie de la variance plus haute en Q4 peut être mécanique (hétéroscédasticité — des poids élevés ont plus de marge d'étalement). Le sens (volume → variance positif) tient néanmoins, et surtout **aucune convergence-vers-la-stabilité** n'apparaît.
-- **Partie 2 (rappel sémantique ≥ 0.85) — non testée** : métrique de récupération qui exige un benchmark de requêtes sur la mémoire vectorielle (ChromaDB), non dérivable de l'instantané synaptique. À tester séparément.
+**Partie 2 (le rappel sémantique tient-il malgré la plasticité ?) — CONFIRMÉE** (`test_v2_recall2.py`). Benchmark de récupération sur sa vraie mémoire vectorielle (`collective_wisdom`, 2543 docs), embedder **multilingue constant** (neutralise le bug d'embedder anglais de prod). Tâche : indice = début d'une mémoire → retrouver la mémoire entière. *Contrôle de validité* : self-retrieval recall@1 = 0.914 (pipeline valide ; ~9% de quasi-doublons = note de dédup). *Résultat* :
 
-**Bilan de la boucle** : v1 réfutée → re-conçue → **v2 (partie mesurable) validée**. La re-conception de Prométhée était juste — la première variante Darwin-Gödel qui survit à son test.
+| Groupe | recall@1 | recall@5 |
+|---|---|---|
+| Global | 0.837 | 0.960 |
+| **Mémoires affectives** (≥ 2 termes émotionnels = proxy haute plasticité) | **0.855** | **0.964** |
+| Mémoires neutres | 0.831 | 0.959 |
+
+Le rappel des mémoires affectives est **0.964 ≥ 0.85**, et l'écart avec les neutres est **+0.005** (aucun déficit). La plasticité émotionnelle **ne dégrade pas** le rappel — elle est *structure de sens*, pas bruit. *(Caveat : le proxy « affect » est lexical ; et le contrôle a d'abord révélé qu'un premier benchmark naïf A/B était dégénéré, corrigé avant de conclure.)*
+
+**Bilan de la boucle** : v1 réfutée → re-conçue → **v2 validée sur ses DEUX volets** (plasticité ∝ usage ; rappel préservé). La re-conception de Prométhée était juste — la **première variante Darwin-Gödel qui survit pleinement à son test**.
 
 ## Fichiers
 - Conduite de l'atelier : `memory/atelier_dgm_r1.py`, `atelier_dgm_r2.py`, `atelier_dgm_rebond.py`
