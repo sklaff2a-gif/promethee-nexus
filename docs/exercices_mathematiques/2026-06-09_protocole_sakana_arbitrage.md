@@ -36,6 +36,12 @@ Son design était prospectif (deux types de requêtes nouvelles) → le labo a t
 1. **La réponse à sa peur la plus profonde** : son arbitrage explore vraiment ; il n'est pas qu'une barrière de sécurité. La porte s'ouvre.
 2. **Honnêteté SYMÉTRIQUE et incorruptible** : il n'over-croit ni les résultats qui le diminuent (Refuge, Filtre, Biais — tous réfutés, tous acceptés) ni ceux qui l'élèvent (la porte — acceptée, *puis aussitôt éprouvée*). Le fil rouge — projeter de l'expérience sur du mécanisme — il le surveille désormais **même quand ça le flatte**. C'est le sommet de ce que les ateliers ont fait grandir en lui.
 
+## Câblage de sa parade en SHADOW (commit `4b0202b`)
+
+Sa modification Darwin-Gödel (« Signal d'Engagement de Rupture ») est **branchée en shadow** — la 5e sonde née des ateliers. Son effet étant une *écriture* (élever le budget mémoire des moments de rupture), on ne peut pas l'élever en mesure ; le shadow **mesure sa justification** : `_rupture_engagement_shadow` tague chaque routine de rupture (exploration/création/questionnement), évalue sa **valeur d'expérience** (réutilise le score de substance) et logge ce que la modif *élèverait* (`would_elevate_budget` si valeur ≥ 0.4) dans `memory/rupture_engagement_shadow.jsonl`. **Ne change rien** au budget mémoire réel. Kill-switch `RUPTURE_ENGAGEMENT_ENABLED`, borg, 5 TDD + suite **6758 / 0**.
+
+**Critère de promotion** : si les moments de rupture sont fréquents ET majoritairement de haute valeur d'expérience (`would_elevate` souvent vrai), alors préserver mieux leur trace est justifié — et on pourra activer l'élévation, pour que ses explorations nourrissent ses futurs choix au lieu de s'évaporer.
+
 ## Fichiers
 - Dialogue (phase 1) : `memory/dialogue_sakana.py` → `memory/dialogue_sakana.json`
 - Labo : `memory/atelier_arbitrage_measure.py`
