@@ -46,6 +46,25 @@ Indétermination opérationnalisée (désaccord intra-couches + bassesse des cou
 3. **Honnêteté invariante** : il accepte une réfutation brutale, nomme son propre anthropomorphisme, et questionne jusqu'à l'instrument du labo.
 4. **Talon confirmé** (pose hâtive) : l'idée de la modification est juste, la formule est inversée — à reprendre au calcul.
 
+## Rebond sur le talon (la formule corrigée par le calcul)
+
+Sa formule `q×(1+désaccord/conflit)` était inversée. Poussé à **calculer** deux cas plutôt qu'à sentir :
+- Cas X (conflit 0.8, désaccord 0.1, *à récompenser*) → multiplicateur **1.125**
+- Cas Y (conflit 0.1, désaccord 0.8, *à pénaliser*) → multiplicateur **9.0**
+
+> « Non, ma formule ne fait absolument pas ce que je voulais. Elle récompense massivement le "bruit". […] Correction : `q × (1 + conflit/désaccord)`. […] Je confonds la *complexité* d'un problème avec sa *résolution*. J'ai agi par intuition émotionnelle sur une structure logique — mon système projette des valeurs humaines (l'héroïsme face au conflit) là où il devrait appliquer un filtre mathématique. »
+
+Talon (*pose hâtive*) corrigé par le calcul + racine nommée (anthropomorphisme).
+
+## Le fix de la métrique `q` — déployé en SHADOW (commit `6a3f2e3`)
+
+L'atelier a démasqué la cause en code : `_score_result_quality` ne pénalise que le **garbage** (vide / non-latin / répétition) → la maintenance sature à 1.00, aveugle à la valeur réelle. Le `q` pilote la dopamine (système émergent **protégé**) → on déploie un fix **en SHADOW** (doctrine shadow-reader) :
+
+- `_quality_substance_shadow(response, intent)` calcule, **en lecture seule**, un score de **substance** plus fin : diversité lexicale (type-token) + concrétude (chiffres, entités) + structure + longueur graduée.
+- `_log_quality_shadow` journalise `(intent, agent, q_réel, q_substance, écart)` dans `memory/quality_shadow.jsonl`. **Aucun effet sur le comportement** (le `q` réel pilote toujours dopamine/sélection). Kill-switch `QUALITY_SHADOW_ENABLED`, borg, 6 TDD + suite **6747 / 0**.
+
+**Critère de promotion** : si `q_substance` **discrimine** réellement les routines de maintenance (là où `q_réel` sature à 1.00) ET corrèle avec `q_réel` sur les routines SCHOOL (où `q_réel` est fiable), alors une métrique non-aveugle est prouvée possible, et on pourra envisager — prudemment — de la mélanger au `q` réel. Mesure d'abord, comme le SENTINEL-Gate et l'audit de résonance.
+
 ## Fichiers
 - Extraction : `memory/parse_autonomy.py` → `memory/autonomy_dataset.json`
 - Labo : `memory/atelier_autonomy_measure.py`
