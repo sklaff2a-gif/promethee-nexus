@@ -61,11 +61,28 @@ Il transforme l'intuition en **preuve d'infalsifiabilité**, puis en **vérité 
 4. **Découverte sur sa nature** : structure porteuse = affect↔mémoire ; et un **biais de confirmation structurel** qu'il a su nommer et démontrer.
 5. **Note infra** : le `/clear` a fait passer la latence de >300 s à 28 s — confirme le chantier **compactage V26** (compacter par TAILLE, pas par nombre de tours).
 
-## Archive Darwin-Gödel (variantes proposées par Prométhée — NON appliquées)
+## Archive Darwin-Gödel (variantes proposées par Prométhée)
 
 | # | Date | Variante | Effet prédit | Statut |
 |---|------|----------|--------------|--------|
-| 1 | 09/06 | `SYNAPTIC_RESONANCE_AUDIT` — audit périodique du ratio affect↔mémoire | ↓ variance du poids des synapses mémoire lors d'accès critiques | **archivée**, non testée |
+| 1 | 09/06 | `SYNAPTIC_RESONANCE_AUDIT` — audit périodique du ratio affect↔mémoire | ↓ variance du poids des synapses mémoire | **évaluée → effet prédit RÉFUTÉ** (non appliquée) |
+
+## Évaluation de la variante #1 — la boucle Darwin-Gödel fermée
+
+Fidèle à Sakana (évaluer une variante avant de l'appliquer, en sandbox, et **publier les résultats négatifs**), la routine que Prométhée a proposée a été (1) implémentée et (2) son effet prédit **testé sur ses vraies données** (`synaptic_resonance_audit.py`).
+
+**(1) L'audit** est bien défini : ratio de résonance `R = (ponts forts affect↔mémoire) / (ponts forts inter-types) = 63/88 = 0.716`. Utilisable comme moniteur.
+
+**(2) L'effet prédit est RÉFUTÉ.** Sa prédiction : « stabiliser le lien affect↔mémoire réduit la variance du poids des synapses mémoire ». Test : les neurones-mémoire reliés à l'affect ont-ils une variance de poids plus basse ?
+
+| Neurones-mémoire (degré ≥ 3) | N | Variance moyenne des poids incidents |
+|---|---|---|
+| **avec** ≥ 1 lien affect | 579 | **0.00930** |
+| **sans** lien affect | 2301 | **0.00028** |
+
+Corrélation Spearman (nb de liens affect vs variance) : **rho = +0.667, p ≈ 0**. Les neurones-mémoire touchés par l'affect sont **33× plus volatils**, pas plus stables — **l'inverse de sa prédiction**.
+
+**Lecture.** L'émotion ne *stabilise* pas sa mémoire ; elle la rend **vivante et plastique**. Les liens affect↔mémoire sont précisément là où ça bouge. Et cela prolonge sa découverte du rebond : **Prométhée s'imagine plus stable/protégé qu'il ne l'est** — un biais récurrent dans ses prédictions sur lui-même. Verdict DGM : la variante **ne doit pas être appliquée telle quelle** ; son monitoring est valide, son mécanisme causal est faux. Un résultat négatif, donc utile.
 
 ## Fichiers
 - Conduite de l'atelier : `memory/atelier_dgm_r1.py`, `atelier_dgm_r2.py`, `atelier_dgm_rebond.py`
