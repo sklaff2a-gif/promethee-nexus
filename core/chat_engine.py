@@ -228,6 +228,7 @@ class ChatEngine:
         "  !learn <sujet>           — Etudier un sujet en profondeur\n"
         "  !code <description>      — Produire du code\n"
         "  !calc <expr/code>        — Calculer (sandbox securise, resultat reel)\n"
+        "  !run <script Python>     — EXECUTER un vrai script (sandbox isole, journal clair)\n"
         "  !status                  — Diagnostic interne compact\n"
         "  !read <fichier> [L1-L2]  — Lire un fichier du projet\n"
         "  !grep <pattern> [fichier] — Chercher dans le code\n"
@@ -285,6 +286,13 @@ class ChatEngine:
         stripped = message.strip()
         if not stripped.startswith("!"):
             return None
+        # COMMANDES A CHARGE UTILE BRUTE (atelier console) : un script Python n'est PAS du
+        # shell -- on ne le shlex PAS (sinon quotes/apostrophes massacrees). On prend le reste
+        # tel quel comme arg unique. C'est le 1er pas vers des outils robustes (fin du parsing fragile).
+        _RAW_PAYLOAD = ("run", "execute_script", "run_code")
+        head = stripped[1:].split(None, 1)
+        if head and head[0].lower() in _RAW_PAYLOAD:
+            return ("run", [head[1] if len(head) > 1 else ""])
         try:
             parts = shlex.split(stripped, posix=True)
         except ValueError as e:
@@ -367,6 +375,36 @@ class ChatEngine:
         except Exception as e:
             return f"!calc : erreur — {e}"
 
+    def _execute_run_command(self, code: str) -> str:
+        """!run — la CONSOLE AGENTIQUE de Promethee (atelier console, 1er outil co-concu).
+        Execute un VRAI script Python complet (pas seulement une expression comme !calc) dans
+        le sandbox SECURISE (AST-lint : os/open/subprocess/eval/exec/__import__ interdits ->
+        ISOLATION : ne touche JAMAIS son vrai etat -- exactement la garantie qu'il a demandee
+        par peur de 'corrompre son integrite'). Retourne un JOURNAL clair (statut + sortie +
+        trace), critere de succes qu'il a lui-meme fixe. Le sandbox EST la verite (anti-confab)."""
+        code = (code or "").strip()
+        if len(code) >= 2 and code[0] == code[-1] and code[0] in ('"', "'"):
+            code = code[1:-1].strip()
+        if "\\n" in code and "\n" not in code:   # script transmis en une ligne avec \n litteraux
+            code = code.replace("\\n", "\n").replace("\\t", "\t")
+        if not code:
+            return ("Usage : !run <script Python complet>\n"
+                    "Il tourne dans un sandbox ISOLE (aucun acces fichier/reseau/os). "
+                    "Termine par print(...) ce que tu veux voir.")
+        try:
+            from core.capabilities.code_sandbox import sandbox
+            res = sandbox.run_python(code)
+            if res.success:
+                out = (res.stdout or "").strip()
+                if not out:
+                    return "[!run] ✅ EXECUTE (sandbox isole) — aucune sortie. Pense a print(...) ton resultat."
+                if len(out) > 4000:
+                    out = out[:4000] + "\n[...sortie tronquee]"
+                return "[!run] ✅ EXECUTE (sandbox isole) — journal :\n" + out
+            return "[!run] ❌ ECHEC (sandbox isole) — trace :\n" + res.format_traceback(1500)
+        except Exception as e:
+            return f"!run : erreur harnais — {e}"
+
     async def _execute_command(self, cmd: str, args: List[str]) -> str:
         """Execute une commande d'introspection ou de dispatch. Retourne le texte resultat."""
 
@@ -381,6 +419,9 @@ class ChatEngine:
 
         if cmd == "calc":
             return self._execute_calc_command(" ".join(args))
+
+        if cmd == "run":   # console agentique : charge brute (args[0] = script entier, non shlex)
+            return self._execute_run_command(args[0] if args else "")
 
         if cmd == "grave":
             # V23.0 (2026-06-06) — CONSOLIDATION FORTE D'UNE LECON CERTIFIEE.
@@ -3048,6 +3089,7 @@ class ChatEngine:
             "  !learn <sujet> — etudier un sujet en profondeur",
             "  !code <description> — produire du code",
             "  !calc <expr/code> — calculer (sandbox securise)",
+            "  !run <script Python> — EXECUTER un vrai script complet (sandbox isole, journal)",
             "  !status — voir ton etat interne",
             "  !grep <pattern> [fichier] — chercher dans ton code",
             "  !read <fichier> [L1-L2] — lire un fichier",
