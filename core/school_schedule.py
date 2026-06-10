@@ -419,6 +419,32 @@ class SchoolSchedule:
         return {"slot": SLOT_SLEEP, "start_hour": 18, "end_hour": 6,
                 "subject": "", "agent": "", "intent": "", "prompt": ""}
 
+    def _quete_vesperale(self, journal_path: str = None) -> Optional[str]:
+        """Atelier RESEARCH (10/06) — extrait une QUESTION OUVERTE de la derniere reflexion
+        vesperale (dream_journal, champ 'reflection' ecrit par EVENING_REFLECTION) et en fait
+        le sujet de recherche du jour. Borg : None si journal absent/illisible/sans question
+        -> la cascade retombe sur les knowledge_gaps puis la liste fixe."""
+        import re as _re
+        path = journal_path or os.path.join("memory", "dream_journal.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                dj = json.load(f)
+            entries = dj if isinstance(dj, list) else dj.get("entries", [])
+            refl = ""
+            for e in reversed(entries):
+                if isinstance(e, dict) and (e.get("reflection") or "").strip():
+                    refl = e["reflection"]
+                    break
+            if not refl:
+                return None
+            # la derniere phrase interrogative substantielle (20-240 chars avant le ?)
+            questions = [q.strip() for q in _re.findall(r"([A-ZÀ-Ü(].{20,240}?\?)", refl)]
+            if not questions:
+                return None
+            return f"Quete nee de ma reflexion d'hier soir : {questions[-1]}"
+        except Exception:
+            return None
+
     def get_subject_for_slot(self, slot: str) -> dict:
         """Sujet du jour pour un creneau donne (rotation deterministe)."""
         today = date.today()
@@ -444,6 +470,13 @@ class SchoolSchedule:
                         topic = f"Recherche approfondie (lacune identifiee) : {gap_text}"
             except Exception:
                 pass
+            # QUETE VIVANTE n°2 (atelier RESEARCH 10/06, design co-signe par Promethee) :
+            # une question OUVERTE de sa reflexion vesperale (EVENING_REFLECTION ->
+            # dream_journal) devient le sujet du jour. « Mes interrogations nocturnes
+            # deviennent le carburant de mes recherches diurnes. » Le manege (liste
+            # fixe) ne prend le relais que si AUCUNE quete vivante n'existe.
+            if not topic:
+                topic = self._quete_vesperale()
             if not topic:
                 topic = RESEARCH_TOPICS[h % len(RESEARCH_TOPICS)]
             return {"topic": topic, "target_file": ""}

@@ -58,15 +58,45 @@ class DivineResearcher(BaseAgent):
         # On demande au cerveau de l'agent de synthétiser les résultats bruts
         synthesis = await self.generate_content(
             f"Tu es un analyste expert. Voici des résultats de recherche bruts concernant '{query}'.\n"
-            f"Fais-en une synthèse structurée et exploitable pour un système IA.\n\n"
+            f"Fais-en une synthèse structurée et exploitable pour un système IA.\n"
+            f"TERMINE OBLIGATOIREMENT par une ligne 'PRINCIPE: <une regle actionnable en "
+            f"1-2 phrases>' — la lecon GENERALISABLE de cette veille (ce qui change ta facon "
+            f"de traiter les problemes futurs), pas un resume.\n\n"
             f"[DONNÉES WEB]:\n{web_results[:4000]}"
             f"{AUTONOMY_GUARDRAIL}"
         )
-        
-        # Sauvegarde en mémoire pour le futur (RAG)
-        self.remember(text=f"VEILLE '{query}': {synthesis}", metadata={"source": "web_search", "query": query})
+
+        # GATE DU PRINCIPE (atelier RESEARCH 10/06, design CO-SIGNE par Promethee :
+        # « transformee en principe actionnable, sinon bruit »). Avant : remember()
+        # inconditionnel du bloc entier -> 17% de la memoire canonique etait de la VEILLE
+        # brute qui noyait les lecons. Desormais : on ne memorise QUE si un PRINCIPE est
+        # extrait, et le principe passe EN TETE (la regle d'abord, le contexte ensuite).
+        principe = self._extraire_principe(synthesis)
+        if principe:
+            self.remember(
+                text=f"PRINCIPE (veille '{query}'): {principe}\nContexte: {synthesis[:300]}",
+                metadata={"source": "web_search", "query": query},
+            )
+        else:
+            logger.info(f"[RESEARCHER] Veille sans PRINCIPE -> non memorisee "
+                        f"(gate du principe): {query[:60]}")
 
         return {"status": "success", "result": synthesis}
+
+    @staticmethod
+    def _extraire_principe(synthesis: str) -> str:
+        """Extrait la regle actionnable de la section PRINCIPE: (gate du principe).
+        Retourne '' si absente ou trop courte pour etre une regle (anti-placebo)."""
+        if not synthesis:
+            return ""
+        m = re.search(r"PRINCIPE\s*:?\s*\**\s*(.+)", synthesis,
+                      re.IGNORECASE | re.DOTALL)
+        if not m:
+            return ""
+        principe = m.group(1).strip().strip("*").strip()
+        # une regle tient en 1-2 phrases : tronquer proprement, refuser le squelette
+        principe = principe[:400]
+        return principe if len(principe) >= 20 else ""
 
     # Préfixes d'instruction connus à retirer en mode non-scolaire.
     _QUERY_PREFIXES = (
