@@ -36,7 +36,12 @@ PROTECTED_COLLECTIONS = frozenset({
 SHADOW_READ_ENABLED = False   # Phase 1 TERMINEE (10/06) : preuve faite (97% mismatch sur 96 requetes).
                               # Shadow OFF (la double-lecture passive n'a plus de raison d'etre).
 SHADOW_LOG_PATH = os.path.join("memory", "shadow_read_v2.jsonl")
-SHADOW_COLLECTION_SUFFIX = "_v2_test"
+# 10/06 : "_v2_test" -> "_v2" apres REBUILD de l'index HNSW (defaut detecte par l'OPA de
+# Promethee des son 1er run : noeud premium_lesson_011 a d=0.113 d'une paraphrase mais absent
+# du top-100 — noeud faiblement connecte apres les upserts massifs du catchup). La collection
+# collective_wisdom_v2 est reconstruite en un seul passage (cosine explicite, embeddings
+# transferes tels quels). L'ancienne _v2_test reste en place = rollback.
+SHADOW_COLLECTION_SUFFIX = "_v2"
 SHADOW_EMBED_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 
 # --- Phase 4 — FULL SWITCH (10/06) : le temoin MULTILINGUE devient la collection CANONIQUE ---
