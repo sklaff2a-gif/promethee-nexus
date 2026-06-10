@@ -5,8 +5,17 @@ Sur FREE_TIME, query_documents sert le temoin MULTILINGUE (collective_wisdom_v2_
 de l'ancien index anglais. Confinement par contextvar (zero etat singleton). Filet : si le
 temoin renvoie vide/erreur -> fallback sur l'ancien (on ne casse jamais le RAG).
 """
+import pytest
+import core.vector_store as vsmod
 from core.context import canary_mem_v2
 from core.vector_store import ChromaMemoryManager
+
+
+@pytest.fixture(autouse=True)
+def _isole_le_canary(monkeypatch):
+    """Phase 4 (10/06) : le FULL SWITCH est ON par defaut en prod et subsume le canary.
+    Ces tests valident le mecanisme CANARY en isolation -> on coupe le full switch ici."""
+    monkeypatch.setattr(vsmod, "MEM_V2_FULL_SWITCH", False)
 
 
 class _FakeCol:

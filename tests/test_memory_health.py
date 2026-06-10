@@ -12,12 +12,16 @@ import chromadb
 # Ajouter le dossier parent au path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import core.vector_store as vsmod
 from core.vector_store import ChromaMemoryManager
 
 
 @pytest.fixture(autouse=True)
-def isolate_chroma(tmp_path):
-    """Isole ChromaDB dans un tmpdir pour chaque test."""
+def isolate_chroma(tmp_path, monkeypatch):
+    """Isole ChromaDB dans un tmpdir pour chaque test.
+    Phase 4 (10/06) : on teste la mecanique sante/recall sur le chemin ancien -> full switch
+    OFF ici (le routage temoin est teste a part, mocke, dans test_full_switch_mem_v2)."""
+    monkeypatch.setattr(vsmod, "MEM_V2_FULL_SWITCH", False)
     old_instances = ChromaMemoryManager._instances.copy()
     ChromaMemoryManager._instances.clear()
     yield tmp_path

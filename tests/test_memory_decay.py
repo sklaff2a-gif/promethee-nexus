@@ -3,13 +3,17 @@ import time
 import uuid
 import pytest
 from unittest.mock import MagicMock
+import core.vector_store as vsmod
 from core.vector_store import ChromaMemoryManager
 
 
 @pytest.fixture(autouse=True)
 def isolate_chroma(monkeypatch, tmp_path):
-    """Force tous les tests à utiliser un répertoire temporaire."""
+    """Force tous les tests à utiliser un répertoire temporaire.
+    Phase 4 (10/06) : on teste la MECANIQUE decay/purge/recall (agnostique de l'embedder)
+    sur le chemin ancien -> full switch OFF ici (le routage temoin est teste a part, mocke)."""
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(vsmod, "MEM_V2_FULL_SWITCH", False)
     ChromaMemoryManager.reset_all()
     yield
     ChromaMemoryManager.reset_all()

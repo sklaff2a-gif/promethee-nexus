@@ -33,10 +33,19 @@ PROTECTED_COLLECTIONS = frozenset({
 # Greffe passive : compare l'ancien retrieval (embedder ANGLAIS par defaut) a une
 # collection temoin MULTILINGUE et logue les ecarts a froid. INVARIANT : query_documents
 # retourne TOUJOURS l'ancien resultat ; le nouveau est observe, JAMAIS injecte.
-SHADOW_READ_ENABLED = True    # ACTIVE (07/06) : double lecture passive ON ; rollback = remettre False
+SHADOW_READ_ENABLED = False   # Phase 1 TERMINEE (10/06) : preuve faite (97% mismatch sur 96 requetes).
+                              # Shadow OFF (la double-lecture passive n'a plus de raison d'etre).
 SHADOW_LOG_PATH = os.path.join("memory", "shadow_read_v2.jsonl")
 SHADOW_COLLECTION_SUFFIX = "_v2_test"
 SHADOW_EMBED_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+
+# --- Phase 4 — FULL SWITCH (10/06) : le temoin MULTILINGUE devient la collection CANONIQUE ---
+# Cause racine reglee : `collective_wisdom` etait embedde en ANGLAIS (MiniLM defaut) sur du
+# contenu FRANCAIS -> exil linguistique (rappel casse ~95%). Apres Phase 1 (shadow, preuve),
+# Phase 3 (canary FREE_TIME, stable) et le rattrapage du delta (10/06, temoin = sur-ensemble),
+# on bascule TOUTES les lectures ET ecritures de `collective_wisdom` vers le temoin multilingue.
+# L'ancien index anglais est GELE (backup + rollback). KILL-SWITCH : env MEM_V2_FULL_SWITCH=0.
+MEM_V2_FULL_SWITCH = os.getenv("MEM_V2_FULL_SWITCH", "1") != "0"
 
 
 class ChromaMemoryManager:
@@ -156,6 +165,19 @@ class ChromaMemoryManager:
             self.collections[collection_name] = self.client.get_or_create_collection(name=collection_name)
         return self.collections[collection_name]
 
+    def _canonical_collection(self, collection_name: str):
+        """Phase 4 FULL SWITCH (10/06) : SOURCE UNIQUE de verite pour resoudre une collection.
+
+        Sous MEM_V2_FULL_SWITCH, `collective_wisdom` EST le temoin MULTILINGUE (canonique) ->
+        toutes les operations (count, record_recall, purge_expired/low_quality) DOIVENT le
+        cibler, sinon on ecrirait au temoin mais on purgerait/compterait l'ancien (gele).
+        Filet : embedder multilingue indispo -> on retombe sur la collection normale."""
+        if MEM_V2_FULL_SWITCH and collection_name == "collective_wisdom":
+            col = self._get_shadow_collection(collection_name + SHADOW_COLLECTION_SUFFIX)
+            if col is not None:
+                return col
+        return self._get_collection(collection_name)
+
     @staticmethod
     def _sanitize_metadata(metadatas: List[Dict]) -> List[Dict]:
         """Assure que toutes les valeurs metadata sont str/int/float/bool (exigence ChromaDB)."""
@@ -177,10 +199,15 @@ class ChromaMemoryManager:
         return getattr(self.client.get_settings(), "is_persistent", False)
 
     def add_documents(self, documents: List[str], metadatas: List[Dict], ids: List[str], collection_name: str = "collective_wisdom"):
-        """Ajoute des souvenirs dans une collection spécifique."""
+        """Ajoute des souvenirs dans une collection spécifique.
+
+        Phase 4 FULL SWITCH (10/06) : les ecritures de `collective_wisdom` vont desormais
+        dans le temoin MULTILINGUE (collection canonique), pour que les nouveaux souvenirs
+        soient embeddes en francais. L'ancien index anglais est GELE. Filet : si l'embedder
+        multilingue est indispo, on retombe sur l'ancien (on ne perd jamais une ecriture)."""
         try:
             metadatas = self._sanitize_metadata(metadatas)
-            col = self._get_collection(collection_name)
+            col = self._canonical_collection(collection_name)   # full switch -> temoin multilingue
             col.add(documents=documents, metadatas=metadatas, ids=ids)
             return True
         except Exception as e:
@@ -193,17 +220,18 @@ class ChromaMemoryManager:
             if n_results is None:
                 from config import Config
                 n_results = getattr(Config, "RAG_DEFAULT_N_RESULTS", 3)
-            # --- CANARY V26.0 (Phase 3) : confine a FREE_TIME via contextvar ---
-            # Sert le temoin MULTILINGUE en EXCLUSIF (espaces vectoriels incomparables -> pas de
-            # fusion). On passe par _get_shadow_collection (embedder francais), JAMAIS par
-            # _get_collection (qui re-embedderait la requete en anglais). Filet : neuf vide/erreur
-            # -> fallback ancien ci-dessous.
+            # --- FULL SWITCH (Phase 4) ou CANARY (Phase 3, FREE_TIME) : servir le temoin
+            # MULTILINGUE en EXCLUSIF (espaces vectoriels incomparables -> pas de fusion). On
+            # passe par _get_shadow_collection (embedder francais), JAMAIS par _get_collection
+            # (qui re-embedderait la requete en anglais). Filet : neuf vide/erreur -> fallback
+            # ancien ci-dessous. Sous MEM_V2_FULL_SWITCH la condition est globale (toutes les
+            # lectures), pas seulement FREE_TIME.
             try:
                 from core.context import canary_mem_v2
                 _canary = canary_mem_v2.get()
             except Exception:
                 _canary = False
-            if _canary and collection_name == "collective_wisdom":
+            if (MEM_V2_FULL_SWITCH or _canary) and collection_name == "collective_wisdom":
                 shadow_col = self._get_shadow_collection(collection_name + SHADOW_COLLECTION_SUFFIX)
                 if shadow_col is not None:
                     try:
@@ -228,7 +256,7 @@ class ChromaMemoryManager:
             if n_results is None:
                 from config import Config
                 n_results = getattr(Config, "RAG_DEFAULT_N_RESULTS", 3)
-            col = self._get_collection(collection_name)
+            col = self._canonical_collection(collection_name)   # full switch -> temoin multilingue
             return col.query(
                 query_texts=query_texts,
                 n_results=n_results,
@@ -293,8 +321,9 @@ class ChromaMemoryManager:
         passeport PREMIUM + label [CERTIFIE]. Immunisee contre l'oubli PASSIF, revisable par
         preuve contraire. Borg : ne casse JAMAIS `!grave`. Ne s'active que si SHADOW_READ_ENABLED
         (le tier v2 ne vit que tant que le canal shadow est ouvert).
-        Retourne l'id ecrit, ou None (desactive / echec / lecon trop courte)."""
-        if not SHADOW_READ_ENABLED:
+        Retourne l'id ecrit, ou None (desactive / echec / lecon trop courte).
+        Phase 4 : actif si le full switch OU le shadow est en cours (le temoin est canonique)."""
+        if not (MEM_V2_FULL_SWITCH or SHADOW_READ_ENABLED):
             return None
         try:
             if not text or len(text.strip()) < 20:
@@ -323,7 +352,7 @@ class ChromaMemoryManager:
     def record_recall(self, doc_id: str, collection_name: str = "collective_wisdom"):
         """Incrémente le compteur de rappel d'un document."""
         try:
-            col = self._get_collection(collection_name)
+            col = self._canonical_collection(collection_name)
             result = col.get(ids=[doc_id], include=["metadatas"])
             if result and result["metadatas"] and result["metadatas"][0]:
                 meta = result["metadatas"][0]
@@ -353,7 +382,7 @@ class ChromaMemoryManager:
         total = 0
         for name in targets:
             try:
-                col = self._get_collection(name)
+                col = self._canonical_collection(name)
                 all_docs = col.get(include=["metadatas"])
                 if not all_docs["ids"]:
                     continue
@@ -379,7 +408,7 @@ class ChromaMemoryManager:
     def count_documents(self, collection_name: str = "collective_wisdom") -> int:
         """Retourne le nombre de documents dans une collection."""
         try:
-            col = self._get_collection(collection_name)
+            col = self._canonical_collection(collection_name)
             return col.count()
         except Exception as e:
             print(f"❌ Erreur Mémoire (Count): {e}")
@@ -463,7 +492,7 @@ class ChromaMemoryManager:
         total = 0
         for name in targets:
             try:
-                col = self._get_collection(name)
+                col = self._canonical_collection(name)
                 all_docs = col.get(include=["documents"])
                 if not all_docs["ids"]:
                     continue
