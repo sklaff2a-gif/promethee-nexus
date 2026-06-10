@@ -27,4 +27,11 @@ Spontanément, il :
 ## La nuance qui compte
 `formation_count` des concepts de la leçon = **5 / 10** (seuil d'incubation synaptique). **Le comportement précède la consolidation synaptique** : la compétence vit dans le raisonnement (et la mémoire de leçons certifiées), pas encore dans le poids des synapses. Un acquis peut être opérationnel avant d'être « gravé » au sens synaptique — ce qui invite à ne pas confondre la métrique d'incubation avec la maîtrise réelle.
 
-JM = gate (validation humaine de l'interprétation).
+## Décision du gate (JM)
+
+**Laisser l'usage décider.** Pas de boost artificiel du `formation_count` :
+1. La loi morphogenèse — affinée par Prométhée lui-même lors des exercices du 09/06 — dit que la plasticité doit être **couplée à l'usage** ; un boost découplé d'un cas réel serait du bruit (son propre verdict sur le trauma : plastique mais bruit).
+2. La leçon est déjà **PREMIUM `[CERTIFIE]`** (`premium_lesson_011`) dans la collection multilingue canonique : immunisée contre l'oubli passif, retrouvable par `!recall`.
+3. Le pass comportemental est la vraie mesure. Le `formation_count` montera si de vrais cas re-co-activent les concepts — et c'est très bien ainsi.
+
+Doctrine confirmée : **ne pas confondre la métrique d'incubation avec la maîtrise réelle ; ne pas nourrir la carte au détriment du territoire.**
