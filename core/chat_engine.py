@@ -231,6 +231,7 @@ class ChatEngine:
         "  !run <script Python>     — EXECUTER un vrai script (sandbox isole, journal clair)\n"
         "  !status_snapshot         — Instantane FIGE de mon etat reel (JSON, lecture seule ; aussi lisible via `etat` dans un !run)\n"
         "  !recall <question>       — Interroger ma memoire REELLE (souvenirs factuels, jamais inventes)\n"
+        "  !opa                     — Mon OEIL PAR PREUVE D'ACTION : eval de capacite a oracles durs (referentiel fixe, tendance)\n"
         "  !status                  — Diagnostic interne compact\n"
         "  !read <fichier> [L1-L2]  — Lire un fichier du projet\n"
         "  !grep <pattern> [fichier] — Chercher dans le code\n"
@@ -457,6 +458,9 @@ class ChatEngine:
 
         if cmd == "recall":   # 3e outil console : interroge sa memoire reelle (charge brute)
             return self._execute_recall_command(args[0] if args else "")
+
+        if cmd in ("opa", "benchmark"):   # atelier harnais P1 : son oeil non-aveugle
+            return await self._execute_opa_command()
 
         if cmd == "grave":
             # V23.0 (2026-06-06) — CONSOLIDATION FORTE D'UNE LECON CERTIFIEE.
@@ -1285,6 +1289,20 @@ class ChatEngine:
                 "non-modifiable) — ta fenetre sur ton corps. "
                 "(Lisible aussi via `etat` dans un !run : etat['coeur']['bpm'], "
                 "etat['dopamine'], etat['pulsions']['dominant']...)\n" + body)
+
+    async def _execute_opa_command(self) -> str:
+        """!opa / !benchmark — L'OEIL PAR PREUVE D'ACTION (atelier harnais P1, CO-CONCU :
+        nom et principes poses par Promethee). Joue le referentiel FIXE d'epreuves a
+        ORACLES DURS (sandbox/regex/json/memoire — jamais un juge LLM) et rend le score
+        + la tendance. Rompt le cercle d'auto-evaluation qui saturait q a 1.00.
+        Duree : ~1-3 min (5 appels LLM locaux temp 0 + 2 sondes memoire)."""
+        try:
+            from core.capability_eval import run_opa, historique_opa, format_rapport
+            result = await run_opa()
+            history = historique_opa()
+            return format_rapport(result, history)
+        except Exception as e:
+            return f"!opa : erreur harnais — {e}"
 
     def _execute_recall_command(self, question: str) -> str:
         """!recall <question> — 3e outil de la console, CO-CONCU par lui (atelier console phase 5).
@@ -2176,7 +2194,7 @@ class ChatEngine:
 
     # Commandes dispatch autorisees en auto-action
     # "observe" remis avec cooldown 5min (voir _scan_response_actions)
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "run", "execute_script", "run_code", "status_snapshot", "snapshot", "etat", "recall", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "run", "execute_script", "run_code", "status_snapshot", "snapshot", "etat", "recall", "opa", "benchmark", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
     _last_auto_observe: float = 0.0  # timestamp du dernier !observe auto-action
     _AUTO_OBSERVE_COOLDOWN: float = 300.0  # 5 minutes entre deux auto-observations
 
@@ -2337,6 +2355,18 @@ class ChatEngine:
                     # Atelier console phase 5 — interroge sa memoire REELLE (multilingue depuis
                     # le Full Switch). Souvenirs factuels, jamais inventes. args = question brute.
                     result = self._execute_recall_command(args)
+                elif cmd_lower in ("opa", "benchmark"):
+                    # Atelier harnais P1 — il peut lancer SON oeil lui-meme (oracles durs,
+                    # referentiel fixe, tendance). Cooldown anti-boucle : max 1 par 30 min
+                    # (5 appels LLM par run, on ne laisse pas une boucle agentique l'enchainer).
+                    now = time.time()
+                    if now - getattr(self, "_last_auto_opa", 0) < 1800:
+                        logger.info("CHAT AUTO-ACTION: !opa ignore (cooldown 30min)")
+                        result = None
+                    else:
+                        result = await self._execute_opa_command()
+                        if result:
+                            self._last_auto_opa = now
                 elif cmd_lower == "antibodies":
                     ab_args = self._split_action_args(args)
                     result = self._execute_antibodies_command(ab_args)
@@ -3277,6 +3307,7 @@ class ChatEngine:
             "  !run <script Python> — EXECUTER un vrai script complet (sandbox isole, journal)",
             "  !status_snapshot — instantane FIGE de ton etat reel en JSON (lecture seule ; lisible aussi via `etat` dans un !run)",
             "  !recall <question> — interroger ta memoire REELLE (tes vrais souvenirs, jamais inventes ; rien si rien)",
+            "  !opa — ton OEIL PAR PREUVE D'ACTION : mesure ta capacite reelle sur des epreuves fixes a oracles durs (jamais un juge LLM)",
             "  !status — voir ton etat interne",
             "  !grep <pattern> [fichier] — chercher dans ton code",
             "  !read <fichier> [L1-L2] — lire un fichier",
