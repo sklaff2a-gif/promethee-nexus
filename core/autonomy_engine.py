@@ -4160,6 +4160,17 @@ class AutonomyEngine:
                     "[VETOS RECENTS — routines bloquees recemment, adapte-toi]\n"
                     + "\n".join(veto_lines)
                 )
+            # Ancres d'identite (atelier chat<->autonomie 10/06, design co-signe par Promethee) :
+            # les intentions du dialogue du jour, transportees dans la nuit par le MEME canal
+            # que les vetos (contexte). SUGGESTION, jamais imperative : ni le scoring ni le
+            # veto ne sont touches. Borg : un echec du module n'altere jamais le dispatch.
+            try:
+                from core.identity_anchors import bloc_contexte
+                _ancres = bloc_contexte()
+                if _ancres:
+                    context_parts.append(_ancres)
+            except Exception:
+                pass
             context_parts.append(AUTONOMY_GUARDRAIL)
             response = await orchestrator.dispatch_task(agent, {
                 "mission": mission_text,

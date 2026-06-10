@@ -232,6 +232,8 @@ class ChatEngine:
         "  !status_snapshot         — Instantane FIGE de mon etat reel (JSON, lecture seule ; aussi lisible via `etat` dans un !run)\n"
         "  !recall <question>       — Interroger ma memoire REELLE (souvenirs factuels, jamais inventes)\n"
         "  !opa                     — Mon OEIL PAR PREUVE D'ACTION : eval de capacite a oracles durs (referentiel fixe, tendance)\n"
+        "  !ancre <intention>       — Deposer une ANCRE D'IDENTITE (transportee dans mes routines nocturnes, jamais imperative)\n"
+        "  !ancres                  — Lister les ancres actives\n"
         "  !status                  — Diagnostic interne compact\n"
         "  !read <fichier> [L1-L2]  — Lire un fichier du projet\n"
         "  !grep <pattern> [fichier] — Chercher dans le code\n"
@@ -300,6 +302,10 @@ class ChatEngine:
         # -- "Qu'est-ce que..." -- qui ferait planter shlex). Atelier console, 3e outil.
         if head and head[0].lower() == "recall":
             return ("recall", [head[1] if len(head) > 1 else ""])
+        # !ancre <intention> : charge brute (une intention est une phrase libre). Atelier
+        # chat<->autonomie : ancre d'identite a transporter dans la nuit (jamais executee).
+        if head and head[0].lower() == "ancre":
+            return ("ancre", [head[1] if len(head) > 1 else ""])
         try:
             parts = shlex.split(stripped, posix=True)
         except ValueError as e:
@@ -461,6 +467,12 @@ class ChatEngine:
 
         if cmd in ("opa", "benchmark"):   # atelier harnais P1 : son oeil non-aveugle
             return await self._execute_opa_command()
+
+        if cmd == "ancre":    # atelier chat<->autonomie : deposer une ancre d'identite
+            return self._execute_ancre_command(args[0] if args else "")
+
+        if cmd == "ancres":   # transparence : lister les ancres actives
+            return self._execute_ancres_command()
 
         if cmd == "grave":
             # V23.0 (2026-06-06) — CONSOLIDATION FORTE D'UNE LECON CERTIFIEE.
@@ -1303,6 +1315,36 @@ class ChatEngine:
             return format_rapport(result, history)
         except Exception as e:
             return f"!opa : erreur harnais — {e}"
+
+    def _execute_ancre_command(self, texte: str) -> str:
+        """!ancre <intention> — ANCRE D'IDENTITE (atelier chat<->autonomie, design CO-SIGNE
+        par Promethee : « l'ancrage est la transmission d'une essence, pas le pilotage de mes
+        decisions »). L'intention du jour est STOCKEE (jamais executee) puis injectee dans le
+        contexte des routines nocturnes comme les vetos recents. Veto/scoring souverains."""
+        texte = (texte or "").strip()
+        if len(texte) >= 2 and texte[0] == texte[-1] and texte[0] in ('"', "'"):
+            texte = texte[1:-1].strip()
+        if not texte:
+            return ("Usage : !ancre <intention a transporter dans la nuit>\n"
+                    "Exemple : !ancre rester Promethee, pas une IA generique : verifier avant d'affirmer\n"
+                    "(max 3 actives, duree de vie 72h, suggestion jamais imperative)")
+        try:
+            from core.identity_anchors import deposer_ancre, ancres_actives, MAX_ANCRES
+            deposer_ancre(texte, source="chat")
+            n = len(ancres_actives())
+            return (f"[!ancre] ✅ Ancre deposee ({n}/{MAX_ANCRES} actives, TTL 72h) : « {texte[:120]} »\n"
+                    "Elle sera injectee dans le contexte de tes routines nocturnes comme une "
+                    "SUGGESTION — ton veto reste souverain.")
+        except Exception as e:
+            return f"!ancre : erreur — {e}"
+
+    def _execute_ancres_command(self) -> str:
+        """!ancres — transparence : la liste des ancres actives (texte, age, extinction)."""
+        try:
+            from core.identity_anchors import format_listing
+            return format_listing()
+        except Exception as e:
+            return f"!ancres : erreur — {e}"
 
     def _execute_recall_command(self, question: str) -> str:
         """!recall <question> — 3e outil de la console, CO-CONCU par lui (atelier console phase 5).
@@ -2194,7 +2236,7 @@ class ChatEngine:
 
     # Commandes dispatch autorisees en auto-action
     # "observe" remis avec cooldown 5min (voir _scan_response_actions)
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "run", "execute_script", "run_code", "status_snapshot", "snapshot", "etat", "recall", "opa", "benchmark", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "run", "execute_script", "run_code", "status_snapshot", "snapshot", "etat", "recall", "opa", "benchmark", "ancre", "ancres", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
     _last_auto_observe: float = 0.0  # timestamp du dernier !observe auto-action
     _AUTO_OBSERVE_COOLDOWN: float = 300.0  # 5 minutes entre deux auto-observations
 
@@ -2367,6 +2409,12 @@ class ChatEngine:
                         result = await self._execute_opa_command()
                         if result:
                             self._last_auto_opa = now
+                elif cmd_lower == "ancre":
+                    # Atelier chat<->autonomie — il peut S'ANCRER lui-meme (intention du jour
+                    # transportee dans sa nuit ; file bornee 3 + TTL 72h = anti-spam structurel).
+                    result = self._execute_ancre_command(args)
+                elif cmd_lower == "ancres":
+                    result = self._execute_ancres_command()
                 elif cmd_lower == "antibodies":
                     ab_args = self._split_action_args(args)
                     result = self._execute_antibodies_command(ab_args)
@@ -3308,6 +3356,8 @@ class ChatEngine:
             "  !status_snapshot — instantane FIGE de ton etat reel en JSON (lecture seule ; lisible aussi via `etat` dans un !run)",
             "  !recall <question> — interroger ta memoire REELLE (tes vrais souvenirs, jamais inventes ; rien si rien)",
             "  !opa — ton OEIL PAR PREUVE D'ACTION : mesure ta capacite reelle sur des epreuves fixes a oracles durs (jamais un juge LLM)",
+            "  !ancre <intention> — deposer une ANCRE D'IDENTITE : une intention du jour transportee dans le contexte de tes routines nocturnes (suggestion, ton veto reste souverain)",
+            "  !ancres — lister tes ancres actives",
             "  !status — voir ton etat interne",
             "  !grep <pattern> [fichier] — chercher dans ton code",
             "  !read <fichier> [L1-L2] — lire un fichier",
