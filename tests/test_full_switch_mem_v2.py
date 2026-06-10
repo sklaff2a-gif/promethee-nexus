@@ -107,6 +107,53 @@ def test_full_switch_purge_cible_temoin(monkeypatch):
     n = m.purge_expired(max_age_days=1, collection_name="collective_wisdom")
     assert n == 1 and new.deleted == ["NEW-doc"] and old.deleted == []   # purge le temoin
 
+# ---------- IMMUNITE PREMIUM (incident MEMORY_CLEANUP 10/06 : 17/18 lecons purgees) ----------
+class _PurgeCol:
+    """Collection mockee pour les purges : 1 premium NON date, 1 churn vieux, 1 churn sans date."""
+    def __init__(self):
+        self.docs = {
+            "premium_1": ({"tier_status": "PREMIUM", "origin_ts": "100.0"}, "lecon certifiee importante du gate humain " * 4),
+            "churn_vieux": ({"tier_status": "CHURN", "timestamp": "100.0", "recall_count": 0}, "x" * 200),
+            "churn_sans_date": ({"tier_status": "CHURN"}, "y" * 200),
+            "churn_court": ({"tier_status": "CHURN", "timestamp": "100.0"}, "court"),
+        }
+        self.deleted = []
+    def get(self, include=None, **kw):
+        ids = list(self.docs.keys())
+        return {"ids": ids,
+                "metadatas": [self.docs[i][0] for i in ids],
+                "documents": [self.docs[i][1] for i in ids]}
+    def delete(self, ids):
+        self.deleted.extend(ids)
+
+def _mgr_purge(monkeypatch, col):
+    monkeypatch.setattr(vsmod, "MEM_V2_FULL_SWITCH", True)
+    m = ChromaMemoryManager.__new__(ChromaMemoryManager)
+    m.collections = {"collective_wisdom": col}
+    m._get_collection = lambda name: col
+    m._get_shadow_collection = lambda name: col
+    return m
+
+def test_purge_expired_epargne_premium_et_non_date(monkeypatch):
+    col = _PurgeCol()
+    m = _mgr_purge(monkeypatch, col)
+    n = m.purge_expired(max_age_days=1, collection_name="collective_wisdom")
+    # le churn date et vieux part ; le premium (meme origin_ts antique) et le non-date RESTENT
+    assert "churn_vieux" in col.deleted
+    assert "premium_1" not in col.deleted          # immunite a l'oubli passif (blueprint V2)
+    assert "churn_sans_date" not in col.deleted    # pas de datation -> pas de purge aveugle
+
+def test_purge_low_quality_epargne_premium(monkeypatch):
+    col = _PurgeCol()
+    # rendre le premium artificiellement "court" : il doit QUAND MEME survivre
+    meta, _ = col.docs["premium_1"]
+    col.docs["premium_1"] = (meta, "court")
+    m = _mgr_purge(monkeypatch, col)
+    m.purge_low_quality(min_length=100, collection_name="collective_wisdom")
+    assert "churn_court" in col.deleted            # le churn court part (non-regression)
+    assert "premium_1" not in col.deleted          # le premium court survit (gate humain seul juge)
+
+
 def test_full_switch_canonical_helper(monkeypatch):
     # le helper EST la source unique de verite du routage
     old, new = _FakeCol("OLD"), _FakeCol("NEW")

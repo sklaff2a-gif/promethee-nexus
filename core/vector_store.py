@@ -394,7 +394,22 @@ class ChromaMemoryManager:
                 expired_ids = []
                 for doc_id, meta in zip(all_docs["ids"], all_docs["metadatas"]):
                     try:
-                        ts = float(meta.get("timestamp", 0))
+                        meta = meta or {}
+                        # IMMUNITE PREMIUM (10/06, incident MEMORY_CLEANUP 11:06) : le tier
+                        # PREMIUM est par DESIGN immunise contre l'oubli passif (blueprint V2,
+                        # lecons certifiees par le gate humain). La purge a tue 17/18 lecons
+                        # premium parce qu'elle ne connaissait pas les tiers -> jamais plus.
+                        if meta.get("tier_status") == "PREMIUM":
+                            continue
+                        # Un doc SANS datation connue n'est PAS "infiniment vieux" : on ne
+                        # purge que ce qu'on sait dater (avant : timestamp absent -> ts=0 ->
+                        # plus vieux que tout cutoff -> purge aveugle).
+                        ts_raw = meta.get("timestamp", None)
+                        if ts_raw is None:
+                            ts_raw = meta.get("origin_ts", None)   # datation alternative (lecons)
+                        if ts_raw is None:
+                            continue
+                        ts = float(ts_raw)
                         if ts < cutoff:
                             # Protéger les mémoires fréquemment rappelées
                             recall_count = int(meta.get("recall_count", 0))
@@ -498,11 +513,17 @@ class ChromaMemoryManager:
         for name in targets:
             try:
                 col = self._canonical_collection(name)
-                all_docs = col.get(include=["documents"])
+                all_docs = col.get(include=["documents", "metadatas"])
                 if not all_docs["ids"]:
                     continue
                 bad_ids = []
-                for doc_id, doc in zip(all_docs["ids"], all_docs["documents"]):
+                metas = all_docs.get("metadatas") or [{} for _ in all_docs["ids"]]
+                for doc_id, doc, meta in zip(all_docs["ids"], all_docs["documents"], metas):
+                    # IMMUNITE PREMIUM (10/06) : une lecon certifiee par le gate humain n'est
+                    # JAMAIS purgee passivement (blueprint V2) — revisable par preuve contraire
+                    # uniquement, via la file premium_review, pas par un filtre de qualite.
+                    if (meta or {}).get("tier_status") == "PREMIUM":
+                        continue
                     if not doc:
                         bad_ids.append(doc_id)
                         continue
