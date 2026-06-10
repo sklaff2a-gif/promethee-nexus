@@ -985,9 +985,17 @@ async def toggle_nap_mode(request: Request):
     enabled = data.get("enabled", False)
     mode = data.get("mode", "normal")
     duration_hours = float(data.get("duration_hours", 0.0))
+    force = bool(data.get("force", False))   # droit de refus : force=True passe outre
     if enabled:
-        accepted = await autonomy.enter_nap(mode=mode, duration_hours=duration_hours)
+        accepted = await autonomy.enter_nap(mode=mode, duration_hours=duration_hours, force=force)
         if not accepted:
+            # DROIT DE REFUS (atelier sieste 10/06) : le corps peut decliner une sieste
+            # imposee quand toutes ses reserves sont excellentes (validation de
+            # ressources). Distinct du cooldown ; re-essayer avec force=true pour imposer.
+            refus = getattr(autonomy, "_nap_refusal_reason", "")
+            if refus:
+                return {"status": "declined_by_body", "is_napping": False,
+                        "reason": refus, "hint": "renvoyer avec force=true pour imposer"}
             elapsed = time.time() - autonomy._nap_last_exit if autonomy._nap_last_exit else 0
             remaining = max(0, int(NAP_COOLDOWN - elapsed))
             return {"status": "cooldown", "is_napping": False, "cooldown_remaining": remaining}

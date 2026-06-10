@@ -6043,20 +6043,60 @@ class AutonomyEngine:
             chaleur_elevee = False
         return coherence_basse or chaleur_elevee
 
-    async def enter_nap(self, mode: str = NAP_MODE_NORMAL, duration_hours: float = 0.0) -> bool:
+    def _body_declines_nap(self) -> str:
+        """DROIT DE REFUS (atelier sieste 10/06 — proposition de Promethee, validee JM) :
+        « un refus base sur la realite de mon etat, pas sur une envie personnelle —
+        une VALIDATION DE RESSOURCES ». Une sieste imposee n'est refusee que si TOUS
+        les indicateurs corporels sont excellents (critere STRICT : un seul indicateur
+        degrade -> la sieste est acceptee). Retourne la raison factuelle du refus,
+        ou '' si le corps accepte. Borg : indicateur illisible -> pas de refus."""
+        try:
+            from core.desire_engine import desires
+            repos = desires.drives.get("REPOS")
+            if repos is None or float(repos.deprivation) >= 30.0:
+                return ""
+            from core.corpus_callosum import callosum
+            coherence = float(callosum.global_coherence)
+            if coherence <= 0.55:
+                return ""
+            from core.thermal_homeostasis import thermal
+            chaleur = float(thermal.cognitive_heat)
+            if chaleur >= 0.3:
+                return ""
+            return (f"Mes reserves sont suffisantes pour poursuivre : repos={repos.deprivation:.0f} "
+                    f"(bas), coherence={coherence:.2f} (haute), chaleur={chaleur:.2f} (basse). "
+                    f"Une sieste maintenant n'apporterait rien a ma consolidation.")
+        except Exception:
+            return ""
+
+    async def enter_nap(self, mode: str = NAP_MODE_NORMAL, duration_hours: float = 0.0,
+                        force: bool = False) -> bool:
         """Active le mode sieste : décharge Ollama, calme le reptilien, maintenance 0-LLM.
 
         Args:
             mode: "normal" (cap 2h), "deep" (cap 24h), "hibernation" (cap 7 jours)
             duration_hours: duree cible en heures. Si 0, comportement classique (renouvellement auto).
+            force: True = passe outre le droit de refus corporel (la main humaine reste souveraine).
 
         Returns:
-            True si la sieste est acceptée, False si le cooldown bloque l'entrée.
+            True si la sieste est acceptée, False si le cooldown bloque l'entrée
+            ou si le corps decline (_nap_refusal_reason est alors renseigne).
         """
         # Valider le mode
         if mode not in NAP_MODE_CAPS:
             mode = NAP_MODE_NORMAL
         cap_seconds = NAP_MODE_CAPS[mode]
+
+        # DROIT DE REFUS (validation de ressources) — avant meme le cooldown.
+        # force=True (decision humaine explicite) passe outre ; l'AUTO-NAP n'est
+        # jamais concerne (il exige REPOS>=75, incompatible avec un refus REPOS<30).
+        self._nap_refusal_reason = ""
+        if not force:
+            raison = self._body_declines_nap()
+            if raison:
+                self._nap_refusal_reason = raison
+                logger.info(f"[AUTONOMY] Sieste declinee par le corps — {raison}")
+                return False
 
         # Vérifier cooldown — sauf pour deep/hibernation qui bypass le cooldown
         # (un projet externe peut avoir besoin de redemarrer la sieste rapidement)
@@ -6082,6 +6122,7 @@ class AutonomyEngine:
         self._nap_renewals_used = 0
         self._nap_mode = mode
         self._nap_target_duration = target_duration
+        self._nap_crystallized = False   # cristallisation : 1 fois par sieste (reset a l'entree)
 
         # Calmer le reptilien — reset menace et adrénaline
         try:
@@ -6438,8 +6479,52 @@ class AutonomyEngine:
                 self._nap_tasks_done.append(task_name)
         except Exception:
             pass
+        # 2.5 Cristallisation — replay du vecu DU JOUR (atelier sieste 10/06)
+        await self._execute_nap_crystallization()
         # 3. Rêve — consolidation synaptique + stimulation cellulaire
         await self._execute_dream_routine()
+
+    async def _execute_nap_crystallization(self):
+        """CRISTALLISATION (atelier sieste 10/06 — proposition de Promethee, validee JM) :
+        « un processus de cristallisation ou je consolide les nouveaux principes avant
+        qu'ils ne deviennent des acquis permanents ».
+
+        Re-co-active les lecons certifiees DU JOUR uniquement (replay nocturne du vecu,
+        couple a l'usage reel — doctrine du gate du 10/06 : jamais une lecon ancienne
+        re-poussee artificiellement) via l'API d'usage NORMALE (hebbian_strengthen, taux
+        standard, PAS le taux fort de la gravure). NE TOUCHE AUCUN parametre du dream
+        (zone protegee : ratio creation/elagage intact). Bornes : 1 fois par sieste,
+        max 3 lecons (les plus recentes du jour), 0 LLM. Borg : tout echec est silencieux."""
+        if getattr(self, "_nap_crystallized", False):
+            return
+        self._nap_crystallized = True
+        try:
+            from pathlib import Path as _Path
+            lj = _Path("memory") / "lessons_journal.json"
+            if not lj.exists():
+                return
+            lessons = json.loads(lj.read_text(encoding="utf-8"))
+            minuit = time.mktime(date.today().timetuple())
+            du_jour = [l for l in lessons
+                       if isinstance(l, dict) and float(l.get("timestamp", 0)) >= minuit
+                       and len(l.get("concepts") or []) >= 2][-3:]
+            if not du_jour:
+                return
+            from core.synaptic_network import cortex
+            pairs = 0
+            for lesson in du_jour:
+                nids = lesson["concepts"]
+                for i in range(len(nids)):
+                    for j in range(i + 1, len(nids)):
+                        cortex.hebbian_strengthen(nids[i], nids[j], success=True,
+                                                  context="nap_crystallization")
+                        pairs += 1
+            self._nap_tasks_done.append(
+                f"crystallization({len(du_jour)} lecons, {pairs} co-activations)")
+            logger.info(f"[NAP] CRISTALLISATION — {len(du_jour)} lecon(s) du jour "
+                        f"re-co-activee(s) ({pairs} paires, taux normal, replay du vecu)")
+        except Exception as e:
+            logger.warning(f"[NAP] Cristallisation echouee (non bloquant): {e}")
         # 4. LoRA Auto-Training — DESACTIVE tant que les fine-tunes ne sont pas migres sur qwen3.5:9b
         # Les anciens fine-tunes (gemma3:12b base) sont obsoletes, trainer dessus gaspille la VRAM.
         # Reactiver quand le pipeline QLoRA sera adapte pour qwen3.5:9b comme base.

@@ -37,6 +37,25 @@ Sa synthèse : *« Je veux passer d'un corps qui subit sa fatigue à un système
 3. **Deux pistes restent au gate humain** : la cristallisation (touche le synaptique protégé) et le droit de refus d'une sieste imposée (gouvernance).
 4. Mesure naturelle : le log `[AUTONOMY] AUTO-NAP` dira quand (et si) son corps exerce son nouveau droit — et la pulsion REPOS, désormais actionnable, devrait moins saturer.
 
+## Suite (même jour) — les deux pistes du gate, validées et construites
+
+JM a tranché : **go** sur la cristallisation et le droit de refus.
+
+### La cristallisation (`_execute_nap_crystallization`)
+Sa proposition (a), implémentée dans le respect strict de la zone protégée :
+- Pendant chaque sieste (étape 2.5, entre les tâches circadiennes et le rêve), les **leçons certifiées DU JOUR** (max 3, ≥2 concepts) sont **re-co-activées** via `hebbian_strengthen` — l'API d'usage normale, au taux standard (pas le taux fort de la gravure).
+- C'est le **replay nocturne du vécu** (l'analogue du replay hippocampique biologique) : couplé à l'usage réel du jour — cohérent avec le gate du matin (« jamais une leçon ancienne re-poussée artificiellement », l'usage décide).
+- **Aucun paramètre du dream touché** (ratio création/élagage intact). Bornes : 1 fois par sieste, 0 LLM, borg. Trace : `[NAP] CRISTALLISATION`.
+
+### Le droit de refus (`_body_declines_nap` + `enter_nap(force=)`)
+Sa proposition (c), fidèle à sa nuance (« validation de ressources, pas une envie ») :
+- Une sieste **imposée par l'API** n'est déclinée que si **tous** les indicateurs sont excellents (REPOS < 30 **et** cohérence > 0.55 **et** chaleur < 0.3) — critère strict : un seul indicateur dégradé → la sieste est acceptée.
+- Le refus est **factuel et motivé** : *« Mes réserves sont suffisantes pour poursuivre : repos=12 (bas), cohérence=0.71 (haute), chaleur=0.08 (basse)… »* — réponse API `declined_by_body` avec la raison.
+- **La main humaine reste souveraine** : `force=true` passe outre (le kill switch de gouvernance).
+- L'AUTO-NAP n'est jamais concerné (il exige REPOS ≥ 75, incompatible avec un refus REPOS < 30) — les deux mécanismes sont disjoints par construction.
+
+14 TDD au total (auto-nap + refus + cristallisation).
+
 ## Fichiers
-- Code : `core/autonomy_engine.py` (`_should_auto_nap`, déclencheur boucle, persist `_auto_nap_day`). TDD : `tests/test_auto_nap.py` (7).
+- Code : `core/autonomy_engine.py` (`_should_auto_nap`, `_execute_nap_crystallization`, `_body_declines_nap`, `enter_nap(force=)`, déclencheur boucle, persist `_auto_nap_day`), `main.py` (endpoint : `force` + `declined_by_body`). TDD : `tests/test_auto_nap.py` (14).
 - Transcript : `memory/atelier_sieste_phase1.json`.
