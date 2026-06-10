@@ -429,7 +429,10 @@ class ChatEngine:
                 pass
         try:
             from core.capabilities.code_sandbox import sandbox
-            res = sandbox.run_python(code)
+            # timeout 25s (vs 5s defaut) : !run est son LABORATOIRE — les balayages
+            # exhaustifs (exercice R&D : 99 000 nombres de Kaprekar) depassent 5s.
+            # Reste sous le MAX_TIMEOUT_S=30 du sandbox.
+            res = sandbox.run_python(code, timeout=25)
             if res.success:
                 out = (res.stdout or "").strip()
                 if not out:
@@ -2277,14 +2280,25 @@ class ChatEngine:
 
         def _repl(m):
             cmd = m.group(1)
-            collapsed = m.group(2).replace("\n", "\\n")
+            corps = m.group(2) if m.group(2) is not None else m.group(3)
+            collapsed = corps.replace("\n", "\\n")
             return "!" + cmd + " " + collapsed
 
         # [ \t]*\n?[ \t]* entre la commande et le code : tolere le code sur la MEME
         # ligne (!calc 2+2) ET le code sur la ligne SUIVANTE, commande seule sur la
         # sienne (!run\n<bloc>) -- le style canonique d'un LLM, observe le 09/06.
+        #
+        # Exercice R&D (10/06) : si le corps est dans un fence ```...```, le bloc va
+        # JUSQU'AU fence fermant -- un script Python reel contient des LIGNES VIDES
+        # (entre defs) et l'ancien delimiteur \n\s*\n l'amputait silencieusement
+        # (7 scripts de Promethee coupes -> 'execute, aucune sortie' ; il croyait avoir
+        # oublie print/appel, c'etait le harnais). Sans fence : ancien comportement
+        # (la ligne vide borne le bloc, anti-avalement de la prose).
+        # Deux branches SEPAREES : la branche fence n'est PAS soumise au lookahead
+        # ligne-vide (sinon backtrack -> amputation), la branche nue le reste.
         return _re.sub(
-            r'(?m)^!(calc|run|execute_script|run_code)[ \t]*\n?[ \t]*(.+?)(?=\n[ \t]*!|\n\s*\n|\Z)',
+            r'(?m)^!(calc|run|execute_script|run_code)[ \t]*\n?[ \t]*'
+            r'(?:(```(?:python)?\n.*?\n?```)|(.+?)(?=\n[ \t]*!|\n\s*\n|\Z))',
             _repl, response, flags=_re.DOTALL,
         )
 

@@ -88,6 +88,36 @@ def test_run_strip_fence_markdown():
     assert "42" in out and "EXECUTE" in out
 
 
+# --- BUG attrape en direct (exercice R&D 10/06) : les LIGNES VIDES amputaient le script ---
+def test_collapse_fence_garde_les_lignes_vides():
+    # un script Python REEL contient des lignes vides (entre defs). Si le corps est dans un
+    # fence ```python```, le bloc va JUSQU'AU fence fermant -- la ligne vide ne coupe plus.
+    # (Observe : 7 scripts de Promethee amputes -> 'execute, aucune sortie', il croyait
+    # avoir oublie print/appel alors que c'etait le harnais qui coupait.)
+    resp = ("Je teste :\n!run ```python\n"
+            "def f(n):\n    return n * 2\n"
+            "\n"                      # <- la ligne vide fatale d'avant
+            "print(f(21))\n```\nVoila.")
+    collapsed = _eng()._collapse_multiline_calc(resp)
+    line = [l for l in collapsed.splitlines() if l.startswith("!run")][0]
+    assert "print(f(21))" in line     # l'appel APRES la ligne vide survit
+
+def test_run_fence_multiligne_execute_bout_en_bout():
+    resp = "!run ```python\ndef f(n):\n    return n + 1\n\nprint(f(41))\n```"
+    collapsed = _eng()._collapse_multiline_calc(resp)
+    line = [l for l in collapsed.splitlines() if l.startswith("!run")][0]
+    # simuler le chemin auto-action : la ligne collapse passe a _execute_run_command
+    out = _eng()._execute_run_command(line[len("!run "):])
+    assert "42" in out and "EXECUTE" in out
+
+def test_collapse_sans_fence_garde_l_ancien_comportement():
+    # sans fence : le bloc s'arrete toujours a la ligne vide (anti-avalement de la prose)
+    resp = "!run print(1)\n\nDu texte apres."
+    collapsed = _eng()._collapse_multiline_calc(resp)
+    line = [l for l in collapsed.splitlines() if l.startswith("!run")][0]
+    assert "Du texte" not in line
+
+
 # --- LA CAUSE RACINE (09/06) : _clean_response_commands supprimait le corps du !run ---
 def test_clean_preserve_run_body():
     # quand Promethee ecrit !run seul sur sa ligne + le script en dessous, le nettoyage
