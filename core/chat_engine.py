@@ -230,6 +230,7 @@ class ChatEngine:
         "  !calc <expr/code>        — Calculer (sandbox securise, resultat reel)\n"
         "  !run <script Python>     — EXECUTER un vrai script (sandbox isole, journal clair)\n"
         "  !status_snapshot         — Instantane FIGE de mon etat reel (JSON, lecture seule ; aussi lisible via `etat` dans un !run)\n"
+        "  !recall <question>       — Interroger ma memoire REELLE (souvenirs factuels, jamais inventes)\n"
         "  !status                  — Diagnostic interne compact\n"
         "  !read <fichier> [L1-L2]  — Lire un fichier du projet\n"
         "  !grep <pattern> [fichier] — Chercher dans le code\n"
@@ -294,6 +295,10 @@ class ChatEngine:
         head = stripped[1:].split(None, 1)
         if head and head[0].lower() in _RAW_PAYLOAD:
             return ("run", [head[1] if len(head) > 1 else ""])
+        # !recall <question> : charge brute aussi (une question contient souvent une apostrophe
+        # -- "Qu'est-ce que..." -- qui ferait planter shlex). Atelier console, 3e outil.
+        if head and head[0].lower() == "recall":
+            return ("recall", [head[1] if len(head) > 1 else ""])
         try:
             parts = shlex.split(stripped, posix=True)
         except ValueError as e:
@@ -449,6 +454,9 @@ class ChatEngine:
 
         if cmd in ("status_snapshot", "snapshot", "etat"):  # 2e outil console : fenetre sur son corps
             return self._execute_snapshot_command()
+
+        if cmd == "recall":   # 3e outil console : interroge sa memoire reelle (charge brute)
+            return self._execute_recall_command(args[0] if args else "")
 
         if cmd == "grave":
             # V23.0 (2026-06-06) — CONSOLIDATION FORTE D'UNE LECON CERTIFIEE.
@@ -1277,6 +1285,44 @@ class ChatEngine:
                 "non-modifiable) — ta fenetre sur ton corps. "
                 "(Lisible aussi via `etat` dans un !run : etat['coeur']['bpm'], "
                 "etat['dopamine'], etat['pulsions']['dominant']...)\n" + body)
+
+    def _execute_recall_command(self, question: str) -> str:
+        """!recall <question> — 3e outil de la console, CO-CONCU par lui (atelier console phase 5).
+        Interroge sa MEMOIRE REELLE (collective_wisdom, desormais multilingue depuis le Full
+        Switch Memoire V2) et rend les souvenirs FACTUELS les plus proches. Garantie de securite
+        qu'il a posee lui-meme : NE JAMAIS INVENTER un souvenir -- on rend exactement ce que la
+        memoire vectorielle contient, ou un 'aucun souvenir' explicite si rien (anti-hallucination,
+        meme principe que !run/!calc : la source EST la verite, pas le LLM). Aucune interpretation."""
+        question = (question or "").strip()
+        if len(question) >= 2 and question[0] == question[-1] and question[0] in ('"', "'"):
+            question = question[1:-1].strip()
+        if not question:
+            return ("Usage : !recall <question> — interroge ta memoire reelle. "
+                    "Je rends tes vrais souvenirs pertinents (jamais inventes), ou rien si rien.")
+        try:
+            from core.vector_store import ChromaMemoryManager
+            mgr = ChromaMemoryManager.get_instance()
+            res = mgr.query_with_metadata([question], n_results=4, collection_name="collective_wisdom")
+            docs = ((res or {}).get("documents") or [[]])[0]
+            metas = ((res or {}).get("metadatas") or [[]])[0]
+            dists = ((res or {}).get("distances") or [[]])[0]
+            if not docs:
+                return (f"[!recall] Aucun souvenir pertinent trouve pour : « {question} ». "
+                        "Je ne comble pas le vide par une invention.")
+            lines = [f"[!recall] Souvenirs REELS les plus proches de « {question} » "
+                     "(ta memoire, pas une reconstruction) :"]
+            for i, doc in enumerate(docs):
+                meta = metas[i] if i < len(metas) and isinstance(metas[i], dict) else {}
+                dist = dists[i] if i < len(dists) else None
+                src = meta.get("source") or meta.get("tier_status") or "?"
+                tag = f"[{src}" + (f", d={dist:.2f}]" if isinstance(dist, (int, float)) else "]")
+                txt = (doc or "").strip().replace("\n", " ")
+                if len(txt) > 300:
+                    txt = txt[:300] + " […]"
+                lines.append(f"  {i+1}. {tag} {txt}")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"!recall : erreur — {e}"
 
     async def _apply_attention_conjointe(
         self,
@@ -2130,7 +2176,7 @@ class ChatEngine:
 
     # Commandes dispatch autorisees en auto-action
     # "observe" remis avec cooldown 5min (voir _scan_response_actions)
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "run", "execute_script", "run_code", "status_snapshot", "snapshot", "etat", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "run", "execute_script", "run_code", "status_snapshot", "snapshot", "etat", "recall", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
     _last_auto_observe: float = 0.0  # timestamp du dernier !observe auto-action
     _AUTO_OBSERVE_COOLDOWN: float = 300.0  # 5 minutes entre deux auto-observations
 
@@ -2287,6 +2333,10 @@ class ChatEngine:
                     # Atelier console phase 3 — sa fenetre sur son corps (instantane fige
                     # lecture seule de son etat reel). Promethee peut l'emettre lui-meme.
                     result = self._execute_snapshot_command()
+                elif cmd_lower == "recall":
+                    # Atelier console phase 5 — interroge sa memoire REELLE (multilingue depuis
+                    # le Full Switch). Souvenirs factuels, jamais inventes. args = question brute.
+                    result = self._execute_recall_command(args)
                 elif cmd_lower == "antibodies":
                     ab_args = self._split_action_args(args)
                     result = self._execute_antibodies_command(ab_args)
@@ -3226,6 +3276,7 @@ class ChatEngine:
             "  !calc <expr/code> — calculer (sandbox securise)",
             "  !run <script Python> — EXECUTER un vrai script complet (sandbox isole, journal)",
             "  !status_snapshot — instantane FIGE de ton etat reel en JSON (lecture seule ; lisible aussi via `etat` dans un !run)",
+            "  !recall <question> — interroger ta memoire REELLE (tes vrais souvenirs, jamais inventes ; rien si rien)",
             "  !status — voir ton etat interne",
             "  !grep <pattern> [fichier] — chercher dans ton code",
             "  !read <fichier> [L1-L2] — lire un fichier",

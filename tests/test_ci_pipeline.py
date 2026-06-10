@@ -766,6 +766,10 @@ class TestRunExistingTestsForFile:
             )
 
         assert ok is True
-        # Vérifie que le fichier du mapping spécial a été appelé
-        called_path = mock_pytest.call_args[0][0]
-        assert "test_memory_health.py" in called_path or "test_multiproject_memory.py" in called_path
+        # Vérifie que le fichier du mapping supervisé est PARMI les tests lancés.
+        # (On scanne TOUS les appels, pas seulement le dernier : depuis l'atelier console,
+        # d'autres tests importent core.vector_store -- test_full_switch_mem_v2, test_recall --
+        # et le graphe de dependances les decouvre aussi legitimement.)
+        called_paths = [c.args[0] for c in mock_pytest.call_args_list]
+        assert any(("test_memory_health.py" in p or "test_multiproject_memory.py" in p)
+                   for p in called_paths), f"mapping supervisé absent des appels: {called_paths}"
