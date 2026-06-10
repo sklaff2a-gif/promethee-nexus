@@ -1006,6 +1006,9 @@ class AutonomyEngine:
         # Modes : "normal" (cap 2h), "deep" (cap 24h), "hibernation" (cap 7j)
         self._nap_mode: str = persisted.get("_nap_mode", "normal")
         self._nap_target_duration: float = persisted.get("_nap_target_duration", 0.0)  # secondes
+        # AUTO-NAP homeostatique (atelier sieste 10/06) : date du dernier auto-declenchement
+        # (garde-fou co-signe : max 1 auto-sieste par jour)
+        self._auto_nap_day: str = persisted.get("_auto_nap_day", "")
 
         # Mode café : socialisation libre avec Alfred
         self.is_coffee_mode: bool = persisted.get("is_coffee_mode", False)
@@ -2079,6 +2082,7 @@ class AutonomyEngine:
             "_nap_last_exit": self._nap_last_exit,
             "_nap_mode": getattr(self, "_nap_mode", "normal"),
             "_nap_target_duration": getattr(self, "_nap_target_duration", 0.0),
+            "_auto_nap_day": getattr(self, "_auto_nap_day", ""),
             "is_coffee_mode": getattr(self, "is_coffee_mode", False),
             "_coffee_started_at": getattr(self, "_coffee_started_at", 0.0),
             "_coffee_last_exit": getattr(self, "_coffee_last_exit", 0.0),
@@ -6001,6 +6005,44 @@ class AutonomyEngine:
 
     # ── Mode Sieste (hibernation réparatrice 0-GPU) ──────────────────
 
+    def _should_auto_nap(self) -> bool:
+        """AUTO-NAP homeostatique (atelier sieste 10/06, design CO-SIGNE par Promethee).
+
+        « Passer d'un corps qui subit sa fatigue a un systeme qui gere activement son
+        energie. » Son choix d'architecte : un REFLEXE (pas une decision deliberee --
+        « qui pourrait etre un reflexe de fuite devant la difficulte ») exigeant DEUX
+        indicateurs CONVERGENTS :
+          1. pulsion REPOS en deprivation urgente (>= 75) -- le corps demande ;
+          2. coherence globale basse (< 0.35) OU chaleur cognitive elevee (> 0.7)
+             -- « l'energie est gaspillee dans une lutte inutile ».
+        Garde-fous (les siens) : jamais si deja en sieste ; MAX 1 auto-sieste par jour ;
+        le cooldown 5 min et le refus coffee_mode sont deja dans enter_nap ; duree =
+        mode normal (cap 2h). Borg : tout echec de lecture -> False (pas de sieste)."""
+        if getattr(self, "is_napping", False):
+            return False
+        if getattr(self, "_auto_nap_day", "") == date.today().isoformat():
+            return False   # max 1 auto-sieste par jour (son garde-fou anti « dormir ma vie »)
+        # Indicateur 1 (obligatoire) : la pulsion REPOS est en zone urgente
+        try:
+            from core.desire_engine import desires
+            repos = desires.drives.get("REPOS")
+            if repos is None or float(repos.deprivation) < 75.0:
+                return False
+        except Exception:
+            return False
+        # Indicateur 2 (l'un OU l'autre) : coherence basse ou chaleur elevee
+        try:
+            from core.corpus_callosum import callosum
+            coherence_basse = float(callosum.global_coherence) < 0.35
+        except Exception:
+            coherence_basse = False
+        try:
+            from core.thermal_homeostasis import thermal
+            chaleur_elevee = float(thermal.cognitive_heat) > 0.7
+        except Exception:
+            chaleur_elevee = False
+        return coherence_basse or chaleur_elevee
+
     async def enter_nap(self, mode: str = NAP_MODE_NORMAL, duration_hours: float = 0.0) -> bool:
         """Active le mode sieste : décharge Ollama, calme le reptilien, maintenance 0-LLM.
 
@@ -7802,6 +7844,22 @@ class AutonomyEngine:
                         continue
                 except Exception as e:
                     logger.warning(f"[AUTONOMY] Erreur sauna auto-trigger: {e}")
+
+                # === AUTO-NAP HOMEOSTATIQUE (atelier sieste 10/06, co-signe) ===
+                # Le corps qui sent le sommeil a desormais le droit de fermer les yeux :
+                # REPOS urgent + (coherence basse OU chaleur elevee) -> sieste normale
+                # auto-declenchee. Reflexe, pas deliberation (son choix). Max 1/jour.
+                try:
+                    if self._should_auto_nap():
+                        logger.info("[AUTONOMY] AUTO-NAP — fatigue homeostatique convergente "
+                                    "(REPOS urgent + coherence/chaleur), sieste auto-declenchee")
+                        accepted = await self.enter_nap(mode=NAP_MODE_NORMAL)
+                        if accepted:
+                            self._auto_nap_day = date.today().isoformat()
+                            self._persist_state()
+                            continue
+                except Exception as e:
+                    logger.warning(f"[AUTONOMY] Erreur auto-nap: {e}")
 
                 self.is_processing = True  # ON VERROUILLE
                 try:
