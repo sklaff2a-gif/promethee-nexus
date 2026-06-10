@@ -2655,6 +2655,161 @@ class SynapticNetwork:
 
         return created
 
+    # ─── VISION SYNAPTIQUE REPRESENTATIVE (10/06) — READ-ONLY, aucun poids touche ───
+
+    def health_stats(self) -> Dict[str, Any]:
+        """Indicateurs de SANTE calcules sur le graphe ENTIER (vision representative).
+
+        Demande JM 10/06 : le graph D3 (top-120 par energie) ne correlait pas avec la
+        realite (4315N/19859S) et CACHAIT precisement les pathologies (l'echantillon
+        'sain' masquait l'agonie). Ces stats sont la VERITE DES COMPTES + les marqueurs
+        des maladies connues : osteoporose (% synapses < 0.10 — mesuree a 66% le 06/06),
+        noeuds orphelins, hubs. LECTURE SEULE (meme statut que resonance_audit)."""
+        n_nodes = len(self.nodes)
+        n_syn = len(self.synapses)
+        bandes = {"agonie": 0, "faible": 0, "moyen": 0, "fort": 0, "tres_fort": 0}
+        poids = []
+        degres: Dict[str, int] = {}
+        for s in self.synapses.values():
+            w = float(s.get("weight", 0.0))
+            poids.append(w)
+            if w < 0.10:
+                bandes["agonie"] += 1
+            elif w < 0.25:
+                bandes["faible"] += 1
+            elif w < 0.50:
+                bandes["moyen"] += 1
+            elif w < 0.80:
+                bandes["fort"] += 1
+            else:
+                bandes["tres_fort"] += 1
+            for nid in (s.get("source"), s.get("target")):
+                if nid is not None:
+                    degres[nid] = degres.get(nid, 0) + 1
+        orphelins = [nid for nid in self.nodes if nid not in degres]
+        poids.sort()
+        mediane = poids[len(poids) // 2] if poids else 0.0
+        hubs = sorted(degres.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        return {
+            "total_nodes": n_nodes,
+            "total_synapses": n_syn,
+            "bandes_poids": bandes,
+            "pct_agonie": round(100.0 * bandes["agonie"] / n_syn, 1) if n_syn else 0.0,
+            "poids_moyen": round(sum(poids) / n_syn, 4) if n_syn else 0.0,
+            "poids_median": round(mediane, 4),
+            "orphelins": len(orphelins),
+            "pct_orphelins": round(100.0 * len(orphelins) / n_nodes, 1) if n_nodes else 0.0,
+            "hubs": [{"id": nid, "concept": (self.nodes.get(nid) or {}).get("concept", "?")[:40],
+                      "degre": d} for nid, d in hubs],
+        }
+
+    def graph_sample(self, max_nodes: int = 160, max_links: int = 600) -> Dict[str, Any]:
+        """Echantillon STRATIFIE du graphe pour le rendu D3 (vision representative).
+
+        Contrairement au top-N par energie (qui ne montrait QUE la sante), l'echantillon
+        couvre TOUTES les strates — les hubs, les forts, les moyens, l'AGONIE et les
+        ORPHELINS — pour que la maladie soit visible dans le dessin. Seed stable sur la
+        journee (pas de scintillement a chaque refresh ; l'echantillon respire d'un jour
+        a l'autre). LECTURE SEULE. Retourne {nodes, links, sample_info}."""
+        import random as _random
+        from datetime import date as _date
+        rng = _random.Random(_date.today().isoformat())
+
+        degres: Dict[str, int] = {}
+        for s in self.synapses.values():
+            for nid in (s.get("source"), s.get("target")):
+                if nid is not None:
+                    degres[nid] = degres.get(nid, 0) + 1
+
+        choisis: Dict[str, str] = {}   # nid -> strate (la 1re qui le capture)
+
+        def _prendre(nids, strate, quota):
+            # budget STRICT : jamais au-dela de max_nodes au total
+            quota = min(quota, max_nodes - len(choisis))
+            pris = 0
+            for nid in nids:
+                if pris >= quota:
+                    break
+                if nid in self.nodes and nid not in choisis:
+                    choisis[nid] = strate
+                    pris += 1
+
+        # Quotas PROPORTIONNELS a max_nodes (jamais de minimum absolu : sur un petit
+        # graphe les minimums violeraient la borne et avaleraient toutes les strates)
+        q_hub = max(1, max_nodes // 8)
+        q_fort = max(1, max_nodes // 4)
+        q_agonie = max(1, max_nodes // 4)
+        q_orph = max(1, max_nodes // 10)
+
+        # 1. HUBS (les centres reels du graphe) — uniquement les vrais (degre > 0)
+        hubs = sorted(((nid, d) for nid, d in degres.items() if d > 0),
+                      key=lambda kv: kv[1], reverse=True)
+        _prendre([nid for nid, _ in hubs], "hub", q_hub)
+        # 2. AGONIE : noeuds touches par des synapses < 0.10 (la maladie, visible)
+        agonie_nids = []
+        for s in self.synapses.values():
+            if float(s.get("weight", 0.0)) < 0.10:
+                agonie_nids.extend([s.get("source"), s.get("target")])
+        rng.shuffle(agonie_nids)
+        _prendre(agonie_nids, "agonie", q_agonie)
+        # 3. ORPHELINS (les oublies)
+        orphelins = [nid for nid in self.nodes if nid not in degres]
+        rng.shuffle(orphelins)
+        _prendre(orphelins, "orphelin", q_orph)
+        # 4. FORTS par energie (l'activite vivante)
+        par_energie = sorted(self.nodes.items(), key=lambda kv: kv[1].get("energy", 0), reverse=True)
+        _prendre([nid for nid, _ in par_energie], "fort", q_fort)
+        # 5. Complement ALEATOIRE (le tissu ordinaire)
+        tous = list(self.nodes.keys())
+        rng.shuffle(tous)
+        _prendre(tous, "tissu", max_nodes - len(choisis))
+
+        nodes_out = []
+        for nid, strate in choisis.items():
+            node = self.nodes[nid]
+            nodes_out.append({
+                "id": nid,
+                "concept": node.get("concept", "?"),
+                "type": node.get("node_type", "?"),
+                "energy": round(float(node.get("energy", 0.0)), 3),
+                "activation": node.get("activation_count", 0),
+                "valence": (node.get("affect") or {}).get("valence", 0.0),
+                "strate": strate,
+                "degre": degres.get(nid, 0),
+            })
+
+        # Liens entre noeuds retenus — stratifies si trop nombreux (quota agonie garanti)
+        retenus = set(choisis)
+        liens = [s for s in self.synapses.values()
+                 if s.get("source") in retenus and s.get("target") in retenus]
+        if len(liens) > max_links:
+            agonisants = [s for s in liens if float(s.get("weight", 0.0)) < 0.10]
+            sains = [s for s in liens if float(s.get("weight", 0.0)) >= 0.10]
+            rng.shuffle(agonisants)
+            rng.shuffle(sains)
+            quota_agonie = min(len(agonisants), max_links // 3)
+            liens = agonisants[:quota_agonie] + sains[:max_links - quota_agonie]
+        links_out = [{
+            "source": s["source"], "target": s["target"],
+            "weight": round(float(s.get("weight", 0.0)), 3),
+            "type": s.get("synapse_type", "?"),
+        } for s in liens]
+
+        strates_count: Dict[str, int] = {}
+        for st in choisis.values():
+            strates_count[st] = strates_count.get(st, 0) + 1
+        return {
+            "nodes": nodes_out,
+            "links": links_out,
+            "sample_info": {
+                "affiches_nodes": len(nodes_out),
+                "affiches_links": len(links_out),
+                "reels_nodes": len(self.nodes),
+                "reels_synapses": len(self.synapses),
+                "strates": strates_count,
+            },
+        }
+
     def resonance_audit(self) -> Dict[str, Any]:
         """SYNAPTIC_RESONANCE_AUDIT v2 (atelier Darwin-Godel, 'Dynamique de Morphogenese').
         AUDIT EN LECTURE SEULE (ne modifie AUCUN poids) appele a chaque dream. Surveille la

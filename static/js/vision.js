@@ -163,7 +163,7 @@ const NeuralVision = (function() {
             .then(function(data) {
                 if (offlineEl) offlineEl.style.display = "none";
                 processGraphData(data);
-                updateStats(data.stats, data.cardiac);
+                updateStats(data.stats, data.cardiac, data.sante, data.sample_info);
             })
             .catch(function(err) {
                 console.warn("VISION: fetch error", err);
@@ -179,8 +179,12 @@ const NeuralVision = (function() {
         var nodes = data.nodes || [];
         var links = data.links || [];
 
-        // Limiter aux top nodes par energie
-        if (nodes.length > MAX_VISIBLE_NODES) {
+        // VISION REPRESENTATIVE (10/06) : si l'API a deja echantillonne (stratifie
+        // hubs/forts/agonie/orphelins/tissu), on ne re-coupe PAS — re-trier par
+        // energie detruirait la representativite (la maladie redeviendrait invisible).
+        var deja_echantillonne = !!data.sample_info;
+        // Limiter aux top nodes par energie (seulement pour l'ancien mode full)
+        if (!deja_echantillonne && nodes.length > MAX_VISIBLE_NODES) {
             nodes.sort(function(a, b) { return b.energy - a.energy; });
             nodes = nodes.slice(0, MAX_VISIBLE_NODES);
             var visibleIds = new Set(nodes.map(function(n) { return n.id; }));
@@ -202,6 +206,8 @@ const NeuralVision = (function() {
                 energy: n.energy,
                 activation: n.activation,
                 valence: n.valence,
+                strate: n.strate || "",
+                degre: n.degre || 0,
                 x: existing ? existing.x : width / 2 + (Math.random() - 0.5) * 100,
                 y: existing ? existing.y : height / 2 + (Math.random() - 0.5) * 100,
                 vx: existing ? existing.vx : 0,
@@ -244,7 +250,7 @@ const NeuralVision = (function() {
         var linkEnter = linkElements.enter().append("line");
 
         linkElements = linkEnter.merge(linkElements)
-            .attr("stroke", function(d) { return SYNAPSE_TYPE_COLORS[d.type] || "#00ff41"; })
+            .attr("stroke", function(d) { return d.weight < 0.10 ? "#ff3344" : (SYNAPSE_TYPE_COLORS[d.type] || "#00ff41"); })
             .attr("stroke-width", function(d) { return Math.max(0.3, d.weight * 3); })
             .attr("stroke-opacity", function(d) { return d.weight < 0.1 ? 0.15 : 0.2 + d.weight * 0.4; })
             .attr("stroke-dasharray", function(d) { return d.weight < 0.08 ? "2,3" : null; });
@@ -270,8 +276,12 @@ const NeuralVision = (function() {
             .attr("fill", function(d) { return NODE_TYPE_COLORS[d.type] || "#00ff41"; })
             .attr("opacity", function(d) { return 0.3 + 0.7 * d.energy; })
             .attr("filter", function(d) { return d.energy > 0.7 ? "url(#glow-green)" : null; })
-            .attr("stroke", function(d) { return d.energy > 0.8 ? NODE_TYPE_COLORS[d.type] || "#00ff41" : "none"; })
-            .attr("stroke-width", function(d) { return d.energy > 0.8 ? 0.5 : 0; });
+            .attr("stroke", function(d) {
+                if (d.strate === "orphelin") return "#ff3344";
+                return d.energy > 0.8 ? NODE_TYPE_COLORS[d.type] || "#00ff41" : "none";
+            })
+            .attr("stroke-width", function(d) { return d.strate === "orphelin" ? 1.2 : (d.energy > 0.8 ? 0.5 : 0); })
+            .attr("stroke-dasharray", function(d) { return d.strate === "orphelin" ? "2,2" : null; });
 
         // Restart simulation
         simulation.nodes(nodeData);
@@ -346,14 +356,27 @@ const NeuralVision = (function() {
     }
 
     // --- Stats header ---
-    function updateStats(stats, cardiac) {
+    function updateStats(stats, cardiac, sante, sampleInfo) {
         if (!statsEl) return;
+        // VISION REPRESENTATIVE : la verite des comptes (graphe ENTIER) + sante.
         var text = (stats.total_nodes || 0) + "N " + (stats.total_synapses || 0) + "S";
+        if (sampleInfo) {
+            text += " (vue: " + sampleInfo.affiches_nodes + "N/" + sampleInfo.affiches_links + "S)";
+        }
+        var alerte = false;
+        if (sante) {
+            text += " | agonie " + (sante.pct_agonie || 0) + "%";
+            text += " | orphelins " + (sante.orphelins || 0);
+            // seuils d'alerte : osteoporose (>50% agonie) ou orphelins massifs (>10%)
+            alerte = (sante.pct_agonie > 50) || (sante.pct_orphelins > 10);
+        }
         if (cardiac && cardiac.bpm) {
             var emotion = cardiac.emotion || "---";
             var color = EMOTION_COLORS[emotion] || "#00ff41";
             text += " | " + Math.round(cardiac.bpm) + " BPM";
-            statsEl.style.color = color;
+            statsEl.style.color = alerte ? "#ff3344" : color;
+        } else if (alerte) {
+            statsEl.style.color = "#ff3344";
         }
         statsEl.textContent = text;
     }

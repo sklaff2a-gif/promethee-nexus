@@ -1086,34 +1086,41 @@ async def awareness_history():
     return {"snapshots": awareness.get_all_snapshots()}
 
 @app.get("/api/synaptic/graph")
-async def synaptic_graph():
-    """Retourne le graphe synaptique optimise pour D3.js (VISION)."""
+async def synaptic_graph(full: int = 0, nodes: int = 160, links: int = 600):
+    """Graphe synaptique pour D3.js (VISION) — version REPRESENTATIVE (10/06).
+
+    Avant : l'API renvoyait les ~20k synapses (2-4 MB/30s) et le front coupait au
+    top-120 par energie -> le graph ne montrait QUE la sante et cachait les
+    pathologies (agonie, orphelins). Desormais : echantillon STRATIFIE calcule
+    cote serveur (hubs + forts + agonie + orphelins + tissu) + indicateurs de
+    SANTE sur le graphe ENTIER (verite des comptes, % agonie, orphelins, hubs)
+    -> le graph devient une source de DETECTION de problemes. ?full=1 = l'ancien
+    dump complet (debug)."""
     from core.synaptic_network import cortex
     from core.cardiac_engine import heart
 
-    nodes = []
-    for nid, node in cortex.nodes.items():
-        nodes.append({
-            "id": nid,
-            "concept": node["concept"],
-            "type": node["node_type"],
-            "energy": round(node["energy"], 3),
-            "activation": node["activation_count"],
-            "valence": node.get("affect", {}).get("valence", 0.0),
-        })
-
-    links = []
-    for key, syn in cortex.synapses.items():
-        if syn["source"] in cortex.nodes and syn["target"] in cortex.nodes:
-            links.append({
-                "source": syn["source"],
-                "target": syn["target"],
-                "weight": round(syn["weight"], 3),
-                "type": syn["synapse_type"],
-            })
-
     cardiac = heart.get_stats()
-    return {"nodes": nodes, "links": links, "cardiac": cardiac, "stats": cortex.get_stats()}
+    sante = cortex.health_stats()
+
+    if full:
+        all_nodes = [{
+            "id": nid, "concept": n["concept"], "type": n["node_type"],
+            "energy": round(n["energy"], 3), "activation": n["activation_count"],
+            "valence": n.get("affect", {}).get("valence", 0.0),
+        } for nid, n in cortex.nodes.items()]
+        all_links = [{
+            "source": s["source"], "target": s["target"],
+            "weight": round(s["weight"], 3), "type": s["synapse_type"],
+        } for s in cortex.synapses.values()
+            if s["source"] in cortex.nodes and s["target"] in cortex.nodes]
+        return {"nodes": all_nodes, "links": all_links, "cardiac": cardiac,
+                "stats": cortex.get_stats(), "sante": sante}
+
+    sample = cortex.graph_sample(max_nodes=max(40, min(nodes, 400)),
+                                 max_links=max(100, min(links, 2000)))
+    return {"nodes": sample["nodes"], "links": sample["links"],
+            "sample_info": sample["sample_info"], "cardiac": cardiac,
+            "stats": cortex.get_stats(), "sante": sante}
 
 @app.get("/api/reptilian/status")
 async def reptilian_status():
