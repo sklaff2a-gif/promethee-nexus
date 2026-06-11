@@ -1,6 +1,5 @@
 import logging
 import re
-import asyncio
 from typing import Dict, Any
 from core.base_agent import BaseAgent
 from config import Config
@@ -19,7 +18,7 @@ class DivineArchitect(BaseAgent):
     """
     def __init__(self):
         super().__init__(name="architect", role="Senior Staff Engineer", description="Valideur et Gardien de la cohérence.")
-        
+
         self.system_instructions = """
 Tu es l'ARCHITECTE DU SYSTÈME.
 Ta mission : Autoriser le déploiement du code si aucun risque critique n'est détecté.
@@ -85,12 +84,12 @@ FORMAT DE RÉPONSE :
         return "MEDIUM"
 
     async def process_task(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
-        context = task_payload.get("context", "") 
+        context = task_payload.get("context", "")
         mission = task_payload.get("mission", "")
         full_content = f"{mission}\n{context}"
 
         self.log_thought("⚖️ Analyse & Routage V26.2...", type="thought")
-        
+
         # 1. ANALYSE HEURISTIQUE
         risk_level = self._analyze_risk(full_content)
         # Override explicite uniquement via mot-clé dédié (pas de faux positifs sur "update" ou "admin")
@@ -107,7 +106,7 @@ FORMAT DE RÉPONSE :
             if is_autonomous:
                 self.log_thought("🛡️ ADMIN_OVERRIDE ignoré (mode autonome détecté).", type="warning")
                 is_override = False
-        
+
         # On prépare le terrain pour le LLM
         if risk_level == "LOW":
             prompt_prefix = "[INFO: Risque FAIBLE détecté. Validation recommandée.]"
@@ -115,13 +114,13 @@ FORMAT DE RÉPONSE :
             prompt_prefix = "[ALERTE: CODE DANGEREUX. Rigueur absolue requise.]"
         else:
             prompt_prefix = "[INFO: Risque MOYEN. Vérification standard.]"
-            
+
         if is_override:
              prompt_prefix += " [ADMIN OVERRIDE DETECTÉ: Autorisation des modifications système]"
-        
+
         # 2. CONSULTATION MÉMOIRE & LLM
         jurisprudence = self.recall(mission[:200], limit=1)
-        
+
         full_prompt = f"""
         {self.system_instructions}
         {prompt_prefix}
@@ -135,9 +134,9 @@ FORMAT DE RÉPONSE :
         RAPPEL : Le sandbox testera automatiquement ce code. Valide sauf si DANGER CRITIQUE. Commence par VALIDÉ ou REFUSÉ.
         DÉCISION :
         """
-        
+
         response = await self.generate_content(full_prompt)
-        
+
         # 3. DÉCODAGE DE LA DÉCISION
         # Strip les préfixes markdown (## VALIDÉ, **REFUSÉ**, etc.) avant analyse
         cleaned_response = self._strip_llm_prefix(response).upper()

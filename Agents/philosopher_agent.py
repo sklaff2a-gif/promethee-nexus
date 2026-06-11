@@ -3,8 +3,8 @@
 Agent dédié à SCHOOL_AXIOMATIC. Tient une cohérence relationnelle longue
 sur un univers inventé, sans plaquer notre physique/sociologie réelle.
 
-Modèle : qwen3.5:9b (raisonnement pur, pas de code — le MoE V17
-qwen2.5-coder serait inadapté à ce slot purement conceptuel).
+Modèle : généraliste local (Config.LOCAL_MODELS["philosopher"]) — raisonnement
+pur, pas de code ; le spécialiste code serait inadapté à ce slot conceptuel.
 """
 import logging
 from typing import Dict, Any

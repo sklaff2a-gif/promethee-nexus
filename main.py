@@ -2265,7 +2265,7 @@ async def school_axiomatic_run(payload: dict):
     """P15.3 (2026-05-14) — SCHOOL_AXIOMATIC mode on-demand.
 
     Lance une session de raisonnement axiomatique sur un univers inventé,
-    avec l'agent philosopher (qwen3.5:9b). Charge l'univers, injecte
+    avec l'agent philosopher (modèle généraliste local). Charge l'univers, injecte
     axiome+concepts, dispatch, grade avec C1-C5 déterministes, sauve la
     session dans memory/school/axiomatic_universes/<id>.json.
 

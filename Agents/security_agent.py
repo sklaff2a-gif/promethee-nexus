@@ -67,7 +67,8 @@ CONCLUSION : [synthèse en 1-2 phrases]
         try:
             project_files = get_project_structure()
             guardrail_suffix = analysis_guardrail(project_files)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[SECURITY] Guardrail désactivé — get_project_structure() a échoué: {e}")
             guardrail_suffix = ""
 
         prompt = f"""{self.system_instructions}

@@ -1,8 +1,7 @@
 import asyncio
-import json
 import logging
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any
 from core.base_agent import BaseAgent
 from core.capabilities.web_surfer import WebSurfer
 from core.prompt_templates import AUTONOMY_GUARDRAIL
@@ -48,13 +47,13 @@ class DivineResearcher(BaseAgent):
         query = self._extract_search_query(mission)
 
         self.log_thought(f"🌍 Lancement WebSurfer Hybride : {query[:30]}...", "info")
-        
+
         # Appel à l'outil dans un executor (search() est synchrone/bloquant)
         loop = asyncio.get_running_loop()
         web_results = await loop.run_in_executor(None, lambda: self.surfer.search(query, max_results=5))
-        
+
         self.log_thought("✅ Résultats récupérés. Analyse et Synthèse...", "info")
-        
+
         # On demande au cerveau de l'agent de synthétiser les résultats bruts
         synthesis = await self.generate_content(
             f"Tu es un analyste expert. Voici des résultats de recherche bruts concernant '{query}'.\n"

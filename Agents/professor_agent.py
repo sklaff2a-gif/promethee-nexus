@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 logger = logging.getLogger("ProfessorAgent")
 
@@ -414,17 +414,14 @@ class ProfessorAgent(BaseAgent):
     def _feed_desire_engine(self, course_type: str, grade: float):
         """Nourrit le DesireEngine selon la note."""
         try:
-            from core.event_bus.bus import bus
-            import asyncio
+            from core.event_bus.bus import publish_from_sync
             event_type = "SCHOOL_GRADE_HIGH" if grade >= 7.0 else "SCHOOL_GRADE_LOW"
             event = {
                 "course_type": course_type,
                 "grade": grade,
                 "event_type": event_type,
             }
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(bus.publish("SCHOOL_GRADE_RECEIVED", event))
+            publish_from_sync("SCHOOL_GRADE_RECEIVED", event, label="professor.feed_desire")
         except Exception as e:
             logger.debug(f"[PROFESSOR] Bus publish failed: {e}")
 

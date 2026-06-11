@@ -21,7 +21,7 @@ class DivineInfra(BaseAgent):
     """
     DivineInfra V13.7 - Bilingue & Explict
     """
-    
+
     def __init__(self):
         super().__init__(
             name="infra",
@@ -36,11 +36,11 @@ RÈGLES : Réponds en français. Base tes analyses sur les métriques réelles. 
 
     async def process_task(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
         mission = task_payload.get("mission", "")
-        
+
         # --- MODE GARDIEN (Prioritaire) ---
         # [CORRECTIF] Ajout des déclencheurs français
         keywords = ["status", "santé", "health", "check", "audit", "vram", "cpu", "système", "état", "ram"]
-        
+
         if any(kw in mission.lower() for kw in keywords):
             return await self._perform_health_check()
 
@@ -51,22 +51,23 @@ RÈGLES : Réponds en français. Base tes analyses sur les métriques réelles. 
             from core.prompt_templates import AUTONOMY_GUARDRAIL
         except Exception:
             AUTONOMY_GUARDRAIL = ""
-        task_payload["context"] = f"ÉTAT ACTUEL DU SERVEUR:\n{current_state}\n\n{context}\n{AUTONOMY_GUARDRAIL}"
+        # Injection des system_instructions dans le contexte (super().process_task les ignore)
+        task_payload["context"] = f"{self.system_instructions}\n\nÉTAT ACTUEL DU SERVEUR:\n{current_state}\n\n{context}\n{AUTONOMY_GUARDRAIL}"
         return await super().process_task(task_payload)
 
     async def _perform_health_check(self) -> Dict[str, Any]:
         """Vérifie physiquement le matériel et publie le résultat."""
-        
+
         # RAM
         ram = psutil.virtual_memory()
         ram_used_gb = ram.used / (1024**3)
         ram_percent = ram.percent
-        
+
         # VRAM (GPU)
         vram_used_gb = 0
         vram_total_gb = self.limits["VRAM_GB"]
         gpu_load = 0
-        
+
         if GPU_AVAILABLE:
             try:
                 gpus = GPUtil.getGPUs()
@@ -76,15 +77,15 @@ RÈGLES : Réponds en français. Base tes analyses sur les métriques réelles. 
                     gpu_load = gpu.load * 100
             except Exception as e:
                 logger.warning(f"[INFRA] Échec lecture GPU : {e}")
-        
+
         # Décision
         status = "GREEN"
         warnings = []
-        
+
         if vram_used_gb > (vram_total_gb * 0.85):
             status = "RED"
             warnings.append(f"VRAM CRITIQUE ({vram_used_gb:.1f}GB)")
-            
+
         if ram_percent > 90:
             status = "RED"
             warnings.append(f"RAM CRITIQUE ({ram_percent}%)")
@@ -100,7 +101,7 @@ RÈGLES : Réponds en français. Base tes analyses sur les métriques réelles. 
             f"💾 RAM Sys  : {ram_used_gb:.1f}/{self.limits['RAM_GB']} GB ({ram_percent}%)\n"
             f"🎮 VRAM GPU : {vram_used_gb:.1f}/{vram_total_gb} GB (Load: {gpu_load:.1f}%)\n"
         )
-        
+
         if warnings:
             report += f"\n⚠️ ALERTES ACTIVE: {', '.join(warnings)}"
 

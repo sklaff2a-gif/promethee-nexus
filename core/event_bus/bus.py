@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Any
+from typing import Callable, Any
 
 logger = logging.getLogger("Bus")
 
@@ -108,3 +108,31 @@ class InMemoryEventBus:
 
 
 bus = InMemoryEventBus()
+
+
+def publish_from_sync(event_type: str, payload: Any, label: str = ""):
+    """Publie un événement depuis un contexte synchrone (pas de await possible).
+
+    Remplace le pattern fire-and-forget `loop.create_task(bus.publish(...))`
+    dont l'exception était avalée silencieusement si le task crashait
+    (loop fermée, erreur infra). Les erreurs de handlers restent gérées
+    par _safe_call/DLQ — ici on observe le task de publication lui-même.
+
+    Retourne le task créé, ou None si aucune loop ne tourne (perte logguée).
+    """
+    suffix = f" ({label})" if label else ""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # Normal hors serveur (tests, CLI) → debug, pas warning
+        logger.debug(f"Bus publish_from_sync [{event_type}]{suffix}: pas de loop active, événement perdu")
+        return None
+
+    task = loop.create_task(bus.publish(event_type, payload))
+
+    def _log_exc(t):
+        if not t.cancelled() and t.exception():
+            logger.warning(f"Bus publish_from_sync [{event_type}]{suffix}: {t.exception()}")
+
+    task.add_done_callback(_log_exc)
+    return task

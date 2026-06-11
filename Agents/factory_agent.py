@@ -111,12 +111,12 @@ class DivineFactory(BaseAgent):
 
         # 2. Mots-clés Python (Regex Durcie V23.2)
         pattern = r'(^|\n)(import |from |class |def |@|print\(|[ \t]*[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*[\"\'\[\{])'
-        
+
         match = re.search(pattern, text)
         if match:
             start_index = match.start()
             return text[start_index:].lstrip()
-            
+
         return None
 
     def _is_valid_target_path(self, filename: str) -> bool:
@@ -148,10 +148,10 @@ class DivineFactory(BaseAgent):
         # Si le chemin contient déjà un dossier explicite (ex: 'Agents/toto.py'), on respecte l'ordre.
         if "/" in filename or "\\" in filename:
             return filename
-            
+
         # Liste des dossiers surveillés pour la redirection
         watched_dirs = ["Agents", "core"]
-        
+
         for folder in watched_dirs:
             potential_path = os.path.join(folder, filename)
             # M07: résoudre par rapport au project_root, pas au cwd
@@ -159,14 +159,14 @@ class DivineFactory(BaseAgent):
             if os.path.exists(absolute_check):
                 self.log_thought(f"📍 Redirection intelligente : {filename} -> {potential_path}", type="info")
                 return potential_path
-                
+
         # Si non trouvé ailleurs, on garde le chemin d'origine (racine)
         return filename
 
     async def process_task(self, task_payload: Dict[str, Any]) -> Dict[str, Any]:
         mission = task_payload.get("mission", "")
         context = task_payload.get("context", "")
-        
+
         self.log_thought(f"Analyse Factory V26.0 : {mission[:50]}...", type="thought")
 
         # 1. DÉTECTION DU CHEMIN
@@ -200,7 +200,7 @@ class DivineFactory(BaseAgent):
         # APPLICATION INTELLIGENCE GÉOGRAPHIQUE
         if target_path:
             target_path = self._resolve_smart_path(target_path)
-        
+
         # 2. DÉTECTION DU CODE
         full_text = context + "\n" + mission
         code_content = self._extract_code_force(full_text)
@@ -266,17 +266,15 @@ class DivineFactory(BaseAgent):
                         )
                         # Notifier l'échec pour libérer le pending_deploy
                         try:
-                            from core.event_bus.bus import bus
-                            import asyncio as _asyncio
-                            loop = _asyncio.get_running_loop()
-                            loop.create_task(bus.publish("ARTIFACT_FAILED", {
+                            from core.event_bus.bus import publish_from_sync
+                            publish_from_sync("ARTIFACT_FAILED", {
                                 "filepath": target_path,
                                 "spec_id": task_payload.get("evolution_spec_id", ""),
                                 "reason": "anti_troncature",
                                 "detail": f"{new_size}B vs {existing_size}B ({ratio_pct}%)",
-                            }))
-                        except Exception:
-                            pass
+                            }, label="factory.anti_troncature")
+                        except Exception as e:
+                            logger.warning(f"[FACTORY] Échec publication ARTIFACT_FAILED: {e}")
                         return {
                             "status": "error",
                             "result": (
@@ -288,7 +286,7 @@ class DivineFactory(BaseAgent):
 
                 # Backup automatique avant écriture
                 self._backup(full_path)
-                
+
                 with open(full_path, "w", encoding="utf-8") as f:
                     f.write(code_content)
 
@@ -308,7 +306,7 @@ class DivineFactory(BaseAgent):
                 self._log_to_manifest("WRITE", target_path)
                 msg = f"✅ Fichier écrit (Smart Path + Backup) : {target_path}"
                 self.remember(f"FILE_CREATED: {target_path}", metadata={"type": "code_creation"})
-                
+
                 # Feedback UI
                 from core.event_bus.bus import bus
                 import time as _time
@@ -321,9 +319,9 @@ class DivineFactory(BaseAgent):
                 if evo_spec_id:
                     artifact_event["spec_id"] = evo_spec_id
                 await bus.publish("ARTIFACT_CREATED", artifact_event)
-                
+
                 return {"status": "success", "result": msg}
-            
+
             except Exception as e:
                 return {"status": "error", "result": f"Erreur disque : {e}"}
 

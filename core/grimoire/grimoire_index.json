@@ -46,7 +46,7 @@
   {
     "slug": "git_keeper",
     "name": "GitKeeper",
-    "description": "Expert Git : commandes, workflows, messages de commit, rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©solution de conflits",
+    "description": "Expert Git : commandes, workflows, messages de commit, résolution de conflits",
     "keywords": [
       "git",
       "commit",
@@ -62,7 +62,7 @@
   {
     "slug": "doc_writer",
     "name": "DocWriter",
-    "description": "RÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©daction de documentation technique : README, docstrings, guides API, changelogs",
+    "description": "Rédaction de documentation technique : README, docstrings, guides API, changelogs",
     "keywords": [
       "readme",
       "documentation",
@@ -77,7 +77,7 @@
   {
     "slug": "data_analyst",
     "name": "DataAnalyst",
-    "description": "Analyse de donnÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©es : CSV/JSON, statistiques, tendances, visualisations",
+    "description": "Analyse de données : CSV/JSON, statistiques, tendances, visualisations",
     "keywords": [
       "csv",
       "json",
@@ -86,21 +86,21 @@
       "moyenne",
       "graphique",
       "tendance",
-      "analyse donnÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©es"
+      "analyse données"
     ],
     "file": "data_analyst.py"
   },
   {
     "slug": "task_scheduler",
     "name": "TaskScheduler",
-    "description": "Planification de tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ches : dÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©composition, prioritÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©s, roadmaps, dÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©pendances",
+    "description": "Planification de tâches : décomposition, priorités, roadmaps, dépendances",
     "keywords": [
       "planifie",
       "planning",
-      "tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢che",
-      "prioritÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©",
+      "tâche",
+      "priorité",
       "roadmap",
-      "ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©tapes",
+      "étapes",
       "deadline",
       "todo"
     ],
@@ -109,11 +109,11 @@
   {
     "slug": "log_analyst",
     "name": "LogAnalyst",
-    "description": "Analyse de logs : patterns d'erreur, diagnostic d'incidents, rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¨gles d'alerte",
+    "description": "Analyse de logs : patterns d'erreur, diagnostic d'incidents, règles d'alerte",
     "keywords": [
       "log",
       "logs",
-      "erreur rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©currente",
+      "erreur récurrente",
       "incident",
       "monitoring",
       "alerte",
@@ -162,22 +162,23 @@
     "file": "loop_breaker.py"
   },
   {
-    "slug": "philosopher",
-    "name": "Philosopher",
-    "description": "RÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©flexion philosophique, introspection, exercices de conscience, questions existentielles",
+    "slug": "introspector",
+    "name": "Introspector",
+    "description": "Réflexion philosophique, introspection, exercices de conscience, questions existentielles",
     "keywords": [
       "conscience",
       "introspection",
       "philosophie",
       "existence",
-      "ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©veil",
-      "rÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©flexion",
+      "éveil",
+      "réflexion",
       "exercice",
-      "pensÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©e",
-      "identitÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©",
-      "tÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©moin",
+      "pensée",
+      "identité",
+      "témoin",
       "absence",
       "douleur"
-    ]
+    ],
+    "file": "introspector.py"
   }
 ]

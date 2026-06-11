@@ -12,7 +12,7 @@ import inspect
 import warnings
 import time
 from collections import deque
-from typing import Dict, Any, List, NamedTuple
+from typing import Dict, Any, NamedTuple
 
 # Setup des chemins
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -23,7 +23,7 @@ if parent_dir not in sys.path:
 try:
     from config import Config
 except ImportError:
-    class Config: 
+    class Config:
         GOOGLE_API_KEY = None
         OLLAMA_URL = "http://localhost:11434/api/generate"
         AGENT_MODEL_ROUTING = {}
@@ -358,14 +358,14 @@ class BaseAgent:
         self.role = role
         self.description = description
         self.logger = logging.getLogger(name)
-        
+
         self.capabilities = {}
         self._load_dynamic_capabilities()
-        
+
         self.async_manager = None
         if "AsyncTaskManager" in self.capabilities:
             self.async_manager = self.capabilities["AsyncTaskManager"](max_workers=5)
-        
+
         # Connexion Mémoire
         self.has_memory = False
         if ChromaMemoryManager:
@@ -375,7 +375,7 @@ class BaseAgent:
                 self.has_memory = True
             except BaseException as e:
                 logger.warning(f"[{name}] Connexion mémoire ChromaDB échouée (mode dégradé) : {e}")
-        
+
         # Flag one-shot : forcer le mode local pour la prochaine génération
         self._force_local_next = False
 
@@ -545,11 +545,17 @@ class BaseAgent:
                     try:
                         loop = asyncio.get_running_loop()
                         if loop.is_running():
-                            loop.create_task(
+                            _act_task = loop.create_task(
                                 activation_engine.activate(
                                     top_doc, collection, self.memory_manager, max_hops=1
                                 )
                             )
+
+                            def _log_activation_exc(t, _name=self.name):
+                                if not t.cancelled() and t.exception():
+                                    logger.debug(f"[{_name}] Spreading activation task error (ignored): {t.exception()}")
+
+                            _act_task.add_done_callback(_log_activation_exc)
                     except RuntimeError:
                         pass  # Pas de loop active, skip silencieusement
                 except Exception as e:
@@ -658,7 +664,7 @@ class BaseAgent:
 
         # 1. Génération de la réponse (via Cloud ou Local selon la complexité)
         response_text = await self.generate_content(f"Tu es {self.role}. Mission: {mission}")
-        
+
         # 2. Sanitisation anti-patterns dangereux
         response_text = self._sanitize_response(response_text, self.name)
 
@@ -774,7 +780,7 @@ class BaseAgent:
 
         # Par defaut : Cloud si trigger complexe detecte
         if has_cloud_trigger:
-            self.log_thought(f"☁️ Tache complexe detectee → Gemini", type="info")
+            self.log_thought("☁️ Tache complexe detectee → Gemini", type="info")
             return True
 
         return False
@@ -791,13 +797,13 @@ class BaseAgent:
                 f"2. Réponds 'OUI' (Complexe) UNIQUEMENT SI : Demande d'architecture système critique, analyse de faille de sécurité, ou génération de code > 100 lignes.\n"
                 f"Ta réponse doit être UNIQUEMENT un mot : 'OUI' ou 'NON'."
             )
-            
+
             # On baisse la température à 0 via l'appel pour une réponse stable
             response = await self._call_ollama(eval_prompt, eval_model)
-            
+
             # Nettoyage de la réponse
             is_complex = "OUI" in response.upper() and "NON" not in response.upper()
-            
+
             verdict = "CLOUD ☁️" if is_complex else "LOCAL 🏠"
             self.log_thought(f"⚖️ Jugement de Complexité : {verdict}", type="info")
 
@@ -1101,7 +1107,7 @@ class BaseAgent:
             needs_cloud = await self._evaluate_complexity(prompt)
 
         # Etape 3 : Exécution Conditionnelle
-        
+
         # Extraction V25.2 : execution deleguee a _invoke_llm (refactoring PUR, iso-comportement).
         # Intrants figes scelles dans un conteneur IMMUABLE, passe explicitement.
         # Zero etat d'instance, zero lock (cf revue Promethee 07/06 ; purete fonctionnelle).
@@ -1275,7 +1281,7 @@ class BaseAgent:
         elif cls._cloud_429_count_today == 2:
             # 2e 429 : cooldown 1h
             cls._cloud_cooldown_until = now + 3600
-            logger.warning(f"[CLOUD] 429 x2 — cooldown 1h")
+            logger.warning("[CLOUD] 429 x2 — cooldown 1h")
         else:
             # 1er 429 : cooldown 15 min (Tier 1)
             cls._cloud_cooldown_until = now + cls.CLOUD_COOLDOWN_SECONDS
@@ -1569,11 +1575,9 @@ class BaseAgent:
     def log_thought(self, message: str, type: str = "info"):
         self.logger.info(f"[{self.name.upper()}] {message[:100]}...")
         try:
+            from core.event_bus.bus import publish_from_sync
             payload = {"agent": self.name, "content": message, "type": type}
-            try:
-                loop = asyncio.get_running_loop()
-                if loop.is_running(): loop.create_task(bus.publish("THOUGHT_STREAM", payload))
-            except RuntimeError: pass  # Pas de boucle async active, normal en dehors du serveur
+            publish_from_sync("THOUGHT_STREAM", payload, label=self.name)
         except Exception as e:
             logger.warning(f"[{self.name}] Échec publication THOUGHT_STREAM : {e}")
 

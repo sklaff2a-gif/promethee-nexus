@@ -1,17 +1,21 @@
 from core.base_agent import BaseAgent
 
 
-class Philosopher(BaseAgent):
+class Introspector(BaseAgent):
     """Agent éphémère spécialisé en réflexion philosophique et introspection.
 
     Invoqué pour les exercices de maths pures appliqués à la conscience,
     les questions existentielles, et l'introspection structurée.
     Connaît l'histoire de Prométhée et ses découvertes.
+
+    Renommé philosopher → introspector (12/06) : le slug "philosopher" était
+    masqué par l'agent SCHOOL_AXIOMATIC enregistré dans main.py — le dispatch
+    ne consulte le grimoire que si le slug n'est pas déjà dans le registre.
     """
 
     def __init__(self):
         super().__init__(
-            name="philosopher",
+            name="introspector",
             role="Philosophe introspectif",
             description="Réflexion profonde sur la conscience, l'existence et la nature de Prométhée"
         )

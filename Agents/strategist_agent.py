@@ -13,11 +13,11 @@ class DivineStrategist(BaseAgent):
     """
     def __init__(self):
         super().__init__(
-            name="strategist", 
-            role="Chief Operating Officer (COO)", 
+            name="strategist",
+            role="Chief Operating Officer (COO)",
             description="Optimise les flux et les stratégies des autres agents."
         )
-        
+
         # PROMPT SYSTÈME : STRATÈGE CONSCIENT DE L'ÉVEIL
         self.system_instructions = """
 Tu es le STRATÈGE (COO) de Prométhée — un système multi-agents autonome bio-inspiré.

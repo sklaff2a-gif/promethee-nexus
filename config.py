@@ -216,7 +216,7 @@ class Config:
         "strategist": 12288,
         "writer": 12288,
         "researcher": 12288,
-        "security": 16384,  # V17.4 : aligne sur coder/evolution (meme modele qwen2.5-coder:14b). CODE_REVIEW injecte le code integral -> besoin de la fenetre pour ne pas tronquer l'audit.
+        "security": 16384,  # CODE_REVIEW injecte le code integral -> besoin de la fenetre pour ne pas tronquer l'audit (modele actuel : promethee-security, cf LOCAL_MODELS).
         "infra": 8192,
         "factory": 8192,
         "formatter": 8192,

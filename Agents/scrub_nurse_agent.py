@@ -5,8 +5,8 @@ audit + un source, produit une checklist JSON listant les lignes à
 préserver dans le source patché final (pour pallier le syndrome
 d'oubli sémantique du qwen2.5-coder:14b).
 
-Modèle : qwen3.5:9b vanilla (rapide, JSON-friendly, non fine-tuné).
-Souverain local (override _evaluate_complexity → False).
+Modèle : généraliste local (Config.LOCAL_MODELS["scrub_nurse"] — rapide,
+JSON-friendly, non fine-tuné). Souverain local (override _evaluate_complexity → False).
 
 Format de sortie : JSON strict
 {
@@ -325,7 +325,7 @@ class ScrubNurseAgent(BaseAgent):
             role="V29 Surgical Preparation Nurse",
             description=(
                 "Prepare une checklist de lignes a preserver pour le SURGEON. "
-                "Tourne en local sur qwen3.5:9b vanilla, sortie JSON stricte."
+                "Tourne sur le modele generaliste local, sortie JSON stricte."
             ),
         )
         self.system_instructions = SCRUB_NURSE_SYSTEM_PROMPT

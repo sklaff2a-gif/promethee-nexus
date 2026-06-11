@@ -1,6 +1,5 @@
 import ast
 import logging
-import asyncio
 import re
 from typing import Dict, Any
 from core.base_agent import BaseAgent
@@ -31,17 +30,17 @@ class DivineFormatter(BaseAgent):
         # PATCH : Ajout de 'try' et 'except' pour éviter ton dernier bug
         blacklist = ["shutil", "print", "import", "def", "return", "class", "exit", "sys", "os", "copy2", "try", "except"]
         clean_name = filename.strip().lower()
-        
+
         # 1. Rejet si commence par un mot clé
         for kw in blacklist:
             if clean_name.startswith(kw + ".") or clean_name == kw:
                 return False
-                
+
         # 2. Rejet si pas d'extension (sauf fichiers spéciaux connus)
         # PATCH : 'cible' a été retiré pour forcer une extension correcte
         if "." not in clean_name and clean_name not in ["makefile", "dockerfile", "license", "readme"]:
             return False
-            
+
         return True
 
     def _parse_response(self, response: str):
@@ -139,7 +138,7 @@ class DivineFormatter(BaseAgent):
                         ast.parse(det_code)
                     except SyntaxError as e:
                         self.log_thought(f"❌ Evolution bypass : syntaxe invalide ({e.msg} ligne {e.lineno}).", type="error")
-                        return {"status": "error", "result": f"SYNTAXE_INVALIDE — code Evolution invalide."}
+                        return {"status": "error", "result": "SYNTAXE_INVALIDE — code Evolution invalide."}
                 response = self._rebuild_formatted_response(det_file, det_code)
                 try:
                     from core.orchestrator import orchestrator
@@ -193,13 +192,13 @@ class DivineFormatter(BaseAgent):
             # --- TENTATIVE 2 : ESCALADE PREMIUM (Si le local échoue) ---
             fail_reason = f"Hallucination détectée ({target_file})" if target_file else "Format illisible"
             self.log_thought(f"⚠️ {fail_reason}. Escalade vers l'Intelligence Supérieure (Premium)...", type="warning")
-            
+
             # On relance avec un prompt d'insistance
             prompt_premium = f"ERREUR PRÉCÉDENTE : Le modèle a confondu le code et le nom du fichier.\nCORRIGE IMMÉDIATEMENT.\n\n{prompt}"
-            
+
             response = await self.generate_content(prompt_premium)
             target_file, has_code = self._parse_response(response)
-            
+
             # Re-validation
             is_valid = target_file and self._is_valid_filename(target_file) and has_code
 

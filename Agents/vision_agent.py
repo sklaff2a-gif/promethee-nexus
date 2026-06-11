@@ -90,7 +90,7 @@ class DivineVision(BaseAgent):
                 result = await orchestrator.dispatch_task("researcher", {
                     "mission": f"Recherche approfondie: {topic}",
                     "context": f"ROADMAP_RESEARCH pour module {display}",
-                    "force_local": True,
+                    "force_local": True,  # Économie Cloud : recherche roadmap = low-priority
                 })
                 if result and result.get("status") == "success":
                     findings.append(result.get("result", ""))

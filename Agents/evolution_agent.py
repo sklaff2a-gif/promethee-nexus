@@ -512,15 +512,14 @@ class DivineEvolution(BaseAgent):
 
         # 3. Publier l'événement
         try:
-            from core.event_bus.bus import bus
-            loop = asyncio.get_event_loop()
+            from core.event_bus.bus import publish_from_sync
             event_data = {
                 "bridges": bridges[:10],
                 "anomalies": cross_result.get("anomalies", [])[:5],
                 "insight": insight_text[:300],
                 "timestamp": time.time()
             }
-            loop.create_task(bus.publish("EVOLUTION_INSIGHT", event_data))
+            publish_from_sync("EVOLUTION_INSIGHT", event_data, label="evolution.crystallize")
         except Exception as e:
             logger.debug(f"crystallize publish echoue: {e}")
 
@@ -1413,7 +1412,7 @@ class DivineEvolution(BaseAgent):
                     # Re-soumettre à l'Architect avec le rapport du spécialiste
                     reviewer_report = reviewer_response.get("result", "")[:500]
                     self.log_thought(
-                        f"🔍 Phase 5b : code_reviewer dit SAFE — re-soumission à l'Architect...",
+                        "🔍 Phase 5b : code_reviewer dit SAFE — re-soumission à l'Architect...",
                         type="info"
                     )
                     architect_response2 = await orchestrator.dispatch_task("architect", {
