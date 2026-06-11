@@ -3848,6 +3848,7 @@ class ChatEngine:
             })
 
         stream_id = f"chat-{uuid.uuid4().hex[:8]}"
+        full_response = ""   # rempli par Gemini (3b) OU par le streaming local (4)
 
         # 3b. Gemini pour les questions profondes (philosophie, conscience, emotions)
         #     Detecte les mots-cles qui indiquent une reflexion poussee.
@@ -3891,27 +3892,30 @@ class ChatEngine:
                         full_response = gemini_response
                         logger.info(f"CHAT: Reponse Gemini Flash ({len(full_response)} chars)")
                         print(f"   💎 CHAT: Reponse via Gemini (question profonde)")
-                        # Publier comme si c'etait un stream
-                        stream_id = f"chat-{uuid.uuid4().hex[:8]}"
+                        # Publier comme si c'etait un stream (stream_id commun,
+                        # l'attention conjointe peut y coudre un addendum)
                         await bus.publish("CHAT_STREAM", {
                             "stream_id": stream_id, "status": "start", "emergent_sources": ["gemini"],
                         })
                         await bus.publish("CHAT_STREAM", {"stream_id": stream_id, "chunk": full_response})
                         await bus.publish("CHAT_STREAM", {"stream_id": stream_id, "done": True})
-                        # Sauvegarder
-                        self.messages.append({
-                            "role": "assistant", "content": full_response, "timestamp": time.time(),
-                        })
-                        self._trim_and_save()
-                        self._satisfy_connexion()
-                        return full_response.strip()
+                        # Audit 11/06 — PIPELINE UNIFIE : plus de return anticipe.
+                        # Avant, ce chemin sautait TOUT le post-traitement (P16
+                        # synaptique, auto-actions + boucle agentique, anti-boucle,
+                        # attention conjointe, curiosity seeds, CHAT_RESPONSE,
+                        # stimulate_heart) : quand il repondait via Gemini, il
+                        # parlait sans son corps. Desormais full_response non vide
+                        # fait sauter le streaming local et REJOINT le pipeline
+                        # commun (append/trim/satisfy y sont faits une seule fois).
             except Exception as e:
                 logger.debug(f"CHAT: Gemini fallback local: {e}")
+                full_response = ""
 
-        # 4. Streaming via httpx (local, fallback)
-        full_response = ""
-        emergent_sources = []
-        try:
+        # 4. Streaming via httpx (local, fallback) — saute si Gemini a deja repondu
+        gemini_handled = bool(full_response)
+        emergent_sources = ["gemini"] if gemini_handled else []
+        if not gemini_handled:
+          try:
             from core.base_agent import gpu_scheduler
             async with gpu_scheduler.access("chat_stream"):
                 # Publier le debut du stream (avec sources emergentes)
@@ -3975,7 +3979,7 @@ class ChatEngine:
                     "done": True,
                 })
 
-        except Exception as e:
+          except Exception as e:
             logger.error(f"CHAT: Erreur streaming — {e}")
             log_decision(
                 module="chat_engine",

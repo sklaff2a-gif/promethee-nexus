@@ -237,10 +237,24 @@ class GpuScheduler:
         temp = await self._check_gpu_temp()
         if temp >= self.GPU_TEMP_MAX:
             logger.warning(f"[GPU_QUEUE] GPU à {temp}°C (max {self.GPU_TEMP_MAX}) — attente refroidissement...")
-            while temp >= self.GPU_TEMP_MAX - 5:  # Hystérésis 5°C
+            # Audit 11/06 : plafond sur la boucle d'attente. Sans cap, une sonde
+            # thermique qui rend une valeur aberrante en continu FIGEAIT le
+            # scheduler GPU pour toujours (tout Prométhée muet). 30 tours x 10s
+            # = 5 min : un GPU sain redescend en < 2 min (throttle 75°C) ; au-delà
+            # c'est la sonde ou une charge externe -> on reprend, le bridage
+            # hardware (power cap 250W, TDR) protège le silicium.
+            _tours = 0
+            while temp >= self.GPU_TEMP_MAX - 5 and _tours < 30:  # Hystérésis 5°C
                 await asyncio.sleep(10)
                 temp = await self._check_gpu_temp()
-            logger.info(f"[GPU_QUEUE] GPU refroidi à {temp}°C — reprise")
+                _tours += 1
+            if temp >= self.GPU_TEMP_MAX - 5:
+                logger.error(
+                    f"[GPU_QUEUE] GPU encore à {temp}°C après {_tours * 10}s d'attente — "
+                    f"reprise FORCÉE (sonde suspecte ou charge externe, bridage hardware actif)"
+                )
+            else:
+                logger.info(f"[GPU_QUEUE] GPU refroidi à {temp}°C — reprise")
 
         # Vérification VRAM — décharge les modèles Ollama si saturation
         await self._check_vram()
@@ -1199,6 +1213,13 @@ class BaseAgent:
                         if response.text:
                             final = self._sanitize_response(self._strip_cot(response.text), self.name)
                             return final, True, model_name.split('/')[-1]   # source = modele cloud ; consolidation DEPORTEE
+                        # Audit 11/06 : réponse VIDE = perte silencieuse. Avant, la
+                        # cascade passait au modèle suivant sans aucune trace ->
+                        # impossible de diagnostiquer pourquoi tout le cloud rendait vide.
+                        logger.warning(
+                            f"[CLOUD] {model_name} a rendu une réponse VIDE "
+                            f"(safety/recitation/MAX_TOKENS probable) — modèle suivant"
+                        )
                     except Exception as e:
                         # Détecter les erreurs 429 (quota exceeded)
                         err_str = str(e)
@@ -1211,6 +1232,9 @@ class BaseAgent:
                                 type="warning"
                             )
                             break  # Stop la cascade
+                        # Audit 11/06 : le continue était muet — la cascade avalait
+                        # toute erreur non-429 sans trace dans les logs.
+                        logger.warning(f"[CLOUD] {model_name} erreur: {err_str[:150]} — modèle suivant")
                         continue
 
                 # Si le Cloud échoue, fallback sur le Local
