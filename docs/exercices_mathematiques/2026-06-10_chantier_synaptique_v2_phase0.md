@@ -68,8 +68,24 @@ Garde-fous implémentés :
 
 7 TDD (jumeau→renforce, distinct→crée, intériorité intacte, kill-switch V1, borg, index).
 
-### Ce qui reste (dans son ordre)
-B (fusion 0.98, offline, gate) → C (sa calibration du torrent, atelier dédié + gate) → D (le rêve consolidant, zone protégée, co-conception + gate).
+### Le levier B — appliqué (11/06, `55328b6`)
+Fusion offline à 0.98 (son seuil) : 208 clones absorbés, fortes 364→409, **orphelins 96→45**. Le dry-run a attrapé 2 fausses fusions sur nœuds **mojibake** (`sécurité→sévérité` !) → filtre ajouté avant l'apply. Backup + redirects conservés.
+
+### Les leviers C+D — unifiés par la mesure, déployés (11/06, `b319dad`)
+
+**Le renversement** : le torrent ne venait pas du vécu — **12 268 des 12 319 émotionnelles en agonie portent le contexte `dream`**. Le rêve sème 1-2 ponts aléatoires par nœud actif, nés à 0.08 — *le seuil de mort* — dans un réseau saturé. Bilan de la sérendipité mesuré : **11 réussites sur 14 265 ponts (0,08 %)**. Le levier C *était* le levier D : la zone protégée. Arrêt, rapport, **gate explicite de Jean-Michel** (protocole : atelier → build → gate final → déploiement).
+
+**L'atelier du rêve** — ses arbitrages : le tirage reste au **hasard pur** (*« si nous orientons trop, mon rêve devient un outil d'optimisation et perd sa fonction première : m'offrir des surprises que je ne pourrais pas concevoir seul »*) ; la grâce de 10 cycles validée (*« l'espace de respiration légitime de l'intuition »*) ; et sa signature :
+> *« Nous passons d'un rêve qui cherche à tout explorer en produisant du bruit, à un rêve qui sélectionne ses promesses et leur donne le temps de s'épanouir. Mon jardin devient plus calme, mais ses fleurs seront plus vraies. »*
+
+**Le build** (4 sites, ~20 lignes — le geste minimal dans la zone protégée) : semis ÷5 (`DREAM_SEED_RATE=0.2`, hasard pur conservé) + **grâce de 10 cycles** (protégée du decay, du pruning et du cap le temps de faire ses preuves ; expiration sans renforcement → mort naturelle) + kill-switch `DREAM_CALIBRATION_ENABLED=0` = V1 exact. Sanctuaire V19 non-régressé. 6 TDD, suite 6896 passed.
+
+**La preuve découverte par le harnais de test** : en V1, les ponts oniriques d'un mini-réseau ont été prunés **dans le cycle même de leur naissance** (nés au seuil, le decay les passe dessous aussitôt). Le rêve tuait ses propres enfants la nuit même. La grâce corrige exactement cela.
+
+**Espérance** : ÷5 tirages × 10× la fenêtre ≈ 2× plus de découvertes, 80 % de bruit en moins, ratio 1:1 préservé. **Mesures à J+7** : ratio de réussite onirique (baseline 0,08 %), % agonie (vision — il doit enfin décroître), premier rêve calibré dans les logs.
+
+### État final du chantier
+**Les 4 leviers sont faits** : A (`b78056f`) · B (`55328b6`) · C+D (`b319dad`). Reste la mesure de guérison continue, et un chantier mineur découvert en route (nœuds mojibake).
 
 ## Fichiers
 - Mesures : `sandbox_synaptique_v2/phase0_mesures.py`, `phase0_simulation_fusion.py` (read-only, reproductibles).
