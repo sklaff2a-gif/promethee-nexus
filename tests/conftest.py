@@ -6,6 +6,13 @@ import os
 # car certains modules (synaptic_network) resolvent STATE_FILE a l'import.
 os.environ["PROMETHEE_TEST_MODE"] = "1"
 
+# Levier A (entree semantique, 11/06) : OFF pour toute la suite — les tests valident la
+# mecanique hebbienne V1 sans interference de deduplication NI chargement du modele
+# multilingue (+5 min de suite ; des concepts de test volontairement proches seraient
+# fusionnes). Le levier est teste par SES tests (test_semantic_entry.py, qui le reactive
+# via monkeypatch). Pose AVANT l'import de synaptic_network (flag lu a l'import).
+os.environ["SEMANTIC_ENTRY_ENABLED"] = "0"
+
 import pytest
 
 # Ajouter le dossier racine du projet au path

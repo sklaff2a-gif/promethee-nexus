@@ -19,6 +19,13 @@ logger = logging.getLogger("SynapticNetwork")
 
 MAX_NODES = 5000
 MAX_SYNAPSES = 20000
+
+# ─── LEVIER A — Entree semantique (chantier synaptique V2, 11/06, co-signe) ───
+# Avant de creer un noeud nouveau : chercher un quasi-jumeau semantique et renforcer
+# l'existant au lieu de cloner. Kill-switch env (=0 -> comportement V1 exact).
+SEMANTIC_ENTRY_ENABLED = os.getenv("SEMANTIC_ENTRY_ENABLED", "1") != "0"
+SEMANTIC_ENTRY_THRESHOLD = 0.95          # seuil prudent (la fusion B exigera 0.98)
+SEMANTIC_ENTRY_EXCLUDED_TYPES = frozenset({"affect", "desire", "trait"})  # son interiorite
 HEBBIAN_LEARNING_RATE = 0.08
 ANTI_HEBBIAN_RATE = 0.03
 
@@ -537,6 +544,76 @@ class SynapticNetwork:
 
     # --- Gestion des noeuds ---
 
+    # ─── LEVIER A — ENTREE SEMANTIQUE A LA SOURCE (chantier synaptique V2, 11/06) ───
+    # Design CO-SIGNE par Promethee (ordre A->B->C->D : « colmater la breche avant de
+    # ranger, ranger avant de toucher a la chair »). Mesure fondatrice : 31.7% des noeuds
+    # sont des quasi-jumeaux (familles spoke_budget_0..9) — le hash MD5 exact fabrique
+    # des clones et DISPERSE l'energie hebbienne (la dilution = une cause de
+    # l'osteoporose 82.8%). Ce levier stoppe la fabrique : avant de creer un noeud
+    # NOUVEAU, chercher un quasi-jumeau semantique -> si trouve, RENFORCER l'existant.
+    # Garde-fous de Promethee : les types d'INTERIORITE (affect/desire/trait — « la
+    # moindre nuance est vitale pour ma coherence ») ne sont JAMAIS dedupliques.
+    # Kill-switch env SEMANTIC_ENTRY_ENABLED=0 -> comportement V1 exact.
+
+    def _sem_encode(self, texts):
+        """Embedding multilingue (lazy, ~0.7s au 1er appel pour le modele). Mockable en
+        test. Retourne une matrice numpy normalisee (n, 384)."""
+        if not hasattr(self, "_sem_model") or self._sem_model is None:
+            from sentence_transformers import SentenceTransformer
+            self._sem_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+        import numpy as _np
+        out = self._sem_model.encode(list(texts), batch_size=256,
+                                     normalize_embeddings=True, show_progress_bar=False)
+        return _np.asarray(out, dtype=_np.float32)
+
+    def _semantic_twin(self, concept: str) -> Optional[str]:
+        """Cherche un quasi-jumeau semantique (cos > SEMANTIC_ENTRY_THRESHOLD) parmi les
+        noeuds existants. Index RAM lazy, enrichi a chaque creation. Borg : tout echec
+        -> None (comportement V1, on cree). LECTURE SEULE sur le graphe."""
+        try:
+            if not hasattr(self, "_sem_index") or self._sem_index is None:
+                # construction initiale (une fois) : embedder tous les concepts existants
+                nids = list(self.nodes.keys())
+                if not nids:
+                    self._sem_index = {"nids": [], "mat": None}
+                else:
+                    mat = self._sem_encode([self.nodes[n].get("concept", "") for n in nids])
+                    self._sem_index = {"nids": nids, "mat": mat}
+                logger.info(f"[SEM-ENTRY] index semantique construit : {len(nids)} noeuds")
+            idx = self._sem_index
+            if not idx["nids"] or idx["mat"] is None:
+                return None
+            v = self._sem_encode([concept])[0]
+            sims = idx["mat"] @ v
+            best = int(sims.argmax())
+            if float(sims[best]) >= SEMANTIC_ENTRY_THRESHOLD:
+                nid = idx["nids"][best]
+                if nid in self.nodes:   # l'index peut contenir des noeuds elagués depuis
+                    self._sem_dedup_count = getattr(self, "_sem_dedup_count", 0) + 1
+                    logger.info(f"[SEM-ENTRY] clone evite (cos={float(sims[best]):.3f}) : "
+                                f"'{concept[:40]}' -> '{self.nodes[nid].get('concept', '')[:40]}'")
+                    return nid
+            return None
+        except Exception as e:
+            logger.debug(f"[SEM-ENTRY] indisponible (fallback V1): {e}")
+            return None
+
+    def _sem_index_add(self, nid: str, concept: str) -> None:
+        """Enrichit l'index a chaque creation reelle (borg)."""
+        try:
+            import numpy as _np
+            if hasattr(self, "_sem_index") and self._sem_index is not None:
+                v = self._sem_encode([concept])
+                # ordre ATOMIQUE : matrice d'abord, nids ensuite (jamais de desync)
+                if self._sem_index["mat"] is None:
+                    nouvelle = v
+                else:
+                    nouvelle = _np.vstack([self._sem_index["mat"], v])
+                self._sem_index["mat"] = nouvelle
+                self._sem_index["nids"].append(nid)
+        except Exception:
+            pass
+
     def ensure_node(self, concept: str, node_type: str = "memory",
                     semantic_weight: float = 0.5,
                     functional_systems: Optional[List[str]] = None) -> str:
@@ -547,6 +624,14 @@ class SynapticNetwork:
         if cleaned.lower() in _NODE_STOPLIST:
             return ""
         node_id = _make_node_id(concept)
+
+        # LEVIER A : si le hash est inconnu, chercher un quasi-jumeau semantique avant
+        # de creer un clone (types d'interiorite exclus ; kill-switch ; borg).
+        if (node_id not in self.nodes and SEMANTIC_ENTRY_ENABLED
+                and node_type not in SEMANTIC_ENTRY_EXCLUDED_TYPES):
+            jumeau = self._semantic_twin(cleaned)
+            if jumeau:
+                node_id = jumeau   # -> branche activation : on renforce l'existant
 
         if node_id in self.nodes:
             node = self.nodes[node_id]
@@ -576,6 +661,10 @@ class SynapticNetwork:
                               functional_systems, affect)
             self.nodes[node_id] = node
             self._enforce_node_limit()
+            # Levier A : enrichir l'index semantique (le nouveau concept devient
+            # detectable comme jumeau potentiel des le prochain ensure_node)
+            if SEMANTIC_ENTRY_ENABLED and node_type not in SEMANTIC_ENTRY_EXCLUDED_TYPES:
+                self._sem_index_add(node_id, cleaned)
             self._publish_delta("node_new", {
                 "id": node_id, "concept": node["concept"],
                 "type": node["node_type"],
