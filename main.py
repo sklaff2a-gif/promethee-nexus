@@ -711,8 +711,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 _start_time = time.time()
 
+class NoCacheStaticFiles(StaticFiles):
+    """StaticFiles avec revalidation forcée (no-cache).
+
+    Sans Cache-Control, le navigateur applique son heuristique et peut servir
+    un JS périmé après modification (vu le 10/06 : vision.js retravaillé mais
+    ?v= non incrémenté). no-cache = revalidation ETag à chaque requête,
+    coût nul en localhost, fraîcheur garantie.
+    """
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 if os.path.exists("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
+    app.mount("/static", NoCacheStaticFiles(directory="static"), name="static")
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():

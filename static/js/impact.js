@@ -173,7 +173,7 @@ const ImpactView = (function() {
     }
 
     function fetchGraph() {
-        fetch("/api/health/impact")
+        fetch("/api/health/impact", { headers: authHeaders() })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 graphData = data;
@@ -558,10 +558,10 @@ const ImpactView = (function() {
             // Tooltip spécial pour les nœuds planifiés
             var pc = PHASE_COLORS[d.phase] || "#555";
             var statusLabel = (d.status || "planned").toUpperCase();
-            lines.push('<b style="color:' + pc + '">' + d.display + '</b> <span style="color:#666">(' + statusLabel + ')</span>');
-            lines.push('<span style="color:' + pc + '">Phase ' + d.phase + ' \u2014 ' + (d.phase_name || '') + '</span>');
+            lines.push('<b style="color:' + pc + '">' + escapeHtml(d.display) + '</b> <span style="color:#666">(' + escapeHtml(statusLabel) + ')</span>');
+            lines.push('<span style="color:' + pc + '">Phase ' + d.phase + ' \u2014 ' + escapeHtml(d.phase_name || '') + '</span>');
             if (d.description) {
-                lines.push('<span style="color:#aaa;font-style:italic">' + d.description + '</span>');
+                lines.push('<span style="color:#aaa;font-style:italic">' + escapeHtml(d.description) + '</span>');
             }
             lines.push('<span style="color:#666">Connexions pr\u00e9vues: ' + (d.connects_to_count || 0) + ' modules</span>');
         } else {
@@ -630,8 +630,9 @@ const ImpactView = (function() {
         var overlay = document.getElementById("impact-overlay");
         if (!overlay) return;
         overlay.style.display = "flex";
-        init();
-        fetchGraph();
+        // init() fetch deja a la premiere ouverture — eviter le double fetch
+        if (!initialized) init();
+        else fetchGraph();
     }
 
     function close() {

@@ -110,7 +110,7 @@ const TissueView = (function() {
 
     async function _fetch() {
         try {
-            const r = await fetch("/api/tissue/grid");
+            const r = await fetch("/api/tissue/grid", { headers: authHeaders() });
             if (!r.ok) return;
             const data = await r.json();
             _render(data);
@@ -123,6 +123,7 @@ const TissueView = (function() {
         if (!_overlay) _buildOverlay();
         _overlay.style.display = "flex";
         _fetch();
+        if (_timer) clearInterval(_timer);  // garde anti double-open (fuite d'interval)
         _timer = setInterval(_fetch, REFRESH_MS);
         document.addEventListener("keydown", _onKey);
     }

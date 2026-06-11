@@ -1,15 +1,50 @@
-// Token API (lire depuis meta tag ou localStorage)
+// Token API (lire depuis localStorage) — escapeHtml/authHeaders sont des helpers
+// globaux definis dans index.html (charges avant ce fichier).
 const API_TOKEN = localStorage.getItem('api_token') || '';
+const WS_PROTO = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
 const wsUrl = API_TOKEN
-    ? `ws://${window.location.host}/ws?token=${API_TOKEN}`
-    : `ws://${window.location.host}/ws`;
-const ws = new WebSocket(wsUrl);
+    ? `${WS_PROTO}${window.location.host}/ws?token=${API_TOKEN}`
+    : `${WS_PROTO}${window.location.host}/ws`;
 
-function authHeaders() {
-    const h = { 'Content-Type': 'application/json' };
-    if (API_TOKEN) h['Authorization'] = `Bearer ${API_TOKEN}`;
-    return h;
+// --- WEBSOCKET AVEC RECONNEXION ---
+// Prométhée redémarre souvent par design (Smart Restart exit 65 + Guardian) :
+// sans reconnexion, les panneaux temps réel mouraient en silence après chaque
+// restart pendant que la télémétrie pollée continuait — état mixte trompeur.
+let ws = null;
+let wsRetryDelay = 1000;        // backoff 1s -> 10s
+let wsWasConnected = false;     // pour ne logger que les vraies reconnexions
+
+function connectWS() {
+    ws = new WebSocket(wsUrl);
+    ws.onopen = () => {
+        wsRetryDelay = 1000;
+        if (wsWasConnected) {
+            addLog('SYSTEM', 'WebSocket reconnecté — resynchronisation', 'success');
+            resyncAfterReconnect();
+        }
+        wsWasConnected = true;
+    };
+    ws.onmessage = handleWsMessage;
+    ws.onclose = () => {
+        addLog('SYSTEM', `WebSocket perdu — reconnexion dans ${Math.round(wsRetryDelay / 1000)}s`, 'err');
+        setTimeout(connectWS, wsRetryDelay);
+        wsRetryDelay = Math.min(wsRetryDelay * 2, 10000);
+    };
 }
+
+// Recharge les états serveur après une coupure (restart, crash réseau).
+function resyncAfterReconnect() {
+    fetch('/api/autonomy/status', { headers: authHeaders() }).then(r => r.json()).then(syncAutonomyStatus).catch(() => {});
+    fetch('/api/reptilian/status', { headers: authHeaders() }).then(r => r.json()).then(updateTelemReptilian).catch(() => {});
+    fetch('/health').then(r => r.json()).then(data => {
+        if (data && data.version) {
+            const el = document.getElementById('version-display');
+            if (el) el.textContent = 'V' + data.version;
+        }
+    }).catch(() => {});
+    updateTelemNeurochemistry();
+}
+
 const dialogueBox = document.getElementById('dialogue-box');
 const logsBox = document.getElementById('logs-box');
 const chatMessages = document.getElementById('chat-messages');
@@ -18,30 +53,27 @@ const activeChatStreams = {};
 const recentlyStreamed = new Set();
 let chatPanelOpen = false;
 
-// FONCTION: Formater le code pour l'affichage
-function formatMessage(text) {
-    if (typeof text === 'object') text = JSON.stringify(text, null, 2);
+// FONCTION: Convertir du texte (potentiellement avec blocs ```) en HTML sûr.
+// Échappement obligatoire : le contenu vient des LLM — un traceback "in <module>"
+// ou du code "x < y" injecté brut en innerHTML est parsé comme HTML et avalé.
+function textToSafeHtml(text) {
+    if (text === undefined || text === null) return "";
+    text = String(text);
     if (text.includes('```')) {
-        text = text.replace(/```(?:python|json|html)?\s*([\s\S]*?)```/g, '<pre>$1</pre>');
+        let html = "";
+        text.split('```').forEach((part, index) => {
+            if (index % 2 === 1) html += `<pre>${escapeHtml(part)}</pre>`;
+            else html += escapeHtml(part).replace(/\n/g, '<br>');
+        });
+        return html;
     }
-    return text.replace(/\n/g, '<br>');
+    return escapeHtml(text).replace(/\n/g, '<br>');
 }
 
 // FONCTION: Ajouter un message au dialogue principal
 function addDialogue(sender, text, type) {
     const div = document.createElement('div');
-    
-    // Traitement du code
-    let htmlContent = "";
-    if (text && text.includes('```')) {
-       const parts = text.split('```');
-       parts.forEach((part, index) => {
-           if (index % 2 === 1) htmlContent += `<pre>${part}</pre>`;
-           else htmlContent += part.replace(/\n/g, '<br>');
-       });
-    } else {
-       htmlContent = text ? text.replace(/\n/g, '<br>') : "";
-    }
+    const htmlContent = textToSafeHtml(text);
 
     if (type === 'user') {
         div.className = 'msg-user';
@@ -51,7 +83,7 @@ function addDialogue(sender, text, type) {
         div.innerHTML = `<div>${htmlContent}</div>`;
     } else {
         div.className = 'msg-agent';
-        div.innerHTML = `<span class="font-bold text-xs mb-1 block opacity-50">[${sender}]</span><div>${htmlContent}</div>`;
+        div.innerHTML = `<span class="font-bold text-xs mb-1 block opacity-50">[${escapeHtml(sender)}]</span><div>${htmlContent}</div>`;
     }
     dialogueBox.appendChild(div);
     dialogueBox.scrollTop = dialogueBox.scrollHeight;
@@ -61,15 +93,16 @@ function addDialogue(sender, text, type) {
 function addLog(source, text, level) {
     const div = document.createElement('div');
     div.className = 'log-entry';
-    
+
     if (level === 'err') div.classList.add('log-err');
     else if (level === 'sys') div.classList.add('log-sys');
     else if (level === 'success') div.classList.add('log-success');
-    
+
     const time = new Date().toLocaleTimeString('fr-FR');
+    text = (text === undefined || text === null) ? '' : String(text);
     if (text.length > 150) text = text.substring(0, 150) + "...";
-    
-    div.innerHTML = `<span class="text-gray-600">[${time}]</span> <span class="opacity-70">[${source}]</span> <span>${text}</span>`;
+
+    div.innerHTML = `<span class="text-gray-600">[${time}]</span> <span class="opacity-70">[${escapeHtml(source)}]</span> <span>${escapeHtml(text)}</span>`;
     
     logsBox.appendChild(div);
     logsBox.scrollTop = logsBox.scrollHeight;
@@ -97,7 +130,7 @@ function highlightAgent(name) {
 }
 
 // GESTIONNAIRE D'ÉVÉNEMENTS WEBSOCKET (LE CŒUR VISUEL)
-ws.onmessage = (event) => {
+function handleWsMessage(event) {
     const data = JSON.parse(event.data);
     const type = data.type;
     const payload = data.payload || {};
@@ -105,18 +138,19 @@ ws.onmessage = (event) => {
     // 1. Démarrage de tâche (Allumage Agent)
     if (type === "AGENT_TASK_DISPATCH") {
         highlightAgent(payload.target);
-        addLog('ROUTER', `Mission envoyée vers -> ${payload.target.toUpperCase()}`, 'sys');
+        addLog('ROUTER', `Mission envoyée vers -> ${(payload.target || '?').toUpperCase()}`, 'sys');
     }
     // 2. Flux de pensée (Thought Stream) — affiché dans le panneau flux
     else if (type === "THOUGHT_STREAM") {
         highlightAgent(payload.agent);
+        const tsAgent = (payload.agent || '?').toUpperCase();
         if (payload.type === 'error') {
-            addDialogue(payload.agent.toUpperCase(), payload.content, 'system');
-            addLog(payload.agent, payload.content, 'err');
+            addDialogue(tsAgent, payload.content, 'system');
+            addLog(payload.agent || '?', payload.content, 'err');
         } else {
-            addDialogue(payload.agent.toUpperCase(), payload.content, 'system');
+            addDialogue(tsAgent, payload.content, 'system');
         }
-    } 
+    }
     // 2b. Streaming temps réel (tokens progressifs)
     else if (type === "AGENT_STREAM") {
         highlightAgent(payload.agent);
@@ -127,7 +161,7 @@ ws.onmessage = (event) => {
             const div = document.createElement('div');
             div.className = 'msg-agent';
             div.id = `stream-${sid}`;
-            div.innerHTML = `<span class="font-bold text-xs mb-1 block opacity-50">[${payload.agent.toUpperCase()}]</span><div class="stream-content"></div><span class="cursor">|</span>`;
+            div.innerHTML = `<span class="font-bold text-xs mb-1 block opacity-50">[${escapeHtml((payload.agent || '?').toUpperCase())}]</span><div class="stream-content"></div><span class="cursor">|</span>`;
             dialogueBox.appendChild(div);
             activeStreams[sid] = div;
         } else if (payload.done) {
@@ -137,20 +171,7 @@ ws.onmessage = (event) => {
                 const cursorEl = div.querySelector('.cursor');
                 if (cursorEl) cursorEl.remove();
                 const contentEl = div.querySelector('.stream-content');
-                if (contentEl) {
-                    const raw = contentEl.textContent;
-                    let html = "";
-                    if (raw.includes('```')) {
-                        const parts = raw.split('```');
-                        parts.forEach((part, index) => {
-                            if (index % 2 === 1) html += `<pre>${part}</pre>`;
-                            else html += part.replace(/\n/g, '<br>');
-                        });
-                    } else {
-                        html = raw.replace(/\n/g, '<br>');
-                    }
-                    contentEl.innerHTML = html;
-                }
+                if (contentEl) contentEl.innerHTML = textToSafeHtml(contentEl.textContent);
                 delete activeStreams[sid];
             }
             // Marquer l'agent comme récemment streamé (TTL 3s)
@@ -275,7 +296,7 @@ ws.onmessage = (event) => {
                 div.className = 'msg-chat-emergent';
                 div.id = `chat-stream-${sid}`;
                 const sourcesText = payload.emergent_sources.join(', ');
-                div.innerHTML = `<span class="emergent-badge">[PROMETHEE — ${sourcesText}]</span><div class="stream-content"></div><span class="emergent-cursor">|</span>`;
+                div.innerHTML = `<span class="emergent-badge">[PROMETHEE — ${escapeHtml(sourcesText)}]</span><div class="stream-content"></div><span class="emergent-cursor">|</span>`;
             } else {
                 // Style standard pour les reponses LLM
                 div.className = 'msg-chat-bot';
@@ -292,20 +313,7 @@ ws.onmessage = (event) => {
                 const cursorEl = div.querySelector('.chat-cursor') || div.querySelector('.emergent-cursor');
                 if (cursorEl) cursorEl.remove();
                 const contentEl = div.querySelector('.stream-content');
-                if (contentEl) {
-                    const raw = contentEl.textContent;
-                    let html = "";
-                    if (raw.includes('```')) {
-                        const parts = raw.split('```');
-                        parts.forEach((part, index) => {
-                            if (index % 2 === 1) html += `<pre>${part}</pre>`;
-                            else html += part.replace(/\n/g, '<br>');
-                        });
-                    } else {
-                        html = raw.replace(/\n/g, '<br>');
-                    }
-                    contentEl.innerHTML = html;
-                }
+                if (contentEl) contentEl.innerHTML = textToSafeHtml(contentEl.textContent);
                 delete activeChatStreams[sid];
             }
         } else if (payload.chunk) {
@@ -320,11 +328,14 @@ ws.onmessage = (event) => {
     }
     // 18. CHAT_RESPONSE : log dans les logs systeme
     else if (type === "CHAT_RESPONSE") {
-        var connBefore = payload.connexion_before ? Math.round(payload.connexion_before) : '?';
-        var connAfter = payload.connexion_after ? Math.round(payload.connexion_after) : '?';
+        var connBefore = payload.connexion_before !== undefined ? Math.round(payload.connexion_before) : '?';
+        var connAfter = payload.connexion_after !== undefined ? Math.round(payload.connexion_after) : '?';
         addLog("CHAT", `Reponse envoyee (CONNEXION ${connBefore} -> ${connAfter})`, "success");
     }
-};
+}
+
+// Connexion initiale (avec reconnexion automatique sur perte)
+connectWS();
 
 // --- CHAT DIRECT ---
 
@@ -364,16 +375,7 @@ function toggleChatPanel() {
 
 function addChatMessage(sender, text, type, emergentSources) {
     const div = document.createElement('div');
-    let htmlContent = "";
-    if (text && text.includes('```')) {
-        const parts = text.split('```');
-        parts.forEach((part, index) => {
-            if (index % 2 === 1) htmlContent += `<pre>${part}</pre>`;
-            else htmlContent += part.replace(/\n/g, '<br>');
-        });
-    } else {
-        htmlContent = text ? text.replace(/\n/g, '<br>') : "";
-    }
+    const htmlContent = textToSafeHtml(text);
 
     if (type === 'user') {
         div.className = 'msg-chat-user';
@@ -382,7 +384,7 @@ function addChatMessage(sender, text, type, emergentSources) {
         // Style emergent — pensees authentiques de Promethee (organes actifs)
         div.className = 'msg-chat-emergent';
         const sourcesText = emergentSources.join(', ');
-        div.innerHTML = `<span class="emergent-badge">[PROMETHEE — ${sourcesText}]</span><div>${htmlContent}</div>`;
+        div.innerHTML = `<span class="emergent-badge">[PROMETHEE — ${escapeHtml(sourcesText)}]</span><div>${htmlContent}</div>`;
     } else {
         div.className = 'msg-chat-bot';
         div.innerHTML = `<span class="font-bold text-xs mb-1 block opacity-50" style="color:#ffa500;">[PROMETHEE]</span><div>${htmlContent}</div>`;
@@ -494,7 +496,7 @@ function renderWishlist(wishlist, history) {
             statusText = 'EN ATTENTE';
         }
         div.className = `wish-item ${statusClass}`;
-        div.innerHTML = `<span>${category}</span><span class="text-[8px]">${statusText}</span>`;
+        div.innerHTML = `<span>${escapeHtml(category)}</span><span class="text-[8px]">${statusText}</span>`;
         container.appendChild(div);
     });
 }
@@ -638,7 +640,7 @@ function toggleCoffeeMode() {
     const newState = !coffeeModeActive;
     fetch('/api/coffee-mode', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: authHeaders(),
         body: JSON.stringify({ enabled: newState })
     }).then(r => r.json()).then(data => {
         if (data.status === 'blocked') {
@@ -747,7 +749,7 @@ const psycheChartInstance = new Chart(ctx, {
 });
 
 // Chargement initial des traits PSYCHE
-fetch('/api/psyche/status').then(r => r.json()).then(data => {
+fetch('/api/psyche/status', { headers: authHeaders() }).then(r => r.json()).then(data => {
     if (data && data.system_average) {
         const avg = data.system_average;
         psycheChartInstance.data.datasets[0].data = [
@@ -899,11 +901,7 @@ function updateAvatar(emotion) {
 
 // --- NEUROCHIMIE TELEMETRIE ---
 function updateTelemNeurochemistry() {
-    fetch('/api/psyche/status').then(function(r) { return r.json(); }).then(function(data) {
-        // Les pools neurochimiques ne sont pas dans psyche, cherchons dans brain
-    }).catch(function() {});
-    // Fallback : lire directement le brain status pour les neurochimiques
-    fetch('/api/brain/status').then(function(r) { return r.json(); }).then(function(data) {
+    fetch('/api/brain/status', { headers: authHeaders() }).then(function(r) { return r.json(); }).then(function(data) {
         var cs = data && data.current_state;
         if (!cs || !cs.organ_states) return;
         var neuro = cs.organ_states;
@@ -941,7 +939,7 @@ setInterval(updateTelemNeurochemistry, 30000);
 updateTelemNeurochemistry();
 
 // Chargement initial télémétrie
-fetch('/api/reptilian/status').then(function(r) { return r.json(); }).then(function(data) {
+fetch('/api/reptilian/status', { headers: authHeaders() }).then(function(r) { return r.json(); }).then(function(data) {
     updateTelemReptilian(data);
 }).catch(function() {});
 
@@ -968,9 +966,9 @@ function syncAutonomyStatus(data) {
         updateSaunaButton(data.is_sauna_active);
     }
 }
-fetch('/api/autonomy/status').then(r => r.json()).then(syncAutonomyStatus).catch(() => {});
+fetch('/api/autonomy/status', { headers: authHeaders() }).then(r => r.json()).then(syncAutonomyStatus).catch(() => {});
 setInterval(() => {
-    fetch('/api/autonomy/status').then(r => r.json()).then(syncAutonomyStatus).catch(() => {});
+    fetch('/api/autonomy/status', { headers: authHeaders() }).then(r => r.json()).then(syncAutonomyStatus).catch(() => {});
 }, 30000);
 
 // Chargement version + état sieste depuis /health

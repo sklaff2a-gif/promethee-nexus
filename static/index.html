@@ -371,7 +371,7 @@
                 <div class="absolute top-0 left-0 right-0 bg-transparent text-cyan-300 text-[9px] px-1 font-bold h-5 flex items-center border-b border-cyan-900/30 justify-between">
                     <span>TÉLÉMÉTRIE</span>
                     <span class="flex items-center gap-1 flex-wrap">
-                        <button onclick="document.getElementById('vision-overlay').style.display='flex'" class="text-[8px] border px-1 hover:bg-cyan-900 hover:text-black transition" style="color:#00e5c8;border-color:rgba(0,229,200,0.3)">VISION</button>
+                        <button onclick="document.getElementById('vision-overlay').style.display='flex'; if (typeof NeuralVision !== 'undefined') NeuralVision.refresh();" class="text-[8px] border px-1 hover:bg-cyan-900 hover:text-black transition" style="color:#00e5c8;border-color:rgba(0,229,200,0.3)">VISION</button>
                         <button onclick="TissueView.open()" class="text-[8px] border px-1 hover:bg-green-900 hover:text-black transition" style="color:#4dff88;border-color:rgba(77,255,136,0.3)">TISSUE</button>
                         <button onclick="ImpactView.open()" class="text-[8px] border px-1 hover:bg-cyan-900 hover:text-black transition" style="color:#60a0ff;border-color:rgba(96,160,255,0.3)">IMPACT</button>
                         <button onclick="AlfredView.open()" class="text-[8px] border px-1 hover:bg-yellow-900 hover:text-black transition" style="color:#ffb860;border-color:rgba(255,184,96,0.3)">☕ ALFRED</button>
@@ -462,6 +462,29 @@
     </div>
 
     <script>
+    // --- Helpers globaux (charges AVANT les vues inline et les modules js/) ---
+
+    // Echappement HTML : tout contenu LLM/utilisateur passe par la avant innerHTML.
+    // Sans ca, un traceback "in <module>" ou du code "x < y" est parse comme HTML et avale.
+    function escapeHtml(s) {
+        if (s === undefined || s === null) s = '';
+        return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    // Headers API avec token Bearer si configure (localStorage.api_token).
+    function authHeaders(extra) {
+        const h = Object.assign({ 'Content-Type': 'application/json' }, extra || {});
+        const t = localStorage.getItem('api_token');
+        if (t) h['Authorization'] = 'Bearer ' + t;
+        return h;
+    }
+    </script>
+
+    <script>
     const AlfredView = {
         open() {
             document.getElementById('alfred-overlay').style.display = 'flex';
@@ -475,8 +498,8 @@
             const stats = document.getElementById('alfred-stats');
             try {
                 const [convRes, statusRes] = await Promise.all([
-                    fetch('/api/alfred/conversations'),
-                    fetch('/api/alfred/status')
+                    fetch('/api/alfred/conversations', { headers: authHeaders() }),
+                    fetch('/api/alfred/status', { headers: authHeaders() })
                 ]);
                 const data = await convRes.json();
                 const status = await statusRes.json();
@@ -495,14 +518,16 @@
             }
         },
         renderMarkdown(md, date) {
-            return md
+            // Echapper AVANT les regex markdown (le contenu vient du LLM).
+            // Consequence : le blockquote matche sur "&gt;" et non ">".
+            return escapeHtml(md)
                 .replace(/^# (.+)$/gm, '<h1 style="color:#ffb860; font-size:14px; font-weight:bold; margin:20px 0 10px; border-bottom:1px solid rgba(255,184,96,0.2); padding-bottom:4px;">$1</h1>')
                 .replace(/^## (.+)$/gm, '<h2 style="color:#ffb860; font-size:12px; font-weight:bold; margin:16px 0 6px;">$1</h2>')
                 .replace(/^---$/gm, '<hr style="border-color:rgba(255,184,96,0.15); margin:12px 0;">')
                 .replace(/^- \*\*(.+?)\*\* : (.+)$/gm, '<div style="margin:2px 0;"><span style="color:#ffb860;">$1</span>: <span style="color:#aaa;">$2</span></div>')
                 .replace(/\*\*Alfred\*\* :/g, '<div style="color:#ffb860; font-weight:bold; margin-top:8px;">Alfred :</div>')
                 .replace(/\*\*Prométhée\*\* :/g, '<div style="color:#00e5c8; font-weight:bold; margin-top:8px;">Prométhée :</div>')
-                .replace(/^> (.+)$/gm, '<blockquote style="border-left:2px solid rgba(255,184,96,0.3); padding-left:10px; margin:4px 0; color:#bbb;">$1</blockquote>')
+                .replace(/^&gt; (.+)$/gm, '<blockquote style="border-left:2px solid rgba(255,184,96,0.3); padding-left:10px; margin:4px 0; color:#bbb;">$1</blockquote>')
                 .replace(/\n\n/g, '<br>');
         }
     };
@@ -537,8 +562,8 @@
             const stats = document.getElementById('stefan-stats');
             try {
                 const [confRes, statusRes] = await Promise.all([
-                    fetch('/api/stefan/confrontations'),
-                    fetch('/api/stefan/status')
+                    fetch('/api/stefan/confrontations', { headers: authHeaders() }),
+                    fetch('/api/stefan/status', { headers: authHeaders() })
                 ]);
                 const data = await confRes.json();
                 const status = await statusRes.json();
@@ -549,7 +574,7 @@
                 }
                 let html = '';
                 for (const conv of data.confrontations) {
-                    html += `<h1 style="color:#ff5050; font-size:14px; font-weight:bold; margin:20px 0 10px; border-bottom:1px solid rgba(255,80,80,0.2); padding-bottom:4px;">${conv.date}</h1>`;
+                    html += `<h1 style="color:#ff5050; font-size:14px; font-weight:bold; margin:20px 0 10px; border-bottom:1px solid rgba(255,80,80,0.2); padding-bottom:4px;">${escapeHtml(conv.date)}</h1>`;
                     html += this.renderConfrontation(conv.content);
                 }
                 el.innerHTML = html;
@@ -558,7 +583,7 @@
             }
         },
         renderConfrontation(text) {
-            return text
+            return escapeHtml(text)
                 .replace(/={60}/g, '<hr style="border-color:rgba(255,80,80,0.2); margin:16px 0;">')
                 .replace(/\[(.+?)\] Confrontation #(\d+)/g, '<div style="color:#ff5050; font-weight:bold; margin-top:8px;">[$1] Confrontation #$2</div>')
                 .replace(/Source: (.+)/g, '<div style="color:#666; font-size:10px;">Source: $1</div>')
@@ -595,7 +620,7 @@
         },
         async load() {
             try {
-                const res = await fetch('/api/mailbox/read');
+                const res = await fetch('/api/mailbox/read', { headers: authHeaders() });
                 const data = await res.json();
                 this.render(data.letters || []);
                 this.refreshBadge();
@@ -619,11 +644,11 @@
                 const unread = !letter.read ? 'border-left:3px solid #ff80ff;' : 'border-left:3px solid #333;';
                 html += `<div style="margin-bottom:20px; padding:16px; background:rgba(20,0,20,0.3); border:1px solid rgba(255,128,255,0.15); border-radius:8px; ${unread}">
                     <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
-                        <span style="color:#ff80ff; font-size:11px; font-weight:bold;">${letter.subject || 'Sans titre'}</span>
-                        <span style="color:#666; font-size:9px;">${letter.date_human || ''}</span>
+                        <span style="color:#ff80ff; font-size:11px; font-weight:bold;">${escapeHtml(letter.subject || 'Sans titre')}</span>
+                        <span style="color:#666; font-size:9px;">${escapeHtml(letter.date_human || '')}</span>
                     </div>
-                    <div style="color:#999; font-size:9px; margin-bottom:8px;">Source: ${letter.source} | Humeur: ${letter.mood || '?'}</div>
-                    <div style="color:#ddd; font-size:11px; line-height:1.6; white-space:pre-wrap;">${letter.content}</div>
+                    <div style="color:#999; font-size:9px; margin-bottom:8px;">Source: ${escapeHtml(letter.source)} | Humeur: ${escapeHtml(letter.mood || '?')}</div>
+                    <div style="color:#ddd; font-size:11px; line-height:1.6; white-space:pre-wrap;">${escapeHtml(letter.content)}</div>
                 </div>`;
             }
             html += '</div>';
@@ -631,7 +656,7 @@
         },
         async refreshBadge() {
             try {
-                const res = await fetch('/api/mailbox/status');
+                const res = await fetch('/api/mailbox/status', { headers: authHeaders() });
                 const data = await res.json();
                 const badge = document.getElementById('mailbox-badge');
                 if (data.unread_count > 0) {
@@ -666,10 +691,10 @@
         </div>
     </div>
 
-    <script src="/static/js/games.js?v=1.5"></script>
-    <script src="/static/js/tissue.js?v=1.0"></script>
-    <script src="/static/js/vision.js?v=1.1"></script>
-    <script src="/static/js/impact.js?v=1.1"></script>
-    <script src="/static/js/nexus.js?v=13.0"></script>
+    <script src="/static/js/games.js?v=1.6"></script>
+    <script src="/static/js/tissue.js?v=1.1"></script>
+    <script src="/static/js/vision.js?v=1.2"></script>
+    <script src="/static/js/impact.js?v=1.2"></script>
+    <script src="/static/js/nexus.js?v=14.0"></script>
 </body>
 </html>

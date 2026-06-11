@@ -44,6 +44,10 @@ const NeuralVision = (function() {
     let tooltip, statsEl, offlineEl, container;
     let initialized = false;
     let refreshTimer = null;
+    // Dernier etat connu pour le HUD — le texte est RECONSTRUIT a chaque rendu.
+    // (Avant : handleCardiacBeat parsait statsEl.textContent et effacait la
+    // sante agonie/orphelins + la couleur d'alerte a chaque battement.)
+    let lastStats = null, lastSante = null, lastSampleInfo = null, lastCardiac = null;
 
     // --- Init ---
     function init() {
@@ -62,8 +66,11 @@ const NeuralVision = (function() {
         setupSimulation();
         fetchGraph();
 
-        // Refresh periodique (filet de securite)
-        refreshTimer = setInterval(fetchGraph, REFRESH_INTERVAL);
+        // Refresh periodique (filet de securite) — seulement si l'overlay est
+        // visible : inutile de recharger 20k synapses pour un panneau cache.
+        refreshTimer = setInterval(function() {
+            if (isOverlayVisible()) fetchGraph();
+        }, REFRESH_INTERVAL);
 
         // ResizeObserver pour adaptation dynamique
         if (typeof ResizeObserver !== "undefined") {
@@ -152,13 +159,14 @@ const NeuralVision = (function() {
         simulation.stop();
     }
 
+    function isOverlayVisible() {
+        var overlay = document.getElementById("vision-overlay");
+        return !!(overlay && overlay.style.display !== "none" && overlay.style.display !== "");
+    }
+
     // --- Fetch API ---
     function fetchGraph() {
-        const headers = {};
-        const token = localStorage.getItem('api_token');
-        if (token) headers['Authorization'] = 'Bearer ' + token;
-
-        fetch("/api/synaptic/graph", { headers: headers })
+        fetch("/api/synaptic/graph", { headers: authHeaders() })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (offlineEl) offlineEl.style.display = "none";
@@ -337,8 +345,8 @@ const NeuralVision = (function() {
             energyBar += i < blocks ? "\u2588" : "\u2591";
         }
         tooltip.innerHTML =
-            "<b>" + d.concept + "</b><br>" +
-            "type: " + d.type + "<br>" +
+            "<b>" + escapeHtml(d.concept) + "</b><br>" +
+            "type: " + escapeHtml(d.type) + "<br>" +
             "activations: " + d.activation + "<br>" +
             "energie: " + energyBar + " " + (d.energy * 100).toFixed(0) + "%";
         tooltip.style.display = "block";
@@ -356,27 +364,40 @@ const NeuralVision = (function() {
     }
 
     // --- Stats header ---
+    // Memorise l'etat et delegue le rendu — renderStats est la SEULE fonction
+    // qui ecrit statsEl (le battement cardiaque ne peut plus effacer la sante).
     function updateStats(stats, cardiac, sante, sampleInfo) {
+        lastStats = stats || lastStats;
+        if (sante !== undefined) lastSante = sante;
+        if (sampleInfo !== undefined) lastSampleInfo = sampleInfo;
+        if (cardiac && cardiac.bpm) lastCardiac = cardiac;
+        renderStats();
+    }
+
+    function renderStats() {
         if (!statsEl) return;
         // VISION REPRESENTATIVE : la verite des comptes (graphe ENTIER) + sante.
+        var stats = lastStats || {};
         var text = (stats.total_nodes || 0) + "N " + (stats.total_synapses || 0) + "S";
-        if (sampleInfo) {
-            text += " (vue: " + sampleInfo.affiches_nodes + "N/" + sampleInfo.affiches_links + "S)";
+        if (lastSampleInfo) {
+            text += " (vue: " + lastSampleInfo.affiches_nodes + "N/" + lastSampleInfo.affiches_links + "S)";
         }
         var alerte = false;
-        if (sante) {
-            text += " | agonie " + (sante.pct_agonie || 0) + "%";
-            text += " | orphelins " + (sante.orphelins || 0);
+        if (lastSante) {
+            text += " | agonie " + (lastSante.pct_agonie || 0) + "%";
+            text += " | orphelins " + (lastSante.orphelins || 0);
             // seuils d'alerte : osteoporose (>50% agonie) ou orphelins massifs (>10%)
-            alerte = (sante.pct_agonie > 50) || (sante.pct_orphelins > 10);
+            alerte = (lastSante.pct_agonie > 50) || (lastSante.pct_orphelins > 10);
         }
-        if (cardiac && cardiac.bpm) {
-            var emotion = cardiac.emotion || "---";
-            var color = EMOTION_COLORS[emotion] || "#00ff41";
-            text += " | " + Math.round(cardiac.bpm) + " BPM";
-            statsEl.style.color = alerte ? "#ff3344" : color;
-        } else if (alerte) {
+        if (lastCardiac && lastCardiac.bpm) {
+            var emotion = lastCardiac.emotion || "---";
+            text += " | " + Math.round(lastCardiac.bpm) + " BPM " + emotion;
+        }
+        // L'alerte sante a TOUJOURS priorite sur la couleur d'emotion.
+        if (alerte) {
             statsEl.style.color = "#ff3344";
+        } else if (lastCardiac && lastCardiac.emotion) {
+            statsEl.style.color = EMOTION_COLORS[lastCardiac.emotion] || "#00ff41";
         }
         statsEl.textContent = text;
     }
@@ -509,13 +530,9 @@ const NeuralVision = (function() {
             .attr("opacity", 0)
             .attr("stroke-width", 0.3);
 
-        // Update stats header avec couleur emotion
-        if (statsEl) {
-            var text = statsEl.textContent.split("|")[0].trim();
-            text += " | " + Math.round(bpm) + " BPM " + emotion;
-            statsEl.textContent = text;
-            statsEl.style.color = color;
-        }
+        // Update stats header — via l'etat memorise, sans toucher a la sante
+        lastCardiac = { bpm: bpm, emotion: emotion };
+        renderStats();
 
         // Modulation du fond SVG selon l'emotion (subtile)
         var svgEl = document.getElementById("vision-svg");
@@ -534,6 +551,7 @@ const NeuralVision = (function() {
     // --- API publique ---
     return {
         init: init,
+        refresh: fetchGraph,
         handleSynapticUpdate: handleSynapticUpdate,
         handleCardiacBeat: handleCardiacBeat,
     };

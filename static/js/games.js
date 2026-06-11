@@ -18,7 +18,7 @@ const GamesView = {
 
     async loadStatus() {
         try {
-            const res = await fetch('/api/games/status');
+            const res = await fetch('/api/games/status', { headers: authHeaders() });
             const data = await res.json();
             this.renderHub(data);
         } catch (e) {
@@ -113,7 +113,7 @@ const GamesView = {
         for (const [key, comp] of Object.entries(competences)) {
             const ok = comp.validated;
             html += `<div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid rgba(100,100,100,0.1);">
-                <span style="color:#888; font-size:9px;">${comp.description}</span>
+                <span style="color:#888; font-size:9px;">${escapeHtml(comp.description)}</span>
                 <span style="color:${ok ? '#4dff88' : '#883333'}; font-size:10px; font-weight:bold;">${ok ? '✓' : '✗'}</span>
             </div>`;
         }
@@ -129,7 +129,7 @@ const GamesView = {
                 const icon = won ? '🏆' : h.winner ? '💀' : '🤝';
                 const date = new Date(h.timestamp * 1000).toLocaleString('fr-FR', {hour:'2-digit',minute:'2-digit'});
                 html += `<div style="display:flex; justify-content:space-between; font-size:9px; color:#888; padding:2px 0;">
-                    <span>${icon} ${h.game} vs ${h.opponent} (${h.moves} coups)</span>
+                    <span>${icon} ${escapeHtml(h.game)} vs ${escapeHtml(h.opponent)} (${h.moves} coups)</span>
                     <span>${date}</span>
                 </div>`;
             }
@@ -140,12 +140,15 @@ const GamesView = {
         el.innerHTML = html;
     },
 
-    async newGame(gameType, prometheeStarts, difficulty = 'adaptive') {
+    // humanStarts=true : l'humain joue en premier (bouton JOUER) ;
+    // false : Promethee commence (bouton "2e"). Nom corrige le 12/06 —
+    // l'ancien parametre "prometheeStarts" signifiait en realite l'inverse.
+    async newGame(gameType, humanStarts, difficulty = 'adaptive') {
         try {
             const res = await fetch('/api/games/new', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({game: gameType, opponent: 'human', promethee_starts: !prometheeStarts, difficulty: difficulty})
+                headers: authHeaders(),
+                body: JSON.stringify({game: gameType, opponent: 'human', promethee_starts: !humanStarts, difficulty: difficulty})
             });
             const data = await res.json();
             if (data.error) {
@@ -217,7 +220,7 @@ const GamesView = {
     async afterMatchEnd() {
         // Si tournoi en cours → match suivant, sinon → hub
         try {
-            const res = await fetch('/api/games/tournament/status');
+            const res = await fetch('/api/games/tournament/status', { headers: authHeaders() });
             const data = await res.json();
             if (data.tournament && data.tournament.status === 'in_progress') {
                 this.nextTournamentMatch();
@@ -231,7 +234,7 @@ const GamesView = {
         try {
             const res = await fetch('/api/games/move', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: authHeaders(),
                 body: JSON.stringify({move: [row, col], player: 'human'})
             });
             const data = await res.json();
@@ -313,7 +316,7 @@ const GamesView = {
         try {
             const res = await fetch('/api/games/move', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: authHeaders(),
                 body: JSON.stringify({move: col, player: 'human'})
             });
             const data = await res.json();
@@ -337,7 +340,7 @@ const GamesView = {
             const color = isP ? '#00e5c8' : '#ffb860';
             const name = isP ? 'Promethee' : 'Toi';
             if (msg.message) {
-                html += `<div style="margin:2px 0;"><span style="color:${color}; font-weight:bold;">${name}:</span> <span style="color:#aaa;">${msg.message}</span></div>`;
+                html += `<div style="margin:2px 0;"><span style="color:${color}; font-weight:bold;">${name}:</span> <span style="color:#aaa;">${escapeHtml(msg.message)}</span></div>`;
             }
         }
         html += '</div>';
@@ -361,7 +364,7 @@ const GamesView = {
         try {
             const res = await fetch('/api/games/say', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: authHeaders(),
                 body: JSON.stringify({message: msg})
             });
             const data = await res.json();
@@ -375,7 +378,7 @@ const GamesView = {
                         const color = isP ? '#00e5c8' : '#ffb860';
                         const name = isP ? 'Promethee' : 'Toi';
                         if (m.message) {
-                            html += `<div style="margin:2px 0;"><span style="color:${color}; font-weight:bold;">${name}:</span> <span style="color:#aaa;">${m.message}</span></div>`;
+                            html += `<div style="margin:2px 0;"><span style="color:${color}; font-weight:bold;">${name}:</span> <span style="color:#aaa;">${escapeHtml(m.message)}</span></div>`;
                         }
                     }
                     chatEl.innerHTML = html;
@@ -400,7 +403,7 @@ const GamesView = {
         try {
             const res = await fetch('/api/games/tournament/start', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: authHeaders(),
                 body: JSON.stringify({game: gameType})
             });
             const data = await res.json();
@@ -481,7 +484,7 @@ const GamesView = {
 
     async nextTournamentMatch() {
         try {
-            const res = await fetch('/api/games/tournament/next', {method: 'POST'});
+            const res = await fetch('/api/games/tournament/next', {method: 'POST', headers: authHeaders()});
             const data = await res.json();
             if (data.error) { alert(data.error); return; }
             if (data.tournament) {
@@ -496,7 +499,7 @@ const GamesView = {
 
     async checkSynthebriseActive() {
         try {
-            const res = await fetch('/api/games/synthebrise/status');
+            const res = await fetch('/api/games/synthebrise/status', { headers: authHeaders() });
             const data = await res.json();
             if (data.game && !data.game.game_over) {
                 this.renderSynthebrise({state: data.game, message: "Partie en cours — a toi !"});
@@ -508,7 +511,7 @@ const GamesView = {
         try {
             const res = await fetch('/api/games/synthebrise/new', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: authHeaders(),
                 body: JSON.stringify({opponent: 'promethee'})
             });
             const data = await res.json();
@@ -537,7 +540,7 @@ const GamesView = {
             const player = (state.players || [])[i] || '?';
             const label = player === 'seed' ? '🌱' : player === 'human' ? '👤' : '🤖';
             html += `<div style="background:rgba(255,128,255,0.1); border:1px solid ${color}; border-radius:4px; padding:4px 8px; font-size:10px;">
-                <div style="color:${color}; font-weight:bold;">${words[i]}</div>
+                <div style="color:${color}; font-weight:bold;">${escapeHtml(words[i])}</div>
                 <div style="color:#666; font-size:8px;">${label} ${score}/10</div>
             </div>`;
             if (i < words.length - 1) html += '<span style="color:#555;">—</span>';
@@ -548,7 +551,7 @@ const GamesView = {
         // Message
         const msg = data.message || data.ai_response?.message || '';
         if (msg) {
-            html += `<div style="color:#aaa; font-size:10px; margin-bottom:12px; font-style:italic;">${msg}</div>`;
+            html += `<div style="color:#aaa; font-size:10px; margin-bottom:12px; font-style:italic;">${escapeHtml(msg)}</div>`;
         }
 
         // Input ou resultat
@@ -582,7 +585,7 @@ const GamesView = {
 
     async triggerAiSynthebrise() {
         try {
-            const res = await fetch('/api/games/synthebrise/ai-play', {method: 'POST'});
+            const res = await fetch('/api/games/synthebrise/ai-play', {method: 'POST', headers: authHeaders()});
             const data = await res.json();
             if (data.error) return;
             this.renderSynthebrise(data);
@@ -598,7 +601,7 @@ const GamesView = {
         try {
             const res = await fetch('/api/games/synthebrise/play', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
+                headers: authHeaders(),
                 body: JSON.stringify({word: word})
             });
             const data = await res.json();
@@ -615,7 +618,7 @@ const GamesView = {
     async forfeit() {
         if (!confirm('Abandonner la partie ?')) return;
         try {
-            await fetch('/api/games/forfeit', {method: 'POST'});
+            await fetch('/api/games/forfeit', {method: 'POST', headers: authHeaders()});
             this.loadStatus();
         } catch (e) { alert('Erreur: ' + e.message); }
     }
