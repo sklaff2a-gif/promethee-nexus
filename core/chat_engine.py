@@ -1586,6 +1586,66 @@ class ChatEngine:
         )
         return raw_clean
 
+    @staticmethod
+    def _cut_repetition_loop(text: str):
+        """Anti-boucle V2 (12/06) — coupe les vraies boucles de generation
+        sans amputer le raisonnement iteratif legitime.
+
+        V1 (inline dans _run_chat) coupait au PREMIER doublon de cle 50-chars :
+        un raisonnement mathematique honnete (« Attends... Rectifions ») qui
+        repete ses en-tetes de structure etait ampute — 3 reponses perdues le
+        11/06 (logs 19:56/20:28/20:43). V1 avait aussi un bug d'index :
+        detection sur la liste filtree (> 20 chars) mais coupe appliquee a la
+        liste des lignes non vides (coupait trop tot).
+
+        Regles V2 (detection ET coupe dans les coordonnees du texte ORIGINAL) :
+        - R2 degenerescence : 3 lignes strictement identiques consecutives
+          (> 10 chars) -> coupe apres la premiere occurrence.
+        - R1 boucle de prose : 2 lignes eligibles CONSECUTIVES deja vues
+          (cle = 50 premiers chars lowercase ; eligible = > 20 chars et pas
+          une ligne de structure). Les lignes de structure (listes, titres,
+          maths, tableaux, citations, numerotation) sont TRANSPARENTES :
+          elles se repetent legitimement dans tout raisonnement iteratif,
+          mais n'interrompent pas la consecutivite d'une vraie boucle.
+
+        Retourne (texte, cut_line) — cut_line = -1 si rien coupe, sinon
+        l'index 0-based de la premiere ligne supprimee.
+        """
+        lines = text.split("\n")
+
+        # R2 — lignes strictement identiques consecutives (degenerescence pure)
+        streak = 1
+        for i in range(1, len(lines)):
+            cur, prev = lines[i].strip(), lines[i - 1].strip()
+            if cur and len(cur) > 10 and cur == prev:
+                streak += 1
+                if streak >= 3:
+                    cut_at = i - streak + 2  # garder la premiere occurrence
+                    return "\n".join(lines[:cut_at]).rstrip(), cut_at
+            else:
+                streak = 1
+
+        # R1 — boucle de prose (2 lignes eligibles consecutives deja vues)
+        struct_prefixes = ("*", "-", "#", "$", "|", ">", "!", "```", "=")
+        seen = set()
+        prev_repeat_idx = -1
+        for i, raw in enumerate(lines):
+            s = raw.strip()
+            if len(s) <= 20:
+                continue  # courte : transparente
+            if s.startswith(struct_prefixes) or s[0].isdigit():
+                continue  # structure : transparente
+            key = s[:50].lower()
+            if key in seen:
+                if prev_repeat_idx >= 0:
+                    return "\n".join(lines[:prev_repeat_idx]).rstrip(), prev_repeat_idx
+                prev_repeat_idx = i
+            else:
+                seen.add(key)
+                prev_repeat_idx = -1
+
+        return text, -1
+
     def _clean_response_commands(self, response: str) -> str:
         """Nettoie les faux resultats hallucinés apres les commandes !.
 
@@ -4060,24 +4120,12 @@ class ChatEngine:
             )
             return None
 
-        # Anti-boucle : detecter les repetitions dans la reponse
-        # Le LLM 9B repete parfois des blocs entiers — couper au premier doublon
-        sentences = [s.strip() for s in full_response.split("\n") if len(s.strip()) > 20]
-        if len(sentences) > 3:
-            seen = set()
-            cut_index = -1
-            for i, s in enumerate(sentences):
-                key = s[:50].lower()
-                if key in seen:
-                    cut_index = i
-                    break
-                seen.add(key)
-            if cut_index > 0:
-                # Couper a la premiere repetition
-                clean_sentences = sentences[:cut_index]
-                remaining = [s for s in full_response.split("\n") if s.strip()]
-                full_response = "\n".join(remaining[:cut_index])
-                logger.warning(f"CHAT: Boucle detectee — reponse coupee a la ligne {cut_index}")
+        # Anti-boucle V2 : couper les VRAIES boucles de generation (repetitions
+        # consecutives) sans amputer le raisonnement iteratif legitime —
+        # 3 reponses perdues le 11/06 avec la V1 (cf _cut_repetition_loop + tests)
+        full_response, _cut_line = self._cut_repetition_loop(full_response)
+        if _cut_line >= 0:
+            logger.warning(f"CHAT: Boucle detectee — reponse coupee a la ligne {_cut_line}")
 
         # 4b. Filtre post-generation : detecter les fabrications visuelles
         if visual_request_detected and not visual_context:
