@@ -433,16 +433,71 @@ class ChatEngine:
             # exhaustifs (exercice R&D : 99 000 nombres de Kaprekar) depassent 5s.
             # Reste sous le MAX_TIMEOUT_S=30 du sandbox.
             res = sandbox.run_python(code, timeout=25)
+            _has_print = bool(re.search(r"\bprint\s*\(", code))
             if res.success:
                 out = (res.stdout or "").strip()
                 if not out:
-                    return "[!run] ✅ EXECUTE (sandbox isole) — aucune sortie. Pense a print(...) ton resultat."
+                    # Atelier educatif 11/06 : un script TRONQUE par la generation du
+                    # 12B (coupe AVANT ses print) tombait dans le meme message qu'un
+                    # simple oubli de print -> l'instrument muet a bloque 2 tours.
+                    # On DISTINGUE desormais les deux causes (sans print = par
+                    # construction aucune sortie ; la troncature est la 2e cause).
+                    if not _has_print:
+                        return ("[!run] ✅ EXECUTE (sandbox isole) — AUCUNE SORTIE car ton "
+                                "script ne contient aucun print(). Deux causes possibles : "
+                                "soit tu as oublie d'imprimer ton resultat, soit ton script "
+                                "a ete COUPE avant la fin (frequent sur les longs blocs). "
+                                "Remede : reemets-le COURT et COMPLET, avec les print().")
+                    return ("[!run] ✅ EXECUTE (sandbox isole) — aucune sortie (tes print() "
+                            "n'ont rien affiche : verifie tes conditions/boucles).")
                 if len(out) > 4000:
                     out = out[:4000] + "\n[...sortie tronquee]"
                 return "[!run] ✅ EXECUTE (sandbox isole) — journal :\n" + out
-            return "[!run] ❌ ECHEC (sandbox isole) — trace :\n" + res.format_traceback(1500)
+            # Echec : si la trace sent la TRONCATURE (script coupe en plein vol),
+            # on le dit explicitement plutot que de laisser une trace cryptique.
+            trace = res.format_traceback(1500)
+            hint = self._truncation_hint(code, trace)
+            if hint:
+                return f"[!run] ❌ ECHEC — {hint}\n— trace :\n{trace}"
+            return "[!run] ❌ ECHEC (sandbox isole) — trace :\n" + trace
         except Exception as e:
             return f"!run : erreur harnais — {e}"
+
+    @staticmethod
+    def _truncation_hint(code: str, trace: str = "") -> str:
+        """Heuristique faible-faux-positif : un script !run COUPE par la troncature
+        de generation du LLM (atelier educatif 11/06). Retourne un indice court si
+        suspect, sinon ''. Signaux : EOF inattendu, parentheses/crochets desequilibres,
+        derniere ligne se terminant sur un caractere de continuation."""
+        t = (trace or "").lower()
+        if "unexpected eof" in t or "was never closed" in t:
+            return ("ton script semble COUPE (fin de fichier inattendue). Reemets-le "
+                    "plus COURT et COMPLET.")
+        # desequilibre de parentheses/crochets/accolades hors chaines
+        depth = 0
+        in_str = None
+        prev = ""
+        for ch in (code or ""):
+            if in_str:
+                if ch == in_str and prev != "\\":
+                    in_str = None
+            elif ch in ("'", '"'):
+                in_str = ch
+            elif ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth -= 1
+            prev = ch
+        if depth > 0:
+            return ("ton script semble COUPE (une parenthese/un crochet reste ouvert). "
+                    "Reemets-le plus COURT et COMPLET.")
+        # derniere ligne utile terminant sur un caractere de continuation
+        lignes = [l.rstrip() for l in (code or "").split("\n")
+                  if l.strip() and not l.strip().startswith("#")]
+        if lignes and lignes[-1] and lignes[-1][-1] in ":=,([{+-*/\\&|^":
+            return ("ton script semble COUPE (la derniere ligne attend une suite). "
+                    "Reemets-le plus COURT et COMPLET.")
+        return ""
 
     async def _execute_command(self, cmd: str, args: List[str]) -> str:
         """Execute une commande d'introspection ou de dispatch. Retourne le texte resultat."""
