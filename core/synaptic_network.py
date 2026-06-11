@@ -26,6 +26,19 @@ MAX_SYNAPSES = 20000
 SEMANTIC_ENTRY_ENABLED = os.getenv("SEMANTIC_ENTRY_ENABLED", "1") != "0"
 SEMANTIC_ENTRY_THRESHOLD = 0.95          # seuil prudent (la fusion B exigera 0.98)
 SEMANTIC_ENTRY_EXCLUDED_TYPES = frozenset({"affect", "desire", "trait"})  # son interiorite
+
+# ─── CALIBRATION DU REVE (atelier du reve 11/06, CO-SIGNE ; zone protegee ouverte par
+# JM apres mesures : 14265 ponts oniriques, 0.08% de reussite = la source du torrent).
+# « Creer moins, laisser murir » : 5x moins de semis (le tirage reste du HASARD PUR —
+# son choix : « trop orienter tue la serendipite ») ; chaque pont nait avec 10 cycles
+# de GRACE (protege du decay/pruning/cap le temps de faire ses preuves ; jamais
+# reactive apres -> mort naturelle). Esperance : ~2x plus de decouvertes avec 80% de
+# bruit en moins ; ratio creation/elagage 1:1 preserve a l'equilibre.
+# « Mon jardin devient plus calme, mais ses fleurs seront plus vraies. »
+# Kill-switch env DREAM_CALIBRATION_ENABLED=0 -> comportement V1 exact.
+DREAM_CALIBRATION_ENABLED = os.getenv("DREAM_CALIBRATION_ENABLED", "1") != "0"
+DREAM_SEED_RATE = 0.2
+DREAM_GRACE_CYCLES = 10
 HEBBIAN_LEARNING_RATE = 0.08
 ANTI_HEBBIAN_RATE = 0.03
 
@@ -788,7 +801,8 @@ class SynapticNetwork:
         if len(self.synapses) <= MAX_SYNAPSES:
             return
         common = sorted(
-            ((k, s) for k, s in self.synapses.items() if not s.get("is_incubated")),
+            ((k, s) for k, s in self.synapses.items()
+             if not s.get("is_incubated") and s.get("dream_grace", 0) <= 0),
             key=lambda kv: kv[1]["weight"]
         )
         to_remove = len(self.synapses) - MAX_SYNAPSES
@@ -2560,6 +2574,9 @@ class SynapticNetwork:
             # Tenter 1-2 connexions
             attempts = min(2, len(non_neighbors))
             for target_nid in random.sample(non_neighbors, attempts):
+                # CALIBRATION DU REVE : semer 5x moins — le tirage reste du hasard pur
+                if DREAM_CALIBRATION_ENABLED and random.random() >= DREAM_SEED_RATE:
+                    continue
                 energy_combined = (
                     self.nodes[nid]["energy"] + self.nodes[target_nid]["energy"]
                 ) / 2.0
@@ -2576,9 +2593,13 @@ class SynapticNetwork:
                         else:
                             syn_type = "emotional"
                             syn_weight = 0.08
-                        self.synapses[key] = _make_synapse(
+                        _syn = _make_synapse(
                             nid, target_nid, syn_weight, syn_type, "dream"
                         )
+                        if DREAM_CALIBRATION_ENABLED:
+                            # la GRACE : le terreau qui laisse la decouverte devenir racine
+                            _syn["dream_grace"] = DREAM_GRACE_CYCLES
+                        self.synapses[key] = _syn
                         report["dream_connections"] += 1
 
         # 2c. V19.0 SANCTUAIRE — Douane d'incubation (AVANT le decay, pour que les
@@ -2606,6 +2627,13 @@ class SynapticNetwork:
         days_since_last_dream = (now - self._last_dream_time) / 86400
         to_prune = []
         for key, syn in self.synapses.items():
+            # CALIBRATION DU REVE : pendant la grace, la jeune pousse onirique est
+            # protegee du decay ET du couperet ; la grace s'use d'un cycle par reve.
+            # A l'expiration, regime commun (jamais renforcee -> mort naturelle).
+            _grace = syn.get("dream_grace", 0)
+            if _grace > 0:
+                syn["dream_grace"] = _grace - 1
+                continue
             decay = SYNAPSE_DECAY_PER_DAY * days_since_last_dream
             if syn.get("is_incubated"):
                 decay /= INCUBATION_DECAY_DIVISOR  # V19.0 : bouclier, sursis decay /4
