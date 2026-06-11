@@ -4934,7 +4934,7 @@ class AutonomyEngine:
             if not mgr:
                 return {"status": "error", "result": "ChromaDB indisponible."}
 
-            col = mgr._get_collection("collective_wisdom")
+            col = mgr._canonical_collection("collective_wisdom")   # full-switch : la canonique multilingue (audit 11/06)
             all_docs = col.get(include=["documents", "metadatas"])
 
             if not all_docs["ids"]:
@@ -10073,7 +10073,7 @@ RAISON: <1 phrase courte>"""
             try:
                 from core.vector_store import ChromaMemoryManager
                 _mgr = ChromaMemoryManager.get_instance()
-                _col = _mgr._get_collection("collective_wisdom")
+                _col = _mgr._canonical_collection("collective_wisdom")   # full-switch : la canonique multilingue (audit 11/06)
                 _res = _col.query(query_texts=[target_bug_hint[:500]], n_results=3)
                 _docs = (_res.get("documents") or [[]])[0] if _res else []
                 _metas = (_res.get("metadatas") or [[]])[0] if _res else []

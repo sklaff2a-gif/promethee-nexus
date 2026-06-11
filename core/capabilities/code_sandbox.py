@@ -37,6 +37,93 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# Filet anti-orphelins Windows (audit 11/06)
+# ═══════════════════════════════════════════════════════════════════════
+# subprocess.run(timeout=) tue l'enfant au timeout, MAIS si le processus
+# PARENT meurt pendant l'attente (pytest interrompu, kill du serveur),
+# l'enfant survit orphelin a 100% CPU (constate : 2 "while True: pass"
+# up 70h/39h le 11/06). Le Job Object Windows avec KILL_ON_JOB_CLOSE
+# garantit par l'OS la mort de l'enfant a la mort du parent : quand le
+# dernier handle du job se ferme (y compris fermeture forcee par l'OS a
+# la mort du parent), tous les processus du job sont tues. Fallback
+# integral : toute erreur -> None -> comportement actuel inchange.
+
+def _win_job_kill_on_close():
+    """Cree un Job Object KILL_ON_JOB_CLOSE. Retourne le handle ou None."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.windll.kernel32
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            return None
+
+        class _BASIC(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _IO(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_uint64) for n in (
+                "ReadOperationCount", "WriteOperationCount",
+                "OtherOperationCount", "ReadTransferCount",
+                "WriteTransferCount", "OtherTransferCount")]
+
+        class _EXTENDED(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _BASIC),
+                ("IoInfo", _IO),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        info = _EXTENDED()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
+        # 9 = JobObjectExtendedLimitInformation
+        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info),
+                                           ctypes.sizeof(info)):
+            k32.CloseHandle(job)
+            return None
+        return job
+    except Exception:
+        return None
+
+
+def _win_assign_to_job(job, proc) -> None:
+    """Attache le subprocess au job (best-effort, jobs imbriques OK Win8+)."""
+    if job is None:
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.AssignProcessToJobObject(job, int(proc._handle))
+    except Exception:
+        pass
+
+
+def _win_close_job(job) -> None:
+    if job is None:
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.CloseHandle(job)
+    except Exception:
+        pass
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Constantes securite
 # ═══════════════════════════════════════════════════════════════════════
@@ -386,12 +473,23 @@ class CodeSandbox:
         env = self._build_minimal_env(tmpdir)
 
         t0 = time.time()
+        _job = _win_job_kill_on_close()   # filet anti-orphelins (audit 11/06)
         try:
-            proc = subprocess.run(
+            _p = subprocess.Popen(
                 [sys.executable, "-c", code],
-                capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=timeout, cwd=tmpdir, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8",
+                errors="replace", cwd=tmpdir, env=env,
             )
+            _win_assign_to_job(_job, _p)
+            try:
+                _out, _err = _p.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _p.kill()
+                _out, _err = _p.communicate()
+                raise subprocess.TimeoutExpired(
+                    cmd=_p.args, timeout=timeout, output=_out, stderr=_err)
+            proc = subprocess.CompletedProcess(_p.args, _p.returncode, _out, _err)
             duration_ms = int((time.time() - t0) * 1000)
             success = proc.returncode == 0
             exception_name = None if success else self._extract_exception_name(proc.stderr)
@@ -445,6 +543,10 @@ class CodeSandbox:
                 return_code=-1, duration_ms=duration_ms,
             )
         finally:
+            # Filet anti-orphelins : fermer le job APRES la fin de l'enfant
+            # (enfant deja mort -> sans effet ; parent tue brutalement -> l'OS
+            # ferme ce handle -> KILL_ON_JOB_CLOSE tue l'enfant. Audit 11/06.)
+            _win_close_job(_job)
             # Couche 6 : nettoyage tempdir
             try:
                 shutil.rmtree(tmpdir, ignore_errors=True)

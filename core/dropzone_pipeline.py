@@ -196,7 +196,7 @@ class DropzonePipeline:
                     text = fh.read()
             except (UnicodeDecodeError, OSError):
                 try:
-                    with open(filepath, "r", encoding="latin-1") as fh:
+                    with open(filepath, "r", encoding="utf-8", errors="replace") as fh:   # audit 11/06 : latin-1 fabriquait du mojibake
                         text = fh.read()
                 except OSError:
                     continue

@@ -43,7 +43,7 @@ class KnowledgeIngestor:
                 with open(filepath, "r", encoding="utf-8") as f:
                     content = f.read()
             except UnicodeDecodeError:
-                with open(filepath, "r", encoding="latin-1") as f:
+                with open(filepath, "r", encoding="utf-8", errors="replace") as f:   # audit 11/06 : latin-1 fabriquait du mojibake
                     content = f.read()
             
             # Archivage (Aplatissement)
