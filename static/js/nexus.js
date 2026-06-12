@@ -326,6 +326,11 @@ function handleWsMessage(event) {
             }
         }
     }
+    // 17b. GAME_CHAT_USER : message humain envoye depuis la salle de jeux —
+    // miroir dans l'onglet CHAT (sync salle de jeux <-> chat, 12/06)
+    else if (type === "GAME_CHAT_USER") {
+        addChatMessage("VOUS", `[salle de jeux — ${payload.game || 'partie'}] ${payload.message || ''}`, "user");
+    }
     // 18. CHAT_RESPONSE : log dans les logs systeme
     else if (type === "CHAT_RESPONSE") {
         var connBefore = payload.connexion_before !== undefined ? Math.round(payload.connexion_before) : '?';

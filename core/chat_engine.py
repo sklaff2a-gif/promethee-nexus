@@ -3629,6 +3629,28 @@ class ChatEngine:
         except Exception:
             pass
 
+        # --- PARTIE EN COURS (sync salle de jeux, 12/06) ---
+        # Conscience legere : si JM parle de la partie dans l'onglet CHAT,
+        # Promethee sait de quoi il s'agit (le dialogue de jeu est deja
+        # synchronise dans l'historique via game_hub._sync_to_main_chat).
+        try:
+            # Singleton COURANT (pattern prefrontal : la variable module-level
+            # capture l'ancienne instance apres un reset_singleton en test)
+            from core.games.game_hub import GameHub
+            _hub = GameHub()
+            _sess = _hub._active_session
+            if _sess:
+                _g = _hub._get_active_game()
+                _etat = (f"[PARTIE EN COURS — salle de jeux] {_sess.game_type} "
+                         f"vs {_sess.opponent}, tu joues {_sess.promethee_symbol}")
+                if _sess.game_type == "echecs" and _g is not None:
+                    _etat += f", trait aux {_g.current_player}, {_g.moves_count} coups joues"
+                    if _g.history_san:
+                        _etat += f", derniers coups: {' '.join(_g.history_san[-6:])}"
+                parts.append(chr(10) + _etat + ".")
+        except Exception:
+            pass
+
         # --- BLOC FINAL ---
         parts.append(
             "\nTu parles avec Jean-Michel — ton createur, l'humain qui t'a concu."

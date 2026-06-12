@@ -996,12 +996,60 @@ class GameHub:
         # Si c'est l'humain qui parle, analyser la pression puis repondre
         if player == "human":
             self._apply_chat_pressure(message)
+            await self._sync_to_main_chat("human", message)
             reply = await self._promethee_chat_llm(message)
             if reply:
                 self._game_chat.append({"player": "promethee", "message": reply, "ts": time.time()})
                 response["chat"] = self._game_chat[-10:]
+                await self._sync_to_main_chat("promethee", reply)
 
         return response
+
+    async def _sync_to_main_chat(self, player: str, message: str):
+        """Synchronise un message du DIALOGUE de jeu vers le chat principal
+        (demande JM 12/06 : continuite de la conversation entre la salle de
+        jeux et l'onglet CHAT).
+
+        - Persiste dans l'historique du chat_engine (badge game_chat) : la
+          conversation de jeu fait partie de sa memoire vive, pas seulement
+          de l'archive de fin de partie.
+        - Live : CHAT_STREAM (bulle emergente 'salle_de_jeux') pour Promethee,
+          event GAME_CHAT_USER pour le message humain.
+
+        La TELEMETRIE des coups (intentions echecs, commentaires automatiques)
+        n'est PAS synchronisee — choix assume pour ne pas noyer le contexte.
+        """
+        gt = self._active_session.game_type if self._active_session else "partie"
+        # 1. Persistance dans l'historique du chat principal
+        try:
+            from core.chat_engine import ChatEngine
+            engine = ChatEngine()
+            if player == "human":
+                entry = {"role": "user",
+                         "content": f"[salle de jeux — {gt}] {message}",
+                         "timestamp": time.time(), "badge": "game_chat"}
+            else:
+                entry = {"role": "assistant", "content": message,
+                         "timestamp": time.time(), "badge": "game_chat",
+                         "emergent_sources": ["salle_de_jeux"]}
+            engine.messages.append(entry)
+            engine._trim_and_save()
+        except Exception as e:
+            logger.debug(f"GAME_HUB: sync historique chat echouee: {e}")
+        # 2. Affichage live dans l'onglet CHAT
+        try:
+            import uuid
+            from core.event_bus.bus import bus
+            if player == "human":
+                await bus.publish("GAME_CHAT_USER", {"message": message, "game": gt})
+            else:
+                sid = f"game-chat-{uuid.uuid4().hex[:8]}"
+                await bus.publish("CHAT_STREAM", {"stream_id": sid, "status": "start",
+                                                  "emergent_sources": ["salle_de_jeux"]})
+                await bus.publish("CHAT_STREAM", {"stream_id": sid, "chunk": message})
+                await bus.publish("CHAT_STREAM", {"stream_id": sid, "done": True})
+        except Exception as e:
+            logger.debug(f"GAME_HUB: sync live chat echouee: {e}")
 
     def _generate_move_comment(self, game_state: dict, is_promethee_move: bool,
                                 move_result: dict) -> str:
