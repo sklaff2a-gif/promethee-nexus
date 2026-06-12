@@ -603,7 +603,7 @@ class SoliloqueV2Engine:
                 f"- **Symptômes dominants** : "
                 + ", ".join(f"`{d.id}`(sail={d.saillance:.2f})" for d in dominants)
                 + "\n"
-                f"- **Ancrages utilisés** : " + ", ".join(f"`{a}`" for a in ancrages) + "\n"
+                "- **Ancrages utilisés** : " + ", ".join(f"`{a}`" for a in ancrages) + "\n"
                 f"- **Tentatives** : {attempts} | **Durée** : {dur:.0f}s\n"
             )
             if rejection_log:

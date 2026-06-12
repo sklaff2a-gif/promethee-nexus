@@ -8,7 +8,7 @@ et prescrit une strategie de sortie.
 import json
 import logging
 from collections import Counter
-from typing import Dict, Any, List
+from typing import Dict, Any
 from core.base_agent import BaseAgent
 
 logger = logging.getLogger("loop_breaker")

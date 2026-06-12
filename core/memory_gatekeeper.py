@@ -6,7 +6,6 @@ Filtre le bruit, les doublons semantiques et les hallucinations
 AVANT l'ecriture en memoire ChromaDB.
 """
 import re
-from typing import Optional
 
 # Patterns de bruit connus (reponses vides / generiques)
 _NOISE_PATTERNS = [

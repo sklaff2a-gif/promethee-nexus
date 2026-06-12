@@ -35,13 +35,12 @@ Mode OBSERVE : Config.ATROPHY_DRY_RUN = True publie rien sur le bus,
 logue seulement dans logs/atrophy_monitor.jsonl. Armement après télémétrie.
 """
 
-import asyncio
 import json
 import logging
 import os
 import time
 from collections import deque
-from typing import List, Optional
+from typing import List
 
 logger = logging.getLogger("atrophy_monitor")
 

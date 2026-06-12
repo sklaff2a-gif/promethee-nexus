@@ -145,7 +145,7 @@ class StrategicJournal:
         self._entries.append(entry)
         self._trim()
         self._save()
-        logger.info(f"[JOURNAL] +Bilan objectifs")
+        logger.info("[JOURNAL] +Bilan objectifs")
 
     def append_evolution_report(self, report_text: str):
         """Ajoute un rapport de feedback Evolution au journal."""

@@ -17,8 +17,7 @@ Format attendu :
 
 import re
 import logging
-from dataclasses import dataclass, field
-from core.prompt_templates import CODE_GENERATION_GUARDRAIL
+from dataclasses import dataclass
 
 logger = logging.getLogger("patch_engine")
 

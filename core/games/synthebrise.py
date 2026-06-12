@@ -307,7 +307,7 @@ class SynthebriseEngine:
                     text=f"[SOUVENIR SYNTHEBRISE] {narrative}",
                     metadata={"source": "synthebrise", "timestamp": str(time.time())},
                 )
-                logger.info(f"SYNTHEBRISE: Souvenir stocke dans ChromaDB")
+                logger.info("SYNTHEBRISE: Souvenir stocke dans ChromaDB")
         except Exception:
             pass
 

@@ -8,7 +8,7 @@ import json
 import os
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Optional, List
 
 from core.event_bus.bus import bus
 

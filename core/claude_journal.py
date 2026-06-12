@@ -10,7 +10,6 @@ C'est la memoire partagee entre deux esprits.
 
 import json
 import os
-import time
 import logging
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -73,13 +72,25 @@ def get_for_vecu() -> str:
 
 
 def _load() -> List[Dict]:
+    """Charge le journal. Si le fichier EXISTE mais est illisible, on le
+    SAUVEGARDE en .corrupt avant de repartir a vide — sinon
+    `_load() -> [] -> write_entry -> _save([1 entree])` ecrasait silencieusement
+    les ~30 entrees du journal de continuite (audit 12/06).
+    """
+    if not os.path.exists(JOURNAL_FILE):
+        return []
     try:
-        if os.path.exists(JOURNAL_FILE):
-            with open(JOURNAL_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return []
+        with open(JOURNAL_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        try:
+            backup = JOURNAL_FILE + ".corrupt"
+            os.replace(JOURNAL_FILE, backup)  # deplace : pas d'ecrasement aveugle
+            logger.warning(f"CLAUDE_JOURNAL: fichier illisible ({e}) -> sauvegarde {backup}")
+        except Exception as e2:
+            logger.warning(f"CLAUDE_JOURNAL: illisible ET backup impossible: {e2}")
+        return []
 
 
 def _save(entries: List[Dict]):

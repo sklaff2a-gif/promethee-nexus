@@ -960,7 +960,7 @@ class ReptilianCore:
 
         # Consulter l'amygdale pour cet intent
         if intent:
-            mem = self.threat_memories.get(f"error_streak")
+            mem = self.threat_memories.get("error_streak")
             if mem and mem.severity >= 7.0 and mem.conditioned_reflex in ("FREEZE", "SHED"):
                 return f"amygdale: {mem.pattern} associé à {mem.conditioned_reflex} (gravité={mem.severity:.1f})"
 

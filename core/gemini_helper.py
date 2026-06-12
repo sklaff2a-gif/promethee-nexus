@@ -10,7 +10,6 @@ Modele : gemini-2.5-flash (rapide, quasi-illimite dans le budget).
 """
 
 import os
-import time
 import logging
 from datetime import date
 from typing import Optional

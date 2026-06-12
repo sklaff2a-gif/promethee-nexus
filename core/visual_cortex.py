@@ -380,7 +380,7 @@ class VisualCortex:
             # Fallback Gemini si hallucination ou echec
             if not response_text or len(response_text) < 50 or self._is_hallucinated(response_text, full_path):
                 if response_text and self._is_hallucinated(response_text, full_path):
-                    logger.warning(f"VISUAL: Hallucination ciblee detectee, fallback Gemini...")
+                    logger.warning("VISUAL: Hallucination ciblee detectee, fallback Gemini...")
                 try:
                     gemini_text = await self._call_gemini_vision(prompt, image_b64)
                     if gemini_text and len(gemini_text) >= 50:
@@ -491,7 +491,7 @@ class VisualCortex:
             image_type = self._classify_image_type(filename, photo_path)
             if image_type == "illustration":
                 prompt = PROMPT_ILLUSTRATION
-                logger.info(f"VISUAL: Image classee 'illustration' — prompt adapte")
+                logger.info("VISUAL: Image classee 'illustration' — prompt adapte")
             elif image_type == "portrait":
                 prompt = PROMPT_PORTRAIT
             else:
@@ -529,7 +529,7 @@ class VisualCortex:
             # Fallback Gemini si local hallucine ou echoue
             if not response_text or len(response_text) < 50 or self._is_hallucinated(response_text, photo_path):
                 if response_text and self._is_hallucinated(response_text, photo_path):
-                    logger.warning(f"VISUAL: Hallucination detectee (local), fallback Gemini...")
+                    logger.warning("VISUAL: Hallucination detectee (local), fallback Gemini...")
                 try:
                     gemini_text = await self._call_gemini_vision(prompt, image_b64)
                     if gemini_text and len(gemini_text) >= 50:
@@ -808,7 +808,7 @@ class VisualCortex:
             # Compter les occurrences du mot d'emotion + variantes
             count = text_lower.count(emotion)
             # Bonus si le mot apparait dans la section EMOTION
-            if f"**emotion**" in text_lower or f"emotion" in text_lower:
+            if "**emotion**" in text_lower or "emotion" in text_lower:
                 # Chercher le mot apres "emotion"
                 emotion_section = text_lower.split("emotion")[-1][:200]
                 if emotion in emotion_section:

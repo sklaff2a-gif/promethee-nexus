@@ -7,8 +7,8 @@ import json
 import os
 import time
 import logging
-from dataclasses import dataclass, field, asdict
-from typing import Dict, Any, Optional, List
+from dataclasses import dataclass
+from typing import Dict, Any, Optional
 
 from core.event_bus.bus import bus
 
@@ -324,7 +324,7 @@ class DesireEngine:
 
         # Sandbox WORKSHOP : pas de punition sur les echecs
         if event_type == "SCHOOL_GRADE_LOW" and "WORKSHOP" in course_type.upper():
-            logger.debug(f"[DESIRE] Cahier de brouillon: WORKSHOP echec ignore (sandbox)")
+            logger.debug("[DESIRE] Cahier de brouillon: WORKSHOP echec ignore (sandbox)")
             return  # Pas de frustration — zone safe
 
         self.on_event(event_type, event)

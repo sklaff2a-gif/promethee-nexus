@@ -1,5 +1,4 @@
 import hashlib
-import re
 import os
 import time
 import httpx
@@ -111,10 +110,10 @@ class RouterAgent:
         # motive cette promotion : keyword generique "analyse" de csv_parser
         # mangait les routages vers security et log_analyst.
         if any(x in m_low for x in ["cpu", "ram", "gpu", "vram", "status", "santé", "check system"]):
-            logger.info(f"⚡ ROUTER: Strong keyword (infra) -> INFRA")
+            logger.info("⚡ ROUTER: Strong keyword (infra) -> INFRA")
             return "infra"
         if any(x in m_low for x in ["secu", "faille", "attack", "protect"]):
-            logger.info(f"⚡ ROUTER: Strong keyword (security) -> SECURITY")
+            logger.info("⚡ ROUTER: Strong keyword (security) -> SECURITY")
             return "security"
 
         # --- NIVEAU 0.5 : CONSULTATION DU GRIMOIRE (Spécialistes éphémères) ---

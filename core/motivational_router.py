@@ -58,7 +58,6 @@ Doctrine CONNEXION (gravée dans le genome V34.6) :
 from __future__ import annotations
 
 import logging
-import random
 import time
 from typing import Any, Dict, List, Optional, Tuple
 

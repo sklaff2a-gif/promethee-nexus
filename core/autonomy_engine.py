@@ -6321,7 +6321,7 @@ class AutonomyEngine:
             "content": "Mode café activé — pause sociale avec Alfred. Pas de routines, juste du lien.",
             "type": "info"
         })
-        print(f"   ☕ MODE CAFÉ: Activé — 20 min de socialisation libre.")
+        print("   ☕ MODE CAFÉ: Activé — 20 min de socialisation libre.")
         logger.info("[COFFEE_MODE] Activé — 20 min de socialisation libre.")
         return True
 
@@ -7319,7 +7319,7 @@ class AutonomyEngine:
             os.makedirs(os.path.dirname(report_path), exist_ok=True)
             with open(report_path, "w", encoding="utf-8") as fh:
                 fh.write(f"# Refactoring Targets — {date.today().isoformat()}\n\n")
-                fh.write(f"Auto-généré par `REFACTORING_AUDIT` (bras armé du drive MAITRISE).\n\n")
+                fh.write("Auto-généré par `REFACTORING_AUDIT` (bras armé du drive MAITRISE).\n\n")
                 fh.write(f"- Fichiers scannés : **{files_scanned}**\n")
                 fh.write(f"- Lignes totales : **{total_lines}**\n")
                 fh.write(f"- Cibles détectées : **{len(targets)}**\n\n")
@@ -7348,7 +7348,6 @@ class AutonomyEngine:
         rapporte passed/failed/errors. Zero LLM, 0 coût LLM (mais utilise CPU).
         Bras armé du drive STABILITE via drive_routine_registry.
         """
-        import subprocess
         try:
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             env = os.environ.copy()
@@ -8578,7 +8577,7 @@ Réponds UNIQUEMENT avec le nouveau prompt complet, rien d'autre."""
             # Validation : le nouveau prompt doit contenir les placeholders obligatoires
             required = ["{current_phi}", "{catalog_text}", "{history_text}", "PARAM:", "DIRECTION:", "VARIATION:", "HYPOTHESE:"]
             if not all(r in new_prompt for r in required):
-                logger.info(f"[META-EVOLVE] Prompt rejeté — placeholders manquants")
+                logger.info("[META-EVOLVE] Prompt rejeté — placeholders manquants")
                 return
 
             # Sauvegarder l'historique (ancien prompt + métriques)
@@ -9332,7 +9331,7 @@ RAISON: <1 phrase courte>"""
                                     f"Genere automatiquement par EVENING_REFLECTION.",
                             source="auto_exercise",
                             mood="curiosite",
-                            subject=f"Exercice auto-dirige",
+                            subject="Exercice auto-dirige",
                         )
 
                         # Publier sur THOUGHT_STREAM
@@ -9375,9 +9374,7 @@ RAISON: <1 phrase courte>"""
         Returns : dict {status, feature_name, iterations, files_created,
         tests_passed, tests_failed, persisted_path, error_message}
         """
-        import os as _os
         import time as _time
-        import json as _json
 
         if not user_story or len(user_story.strip()) < 30:
             return {
@@ -9448,7 +9445,7 @@ RAISON: <1 phrase courte>"""
         # Phase 2 : Boucle ARCHITECT <-> MEDIC sandbox
         try:
             from Agents.feature_architect_agent import FeatureArchitectAgent
-            from core.capabilities.code_sandbox import CodeSandbox, _PATCH_IMPOSSIBLE_RE
+            from core.capabilities.code_sandbox import CodeSandbox
         except Exception as e:
             result_payload["status"] = "import_crash"
             result_payload["error_message"] = f"Import V32: {type(e).__name__}: {e}"
@@ -11091,7 +11088,7 @@ RAISON: <1 phrase courte>"""
                     failure_reason += " [CONTENU INVALIDE]"
                 elif risk == "high":
                     # Confiance basse mais contenu ok → avertissement seulement
-                    print(f"   ⚠️ AVERTISSEMENT: confiance basse mais contenu valide")
+                    print("   ⚠️ AVERTISSEMENT: confiance basse mais contenu valide")
 
                 if not verified:
                     # REJET — enregistrer l'echec
@@ -11115,7 +11112,7 @@ RAISON: <1 phrase courte>"""
                             if retry_response.get("status") == "success":
                                 deliverable = str(retry_response.get("result", ""))
                                 response = retry_response
-                                print(f"   🔄 RETRY: deuxieme tentative acceptee")
+                                print("   🔄 RETRY: deuxieme tentative acceptee")
                     else:
                         # Trop de retries → marquer comme echec pour que quality_score reflète la réalité
                         print(f"   ⛔ ABANDON: trop d'echecs ({past_fails}) pour {slot}")
@@ -11306,7 +11303,7 @@ RAISON: <1 phrase courte>"""
                                 local_grade=grade,
                             )
                             if mentor_result:
-                                print(f"   🎓 MENTOR CLAUDE: evaluation deposee dans le carnet")
+                                print("   🎓 MENTOR CLAUDE: evaluation deposee dans le carnet")
                     except Exception as e:
                         logger.debug(f"[SCHOOL] Mentor echoue: {e}")
 
@@ -12186,7 +12183,7 @@ RAISON: <1 phrase courte>"""
             tech_report = None
             tech_alerts = []
             try:
-                from core.tech_watch import check_all, format_report
+                from core.tech_watch import check_all
                 tech_report = check_all()
                 tech_alerts = tech_report.get("alerts", [])
                 if tech_alerts:
@@ -12288,7 +12285,7 @@ RAISON: <1 phrase courte>"""
                 pass
 
             if is_actionable:
-                print(f"   🎯 VEILLE IA: Découverte actionnable détectée!")
+                print("   🎯 VEILLE IA: Découverte actionnable détectée!")
 
             # Combiner le rapport tech_watch dans le resultat
             combined_result = result_text or ""
@@ -12632,7 +12629,6 @@ RAISON: <1 phrase courte>"""
         Coût: 2-3 appels LLM locaux.
         """
         import json
-        import random
 
         try:
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

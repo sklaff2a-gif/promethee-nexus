@@ -9,10 +9,9 @@ Genere un rapport quotidien depose dans le carnet de correspondance.
 
 import json
 import os
-import time
 import logging
-from datetime import datetime, date
-from typing import Dict, Any, List
+from datetime import date
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 

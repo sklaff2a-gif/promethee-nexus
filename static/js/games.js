@@ -186,6 +186,7 @@ const GamesView = {
     chessPrometheeColor: null,
     chessSelected: null,
     chessState: null,
+    chessThinking: false,  // garde anti-double-appel de chess/ai-move (race 12/06)
 
     CHESS_UNICODE: {
         'P':'♙','N':'♘','B':'♗','R':'♖','Q':'♕','K':'♔',
@@ -307,6 +308,8 @@ const GamesView = {
     },
 
     async aiMoveEchecs() {
+        if (this.chessThinking) return;  // un appel est deja en vol (anti-race)
+        this.chessThinking = true;
         if (this.chessState && !this.chessState.game_over) {
             this.renderEchecs(this.chessState, true);
         }
@@ -314,15 +317,17 @@ const GamesView = {
             const res = await fetch('/api/games/chess/ai-move', {method: 'POST', headers: authHeaders()});
             const data = await res.json();
             if (data.error) {
-                alert(data.error);
                 if (this.chessState) this.renderEchecs(this.chessState);
                 return;
             }
+            // L'utilisateur a pu quitter l'echiquier (RETOUR HUB / abandon) pendant l'attente
+            if (this.currentGame !== 'echecs') return;
             this.updateChatFromResponse(data);
             this.renderEchecs(data.state);
         } catch (e) {
-            alert('Erreur coup Promethee: ' + e.message);
-            if (this.chessState) this.renderEchecs(this.chessState);
+            if (this.chessState && this.currentGame === 'echecs') this.renderEchecs(this.chessState);
+        } finally {
+            this.chessThinking = false;
         }
     },
 
@@ -780,8 +785,13 @@ const GamesView = {
 
     async forfeit() {
         if (!confirm('Abandonner la partie ?')) return;
+        this.currentGame = null;  // quitte la vue : aiMoveEchecs en vol n'ecrasera pas le hub
         try {
-            await fetch('/api/games/forfeit', {method: 'POST', headers: authHeaders()});
+            // forfeiter=human : c'est l'humain qui abandonne (Promethee gagne)
+            await fetch('/api/games/forfeit', {
+                method: 'POST', headers: authHeaders(),
+                body: JSON.stringify({forfeiter: 'human'})
+            });
             this.loadStatus();
         } catch (e) { alert('Erreur: ' + e.message); }
     }

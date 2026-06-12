@@ -23,8 +23,7 @@ naturel vers le baseline (0.5). Singleton. 0 appel LLM.
 import logging
 import os
 import json
-import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 logger = logging.getLogger("Neurochemistry")
 
@@ -117,9 +116,15 @@ class Neurochemistry:
             bus.subscribe("CODELET_ALERT", self._on_codelet_alert)
             bus.subscribe("NAP_MODE", self._on_nap_mode)
             bus.subscribe("EUREKA_BRIDGE", self._on_eureka)
-            bus.subscribe("COUNCIL_CONSENSUS", self._on_council_consensus)
-            bus.subscribe("SCHOOL_GRADE_HIGH", self._on_school_grade_high)
-            bus.subscribe("SPREADING_ACTIVATION", self._on_spreading_activation)
+            # 12/06 — raccordement aux events REELS : COUNCIL_CONSENSUS et
+            # SCHOOL_GRADE_HIGH n'etaient JAMAIS publies (3 handlers morts =
+            # 3 voies de recompense neurochimique inactives). Les events reels
+            # sont COUNCIL_END (status="consensus") et SCHOOL_GRADE_RECEIVED.
+            bus.subscribe("COUNCIL_END", self._on_council_consensus)
+            bus.subscribe("SCHOOL_GRADE_RECEIVED", self._on_school_grade_high)
+            # SPREADING_ACTIVATION : non rebranche — l'activation laterale est
+            # tres frequente (chaque recall), un boost ACh la-dessus spammerait
+            # le pool. Handler retire plutot que faux-cable.
         except Exception as e:
             logger.warning(f"NEUROCHIMIE: Echec souscription bus: {e}")
 
@@ -197,17 +202,18 @@ class Neurochemistry:
         self._apply("acetylcholine", ACETYLCHOLINE_IMPACTS["eureka"])
 
     async def _on_council_consensus(self, event: dict):
-        self._apply("serotonin", SEROTONIN_IMPACTS["council_consensus"])
+        # COUNCIL_END porte status="consensus"|"timeout" : ne recompenser que le consensus
+        if event.get("status") == "consensus":
+            self._apply("serotonin", SEROTONIN_IMPACTS["council_consensus"])
 
     async def _on_school_grade_high(self, event: dict):
-        """Note scolaire >= 8.0 → boost ACh (concu par Promethee)."""
+        """Note scolaire >= 8.0 → boost ACh (concu par Promethee).
+
+        SCHOOL_GRADE_RECEIVED porte 'grade' (cf professor_agent._feed_desire_engine).
+        """
         grade = event.get("grade", 0.0)
         if grade >= 8.0:
             self._apply("acetylcholine", ACETYLCHOLINE_IMPACTS["SCHOOL_GRADE_HIGH"])
-
-    async def _on_spreading_activation(self, event: dict):
-        """Activation reseau synaptique → boost ACh (concu par Promethee)."""
-        self._apply("acetylcholine", ACETYLCHOLINE_IMPACTS["SPREADING_ACTIVATION"])
 
     # ============================================================
     # Modulation

@@ -19,7 +19,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from core.event_bus.bus import bus
 
@@ -546,6 +546,11 @@ class OutreachEngine:
                 "message_log": self._message_log[-50:],
                 "last_per_category": self._last_per_category,
                 "pending_queue": self._pending_queue,
+                # 12/06 : _delivered (en attente d'ACK Telegram) etait perdu au
+                # restart entre livraison et acquittement ; _hourly_timestamps
+                # (garde anti-spam) repartait a zero -> fenetre de spam post-restart.
+                "delivered": self._delivered[-50:],
+                "hourly_timestamps": self._hourly_timestamps[-50:],
                 "silent_mode": self._silent_mode,
                 "silent_mode_since": self._silent_mode_since,
                 "last_user_chat": self._last_user_chat,
@@ -570,6 +575,8 @@ class OutreachEngine:
                 self._message_log = state.get("message_log", [])
                 self._last_per_category = state.get("last_per_category", {})
                 self._pending_queue = state.get("pending_queue", [])
+                self._delivered = state.get("delivered", [])  # 12/06 : restaure les messages en attente d'ACK
+                self._hourly_timestamps = state.get("hourly_timestamps", [])  # 12/06 : garde anti-spam
                 self._silent_mode = state.get("silent_mode", False)
                 self._silent_mode_since = state.get("silent_mode_since", 0.0)
                 self._last_user_chat = state.get("last_user_chat", time.time())

@@ -9,11 +9,10 @@ Il ne remplace pas le LLM — il le supervise.
 
 import json
 import os
-import time
 import logging
 import ast
 from datetime import date, datetime
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, List, Tuple
 
 logger = logging.getLogger(__name__)
 

@@ -8,10 +8,9 @@ import json
 import os
 import time
 import logging
-import uuid
 from enum import IntEnum
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List, Deque
+from typing import Dict, Any, Optional, Deque
 from collections import deque
 
 from core.event_bus.bus import bus

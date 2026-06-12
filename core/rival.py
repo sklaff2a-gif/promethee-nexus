@@ -266,7 +266,7 @@ class StefanEngine:
             # systématiquement les keywords philosophiques profonds que Stefan
             # exige par construction — "authentique", "conscience", "dissonante"…).
             logger.info(f"STEFAN: Confrontation — source={source}, texte={len(promethee_text)} chars")
-            print(f"   ⚔️ STEFAN: Lecture et confrontation...")
+            print("   ⚔️ STEFAN: Lecture et confrontation...")
 
             question = ""
 
@@ -301,7 +301,7 @@ class StefanEngine:
                         if raw:
                             question = self._extract_question(raw)
                             if question and len(question) > 10:
-                                print(f"   ⚔️ STEFAN: via qwen3.5:9b (local)")
+                                print("   ⚔️ STEFAN: via qwen3.5:9b (local)")
             except Exception as e:
                 logger.warning(f"STEFAN P3.2: appel local qwen échoué: {e}")
 
@@ -314,7 +314,7 @@ class StefanEngine:
                         if raw:
                             question = self._extract_question(raw)
                             if question and len(question) > 10:
-                                print(f"   ⚔️ STEFAN: via Gemini Flash (backup)")
+                                print("   ⚔️ STEFAN: via Gemini Flash (backup)")
                                 logger.warning(
                                     "STEFAN P3.2: fallback Gemini Flash utilisé — "
                                     "qwen3.5:9b local indisponible (à investiguer)"
@@ -885,7 +885,7 @@ class StefanEngine:
         """
         if not os.path.exists(RIVAL_STATE_FILE):
             logger.info(
-                f"STEFAN: rival_state.json absent au boot — création initiale (count=0)"
+                "STEFAN: rival_state.json absent au boot — création initiale (count=0)"
             )
             self._save()
             return

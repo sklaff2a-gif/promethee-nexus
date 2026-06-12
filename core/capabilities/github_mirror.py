@@ -3,7 +3,6 @@
 # et ses issues sur GitHub. Accès READ-ONLY uniquement.
 
 import logging
-import os
 import subprocess
 import json
 

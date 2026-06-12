@@ -289,7 +289,7 @@ class DropzonePipeline:
         try:
             summary = manifest["summary"]
             with open(report_path, "w", encoding="utf-8") as fh:
-                fh.write(f"RAPPORT D'INGESTION DROPZONE 2.0\n")
+                fh.write("RAPPORT D'INGESTION DROPZONE 2.0\n")
                 fh.write(f"Date: {manifest['scan_date']}\n")
                 fh.write(f"Projets: {summary['total_projects']}\n")
                 fh.write(f"Fichiers totaux: {summary['total_files']}\n")

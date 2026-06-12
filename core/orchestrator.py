@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import inspect
-import re
 import sys
 from typing import Dict, Any
 

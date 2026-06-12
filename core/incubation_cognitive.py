@@ -10,7 +10,7 @@ import os
 import time
 import uuid
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from typing import Dict, Any, Optional, List
 
 from core.event_bus.bus import bus

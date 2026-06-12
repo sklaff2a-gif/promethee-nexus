@@ -54,7 +54,7 @@ class SaunaMode:
 
         logger.info(f"SAUNA: Demarrage — dechets={before.get('waste',0):.0f}, "
                     f"energie={before.get('avg_energy',0):.0f}")
-        print(f"   🧖 SAUNA: Nettoyage du tissu neural demarre (10 min)")
+        print("   🧖 SAUNA: Nettoyage du tissu neural demarre (10 min)")
 
         # Appliquer le nettoyage
         await self._clean()

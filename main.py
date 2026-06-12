@@ -212,7 +212,6 @@ async def check_rate_limit(request: Request):
     ip = request.client.host if request.client else "unknown"
     allowed, retry_after = _rate_limiter.check(ip)
     if not allowed:
-        from fastapi.responses import JSONResponse
         raise HTTPException(
             status_code=429,
             detail=f"Rate limit exceeded. Max {_rate_limiter.max_requests} requests per {_rate_limiter.window}s.",
@@ -1583,7 +1582,6 @@ async def synthebrise_new(request: Request):
 @app.post("/api/games/synthebrise/play")
 async def synthebrise_play(request: Request):
     """Jouer un mot. Body: {word}"""
-    from core.games.synthebrise import SynthebriseEngine, ai_play_word
     if not hasattr(app.state, 'synthebrise'):
         return {"error": "Pas de partie en cours"}
     engine = app.state.synthebrise
@@ -1615,10 +1613,14 @@ async def synthebrise_status():
     return {"game": app.state.synthebrise.get_state()}
 
 @app.post("/api/games/forfeit")
-async def games_forfeit():
-    """Abandonne la partie en cours."""
+async def games_forfeit(request: Request):
+    """Abandonne la partie en cours. Body optionnel: {forfeiter: "human"|"promethee"}."""
     from core.games.game_hub import game_hub
-    return game_hub.forfeit()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return game_hub.forfeit(forfeiter=body.get("forfeiter", "human"))
 
 # ─── SIGNAL BUS ──────────────────────────────────────────────────────────
 
@@ -1977,7 +1979,6 @@ async def chat_upload(request: Request, background_tasks: BackgroundTasks):
         message (str): texte du message (obligatoire)
         image (UploadFile): fichier image (optionnel)
     """
-    from fastapi import UploadFile, Form, File
     import base64
 
     form = await request.form()

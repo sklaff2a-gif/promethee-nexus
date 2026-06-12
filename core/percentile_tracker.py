@@ -10,7 +10,7 @@ au lieu de seuils absolus codés en dur.
 
 import bisect
 from collections import deque
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 
 # ============================================================

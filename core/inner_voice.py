@@ -17,7 +17,7 @@ import os
 import random
 import time
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger("inner_voice")

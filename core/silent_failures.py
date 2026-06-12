@@ -53,7 +53,7 @@ import time
 import uuid
 from dataclasses import dataclass, field, asdict
 from threading import RLock
-from typing import Dict, List, Optional, Set, Tuple, Iterable
+from typing import Dict, List, Optional, Tuple, Iterable
 
 logger = logging.getLogger("silent_failures")
 

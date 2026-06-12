@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
 
 logger = logging.getLogger("amygdala")

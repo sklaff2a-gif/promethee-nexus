@@ -21,7 +21,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from core.event_bus.bus import bus
 from core.decision_log import log_decision
@@ -361,7 +361,7 @@ class PrefrontalCortex:
             source="pattern",
             steps=[
                 GoalStep(intent="COUNCIL_DEBATE", description=f"Débattre: {concept_a} et {concept_b}"),
-                GoalStep(intent="EXPANSION_CODE", description=f"Implémenter pont créatif"),
+                GoalStep(intent="EXPANSION_CODE", description="Implémenter pont créatif"),
             ],
             cost_estimated=8,
             drive_alignment={"CURIOSITE": 0.9, "CREATION": 0.8},
@@ -400,7 +400,7 @@ class PrefrontalCortex:
             return
         goal = Goal(
             id=uuid.uuid4().hex[:8],
-            title=f"Implémenter décision council",
+            title="Implémenter décision council",
             horizon="medium",
             priority=5.5,
             source="council",
@@ -413,7 +413,7 @@ class PrefrontalCortex:
         )
         self.goals.append(goal)
         self.stats["goals_created"] += 1
-        self._narrate("goal", f"Council consensus → goal créé")
+        self._narrate("goal", "Council consensus → goal créé")
         self._publish_goal_event("PREFRONTAL_GOAL_CREATED", goal)
 
     async def _on_reptilian_alert(self, data: dict):

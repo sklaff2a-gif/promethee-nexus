@@ -39,7 +39,6 @@ Garde-fous :
 - Try/except permissif : ne lève jamais d'exception (retourne messages inchangés)
 - Traçabilité JSONL logs/context_compressor.jsonl
 """
-import hashlib
 import json
 import logging
 import os

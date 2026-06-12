@@ -41,9 +41,8 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
 from threading import RLock
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("prediction_memory")
 

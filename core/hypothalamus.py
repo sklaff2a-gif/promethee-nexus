@@ -8,7 +8,7 @@ import os
 import time
 import logging
 from collections import deque
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
 from core.event_bus.bus import bus
 

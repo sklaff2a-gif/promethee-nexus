@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import shutil
-import sys
+import sys  # noqa: F401 — non utilise par le code mais monkeypatche par 7 tests (garde sys.exit du subprocess)
 
 from core.event_bus.bus import bus
 from core.orchestrator import orchestrator
@@ -529,7 +529,7 @@ async def run_pipeline(filename: str, filepath: str):
             _remember_failure(filename, source_code, "test_validation", detail)
             await bus.publish("CI_PIPELINE_RESULT", {
                 "filename": filename, "success": False,
-                "detail": f"Tests auto-générés invalides — source conservée"
+                "detail": "Tests auto-générés invalides — source conservée"
             })
             return
 
@@ -555,7 +555,7 @@ async def run_pipeline(filename: str, filepath: str):
             _remember_failure(filename, source_code, "test_validation", detail)
             await bus.publish("CI_PIPELINE_RESULT", {
                 "filename": filename, "success": False,
-                "detail": f"Tests rejetés (imports fantômes) — source conservée"
+                "detail": "Tests rejetés (imports fantômes) — source conservée"
             })
             return
 
@@ -592,13 +592,13 @@ async def run_pipeline(filename: str, filepath: str):
             logger.warning(f"[CI/CD] Tests auto-générés défaillants (import/syntax) — PAS de rollback pour {filename}")
             await bus.publish("CI_PIPELINE_RESULT", {
                 "filename": filename, "success": False,
-                "detail": f"Tests auto-générés défaillants — source conservée"
+                "detail": "Tests auto-générés défaillants — source conservée"
             })
         else:
             _rollback(filepath)
             await bus.publish("CI_PIPELINE_RESULT", {
                 "filename": filename, "success": False,
-                "detail": f"Tests échoués — rollback effectué"
+                "detail": "Tests échoués — rollback effectué"
             })
         return
 
@@ -649,7 +649,7 @@ async def run_pipeline(filename: str, filepath: str):
         _rollback(filepath)
         await bus.publish("CI_PIPELINE_RESULT", {
             "filename": filename, "success": False,
-            "detail": f"Architect a refusé — rollback effectué"
+            "detail": "Architect a refusé — rollback effectué"
         })
         return
 

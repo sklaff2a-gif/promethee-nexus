@@ -77,6 +77,7 @@ class GameHub:
         self._active_morpion: Optional[MorpionGame] = None
         self._active_puissance4: Optional[Puissance4Game] = None
         self._active_chess: Optional["ChessGame"] = None
+        self._game_chat: List[Dict[str, Any]] = []  # 12/06 : instance, pas classe
         self._active_session: Optional[GameSession] = None
 
         # Statistiques persistantes
@@ -369,25 +370,36 @@ class GameHub:
                 return {"move": col, "result": result}
         return None
 
-    def forfeit(self) -> Dict[str, Any]:
-        """Abandonne la partie en cours."""
+    def forfeit(self, forfeiter: str = "promethee") -> Dict[str, Any]:
+        """Abandonne la partie en cours.
+
+        forfeiter : qui abandonne. Defaut "promethee" = comportement historique
+        (nettoyage interne de session bloquee + appels existants inchanges).
+        L'UI passe explicitement forfeiter="human" : le bouton ABANDONNER est
+        clique par l'HUMAIN -> Promethee GAGNE (avant le 12/06, l'humain qui
+        abandonnait punissait Promethee).
+        """
         if not self._active_session:
             return {"error": "Pas de partie en cours"}
 
         session = self._active_session
         game = self._get_active_game()
-
-        # Compter comme une defaite
         game.game_over = True
-        game.winner = "forfait"
-        self._record_game_end(game, session, forfeit=True)
+
+        if forfeiter == "human":
+            # L'adversaire abandonne -> Promethee gagne
+            game.winner = session.promethee_symbol
+            self._record_game_end(game, session, forfeit=False)
+        else:
+            game.winner = "forfait"
+            self._record_game_end(game, session, forfeit=True)
 
         self._active_session = None
         self._active_morpion = None
         self._active_puissance4 = None
         self._active_chess = None
 
-        return {"status": "forfait", "game": session.game_type}
+        return {"status": "forfait", "game": session.game_type, "forfeiter": forfeiter}
 
     def _get_active_game(self):
         if self._active_session.game_type == "morpion":
@@ -438,10 +450,12 @@ class GameHub:
                 from core.vector_store import ChromaMemoryManager
                 mgr = ChromaMemoryManager.get_instance()
                 if mgr:
-                    mgr.add(
-                        collection="collective_wisdom",
-                        text=f"[SOUVENIR JEU] {narrative}",
-                        metadata={"source": "game", "game": gt, "timestamp": str(time.time())},
+                    _doc_id = f"game_{gt}_{int(time.time()*1000)}"
+                    mgr.add_documents(
+                        documents=[f"[SOUVENIR JEU] {narrative}"],
+                        metadatas=[{"source": "game", "game": gt, "timestamp": str(time.time())}],
+                        ids=[_doc_id],
+                        collection_name="collective_wisdom",
                     )
             except Exception:
                 pass
@@ -519,11 +533,13 @@ class GameHub:
                     lines.append(f"{who}: {text}")
             if lines:
                 chat_text = "\n".join(lines[-10:])  # 10 derniers messages
-                mgr.add(
-                    collection="collective_wisdom",
-                    text=f"[CHAT JEU {game_type.upper()} vs {opponent}] {chat_text[:500]}",
-                    metadata={"source": "game_chat", "game": game_type,
-                              "opponent": opponent, "timestamp": str(time.time())},
+                _chat_id = f"gamechat_{game_type}_{int(time.time()*1000)}"
+                mgr.add_documents(
+                    documents=[f"[CHAT JEU {game_type.upper()} vs {opponent}] {chat_text[:500]}"],
+                    metadatas=[{"source": "game_chat", "game": game_type,
+                                "opponent": opponent, "timestamp": str(time.time())}],
+                    ids=[_chat_id],
+                    collection_name="collective_wisdom",
                 )
                 logger.info(f"GAME_HUB: Chat de jeu archive ({len(lines)} messages)")
         except Exception:
@@ -955,6 +971,12 @@ class GameHub:
             return {"error": f"Ce n'est pas le tour de Promethee ({game.current_player} au trait)"}
 
         ai = await promethee_chess_move(game)
+
+        # REVALIDATION post-await (jusqu'a 2x60s de LLM) : si forfeit/new_game est
+        # survenu pendant la reflexion, la session a change -> ne PAS rejouer sur
+        # une partie clôturee ni ecraser la nouvelle (race du 12/06).
+        if self._active_session is not session or self._active_chess is not game or game.game_over:
+            return {"error": "La partie a change pendant la reflexion (abandon ou nouvelle partie)."}
         if "error" in ai:
             return ai
 

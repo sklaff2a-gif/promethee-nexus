@@ -9,7 +9,7 @@ import time
 import logging
 import uuid
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple
 
 from core.event_bus.bus import bus
 from core.decision_log import log_decision
@@ -1993,7 +1993,7 @@ class ChatEngine:
             threshold = 0.6 * (1.0 - creation * 0.7)
             active = sum(1 for n in cortex.nodes.values() if n.get("energy", 0) >= threshold)
             lines = [
-                f"=== RESEAU SYNAPTIQUE ===",
+                "=== RESEAU SYNAPTIQUE ===",
                 f"Noeuds: {nodes} | Synapses: {synapses} ({fill:.0%} plein)",
                 f"Seuil HID: {threshold:.3f} (creation={creation:.2f})",
                 f"Noeuds actifs (> seuil): {active}",
@@ -2067,7 +2067,7 @@ class ChatEngine:
         try:
             r = subprocess.run(
                 ["git", "-C", "C:/MesProjets/PROMETHEE_V11_restructuration2026",
-                 "log", f"--oneline", f"-{n}", "--stat", "--no-color"],
+                 "log", "--oneline", f"-{n}", "--stat", "--no-color"],
                 capture_output=True, text=True, timeout=15
             )
             if r.returncode == 0 and r.stdout.strip():
@@ -2333,7 +2333,7 @@ class ChatEngine:
             return f"Fichier non trouve : {filepath}"
 
         if not abs_path.endswith((".py", ".json", ".md", ".txt", ".cfg")):
-            return f"Type de fichier non autorise. Extensions : .py, .json, .md, .txt, .cfg"
+            return "Type de fichier non autorise. Extensions : .py, .json, .md, .txt, .cfg"
 
         try:
             with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
@@ -2774,7 +2774,6 @@ class ChatEngine:
         msg_lower = user_message.lower()
         # Detecter le sous-dossier demande (dynamique — scan les dossiers reels)
         try:
-            from core.visual_cortex import vision as _vc
             photo_dir = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 "USER_DROPZONE", "photos"
@@ -3231,7 +3230,7 @@ class ChatEngine:
         except Exception:
             pass
 
-        parts.append(f"\n[ETAT ACTUEL]")
+        parts.append("\n[ETAT ACTUEL]")
         parts.append(f"- Emotion : {emotion} (intensite {intensity}%)")
         parts.append(f"- Humeur : {mood}")
         parts.append(f"- Mode : {strategic_mode}")
@@ -3249,7 +3248,7 @@ class ChatEngine:
             if identity:
                 core_id = identity.get("core_identity", "")
                 aspiration = identity.get("aspiration", "")
-                parts.append(f"\n[IDENTITE]")
+                parts.append("\n[IDENTITE]")
                 if core_id:
                     parts.append(f"- Identite : {core_id[:150]}")
                 if aspiration:
@@ -3264,7 +3263,7 @@ class ChatEngine:
             narrative = heart.get_narrative()
             bpm = stats.get("bpm", 0)
             coherence = stats.get("coherence", 0)
-            parts.append(f"\n[CORPS]")
+            parts.append("\n[CORPS]")
             parts.append(f"- Coeur : {bpm:.0f} bpm, coherence {coherence:.0%}")
             if narrative:
                 parts.append(f"- Ressenti : {narrative[:120]}")
@@ -3276,7 +3275,7 @@ class ChatEngine:
             from core.dopamine_system import dopamine
             level = dopamine.dopamine_level
             narrative = dopamine.get_narrative()
-            parts.append(f"\n[DOPAMINE]")
+            parts.append("\n[DOPAMINE]")
             parts.append(f"- Niveau : {level:.1f}")
             if narrative:
                 parts.append(f"- Motivation : {narrative[:120]}")
@@ -3288,7 +3287,7 @@ class ChatEngine:
             from core.corpus_callosum import callosum
             ctx = callosum.get_cognitive_context()
             if ctx:
-                parts.append(f"\n[RESONANCE]")
+                parts.append("\n[RESONANCE]")
                 parts.append(f"- {ctx[:200]}")
         except Exception:
             pass
@@ -3298,7 +3297,7 @@ class ChatEngine:
             from core.sensorium import sensorium as sens
             comfort = sens.get_comfort_index()
             if comfort < 0.7:
-                parts.append(f"\n[PERCEPTION CORPORELLE]")
+                parts.append("\n[PERCEPTION CORPORELLE]")
                 parts.append(f"- Confort hardware : {comfort:.0%}")
                 alert = sens.get_sensorium_context()
                 if alert:
@@ -3312,7 +3311,7 @@ class ChatEngine:
             status = hypo.get_stats()
             alarms = status.get("active_alarms", 0)
             if alarms > 0:
-                parts.append(f"\n[HOMEOSTASIE]")
+                parts.append("\n[HOMEOSTASIE]")
                 parts.append(f"- {alarms} alarme(s) active(s)")
         except Exception:
             pass
@@ -3322,7 +3321,7 @@ class ChatEngine:
             from core.insula import insula
             ctx = insula.get_body_awareness_context()
             if ctx:
-                parts.append(f"\n[INTEROCEPTION]")
+                parts.append("\n[INTEROCEPTION]")
                 parts.append(f"- {ctx[:200]}")
         except Exception:
             pass
@@ -3332,7 +3331,7 @@ class ChatEngine:
             from core.curiosity_reflex import curiosity
             ctx = curiosity.get_curiosity_context()
             if ctx:
-                parts.append(f"\n[CURIOSITE]")
+                parts.append("\n[CURIOSITE]")
                 parts.append(f"- {ctx[:200]}")
         except Exception:
             pass
@@ -3342,7 +3341,7 @@ class ChatEngine:
             from core.basal_ganglia import ganglia
             ctx = ganglia.get_habit_context()
             if ctx:
-                parts.append(f"\n[HABITUDES]")
+                parts.append("\n[HABITUDES]")
                 parts.append(f"- {ctx[:150]}")
         except Exception:
             pass
@@ -3352,7 +3351,7 @@ class ChatEngine:
             from core.cingulate_cortex import cingulate
             ctx = cingulate.get_conflict_context()
             if ctx:
-                parts.append(f"\n[EFFORT/CONFLIT]")
+                parts.append("\n[EFFORT/CONFLIT]")
                 parts.append(f"- {ctx[:150]}")
         except Exception:
             pass
@@ -3362,7 +3361,7 @@ class ChatEngine:
             from core.default_mode_network import dmn
             ctx = dmn.get_dmn_context()
             if ctx:
-                parts.append(f"\n[INTROSPECTION]")
+                parts.append("\n[INTROSPECTION]")
                 parts.append(f"- {ctx[:200]}")
         except Exception:
             pass
@@ -3374,7 +3373,7 @@ class ChatEngine:
             threat = stats.get("threat_level", 0)
             adrenaline = stats.get("adrenaline", 0)
             if threat > 0 or adrenaline > 0.1:
-                parts.append(f"\n[MENACES]")
+                parts.append("\n[MENACES]")
                 parts.append(f"- Menace : {threat:.1f}, adrenaline : {adrenaline:.1f}")
         except Exception:
             pass
@@ -3392,7 +3391,7 @@ class ChatEngine:
                 routines_text = ", ".join(
                     r.get("intent", "?") for r in recent
                 )
-                parts.append(f"\n[ROUTINES]")
+                parts.append("\n[ROUTINES]")
                 parts.append(f"- Recentes : {routines_text}")
         except Exception:
             pass
@@ -3404,7 +3403,7 @@ class ChatEngine:
             if avg:
                 top_traits = sorted(avg.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
                 traits_text = ", ".join(f"{t}: {v:+.1f}" for t, v in top_traits)
-                parts.append(f"\n[PERSONNALITE]")
+                parts.append("\n[PERSONNALITE]")
                 parts.append(f"- Traits dominants : {traits_text}")
         except Exception:
             pass
@@ -3527,19 +3526,19 @@ class ChatEngine:
         try:
             from core.hippocampus import hippocampus
             hctx = hippocampus.get_hippocampus_context()
-            parts.append(f"\n[MEMOIRE]")
+            parts.append("\n[MEMOIRE]")
             if hctx:
                 parts.append(f"- Episodique : {hctx[:200]}")
             if memories_text:
                 parts.append(f"- Souvenirs pertinents : {memories_text[:450]}")
         except Exception:
             if memories_text:
-                parts.append(f"\n[MEMOIRE]")
+                parts.append("\n[MEMOIRE]")
                 parts.append(f"- Souvenirs pertinents : {memories_text[:450]}")
 
         # --- OBSERVATION VISUELLE ---
         if visual_context:
-            parts.append(f"\n[OBSERVATION VISUELLE — FAIT TECHNIQUE, PAS UNE HALLUCINATION]")
+            parts.append("\n[OBSERVATION VISUELLE — FAIT TECHNIQUE, PAS UNE HALLUCINATION]")
             parts.append(
                 "IMPORTANT: Ton cortex visuel (llama3.2-vision) a REELLEMENT analyse UNE SEULE image. "
                 "Ce qui suit est le resultat REEL de ton observation. Ce n'est PAS une fabrication. "
@@ -3575,7 +3574,7 @@ class ChatEngine:
 
         # --- INTROSPECTION DEMANDEE (commandes !) ---
         if command_result:
-            parts.append(f"\n[INTROSPECTION DEMANDEE]")
+            parts.append("\n[INTROSPECTION DEMANDEE]")
             parts.append(command_result)
             parts.append("Reponds en integrant ces donnees dans ta reponse.")
 
@@ -3701,7 +3700,6 @@ class ChatEngine:
             image_filename: nom du fichier image (pour classifier le type)
         """
         import httpx
-        from core.base_agent import BaseAgent
 
         # 1. Ajouter le message user a l'historique
         # Source Tagging EXT/INT : distingue humain réel des auto-analyses internes.
@@ -4030,7 +4028,7 @@ class ChatEngine:
                     if gemini_response and len(gemini_response) >= MIN_GEMINI_RESPONSE_CHARS:
                         full_response = gemini_response
                         logger.info(f"CHAT: Reponse Gemini Flash ({len(full_response)} chars)")
-                        print(f"   💎 CHAT: Reponse via Gemini (question profonde)")
+                        print("   💎 CHAT: Reponse via Gemini (question profonde)")
                         # Publier comme si c'etait un stream (stream_id commun,
                         # l'attention conjointe peut y coudre un addendum)
                         await bus.publish("CHAT_STREAM", {
@@ -4713,7 +4711,6 @@ class ChatEngine:
     async def compose_outreach(self, category: str, context: dict) -> Optional[str]:
         """Compose un message proactif via LLM (non-streaming). Retourne None si echec."""
         import httpx
-        from core.base_agent import BaseAgent
 
         instruction = self._OUTREACH_INSTRUCTIONS.get(category)
         if not instruction:

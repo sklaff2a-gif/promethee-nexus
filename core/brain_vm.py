@@ -20,7 +20,7 @@ import os
 import json
 import random
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("BrainVM")

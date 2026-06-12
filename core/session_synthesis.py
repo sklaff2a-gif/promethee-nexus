@@ -11,12 +11,10 @@ Stocke dans memory/sessions/ en format compact.
 Claude relit la derniere synthese au debut de chaque session.
 """
 
-import json
 import os
-import time
 import logging
 from datetime import datetime, date
-from typing import Dict, Any, List
+from typing import List
 
 logger = logging.getLogger(__name__)
 

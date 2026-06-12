@@ -24,7 +24,7 @@ font tomber les goals dans le fallback bureaucratique (Mur de la Honte).
 """
 
 from dataclasses import dataclass, field
-from typing import Protocol, Optional, Any, Dict
+from typing import Protocol, Any, Dict
 
 
 @dataclass

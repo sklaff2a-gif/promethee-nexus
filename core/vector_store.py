@@ -3,10 +3,9 @@ import chromadb
 import logging
 import os
 import shutil
-import uuid
 import time
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict
 
 logger = logging.getLogger("VectorStore")
 
@@ -113,10 +112,10 @@ class ChromaMemoryManager:
             old_path = os.path.join(".", "memory", "chroma_db")
             new_path = os.path.join(".", "memory", "default", "chroma_db")
             if os.path.exists(old_path) and not os.path.exists(new_path):
-                print(f"🔄 [MÉMOIRE] Migration détectée : déplacement de memory/chroma_db/ → memory/default/chroma_db/")
+                print("🔄 [MÉMOIRE] Migration détectée : déplacement de memory/chroma_db/ → memory/default/chroma_db/")
                 os.makedirs(os.path.dirname(new_path), exist_ok=True)
                 shutil.move(old_path, new_path)
-                print(f"✅ [MÉMOIRE] Migration terminée.")
+                print("✅ [MÉMOIRE] Migration terminée.")
 
         # Chemin persistant isolé par projet (utilise Config.CHROMA_PERSIST_PATH comme base)
         try:

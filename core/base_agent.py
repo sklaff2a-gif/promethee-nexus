@@ -129,8 +129,15 @@ class GpuScheduler:
             temp = int(stdout.decode().strip())
             self._last_gpu_temp = temp
             self._last_temp_check = now
+            self._gpu_temp_fail_streak = 0
             return temp
-        except Exception:
+        except Exception as e:
+            # Observabilite : nvidia-smi qui timeoute en serie -> on lit une
+            # valeur perimee SANS alerte (le throttle hardware reste le filet).
+            self._gpu_temp_fail_streak = getattr(self, "_gpu_temp_fail_streak", 0) + 1
+            if self._gpu_temp_fail_streak in (3, 10):
+                logger.warning(f"[GPU_TEMP] nvidia-smi indisponible {self._gpu_temp_fail_streak}x "
+                               f"de suite — temperature figee a {self._last_gpu_temp}C ({e})")
             return self._last_gpu_temp
 
     async def _check_vram(self) -> int:
@@ -164,8 +171,13 @@ class GpuScheduler:
                 )
                 await self._unload_ollama_models()
                 self._vram_unloads += 1
+            self._gpu_vram_fail_streak = 0
             return percent
-        except Exception:
+        except Exception as e:
+            self._gpu_vram_fail_streak = getattr(self, "_gpu_vram_fail_streak", 0) + 1
+            if self._gpu_vram_fail_streak in (3, 10):
+                logger.warning(f"[GPU_VRAM] nvidia-smi indisponible {self._gpu_vram_fail_streak}x "
+                               f"de suite — VRAM figee a {self._last_vram_percent}% ({e})")
             return self._last_vram_percent
 
     async def _unload_ollama_models(self):
@@ -656,8 +668,12 @@ class BaseAgent:
                 if resolved:
                     existing_ctx = task_payload.get("context", "")
                     task_payload["context"] = f"{resolved}\n\n{existing_ctx}".strip()
-            except Exception:
-                pass
+            except Exception as e:
+                # Ne PAS avaler en silence : si la resolution echoue, l'agent
+                # travaille SANS le code/contexte attache (ex. Bridge->Factory
+                # « applique ce code valide » arrive a vide). Tracer l'echec.
+                logger.warning(f"[{self.name}] Resolution pointeurs semantiques echouee "
+                               f"({len(memory_refs)} refs) — mission sans contexte attache: {e}")
 
         mission = task_payload.get("mission", "Inconnue")
         self.log_thought(f"Reçoit la mission : {mission[:50]}...", type="thought")

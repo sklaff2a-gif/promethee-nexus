@@ -15,7 +15,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from core.event_bus.bus import bus
 

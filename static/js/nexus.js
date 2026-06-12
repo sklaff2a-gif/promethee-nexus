@@ -413,9 +413,13 @@ function sendChat() {
     }).catch(err => addLog("CHAT", "Erreur: " + err, "err"));
 }
 
+let chatHistoryLoaded = false;
 function loadChatHistory() {
-    // Ne charger qu'une fois si des messages existent deja
-    if (chatMessages.children.length > 1) return;
+    // Charger une seule fois. Ne PAS se baser sur children.length : les miroirs
+    // du chat de jeu (GAME_CHAT_USER / CHAT_STREAM salle_de_jeux) peuplent deja
+    // chatMessages, ce qui empechait le chargement de l'historique (bug 12/06).
+    if (chatHistoryLoaded) return;
+    chatHistoryLoaded = true;
 
     fetch('/api/chat/history', { headers: authHeaders() })
         .then(r => r.json())

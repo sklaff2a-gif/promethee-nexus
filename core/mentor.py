@@ -16,7 +16,6 @@ Ce qu'il retient des cours = le contexte de la nuit suivante.
 import json
 import os
 import re
-import time
 import logging
 from datetime import date, datetime
 from typing import Dict, Any, Optional, List

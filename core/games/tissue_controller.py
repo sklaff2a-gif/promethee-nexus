@@ -18,8 +18,7 @@ et ajustent leur comportement graduellement.
 """
 
 import logging
-import time
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +69,6 @@ class TissueGameController:
             return "AVANCER"  # Fallback si tissu indisponible
 
         # 1. Convertir etat jeu → signaux
-        from core.physics_playground import PhysicsPlayground
         # Creer une instance temporaire juste pour le mapping
         signals = self._state_to_signals(state)
 
@@ -202,7 +200,6 @@ class TissueGameController:
 
     def _inject_reward(self, tissue, reward: float):
         """Injecte la recompense dans les cellules des zones actives."""
-        import random
         zone_names = ["goals", "cognition", "creativity", "dopamine"]
         for cell in tissue.cells:
             # Trouver dans quelle zone est la cellule

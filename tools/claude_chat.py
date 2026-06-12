@@ -40,6 +40,14 @@ import sys
 import time
 import urllib.request
 
+# Console Windows cp1252 : sans ceci, print() d'une reponse avec emoji (frequent
+# chez Promethee) leve UnicodeEncodeError -> exit!=0 alors que la reponse EST
+# arrivee (le piege PYTHONIOENCODING documente du projet).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 CHAT_API = os.environ.get("PROMETHEE_CHAT_API", "http://127.0.0.1:8000/api/chat")
 HISTORY_PATH = os.environ.get(
     "PROMETHEE_CHAT_HISTORY",
@@ -53,7 +61,11 @@ def load_messages():
     try:
         with open(HISTORY_PATH, encoding="utf-8") as f:
             data = json.load(f)
-        return data.get("messages", data.get("history", data)) if isinstance(data, dict) else data
+        if isinstance(data, dict):
+            msgs = data.get("messages", data.get("history", []))
+        else:
+            msgs = data
+        return msgs if isinstance(msgs, list) else []
     except Exception:
         return []
 

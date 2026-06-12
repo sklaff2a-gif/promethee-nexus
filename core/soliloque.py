@@ -7,7 +7,6 @@ import json
 import os
 import time
 import logging
-import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -330,7 +329,6 @@ class SoliloqueEngine:
     async def _chat(self, messages: List[Dict]) -> Optional[str]:
         """Appel /api/chat pour le compagnon. Retourne la réponse ou None."""
         try:
-            from core.base_agent import BaseAgent
             import httpx
 
             from core.base_agent import gpu_scheduler
@@ -376,7 +374,6 @@ class SoliloqueEngine:
     async def _reflect(self, messages: List[Dict], theme: str) -> Optional[str]:
         """Prométhée formule sa réponse au compagnon."""
         try:
-            from core.base_agent import BaseAgent
             import httpx
 
             # Résumé du dialogue en cours
