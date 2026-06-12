@@ -297,6 +297,11 @@ def _emergency_save():
         stefan._save()
     except Exception:
         pass
+    try:
+        from core.experience_clock import experience_clock
+        experience_clock.force_persist()
+    except Exception:
+        pass
 
 
 @asynccontextmanager
@@ -600,6 +605,13 @@ async def lifespan(app: FastAPI):
 
     # --- Smart Restart via bus (propre, pas de sys.exit dans une Task) ---
     bus.subscribe("SMART_RESTART_REQUESTED", _on_smart_restart)
+
+    # --- Horloge metabolique (Phase C) : cablage bus + tick des experiences ---
+    try:
+        from core.experience_clock import wire_to_bus as _wire_experience_clock
+        _wire_experience_clock()
+    except Exception as e:
+        logger.warning(f"[MAIN] ExperienceClock non cable: {e}")
 
     # --- Emploi du temps scolaire ---
     try:

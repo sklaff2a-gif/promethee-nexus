@@ -40,7 +40,7 @@ try:
     from config import Config as _AmiConfig
     ALFRED_MODEL = _AmiConfig.DEFAULT_LOCAL_MODEL
 except Exception:
-    ALFRED_MODEL = "qwen3.5:9b"
+    ALFRED_MODEL = os.getenv("LOCAL_GENERALIST_MODEL", "gemma4:12b")  # bascule generaliste 12/06 (ex qwen3.5:9b)
 
 # --- Personnalité d'Alfred ---
 

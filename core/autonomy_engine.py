@@ -8341,7 +8341,7 @@ else:
     _OVERRIDES_PATH = os.path.join("config", "tunable_overrides.json")
     _AUTORESEARCH_PROMPT_PATH = os.path.join("config", "autoresearch_prompt.txt")
     _AUTORESEARCH_PROMPT_HISTORY_PATH = os.path.join("memory", "autoresearch_prompt_history.json")
-    _AUTORESEARCH_MODEL = "qwen3.5:9b"
+    _AUTORESEARCH_MODEL = os.getenv("LOCAL_GENERALIST_MODEL", "gemma4:12b")  # bascule 12/06
 
     async def _execute_param_experiment(self) -> dict:
         """Autoresearch V3 (Karpathy-inspired) : le LLM propose, le système exécute.
@@ -8699,7 +8699,7 @@ Réponds UNIQUEMENT avec le nouveau prompt complet."""
                     resp = await client.post(
                         "http://localhost:11434/api/generate",
                         json={
-                            "model": "qwen3.5:9b",
+                            "model": os.getenv("LOCAL_GENERALIST_MODEL", "gemma4:12b"),
                             "prompt": meta_prompt,
                             "stream": False,
                             "think": False,
@@ -8980,7 +8980,7 @@ Réponds UNIQUEMENT avec le nouveau prompt complet."""
     # LLM ARBITRE — sélection intelligente de la prochaine routine
     # ================================================================
 
-    _ROUTINE_SELECT_MODEL = "qwen3.5:9b"
+    _ROUTINE_SELECT_MODEL = os.getenv("LOCAL_GENERALIST_MODEL", "gemma4:12b")  # bascule 12/06
 
     async def _llm_select_routine(self, scored: list) -> dict | None:
         """Le LLM voit le top 5 scoré + contexte et choisit la routine.
@@ -9314,7 +9314,7 @@ RAISON: <1 phrase courte>"""
                     resp = await client.post(
                         "http://localhost:11434/api/generate",
                         json={
-                            "model": "qwen3.5:9b",
+                            "model": os.getenv("LOCAL_GENERALIST_MODEL", "gemma4:12b"),
                             "prompt": prompt,
                             "stream": False,
                             "options": {"temperature": 0.8, "num_predict": 200, "num_ctx": 2048},

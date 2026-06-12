@@ -45,6 +45,9 @@ OLLAMA_GENERATE_URL = "http://localhost:11434/api/generate"
 # et fiabilité — Gemini tronque systématiquement les keywords philosophiques
 # profonds que Stefan EXIGE par construction : "authentique", "dissonante",
 # "conscience"…). Souveraineté locale + supériorité empirique mesurée.
+# DÉCISION 12/06 : GARDÉ sur qwen3.5:9b lors de la bascule généraliste gemma4
+# — ce choix est empirique (probes ci-dessus), pas un défaut de migration.
+# Re-valider par sycophancy_probe avant toute bascule de Stefan.
 STEFAN_MODEL = "qwen3.5:9b"
 
 # V14.12 P2 (13/05) — Anti-boucle par hash sémantique
@@ -383,6 +386,11 @@ class StefanEngine:
 
             return {
                 "status": "success",
+                # "result" obligatoire : _score_result_quality (autonomy_engine)
+                # evalue ce champ — sans lui, un succes etait note quality~0 et
+                # comptait comme ECHEC (blacklist du 11/06, 3 "echecs" qui
+                # etaient des confrontations reussies).
+                "result": question,
                 "question": question,
                 "source": source,
                 "confrontation_number": self.confrontation_count,

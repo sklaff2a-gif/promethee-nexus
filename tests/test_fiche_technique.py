@@ -15,7 +15,10 @@ class TestFaitsVerifies:
         assert "180 millions" in _FICHE_TECHNIQUE  # cite comme contre-exemple faux
 
     def test_modeles_reels(self):
-        for m in ("qwen3.5:9b", "qwen2.5-coder:14b", "llama3.2-vision:11b"):
+        # Le generaliste cite doit etre le modele REEL du chat (dynamique,
+        # suit la bascule LOCAL_GENERALIST_MODEL du 08/06), pas un nom fige.
+        from core.chat_engine import CHAT_MODEL
+        for m in (CHAT_MODEL, "qwen2.5-coder:14b", "llama3.2-vision:11b"):
             assert m in _FICHE_TECHNIQUE
 
     def test_gpu_reel(self):
@@ -23,7 +26,12 @@ class TestFaitsVerifies:
         assert "16 Go" in _FICHE_TECHNIQUE
 
     def test_fine_tunes_cites(self):
-        assert "promethee-strategist" in _FICHE_TECHNIQUE
+        # promethee-strategist ABANDONNE le 08/06 (resultats catastrophiques) :
+        # la fiche ne doit plus le presenter comme un fine-tune actif, mais
+        # doit le mentionner comme abandonne (anti-confabulation).
+        assert "promethee-security" in _FICHE_TECHNIQUE
+        assert "-architect" in _FICHE_TECHNIQUE
+        assert "strategist a ete abandonne" in _FICHE_TECHNIQUE
 
 
 class TestPosture:

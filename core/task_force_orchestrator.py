@@ -41,6 +41,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+# Bascule generaliste 12/06 (ex qwen3.5:9b) — meme levier de rollback que config.py
+_GENERALIST_MODEL = os.getenv("LOCAL_GENERALIST_MODEL", "gemma4:12b")
+
 logger = logging.getLogger("TaskForceOrchestrator")
 
 STATE_FILE = os.path.join(
@@ -231,11 +234,11 @@ INTENT_TO_TASKFORCE: Dict[str, TaskForce] = {
     "EXPANSION_CODE": TaskForce(
         name="code_generation",
         agents=[
-            AgentRole("architect", "qwen3.5:9b", _ARCHITECT_PROMPT,
+            AgentRole("architect", _GENERALIST_MODEL, _ARCHITECT_PROMPT,
                       refractory_seconds=300, timeout_seconds=60),
             AgentRole("coder", "qwen2.5-coder:14b", _CODER_PROMPT,
                       refractory_seconds=120, timeout_seconds=180),
-            AgentRole("critic", "qwen3.5:9b", _CRITIC_PROMPT,
+            AgentRole("critic", _GENERALIST_MODEL, _CRITIC_PROMPT,
                       refractory_seconds=180, timeout_seconds=60),
         ],
         topology=Topology.SEQUENTIAL_FEEDBACK,
@@ -245,11 +248,11 @@ INTENT_TO_TASKFORCE: Dict[str, TaskForce] = {
     "FEATURE_BUILDING": TaskForce(
         name="feature_pipeline",
         agents=[
-            AgentRole("architect", "qwen3.5:9b", _ARCHITECT_PROMPT,
+            AgentRole("architect", _GENERALIST_MODEL, _ARCHITECT_PROMPT,
                       refractory_seconds=300, timeout_seconds=60),
             AgentRole("coder", "qwen2.5-coder:14b", _CODER_PROMPT,
                       refractory_seconds=120, timeout_seconds=180),
-            AgentRole("tester", "qwen3.5:9b", _TESTER_PROMPT,
+            AgentRole("tester", _GENERALIST_MODEL, _TESTER_PROMPT,
                       refractory_seconds=240, timeout_seconds=90),
         ],
         topology=Topology.SEQUENTIAL,
@@ -258,11 +261,11 @@ INTENT_TO_TASKFORCE: Dict[str, TaskForce] = {
     "CODE_REVIEW": TaskForce(
         name="code_review",
         agents=[
-            AgentRole("critic", "qwen3.5:9b", _CRITIC_PROMPT,
+            AgentRole("critic", _GENERALIST_MODEL, _CRITIC_PROMPT,
                       refractory_seconds=120, timeout_seconds=60),
-            AgentRole("security", "qwen3.5:9b", _SECURITY_PROMPT,
+            AgentRole("security", _GENERALIST_MODEL, _SECURITY_PROMPT,
                       refractory_seconds=180, timeout_seconds=60),
-            AgentRole("synthesizer", "qwen3.5:9b", _SYNTHESIZER_PROMPT,
+            AgentRole("synthesizer", _GENERALIST_MODEL, _SYNTHESIZER_PROMPT,
                       refractory_seconds=60, timeout_seconds=60),
         ],
         topology=Topology.PARALLEL_THEN_SYNTH,
@@ -273,9 +276,9 @@ INTENT_TO_TASKFORCE: Dict[str, TaskForce] = {
         agents=[
             AgentRole("strategist", "promethee-strategist", _ARCHITECT_PROMPT,
                       refractory_seconds=300, timeout_seconds=60),
-            AgentRole("evolution", "qwen3.5:9b", _CRITIC_PROMPT,
+            AgentRole("evolution", _GENERALIST_MODEL, _CRITIC_PROMPT,
                       refractory_seconds=300, timeout_seconds=60),
-            AgentRole("synthesizer", "qwen3.5:9b", _SYNTHESIZER_PROMPT,
+            AgentRole("synthesizer", _GENERALIST_MODEL, _SYNTHESIZER_PROMPT,
                       refractory_seconds=60, timeout_seconds=60),
         ],
         topology=Topology.PARALLEL_THEN_SYNTH,

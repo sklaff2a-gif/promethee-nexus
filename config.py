@@ -146,7 +146,12 @@ class Config:
     # MODE OBSERVE par défaut : journalise les inscriptions et les détections sans
     # accorder de sursis. Armer SILENT_FAILURES_DRY_RUN=False après 24h de logs.
     SILENT_FAILURES_ENABLED = True
-    SILENT_FAILURES_DRY_RUN = True  # mode OBSERVE — log sans bloquer le veto
+    # ARME le 12/06 (arbitrage JM) apres 2,5 semaines d'observation dry-run :
+    # les logs montraient que le sursis AURAIT sauve EVENING_REFLECTION,
+    # tuee par veto emotionnel 8 cycles de suite (dream_journal fige au 09/06).
+    # Le veto reste souverain — le sursis est une amnistie ponctuelle de 5 min
+    # sur similarite >=0.90 avec une routine tuee recemment. Rollback : True.
+    SILENT_FAILURES_DRY_RUN = False
 
     # --- Atrophy Monitor (atelier audace 27/05, refonte 29/05 v3) ---
     # Symptome : audace plate a 42.7 sur les 15 agents. Spec issue dialogue

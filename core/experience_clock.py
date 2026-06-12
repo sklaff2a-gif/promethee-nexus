@@ -116,3 +116,22 @@ class ExperienceClock:
 
 # Singleton global — import direct pour les consommateurs
 experience_clock = ExperienceClock()
+
+
+def wire_to_bus() -> None:
+    """Branche l'horloge sur les evenements d'experience reelle.
+
+    Bug historique (corrige 12/06) : le module definissait tick() mais
+    PERSONNE ne l'appelait — l'horloge restait a 0 et ne persistait jamais
+    (8 resets constates par l'observateur nocturne). Le docstring citait
+    DOPAMINE_DIP_FRUITLESS, un event qui n'existe pas ; les events reels
+    sont PREFRONTAL_GOAL_COMPLETE et DOPAMINE_DIP.
+    """
+    from core.event_bus.bus import bus
+
+    async def _on_experience(_payload):
+        experience_clock.tick()
+
+    bus.subscribe("PREFRONTAL_GOAL_COMPLETE", _on_experience)
+    bus.subscribe("DOPAMINE_DIP", _on_experience)
+    logger.info("[ExperienceClock] Cable au bus (PREFRONTAL_GOAL_COMPLETE, DOPAMINE_DIP)")

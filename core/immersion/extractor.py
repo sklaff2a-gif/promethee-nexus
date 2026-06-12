@@ -19,6 +19,7 @@ Polymorphisme enzymatique par origine spatiale :
 """
 from __future__ import annotations
 
+import os
 import asyncio
 import re
 from dataclasses import dataclass, field
@@ -77,7 +78,7 @@ class ExtractionProfile:
     name: str
     advocate_system: str
     prosecutor_system: str
-    model: str = "qwen3.5:9b"
+    model: str = os.getenv("LOCAL_GENERALIST_MODEL", "gemma4:12b")
     temperature: float = 0.0
     max_tokens_advocate: int = 200
     max_tokens_prosecutor: int = 400

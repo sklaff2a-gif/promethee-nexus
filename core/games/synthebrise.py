@@ -11,6 +11,7 @@ Victoire : le joueur qui pose le 10eme mot gagne (pont complet).
 Jouable dans le chat ou pendant un cafe avec Alfred.
 """
 
+import os
 import time
 import logging
 import random
@@ -117,7 +118,7 @@ async def judge_semantic_link(word1: str, word2: str) -> int:
                 resp = await client.post(
                     "http://localhost:11434/api/generate",
                     json={
-                        "model": "qwen3.5:9b",
+                        "model": os.getenv("LOCAL_GENERALIST_MODEL", "gemma4:12b"),
                         "prompt": prompt,
                         "stream": False,
                         "think": False,
@@ -167,7 +168,7 @@ async def ai_play_word(game: SynthebriseGame, personality: str = "promethee") ->
                 resp = await client.post(
                     "http://localhost:11434/api/generate",
                     json={
-                        "model": "qwen3.5:9b",
+                        "model": os.getenv("LOCAL_GENERALIST_MODEL", "gemma4:12b"),
                         "prompt": prompt,
                         "stream": False,
                         "think": False,

@@ -105,7 +105,7 @@ def _extract_real_names(filepath: str) -> List[str]:
 
 # --- LOGPROBS : detecter l'hesitation du LLM en temps reel ---
 
-async def measure_confidence(prompt: str, model: str = "qwen3.5:9b",
+async def measure_confidence(prompt: str, model: str = os.getenv("LOCAL_GENERALIST_MODEL", "gemma4:12b"),
                               max_tokens: int = 100) -> Dict[str, Any]:
     """Mesure la confiance du LLM via les logprobs.
 

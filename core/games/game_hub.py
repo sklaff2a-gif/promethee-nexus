@@ -1037,7 +1037,7 @@ class GameHub:
                     resp = await client.post(
                         "http://localhost:11434/api/generate",
                         json={
-                            "model": "qwen3.5:9b",
+                            "model": os.getenv("LOCAL_GENERALIST_MODEL", "gemma4:12b"),
                             "prompt": prompt,
                             "stream": False,
                             "options": {"temperature": 0.8, "num_predict": 80, "num_ctx": 2048},
