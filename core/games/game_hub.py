@@ -1180,6 +1180,10 @@ class GameHub:
                             "model": os.getenv("LOCAL_GENERALIST_MODEL", "gemma4:12b"),
                             "prompt": prompt,
                             "stream": False,
+                            # think=False OBLIGATOIRE : sans lui, gemma4 consomme
+                            # les 80 tokens en thinking -> response vide (chat de
+                            # jeu MUET du 08 au 12/06, seul payload sans le champ)
+                            "think": False,
                             "options": {"temperature": 0.8, "num_predict": 80, "num_ctx": 2048},
                         },
                         timeout=15,

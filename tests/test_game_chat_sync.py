@@ -97,6 +97,33 @@ class TestSyncDialogue:
         assert out["status"] == "ok"
 
 
+class TestPayloadLLMJeu:
+
+    @pytest.mark.asyncio
+    async def test_think_false_obligatoire(self, hub_en_partie):
+        """Regression : sans think=False, gemma4 consomme num_predict en
+        thinking -> response vide (chat de jeu MUET du 08 au 12/06)."""
+        captured = {}
+
+        class FakeResp:
+            status_code = 200
+            def json(self):
+                return {"response": "Bien recu."}
+
+        class FakeClient:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): return False
+            async def post(self, url, json=None, timeout=None):
+                captured.update(json or {})
+                return FakeResp()
+
+        import httpx
+        with patch.object(httpx, "AsyncClient", FakeClient):
+            reply = await hub_en_partie._promethee_chat_llm("salut")
+        assert reply == "Bien recu."
+        assert captured.get("think") is False
+
+
 class TestConscienceDePartie:
 
     def test_system_prompt_mentionne_la_partie(self, engine, hub_en_partie):
