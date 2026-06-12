@@ -38,6 +38,14 @@ const GamesView = {
             this.currentGame = active.game;
             if (active.game === 'morpion') this.renderMorpion(active.state, active.render);
             else if (active.game === 'puissance4') this.renderPuissance4(active.state, active.render);
+            else if (active.game === 'echecs') {
+                this.chessPrometheeColor = active.promethee_symbol;
+                this.renderEchecs(active.state);
+                // Si c'est le tour de Promethee (ex: refresh en pleine partie), relancer son coup
+                if (!active.state.game_over && active.state.current_player === active.promethee_symbol) {
+                    this.aiMoveEchecs();
+                }
+            }
             return;
         }
 
@@ -66,7 +74,8 @@ const GamesView = {
             { id: 'puissance4', name: 'PUISSANCE 4', icon: '●', desc: 'Connect Four 7x6',
               w: stats.puissance4_wins||0, l: stats.puissance4_losses||0, d: stats.puissance4_draws||0,
               color: '#ffb860' },
-            { id: 'echecs', name: 'ECHECS', icon: '♟', desc: 'Debloquer les 3 premiers jeux',
+            { id: 'echecs', name: 'ECHECS', icon: '♟', desc: 'Banc d\'essai strategique',
+              w: stats.echecs_wins||0, l: stats.echecs_losses||0, d: stats.echecs_draws||0,
               locked: !stats.chess_unlocked, color: '#a0a0ff' },
         ];
 
@@ -79,7 +88,6 @@ const GamesView = {
                 <div style="color:${g.color}; font-size:12px; font-weight:bold; letter-spacing:0.1em;">${g.name}</div>
                 <div style="color:#666; font-size:9px; margin-top:4px;">${g.desc}</div>
                 ${g.locked ? '<div style="color:#883333; font-size:9px; margin-top:8px;">VERROUILLE</div>' :
-                  g.id === 'echecs' ? '<div style="color:#4dff88; font-size:9px; margin-top:8px;">BIENTOT</div>' :
                   `<div style="color:#888; font-size:10px; margin-top:8px;">${g.w}V ${g.l}D ${g.d}N</div>
                    <div style="margin-top:8px; display:flex; gap:4px; justify-content:center; flex-wrap:wrap;">
                        <button onclick="GamesView.newGame('${g.id}', true, 'adaptive')" style="background:${g.color}; color:#000; border:none; padding:3px 8px; font-size:9px; font-weight:bold; cursor:pointer; border-radius:3px;">JOUER</button>
@@ -157,9 +165,164 @@ const GamesView = {
             }
             this.currentGame = gameType;
             if (gameType === 'morpion') this.renderMorpion(data.state, data.render);
-            else this.renderPuissance4(data.state, data.render);
+            else if (gameType === 'puissance4') this.renderPuissance4(data.state, data.render);
+            else {
+                this.chessPrometheeColor = data.promethee_symbol;
+                this.renderEchecs(data.state);
+                if (data.state.current_player === data.promethee_symbol) {
+                    this.aiMoveEchecs();  // Promethee a les blancs : il ouvre
+                }
+            }
         } catch (e) {
             alert('Erreur: ' + e.message);
+        }
+    },
+
+    // ─── ECHECS ──────────────────────────────────────────────
+    // Banc d'essai strategique (12/06) : python-chess arbitre cote serveur,
+    // Promethee choisit via LLM dans la liste des coups legaux. Le front
+    // surligne les destinations legales de la piece selectionnee.
+
+    chessPrometheeColor: null,
+    chessSelected: null,
+    chessState: null,
+
+    CHESS_UNICODE: {
+        'P':'♙','N':'♘','B':'♗','R':'♖','Q':'♕','K':'♔',
+        'p':'♟','n':'♞','b':'♝','r':'♜','q':'♛','k':'♚',
+    },
+
+    renderEchecs(state, thinking = false) {
+        this.chessState = state;
+        const el = document.getElementById('games-content');
+        const humanColor = this.chessPrometheeColor === 'blancs' ? 'noirs' : 'blancs';
+        const humanTurn = !state.game_over && state.current_player === humanColor && !thinking;
+
+        let html = '<div style="max-width:520px; margin:0 auto; padding:16px; text-align:center;">';
+        html += '<div style="color:#a0a0ff; font-size:14px; font-weight:bold; letter-spacing:0.15em; margin-bottom:8px;">♟ ECHECS</div>';
+        html += `<div style="color:#666; font-size:9px; margin-bottom:8px;">Toi: ${escapeHtml(humanColor)} — Promethee: ${escapeHtml(this.chessPrometheeColor || '?')}${state.assisted_moves ? ` — coups assistes: ${state.assisted_moves}` : ''}</div>`;
+
+        if (state.game_over) {
+            const msg = state.winner === null ? 'NULLE !' :
+                (state.winner === this.chessPrometheeColor ? 'PROMETHEE GAGNE !' : 'TU GAGNES !');
+            html += `<div style="color:#ffd700; font-size:13px; font-weight:bold; margin-bottom:8px;">${msg}</div>`;
+        } else if (thinking) {
+            html += '<div style="color:#a0a0ff; font-size:11px; margin-bottom:8px;" class="animate-pulse">Promethee reflechit...</div>';
+        } else {
+            html += `<div style="color:#888; font-size:11px; margin-bottom:8px;">Trait : <strong style="color:#a0a0ff">${escapeHtml(state.current_player)}</strong>${state.in_check ? ' — <span style="color:#ff5050">ECHEC !</span>' : ''}</div>`;
+        }
+
+        // Destinations legales de la piece selectionnee
+        const dests = new Set();
+        if (this.chessSelected) {
+            for (const mv of state.legal_moves) {
+                if (mv.startsWith(this.chessSelected)) dests.add(mv.slice(2, 4));
+            }
+        }
+
+        html += '<div style="display:inline-grid; grid-template-columns:repeat(8,52px); border:2px solid rgba(160,160,255,0.4); border-radius:4px; overflow:hidden;">';
+        for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+                const sq = 'abcdefgh'[c] + (8 - r);
+                const piece = state.board[r][c];
+                const light = (r + c) % 2 === 0;
+                let bg = light ? '#3a3a55' : '#23233a';
+                if (this.chessSelected === sq) bg = '#5555aa';
+                else if (dests.has(sq)) bg = light ? '#3a6a4a' : '#2a5a3a';
+                if (state.last_move && (sq === state.last_move.slice(0,2) || sq === state.last_move.slice(2,4))) {
+                    bg = light ? '#5a5a35' : '#4a4a25';
+                }
+                const glyph = piece ? this.CHESS_UNICODE[piece] || '' : '';
+                const isWhitePiece = piece && piece === piece.toUpperCase();
+                const clickable = humanTurn;
+                html += `<div onclick="${clickable ? `GamesView.clickEchecs('${sq}')` : ''}"
+                    style="width:52px; height:52px; display:flex; align-items:center; justify-content:center;
+                    font-size:34px; background:${bg}; cursor:${clickable ? 'pointer' : 'default'};
+                    color:${isWhitePiece ? '#f0f0f0' : '#111'}; text-shadow:${isWhitePiece ? '0 0 2px #000' : '0 0 2px #888'};">${glyph}</div>`;
+            }
+        }
+        html += '</div>';
+
+        // Historique SAN compact
+        if (state.history_san && state.history_san.length) {
+            let hist = '';
+            for (let i = 0; i < state.history_san.length; i += 2) {
+                hist += `${Math.floor(i/2)+1}.${state.history_san[i]}${state.history_san[i+1] ? ' ' + state.history_san[i+1] : ''}  `;
+            }
+            html += `<div style="color:#666; font-size:9px; margin-top:8px; max-width:440px; margin-left:auto; margin-right:auto;">${escapeHtml(hist.trim())}</div>`;
+        }
+
+        html += '<div style="margin-top:12px; display:flex; gap:8px; justify-content:center;">';
+        if (state.game_over) {
+            html += `<button onclick="GamesView.loadStatus()" style="background:#a0a0ff; color:#000; border:none; padding:6px 16px; font-size:11px; font-weight:bold; cursor:pointer; border-radius:4px;">CONTINUER</button>`;
+        } else {
+            html += `<button onclick="GamesView.forfeit()" style="background:none; color:#ff5050; border:1px solid #ff5050; padding:4px 12px; font-size:9px; cursor:pointer; border-radius:3px;">ABANDONNER</button>`;
+        }
+        html += `<button onclick="GamesView.backToHub()" style="background:none; color:#888; border:1px solid #555; padding:4px 12px; font-size:9px; cursor:pointer; border-radius:3px;">RETOUR HUB</button>`;
+        html += '</div>';
+
+        html += this.renderGameChat();
+        html += '</div>';
+        el.innerHTML = html;
+    },
+
+    clickEchecs(sq) {
+        const state = this.chessState;
+        if (!state || state.game_over) return;
+        if (this.chessSelected) {
+            let uci = this.chessSelected + sq;
+            // auto-promotion dame geree cote serveur ; on valide contre la liste
+            const legal = state.legal_moves.includes(uci) || state.legal_moves.includes(uci + 'q');
+            if (legal) {
+                this.chessSelected = null;
+                this.playEchecs(uci);
+                return;
+            }
+            this.chessSelected = null;
+            // re-selection directe si la case cliquee a des coups legaux
+        }
+        const hasMoves = state.legal_moves.some(mv => mv.startsWith(sq));
+        this.chessSelected = hasMoves ? sq : null;
+        this.renderEchecs(state);
+    },
+
+    async playEchecs(uci) {
+        try {
+            const res = await fetch('/api/games/move', {
+                method: 'POST',
+                headers: authHeaders(),
+                body: JSON.stringify({move: uci, player: 'human'})
+            });
+            const data = await res.json();
+            if (data.error) { alert(data.error); return; }
+            if (!data.move_result || !data.move_result.valid) {
+                alert(data.move_result ? data.move_result.reason : 'Coup invalide');
+                return;
+            }
+            this.updateChatFromResponse(data);
+            if (data.game_over) { this.renderEchecs(data.state); return; }
+            this.renderEchecs(data.state, true);  // "Promethee reflechit..."
+            this.aiMoveEchecs();
+        } catch (e) { alert('Erreur: ' + e.message); }
+    },
+
+    async aiMoveEchecs() {
+        if (this.chessState && !this.chessState.game_over) {
+            this.renderEchecs(this.chessState, true);
+        }
+        try {
+            const res = await fetch('/api/games/chess/ai-move', {method: 'POST', headers: authHeaders()});
+            const data = await res.json();
+            if (data.error) {
+                alert(data.error);
+                if (this.chessState) this.renderEchecs(this.chessState);
+                return;
+            }
+            this.updateChatFromResponse(data);
+            this.renderEchecs(data.state);
+        } catch (e) {
+            alert('Erreur coup Promethee: ' + e.message);
+            if (this.chessState) this.renderEchecs(this.chessState);
         }
     },
 

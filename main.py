@@ -1464,6 +1464,16 @@ async def games_move(request: Request):
     player = body.get("player", "promethee")
     return game_hub.play_move(move, player)
 
+@app.post("/api/games/chess/ai-move")
+async def games_chess_ai_move():
+    """Coup de Promethee aux echecs (LLM local + arbitre python-chess).
+
+    Pattern synthebrise : le front appelle cette route quand c'est le tour
+    de Promethee (async — l'appel LLM ne doit pas bloquer play_move sync).
+    """
+    from core.games.game_hub import game_hub
+    return await game_hub.chess_ai_move()
+
 @app.post("/api/games/say")
 async def games_say(request: Request):
     """Envoyer un message pendant une partie. Body: {message}"""

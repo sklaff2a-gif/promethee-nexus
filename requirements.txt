@@ -12,3 +12,5 @@ httpx
 chromadb
 pytest
 pytest-asyncio
+python-telegram-bot>=21.0
+chess>=1.10  # echecs salle de jeux (12/06) — arbitre python-chess

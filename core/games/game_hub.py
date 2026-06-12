@@ -20,6 +20,7 @@ from typing import Optional, Dict, Any, List
 
 from core.games.morpion import MorpionGame, ai_move as morpion_ai
 from core.games.puissance4 import Puissance4Game, ai_move as puissance4_ai
+from core.games.chess_game import ChessGame, CHESS_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ class GameHub:
         # Parties actives
         self._active_morpion: Optional[MorpionGame] = None
         self._active_puissance4: Optional[Puissance4Game] = None
+        self._active_chess: Optional["ChessGame"] = None
         self._active_session: Optional[GameSession] = None
 
         # Statistiques persistantes
@@ -95,6 +97,12 @@ class GameHub:
             "puissance4_draws": 0,
             "puissance4_total": 0,
             "puissance4_quick_win": False,
+            # Echecs (integres 12/06 — banc d'essai strategique)
+            "echecs_wins": 0,
+            "echecs_losses": 0,
+            "echecs_draws": 0,
+            "echecs_total": 0,
+            "echecs_consecutive_losses": 0,
             # Global
             "chess_unlocked": False,
             "total_games_played": 0,
@@ -114,6 +122,8 @@ class GameHub:
         self._tournament: Optional[Dict[str, Any]] = None
 
         self._load()
+        # Recalculer le deblocage au boot (la regle a pu evoluer — 12/06)
+        self._check_chess_unlock()
 
     @classmethod
     def reset_singleton(cls):
@@ -136,8 +146,16 @@ class GameHub:
         if opponent == "alfred_vs_human":
             opponent = "human"
             difficulty = "medium"
-        if game_type not in ("morpion", "puissance4"):
-            return {"error": f"Jeu inconnu: {game_type}. Disponibles: morpion, puissance4"}
+        if game_type not in ("morpion", "puissance4", "echecs"):
+            return {"error": f"Jeu inconnu: {game_type}. Disponibles: morpion, puissance4, echecs"}
+
+        if game_type == "echecs":
+            if not CHESS_AVAILABLE:
+                return {"error": "python-chess n'est pas installe sur le serveur."}
+            if not self.stats.get("chess_unlocked"):
+                return {"error": "Echecs verrouilles — competences requises non validees."}
+            if opponent != "human":
+                return {"error": "Echecs v1 : uniquement vs humain (banc d'essai strategique)."}
 
         if self._active_session:
             return {"error": f"Partie en cours ({self._active_session.game_type}). Terminez-la d'abord."}
@@ -156,10 +174,15 @@ class GameHub:
             game = MorpionGame()
             session.promethee_symbol = "X" if promethee_starts else "O"
             self._active_morpion = game
-        else:
+        elif game_type == "puissance4":
             game = Puissance4Game()
             session.promethee_symbol = "R" if promethee_starts else "J"
             self._active_puissance4 = game
+        else:
+            game = ChessGame()
+            # Les blancs commencent toujours aux echecs
+            session.promethee_symbol = "blancs" if promethee_starts else "noirs"
+            self._active_chess = game
 
         self._active_session = session
         self._game_chat = []  # Reset chat pour la nouvelle partie
@@ -175,6 +198,11 @@ class GameHub:
             "state": game.get_state(),
             "render": game.render(),
         }
+
+        # Echecs : la riposte de Promethee passe par la route ASYNC
+        # /api/games/chess/ai-move (pattern synthebrise) — pas d'autoplay sync.
+        if game_type == "echecs":
+            return result
 
         # Si Promethee ne commence pas et l'adversaire est Alfred, Alfred joue
         if not promethee_starts and opponent == "alfred":
@@ -214,6 +242,8 @@ class GameHub:
             expected = "O" if session.promethee_symbol == "X" else "X"
             if session.game_type == "puissance4":
                 expected = "J" if session.promethee_symbol == "R" else "R"
+            elif session.game_type == "echecs":
+                expected = "noirs" if session.promethee_symbol == "blancs" else "blancs"
         else:
             return {"error": f"Joueur inconnu: {player}"}
 
@@ -221,12 +251,16 @@ class GameHub:
             return {"error": f"Ce n'est pas le tour de {player} (attendu: {game.current_player})"}
 
         # Jouer le coup
-        if session.game_type == "morpion":
+        if session.game_type == "echecs":
+            if not isinstance(move, str):
+                return {"error": "Echecs: move doit etre un coup UCI (ex: e2e4)"}
+            result = game.play(move)
+        elif session.game_type == "morpion":
             if isinstance(move, (list, tuple)) and len(move) == 2:
                 result = game.play(move[0], move[1])
             else:
                 return {"error": "Morpion: move doit etre [row, col]"}
-        else:
+        else:  # puissance4
             if isinstance(move, int) or (isinstance(move, str) and move.isdigit()):
                 result = game.play(int(move))
             else:
@@ -249,6 +283,7 @@ class GameHub:
             self._active_session = None
             self._active_morpion = None
             self._active_puissance4 = None
+            self._active_chess = None
             self._publish_game_event("GAME_ENDED", session, result)
             return response
 
@@ -260,7 +295,9 @@ class GameHub:
             auto_play = self._alfred_play()
             if auto_play:
                 response["alfred_move"] = auto_play
-        elif session.opponent == "human" and player == "human":
+        elif (session.opponent == "human" and player == "human"
+              and session.game_type != "echecs"):
+            # (echecs : riposte via la route async chess/ai-move)
             auto_play = self._promethee_play(difficulty=session.difficulty)
             if auto_play:
                 response["promethee_move"] = auto_play
@@ -282,6 +319,7 @@ class GameHub:
                 self._active_session = None
                 self._active_morpion = None
                 self._active_puissance4 = None
+                self._active_chess = None
                 self._publish_game_event("GAME_ENDED", session, auto_play.get("result", {}))
 
         response["chat"] = self._game_chat[-10:]
@@ -347,12 +385,15 @@ class GameHub:
         self._active_session = None
         self._active_morpion = None
         self._active_puissance4 = None
+        self._active_chess = None
 
         return {"status": "forfait", "game": session.game_type}
 
     def _get_active_game(self):
         if self._active_session.game_type == "morpion":
             return self._active_morpion
+        if self._active_session.game_type == "echecs":
+            return self._active_chess
         return self._active_puissance4
 
     # --- Statistiques et progression ---
@@ -821,10 +862,15 @@ class GameHub:
         """Verifie si toutes les competences sont validees pour les echecs."""
         if self.stats.get("chess_unlocked"):
             return
-        all_ok = all(req["check"](self.stats) for req in CHESS_REQUIREMENTS.values())
+        # Decision JM 12/06 : les echecs servent de banc d'essai strategique
+        # (moteur python-chess arbitre, Promethee choisit dans les coups legaux).
+        # Deblocage sur morpion + puissance4 valides ; le playground reste une
+        # competence affichee mais n'est plus bloquante.
+        all_ok = (CHESS_REQUIREMENTS["morpion"]["check"](self.stats)
+                  and CHESS_REQUIREMENTS["puissance4"]["check"](self.stats))
         if all_ok:
             self.stats["chess_unlocked"] = True
-            logger.info("GAME_HUB: ECHECS DEBLOQUES — toutes les competences validees!")
+            logger.info("GAME_HUB: ECHECS DEBLOQUES — competences morpion + puissance4 validees!")
 
     def _get_game_stats(self, game_type: str) -> Dict[str, Any]:
         gt = game_type
@@ -889,6 +935,52 @@ class GameHub:
 
     # Chat interne : messages entre joueurs pendant la partie
     _game_chat: List[Dict[str, str]] = []
+
+    async def chess_ai_move(self) -> Dict[str, Any]:
+        """Coup de Promethee aux echecs (ASYNC — LLM local + arbitre).
+
+        Pattern synthebrise : le front appelle cette route quand c'est le tour
+        de Promethee. Le LLM recoit la liste des coups legaux ; coup invalide
+        -> retry -> fallback heuristique marque "assiste".
+        """
+        from core.games.chess_game import promethee_chess_move
+
+        session = self._active_session
+        if not session or session.game_type != "echecs":
+            return {"error": "Pas de partie d'echecs en cours"}
+        game = self._active_chess
+        if game is None or game.game_over:
+            return {"error": "Partie terminee ou absente"}
+        if game.current_player != session.promethee_symbol:
+            return {"error": f"Ce n'est pas le tour de Promethee ({game.current_player} au trait)"}
+
+        ai = await promethee_chess_move(game)
+        if "error" in ai:
+            return ai
+
+        response: Dict[str, Any] = {
+            "promethee_move": ai,
+            "state": game.get_state(),
+            "render": game.render(),
+        }
+
+        comment = ai.get("comment") or ""
+        if comment:
+            self._game_chat.append({"player": "promethee", "message": comment,
+                                    "ts": time.time()})
+
+        if game.game_over:
+            self._record_game_end(game, session)
+            response["game_over"] = True
+            response["stats"] = self._get_game_stats("echecs")
+            self._active_session = None
+            self._active_morpion = None
+            self._active_puissance4 = None
+            self._active_chess = None
+            self._publish_game_event("GAME_ENDED", session, ai.get("result", {}))
+
+        response["chat"] = self._game_chat[-10:]
+        return response
 
     async def game_say(self, player: str, message: str) -> Dict[str, Any]:
         """Un joueur envoie un message pendant la partie."""
