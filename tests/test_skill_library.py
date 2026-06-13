@@ -121,6 +121,53 @@ class TestFind:
         assert fiche["nom"] == "B"
 
 
+class TestParsePayload:
+    """Le parser doit accepter le format pipe ET le format etiquete naturel
+    (l'usage du 13/06 a montre que le LLM ecrit spontanement NOM:/DECLENCHEUR:/...)."""
+
+    def test_format_pipe(self):
+        f = sl.parse_skill_payload("Sonde | decl | ctx | proc | metr | ajust | 0.8")
+        assert f["nom"] == "Sonde"
+        assert f["procedure"] == "proc"
+        assert f["score"] == 0.8
+
+    def test_format_etiquete(self):
+        txt = ("NOM: Detection Cycles\n"
+               "DÉCLENCHEUR: iteration sur domaine fini\n"
+               "CONTEXTE: analyse mathematique\n"
+               "PROCÉDURE: 1. transition 2. path 3. cycle\n"
+               "MÉTRIQUE_SUCCÈS: longueur du cycle\n"
+               "SCORE: 2")
+        f = sl.parse_skill_payload(txt)
+        assert f["nom"] == "Detection Cycles"
+        assert "iteration" in f["declencheur"]
+        assert f["contexte"] == "analyse mathematique"
+        assert "transition" in f["procedure"]
+        assert f["metrique"] == "longueur du cycle"
+        assert f["score"] == 2.0
+
+    def test_etiquete_procedure_multiligne(self):
+        txt = "NOM: X\nPROCÉDURE: etape 1\netape 2\netape 3\nMÉTRIQUE: m"
+        f = sl.parse_skill_payload(txt)
+        assert f["procedure"] == "etape 1\netape 2\netape 3"
+        assert f["metrique"] == "m"
+
+    def test_etiquete_newlines_litteraux(self):
+        # apres collapse : \n litteraux -> restaures puis parses par label
+        f = sl.parse_skill_payload("NOM: Y\\nPROCÉDURE: faire ceci\\nSCORE: 0.5")
+        assert f["nom"] == "Y"
+        assert f["procedure"] == "faire ceci"
+        assert f["score"] == 0.5
+
+    def test_etiquete_via_save_skill(self):
+        txt = "NOM: Cousin\nDÉCLENCHEUR: routine cyclique\nPROCÉDURE: detecter\nSCORE: 3"
+        f = sl.parse_skill_payload(txt)
+        res = sl.save_skill(f["nom"], declencheur=f["declencheur"],
+                            procedure=f["procedure"], score=f["score"])
+        assert res["status"] == "created"
+        assert sl.load_skill("Cousin")["best_score"] == 3.0
+
+
 def test_slugify():
     assert sl.slugify("Sonde d'Attracteurs Numériques") == "sonde-d-attracteurs-numeriques"
     assert sl.slugify("") == "competence"
@@ -182,6 +229,18 @@ class TestExecutionConsole:
         assert fiche["procedure"] == "balayer/iterer/classer"
         assert fiche["best_score"] == 0.7
         assert fiche["protocole_ajustement"] == "reviser si cycle long"
+
+    @pytest.mark.asyncio
+    async def test_save_format_etiquete_naturel(self, engine):
+        # le format que le LLM ecrit spontanement doit marcher de bout en bout
+        payload = ("NOM: Detection Cycles\\nDÉCLENCHEUR: iteration domaine fini"
+                   "\\nCONTEXTE: analyse\\nPROCÉDURE: path + doublon\\nMÉTRIQUE: longueur\\nSCORE: 2")
+        res = await engine._execute_command("skill_save", [payload])
+        assert "🌱" in res or "creee" in res
+        fiche = sl.load_skill("Detection Cycles")
+        assert fiche is not None
+        assert "iteration" in fiche["declencheur"]
+        assert fiche["best_score"] == 2.0
 
     @pytest.mark.asyncio
     async def test_load_via_commande(self, engine):

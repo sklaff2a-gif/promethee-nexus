@@ -1480,34 +1480,25 @@ class ChatEngine:
         indispensables ; les autres enrichissent. Le dernier champ, s'il est un
         nombre, est le SCORE (l'oracle dur de la boucle) — la procedure n'est
         remplacee que s'il bat le meilleur score connu."""
-        # Le collapse multi-ligne a transforme les vrais newlines en \n litteraux
-        # (comme pour !run) : on les restaure pour garder une procedure lisible.
-        payload = (payload or "").replace("\\n", "\n").strip()
-        if not payload:
+        if not (payload or "").strip():
             return ("Usage : !skill_save nom | declencheur | contexte | procedure | "
                     "metrique | protocole_ajustement | score\n"
-                    "(seuls le nom et la procedure sont obligatoires ; le dernier "
-                    "champ numerique est le score qui decide d'une mise a jour)")
-        champs = [c.strip() for c in payload.split("|")]
-        nom = champs[0] if len(champs) > 0 else ""
-        declencheur = champs[1] if len(champs) > 1 else ""
-        contexte = champs[2] if len(champs) > 2 else ""
-        procedure = champs[3] if len(champs) > 3 else ""
-        metrique = champs[4] if len(champs) > 4 else ""
-        protocole = champs[5] if len(champs) > 5 else ""
-        score = None
-        if len(champs) > 6 and champs[6]:
-            try:
-                score = float(champs[6])
-            except ValueError:
-                score = None
-        # Tolerance : si une fiche a moins de 4 champs, la procedure peut etre vide
-        # mais on cree quand meme le squelette (revision ulterieure possible).
+                    "(ou format etiquete NOM: ... / DECLENCHEUR: ... / etc. — les deux "
+                    "marchent ; le dernier champ numerique est le score qui decide "
+                    "d'une mise a jour)")
         try:
-            from core.skill_library import save_skill
-            res = save_skill(nom, declencheur=declencheur, contexte=contexte,
-                             procedure=procedure, metrique=metrique,
-                             protocole=protocole, score=score)
+            from core.skill_library import parse_skill_payload, save_skill
+            # Parser tolerant : accepte le format pipe ET le format etiquete naturel
+            # (NOM:/DECLENCHEUR:/...). Le collapse a deja transforme les vrais
+            # newlines en \n litteraux ; parse_skill_payload les restaure.
+            f = parse_skill_payload(payload)
+            if not f["nom"]:
+                return ("!skill_save : nom de competence introuvable. Donne au moins "
+                        "un NOM et une PROCEDURE (format pipe `nom | ... | procedure` "
+                        "ou etiquete `NOM: ...`).")
+            res = save_skill(f["nom"], declencheur=f["declencheur"], contexte=f["contexte"],
+                             procedure=f["procedure"], metrique=f["metrique"],
+                             protocole=f["protocole"], score=f["score"])
             if res.get("status") == "error":
                 return f"!skill_save : {res.get('message')}"
             icon = {"created": "🌱", "improved": "📈", "kept": "🛡️", "revised": "✏️"}.get(res["status"], "•")

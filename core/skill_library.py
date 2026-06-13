@@ -110,6 +110,94 @@ def _all() -> List[Dict]:
     return out
 
 
+# ─── Parsing tolerant de la charge !skill_save ───────────────────────────────
+# Deux formats acceptes (l'usage du 13/06 a montre que le LLM ecrit spontanement
+# le format ETIQUETE, pas le format pipe impose) :
+#   1. pipe     : nom | declencheur | contexte | procedure | metrique | ajustement | score
+#   2. etiquete : NOM: ...\nDECLENCHEUR: ...\nCONTEXTE: ...\nPROCEDURE: ...\n...
+# Sans cette tolerance, sa procedure nocturne autonome casserait a chaque fois.
+
+def _strip_accents(s: str) -> str:
+    table = str.maketrans("àâäéèêëîïôöùûüç", "aaaeeeeiioouuuc")
+    return (s or "").translate(table)
+
+
+_LABEL_MAP = {
+    "nom": "nom", "name": "nom", "identite": "nom",
+    "declencheur": "declencheur", "trigger": "declencheur", "reconnaissance": "declencheur",
+    "contexte": "contexte", "context": "contexte", "zone": "contexte", "mode": "contexte",
+    "procedure": "procedure", "proc": "procedure", "etapes": "procedure", "methode": "procedure",
+    "metrique": "metrique", "metric": "metrique", "metrique_succes": "metrique",
+    "metrique_de_succes": "metrique", "succes": "metrique", "mesure": "metrique",
+    "ajustement": "protocole", "protocole": "protocole", "protocole_ajustement": "protocole",
+    "revision": "protocole", "mutation": "protocole",
+    "score": "score",
+}
+
+
+def _map_label(raw: str) -> Optional[str]:
+    # lower() AVANT de retirer les accents : la table ne couvre que les minuscules,
+    # donc un label majuscule accentue (« DÉCLENCHEUR ») doit d'abord etre abaisse.
+    key = _strip_accents(raw.lower()).strip().replace(" ", "_").replace("-", "_")
+    return _LABEL_MAP.get(key)
+
+
+def parse_skill_payload(text: str) -> Dict:
+    """Parse une charge !skill_save en champs, tolerant aux deux formats.
+
+    Renvoie {nom, declencheur, contexte, procedure, metrique, protocole, score}.
+    """
+    text = (text or "").replace("\\n", "\n").strip()
+    fields = {"nom": "", "declencheur": "", "contexte": "", "procedure": "",
+              "metrique": "", "protocole": "", "score": None}
+    if not text:
+        return fields
+
+    # Detecter le mode etiquete : au moins une ligne « LABEL_CONNU: ... ».
+    lines = text.split("\n")
+    has_labels = False
+    for line in lines:
+        m = re.match(r"^\s*([A-Za-zÀ-ÿ_][A-Za-zÀ-ÿ_ \-]{1,30}?)\s*:\s*", line)
+        if m and _map_label(m.group(1)):
+            has_labels = True
+            break
+
+    if has_labels:
+        current = None
+        buf: Dict[str, List[str]] = {}
+        for line in lines:
+            m = re.match(r"^\s*([A-Za-zÀ-ÿ_][A-Za-zÀ-ÿ_ \-]{1,30}?)\s*:\s*(.*)$", line)
+            field = _map_label(m.group(1)) if m else None
+            if field:
+                current = field
+                buf.setdefault(field, []).append(m.group(2))
+            elif current is not None:
+                buf.setdefault(current, []).append(line)
+        for f, parts in buf.items():
+            val = "\n".join(parts).strip()
+            if f == "score":
+                try:
+                    fields["score"] = float(val.split()[0]) if val else None
+                except (ValueError, IndexError):
+                    fields["score"] = None
+            else:
+                fields[f] = val
+        return fields
+
+    # Mode pipe : nom | declencheur | contexte | procedure | metrique | ajustement | score
+    champs = [c.strip() for c in text.split("|")]
+    order = ["nom", "declencheur", "contexte", "procedure", "metrique", "protocole"]
+    for i, key in enumerate(order):
+        if i < len(champs):
+            fields[key] = champs[i]
+    if len(champs) > 6 and champs[6]:
+        try:
+            fields["score"] = float(champs[6])
+        except ValueError:
+            fields["score"] = None
+    return fields
+
+
 # ─── API ─────────────────────────────────────────────────────────────────────
 
 def save_skill(nom: str, declencheur: str = "", contexte: str = "",
