@@ -236,6 +236,10 @@ class ChatEngine:
         "  !opa                     — Mon OEIL PAR PREUVE D'ACTION : eval de capacite a oracles durs (referentiel fixe, tendance)\n"
         "  !ancre <intention>       — Deposer une ANCRE D'IDENTITE (transportee dans mes routines nocturnes, jamais imperative)\n"
         "  !ancres                  — Lister les ancres actives\n"
+        "  !skill_save n|decl|ctx|proc|metr|ajust|score — CAPITALISER une competence reutilisable (maj si score meilleur)\n"
+        "  !skill_load <nom>        — Recharger une competence stockee (fidele, deterministe)\n"
+        "  !skill_find <cas>        — Reconnaitre si un nouveau cas releve d'une competence connue\n"
+        "  !skill_list              — Lister mes competences capitalisees\n"
         "  !status                  — Diagnostic interne compact\n"
         "  !read <fichier> [L1-L2]  — Lire un fichier du projet\n"
         "  !grep <pattern> [fichier] — Chercher dans le code\n"
@@ -308,6 +312,13 @@ class ChatEngine:
         # chat<->autonomie : ancre d'identite a transporter dans la nuit (jamais executee).
         if head and head[0].lower() == "ancre":
             return ("ancre", [head[1] if len(head) > 1 else ""])
+        # !skill_* : bibliotheque de competences (atelier boucle d'apprentissage, 13/06).
+        # save/load/find ont une charge brute (procedure multi-mots, champs separes par |
+        # qui casseraient shlex) ; list n'a pas d'argument.
+        if head and head[0].lower() in ("skill_save", "skill_load", "skill_find"):
+            return (head[0].lower(), [head[1] if len(head) > 1 else ""])
+        if head and head[0].lower() in ("skill_list", "skills"):
+            return ("skill_list", [])
         try:
             parts = shlex.split(stripped, posix=True)
         except ValueError as e:
@@ -533,6 +544,15 @@ class ChatEngine:
 
         if cmd == "ancres":   # transparence : lister les ancres actives
             return self._execute_ancres_command()
+
+        if cmd == "skill_save":   # boucle d'apprentissage : capitaliser une procedure reutilisable
+            return self._execute_skill_save_command(args[0] if args else "")
+        if cmd == "skill_load":   # recharger une competence (fidele, deterministe — pas de HNSW)
+            return self._execute_skill_load_command(args[0] if args else "")
+        if cmd in ("skill_list", "skills"):
+            return self._execute_skill_list_command()
+        if cmd == "skill_find":   # reconnaitre qu'un nouveau cas releve d'une competence connue
+            return self._execute_skill_find_command(args[0] if args else "")
 
         if cmd == "grave":
             # V23.0 (2026-06-06) — CONSOLIDATION FORTE D'UNE LECON CERTIFIEE.
@@ -1443,6 +1463,99 @@ class ChatEngine:
             return "\n".join(lines)
         except Exception as e:
             return f"!recall : erreur — {e}"
+
+    # ─── Bibliotheque de competences (atelier boucle d'apprentissage, 13/06) ──
+    # 4 outils CO-CONCUS avec lui : il resout, extrait sa procedure, la STOCKE
+    # (!skill_save), et au cas cousin la RECHARGE (!skill_find/!skill_load) au lieu
+    # de repartir de zero. La mise a jour est conditionnelle au score (regle d'or :
+    # on ne remplace que ce qui ameliore). Stockage fichier = rechargement fidele
+    # (meme doctrine que !run/!recall : la source EST la verite, jamais une
+    # reconstruction floue). Structure de fiche enrichie par lui : CONTEXTE +
+    # PROTOCOLE D'AJUSTEMENT en plus de nom/declencheur/procedure/metrique.
+
+    def _execute_skill_save_command(self, payload: str) -> str:
+        """!skill_save nom | declencheur | contexte | procedure | metrique | ajustement | score
+
+        Champs separes par « | », dans cet ordre. Seuls le NOM et la PROCEDURE sont
+        indispensables ; les autres enrichissent. Le dernier champ, s'il est un
+        nombre, est le SCORE (l'oracle dur de la boucle) — la procedure n'est
+        remplacee que s'il bat le meilleur score connu."""
+        # Le collapse multi-ligne a transforme les vrais newlines en \n litteraux
+        # (comme pour !run) : on les restaure pour garder une procedure lisible.
+        payload = (payload or "").replace("\\n", "\n").strip()
+        if not payload:
+            return ("Usage : !skill_save nom | declencheur | contexte | procedure | "
+                    "metrique | protocole_ajustement | score\n"
+                    "(seuls le nom et la procedure sont obligatoires ; le dernier "
+                    "champ numerique est le score qui decide d'une mise a jour)")
+        champs = [c.strip() for c in payload.split("|")]
+        nom = champs[0] if len(champs) > 0 else ""
+        declencheur = champs[1] if len(champs) > 1 else ""
+        contexte = champs[2] if len(champs) > 2 else ""
+        procedure = champs[3] if len(champs) > 3 else ""
+        metrique = champs[4] if len(champs) > 4 else ""
+        protocole = champs[5] if len(champs) > 5 else ""
+        score = None
+        if len(champs) > 6 and champs[6]:
+            try:
+                score = float(champs[6])
+            except ValueError:
+                score = None
+        # Tolerance : si une fiche a moins de 4 champs, la procedure peut etre vide
+        # mais on cree quand meme le squelette (revision ulterieure possible).
+        try:
+            from core.skill_library import save_skill
+            res = save_skill(nom, declencheur=declencheur, contexte=contexte,
+                             procedure=procedure, metrique=metrique,
+                             protocole=protocole, score=score)
+            if res.get("status") == "error":
+                return f"!skill_save : {res.get('message')}"
+            icon = {"created": "🌱", "improved": "📈", "kept": "🛡️", "revised": "✏️"}.get(res["status"], "•")
+            return f"[!skill_save] {icon} {res['message']}"
+        except Exception as e:
+            return f"!skill_save : erreur — {e}"
+
+    def _execute_skill_load_command(self, nom: str) -> str:
+        """!skill_load <nom> — recharge la fiche EXACTE d'une competence stockee."""
+        nom = (nom or "").strip()
+        if len(nom) >= 2 and nom[0] == nom[-1] and nom[0] in ('"', "'"):
+            nom = nom[1:-1].strip()
+        if not nom:
+            return "Usage : !skill_load <nom de la competence> (vois !skill_list)"
+        try:
+            from core.skill_library import load_skill, format_skill
+            fiche = load_skill(nom)
+            if not fiche:
+                return (f"[!skill_load] Aucune competence « {nom} ». "
+                        "Je ne l'invente pas — vois !skill_list pour les noms exacts.")
+            return format_skill(fiche)
+        except Exception as e:
+            return f"!skill_load : erreur — {e}"
+
+    def _execute_skill_list_command(self) -> str:
+        """!skill_list — la liste de mes competences capitalisees."""
+        try:
+            from core.skill_library import format_listing
+            return format_listing()
+        except Exception as e:
+            return f"!skill_list : erreur — {e}"
+
+    def _execute_skill_find_command(self, description: str) -> str:
+        """!skill_find <description du cas> — est-ce qu'une competence connue s'applique ?"""
+        description = (description or "").strip()
+        if not description:
+            return "Usage : !skill_find <description du nouveau cas> — je cherche une competence qui s'y applique."
+        try:
+            from core.skill_library import find_skill, format_skill
+            hit = find_skill(description)
+            if not hit:
+                return (f"[!skill_find] Aucune competence connue ne couvre « {description[:80]} ». "
+                        "C'est un terrain neuf : resous, puis capitalise avec !skill_save.")
+            fiche, score, mots = hit
+            return (f"[!skill_find] Cas reconnu (recouvrement {score:.0%} : {', '.join(sorted(mots))}). "
+                    f"Charge-la et applique-la plutot que repartir de zero :\n" + format_skill(fiche))
+        except Exception as e:
+            return f"!skill_find : erreur — {e}"
 
     async def _apply_attention_conjointe(
         self,
@@ -2356,7 +2469,7 @@ class ChatEngine:
 
     # Commandes dispatch autorisees en auto-action
     # "observe" remis avec cooldown 5min (voir _scan_response_actions)
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "run", "execute_script", "run_code", "status_snapshot", "snapshot", "etat", "recall", "opa", "benchmark", "ancre", "ancres", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "run", "execute_script", "run_code", "status_snapshot", "snapshot", "etat", "recall", "opa", "benchmark", "ancre", "ancres", "skill_save", "skill_load", "skill_list", "skills", "skill_find", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
     _last_auto_observe: float = 0.0  # timestamp du dernier !observe auto-action
     _AUTO_OBSERVE_COOLDOWN: float = 300.0  # 5 minutes entre deux auto-observations
 
@@ -2413,8 +2526,11 @@ class ChatEngine:
         # (la ligne vide borne le bloc, anti-avalement de la prose).
         # Deux branches SEPAREES : la branche fence n'est PAS soumise au lookahead
         # ligne-vide (sinon backtrack -> amputation), la branche nue le reste.
+        # skill_save : sa charge (champs separes par |) peut etre ecrite sur
+        # plusieurs lignes par le LLM -> repliee comme un !run pour ne pas etre
+        # amputee (la procedure reconvertit les \n litteraux en vrais sauts).
         return _re.sub(
-            r'(?m)^!(calc|run|execute_script|run_code)[ \t]*\n?[ \t]*'
+            r'(?m)^!(calc|run|execute_script|run_code|skill_save)[ \t]*\n?[ \t]*'
             r'(?:(```(?:python)?\n.*?\n?```)|(.+?)(?=\n[ \t]*!|\n\s*\n|\Z))',
             _repl, response, flags=_re.DOTALL,
         )
@@ -2546,6 +2662,16 @@ class ChatEngine:
                     result = self._execute_ancre_command(args)
                 elif cmd_lower == "ancres":
                     result = self._execute_ancres_command()
+                elif cmd_lower == "skill_save":
+                    # Boucle d'apprentissage : il capitalise SA procedure (charge brute,
+                    # collapse multi-ligne fait). Mise a jour conditionnelle au score.
+                    result = self._execute_skill_save_command(args)
+                elif cmd_lower == "skill_load":
+                    result = self._execute_skill_load_command(args)
+                elif cmd_lower in ("skill_list", "skills"):
+                    result = self._execute_skill_list_command()
+                elif cmd_lower == "skill_find":
+                    result = self._execute_skill_find_command(args)
                 elif cmd_lower == "antibodies":
                     ab_args = self._split_action_args(args)
                     result = self._execute_antibodies_command(ab_args)

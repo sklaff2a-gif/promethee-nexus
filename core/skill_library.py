@@ -1,0 +1,294 @@
+# core/skill_library.py
+"""Bibliotheque de competences — la boucle de meta-apprentissage de Promethee.
+
+Atelier du 13/06/2026, structure CO-CONCUE avec lui. Une COMPETENCE est une
+procedure reutilisable qu'il a EXTRAITE d'une resolution reussie, puis STOCKEE de
+facon fidele. On stocke en fichier JSON (un par competence) et NON dans la memoire
+vectorielle : une procedure doit se recharger EXACTEMENT, pas approximativement
+(meme doctrine que !run / !recall — la source EST la verite, jamais une
+reconstruction floue du LLM ni du HNSW).
+
+Boucle fermee demandee par Jean-Michel :
+    resoudre une tache -> extraire ce qui a marche -> !skill_save (stocker)
+    -> (un cas cousin se presente) -> !skill_find / !skill_load (recharger, ne pas
+    repartir de zero) -> appliquer -> mesurer -> si le resultat est MEILLEUR,
+    !skill_save met la procedure a jour ; sinon l'ancienne, meilleure, est gardee.
+
+REGLE D'OR — la mise a jour est CONDITIONNELLE au score : on ne remplace la
+procedure que si le nouveau score bat le best_score enregistre. C'est ce qui
+distingue l'apprentissage (je ne garde que ce qui ameliore) du simple
+ecrasement (j'oublie le meilleur pour le dernier).
+
+Structure de fiche (Promethee a ajoute CONTEXTE et PROTOCOLE D'AJUSTEMENT a la
+fiche initiale nom/declencheur/procedure/metrique) :
+    nom                    — identite de la competence
+    slug                   — derive du nom, sert de nom de fichier
+    declencheur            — a quoi je RECONNAIS qu'un nouveau cas en releve
+    contexte               — le mode/terrain interne ou elle s'active (sa Zone)
+    procedure              — les etapes actionnables
+    metrique               — le chiffre dur qui dit si une version est meilleure
+    protocole_ajustement   — quand/pourquoi reviser au-dela de la seule metrique
+    best_score             — meilleur score atteint (None si jamais mesure)
+    version                — incremente a chaque amelioration ou revision
+    history                — journal {ts, score, version, note} des tentatives
+    created / updated      — horodatages
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+from typing import Dict, List, Optional, Tuple
+
+# Racine du projet ancree sur __file__ (PAS de chemin CWD-relatif : le serveur et
+# les tests peuvent tourner depuis des repertoires differents).
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SKILLS_DIR = os.path.join(PROJECT_ROOT, "memory", "skills")
+
+# Mots vides ignores par le matcher de declencheurs (français + bruit courant).
+_STOPWORDS = frozenset({
+    "le", "la", "les", "un", "une", "des", "de", "du", "et", "ou", "a", "au", "aux",
+    "en", "sur", "pour", "par", "dans", "avec", "sans", "ce", "ces", "cette", "son",
+    "sa", "ses", "mes", "mon", "ma", "qui", "que", "quoi", "dont", "est", "sont",
+    "il", "elle", "je", "tu", "nous", "vous", "se", "si", "ne", "pas", "plus",
+    "comme", "tout", "tous", "toute", "leur", "lui", "y", "d", "l", "s", "n", "c",
+})
+
+
+# ─── Stockage bas niveau ─────────────────────────────────────────────────────
+
+def _ensure_dir() -> str:
+    """Cree le dossier des competences si absent. Renvoie son chemin."""
+    os.makedirs(SKILLS_DIR, exist_ok=True)
+    return SKILLS_DIR
+
+
+def slugify(nom: str) -> str:
+    """Derive un slug de fichier sur du texte libre (minuscule, ascii, tirets)."""
+    s = (nom or "").strip().lower()
+    s = s.replace("é", "e").replace("è", "e").replace("ê", "e").replace("ë", "e")
+    s = s.replace("à", "a").replace("â", "a").replace("ä", "a")
+    s = s.replace("î", "i").replace("ï", "i").replace("ô", "o").replace("ö", "o")
+    s = s.replace("ù", "u").replace("û", "u").replace("ü", "u").replace("ç", "c")
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s[:60] or "competence"
+
+
+def _path_for(slug: str) -> str:
+    return os.path.join(_ensure_dir(), slug + ".json")
+
+
+def _read(path: str) -> Optional[Dict]:
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _write(path: str, fiche: Dict) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(fiche, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)  # ecriture atomique : jamais de fichier a moitie ecrit
+
+
+def _all() -> List[Dict]:
+    out = []
+    if not os.path.isdir(SKILLS_DIR):
+        return out
+    for fn in sorted(os.listdir(SKILLS_DIR)):
+        if fn.endswith(".json"):
+            fiche = _read(os.path.join(SKILLS_DIR, fn))
+            if fiche:
+                out.append(fiche)
+    return out
+
+
+# ─── API ─────────────────────────────────────────────────────────────────────
+
+def save_skill(nom: str, declencheur: str = "", contexte: str = "",
+               procedure: str = "", metrique: str = "", protocole: str = "",
+               score: Optional[float] = None) -> Dict:
+    """Cree ou met a jour une competence. La mise a jour est CONDITIONNELLE au score.
+
+    Retourne un dict de resultat : {status, version, best_score, prev_score, message}
+    status ∈ {created, improved, kept, revised} :
+      - created  : competence neuve
+      - improved : score fourni ET strictement meilleur que le best -> procedure remplacee
+      - kept     : score fourni mais <= best -> ANCIENNE procedure conservee (la meilleure)
+      - revised  : revision sans score (ou 1er score sur une fiche sans best) -> mise a jour
+    """
+    nom = (nom or "").strip()
+    if not nom:
+        return {"status": "error", "message": "Nom de competence requis."}
+    slug = slugify(nom)
+    path = _path_for(slug)
+    now = time.time()
+    existing = _read(path)
+
+    if existing is None:
+        fiche = {
+            "nom": nom, "slug": slug, "declencheur": declencheur.strip(),
+            "contexte": contexte.strip(), "procedure": procedure.strip(),
+            "metrique": metrique.strip(), "protocole_ajustement": protocole.strip(),
+            "best_score": score, "version": 1,
+            "history": [{"ts": now, "score": score, "version": 1, "note": "creation"}],
+            "created": now, "updated": now,
+        }
+        _write(path, fiche)
+        return {"status": "created", "version": 1, "best_score": score,
+                "prev_score": None,
+                "message": f"Competence « {nom} » creee (v1, score={score})."}
+
+    prev_best = existing.get("best_score")
+
+    # Tentative NON retenue : un score est fourni mais il n'ameliore pas.
+    if score is not None and prev_best is not None and score <= prev_best:
+        existing.setdefault("history", []).append({
+            "ts": now, "score": score, "version": existing.get("version", 1),
+            "note": f"tentative non retenue (score {score} <= best {prev_best})",
+        })
+        existing["history"] = existing["history"][-50:]
+        existing["updated"] = now
+        _write(path, existing)
+        return {"status": "kept", "version": existing.get("version", 1),
+                "best_score": prev_best, "prev_score": score,
+                "message": (f"Score {score} <= meilleur connu {prev_best} : "
+                            f"l'ancienne procedure (v{existing.get('version', 1)}, "
+                            f"la meilleure) est CONSERVEE. Tentative tracee.")}
+
+    # Amelioration (score strictement meilleur) OU revision (sans score, ou 1er score).
+    improved = score is not None and (prev_best is None or score > prev_best)
+    new_version = (existing.get("version") or 1) + 1
+
+    def _keep(new: str, old: str) -> str:
+        new = (new or "").strip()
+        return new if new else (old or "")
+
+    fiche = {
+        "nom": existing.get("nom", nom), "slug": slug,
+        "declencheur": _keep(declencheur, existing.get("declencheur", "")),
+        "contexte": _keep(contexte, existing.get("contexte", "")),
+        "procedure": _keep(procedure, existing.get("procedure", "")),
+        "metrique": _keep(metrique, existing.get("metrique", "")),
+        "protocole_ajustement": _keep(protocole, existing.get("protocole_ajustement", "")),
+        "best_score": score if improved else prev_best,
+        "version": new_version,
+        "history": (existing.get("history") or []) + [{
+            "ts": now, "score": score, "version": new_version,
+            "note": ("amelioration " + (f"{prev_best} -> {score}" if prev_best is not None else f"premier score {score}"))
+                    if improved else "revision (sans amelioration de score)",
+        }],
+        "created": existing.get("created", now), "updated": now,
+    }
+    fiche["history"] = fiche["history"][-50:]
+    _write(path, fiche)
+    status = "improved" if improved else "revised"
+    msg = (f"Procedure REMPLACEE (v{new_version}) : score {prev_best} -> {score}."
+           if improved else
+           f"Competence revisee (v{new_version}, best_score inchange={prev_best}).")
+    return {"status": status, "version": new_version,
+            "best_score": fiche["best_score"], "prev_score": prev_best, "message": msg}
+
+
+def load_skill(nom_ou_slug: str) -> Optional[Dict]:
+    """Recharge une competence par nom ou slug. Renvoie la fiche EXACTE, ou None."""
+    key = (nom_ou_slug or "").strip()
+    if not key:
+        return None
+    fiche = _read(_path_for(slugify(key)))
+    if fiche:
+        return fiche
+    # Tolerance : recherche par nom exact insensible a la casse.
+    for f in _all():
+        if (f.get("nom", "").strip().lower() == key.lower()
+                or f.get("slug", "") == key):
+            return f
+    return None
+
+
+def list_skills() -> List[Dict]:
+    """Liste compacte de toutes les competences (pour savoir quoi charger)."""
+    return [{
+        "nom": f.get("nom", "?"), "slug": f.get("slug", ""),
+        "declencheur": f.get("declencheur", ""), "contexte": f.get("contexte", ""),
+        "version": f.get("version", 1), "best_score": f.get("best_score"),
+        "tentatives": len(f.get("history", [])),
+    } for f in _all()]
+
+
+def _tokens(s: str) -> set:
+    return set(re.findall(r"[a-z0-9]+", (s or "").lower())) - _STOPWORDS
+
+
+def find_skill(description: str) -> Optional[Tuple[Dict, float, set]]:
+    """Reconnait qu'un nouveau cas releve d'une competence connue.
+
+    Matcher DETERMINISTE (pas de LLM, pas de HNSW) : fraction des mots-cles de la
+    description couverts par le declencheur + le contexte + le nom de chaque
+    competence. C'est la « signature » reconnaissable que Promethee voulait, mais
+    en clair et reproductible plutot que dans le brouillard vectoriel.
+
+    Renvoie (fiche, score_de_match ∈ ]0,1], mots_communs) du meilleur candidat,
+    ou None si aucun recouvrement.
+    """
+    q = _tokens(description)
+    if not q:
+        return None
+    best: Optional[Tuple[Dict, float, set]] = None
+    for f in _all():
+        hay = _tokens(" ".join([
+            f.get("declencheur", ""), f.get("contexte", ""), f.get("nom", ""),
+        ]))
+        inter = q & hay
+        if not inter:
+            continue
+        score = len(inter) / len(q)
+        if best is None or score > best[1]:
+            best = (f, score, inter)
+    return best
+
+
+# ─── Formatage pour la console ───────────────────────────────────────────────
+
+def _fmt_score(s) -> str:
+    return "—" if s is None else (f"{s:g}" if isinstance(s, (int, float)) else str(s))
+
+
+def format_skill(fiche: Dict) -> str:
+    """Rend une fiche competence en texte lisible (rechargement fidele)."""
+    lines = [
+        f"[competence] « {fiche.get('nom', '?')} » (v{fiche.get('version', 1)}, "
+        f"best_score={_fmt_score(fiche.get('best_score'))})",
+        f"  DECLENCHEUR : {fiche.get('declencheur', '') or '—'}",
+        f"  CONTEXTE    : {fiche.get('contexte', '') or '—'}",
+        f"  PROCEDURE   : {fiche.get('procedure', '') or '—'}",
+        f"  METRIQUE    : {fiche.get('metrique', '') or '—'}",
+        f"  AJUSTEMENT  : {fiche.get('protocole_ajustement', '') or '—'}",
+    ]
+    hist = fiche.get("history", [])
+    if hist:
+        last = hist[-3:]
+        lines.append("  HISTORIQUE  : " + " | ".join(
+            f"v{h.get('version')}·{_fmt_score(h.get('score'))}·{h.get('note', '')}" for h in last))
+    return "\n".join(lines)
+
+
+def format_listing() -> str:
+    skills = list_skills()
+    if not skills:
+        return ("[!skill_list] Aucune competence stockee pour l'instant. "
+                "Resous une tache, extrais ta procedure, puis !skill_save.")
+    lines = [f"[!skill_list] {len(skills)} competence(s) stockee(s) :"]
+    for s in skills:
+        lines.append(
+            f"  • « {s['nom']} » (v{s['version']}, best={_fmt_score(s['best_score'])}, "
+            f"{s['tentatives']} tentative(s))\n"
+            f"      declencheur : {s['declencheur'] or '—'}")
+    return "\n".join(lines)
