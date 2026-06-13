@@ -193,7 +193,44 @@ def heuristic_move(game: "ChessGame") -> Optional[str]:
 
 # ─── Le coup de Promethee (LLM local + arbitrage) ────────────────────────────
 
-def _build_prompt(game: "ChessGame", legal: List[str], correction: str = "") -> str:
+def _skill_hint(game: "ChessGame") -> str:
+    """Pont bibliotheque -> coup (13/06) : injecte la competence la plus PERTINENTE
+    de Promethee dans le contexte du coup, comme une SUGGESTION (jamais imperative
+    — exact pattern des ancres d'identite reinjectees dans les routines).
+
+    Avant ce pont, ses competences vivaient dans la console mais n'atteignaient pas
+    le canal de jeu (promethee_chess_move) : ECHECS etait un savoir mort cote partie.
+    On cherche via le matcher deterministe find_skill (pas de HNSW), avec un seuil de
+    pertinence pour ne jamais injecter une competence hors-sujet (ex: RECURSION).
+    Renvoie '' si rien de pertinent ou si la bibliotheque est indisponible.
+    """
+    try:
+        from core.skill_library import find_skill
+        phase = "ouverture developpement" if game.moves_count < 12 else "milieu de partie tactique strategie"
+        hit = find_skill(f"echecs partie strategie coup {phase} pieces plateau jeu")
+        if not hit:
+            return ""
+        fiche, score, _mots = hit
+        if score < 0.2:  # recouvrement trop faible -> competence non pertinente, on s'abstient
+            return ""
+        proc = (fiche.get("procedure") or "").strip()
+        ajust = (fiche.get("protocole_ajustement") or "").strip()
+        if not proc and not ajust:
+            return ""
+        lines = [f"[TA COMPETENCE « {fiche.get('nom', '?')} » — rappel de ta bibliotheque, pas un ordre]"]
+        if proc:
+            lines.append(f"Methode que tu as toi-meme forgee : {proc[:280]}")
+        if ajust:
+            lines.append(f"Piege a eviter : {ajust[:200]}")
+        lines.append("Applique-la si elle sert ce coup ; sinon ignore-la. Le choix reste le tien.")
+        return "\n".join(lines) + "\n\n"
+    except Exception as e:  # noqa: BLE001 — le pont ne doit JAMAIS casser un coup
+        logger.debug(f"CHESS _skill_hint indisponible: {e}")
+        return ""
+
+
+def _build_prompt(game: "ChessGame", legal: List[str], correction: str = "",
+                  skill_hint: str = "") -> str:
     couleur = game.current_player.upper()
     hist = ""
     for i in range(0, len(game.history_san), 2):
@@ -207,6 +244,7 @@ def _build_prompt(game: "ChessGame", legal: List[str], correction: str = "") -> 
         f"{correction}"
         f"Historique : {hist.strip() or '(debut de partie)'}\n"
         f"Plateau (MAJUSCULES = blancs, ligne 1 en bas) :\n{game.render()}\n\n"
+        f"{skill_hint}"
         f"TES COUPS LEGAUX (choisis STRICTEMENT dans cette liste, format UCI) :\n"
         f"{' '.join(legal)}\n\n"
         f"Reponds sur deux lignes exactement :\n"
@@ -266,13 +304,16 @@ async def promethee_chess_move(game: "ChessGame") -> Dict[str, Any]:
         return {"error": "Pas de coup a jouer"}
 
     uci, intention, assisted = None, "", False
+    # Pont bibliotheque->coup : on charge le rappel de competence UNE fois (lecture
+    # fichiers) et on le passe aux deux appels (initial + correction).
+    hint = _skill_hint(game)
     try:
-        raw = await _ask_llm(_build_prompt(game, legal))
+        raw = await _ask_llm(_build_prompt(game, legal, skill_hint=hint))
         uci, intention = _parse_llm_move(raw, legal)
         if uci is None:
             correction = ("[ARBITRE] Ta proposition precedente n'etait pas dans la liste "
                           "des coups legaux. Relis la liste et choisis STRICTEMENT dedans.\n")
-            raw = await _ask_llm(_build_prompt(game, legal, correction))
+            raw = await _ask_llm(_build_prompt(game, legal, correction, skill_hint=hint))
             uci, intention = _parse_llm_move(raw, legal)
     except Exception as e:
         logger.warning(f"CHESS: appel LLM echoue ({e}) — fallback heuristique")
