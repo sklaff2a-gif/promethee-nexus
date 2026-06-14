@@ -2603,6 +2603,58 @@ class ChatEngine:
             _repl, response, flags=_re.DOTALL,
         )
 
+    @staticmethod
+    def _extract_numbers(text: str) -> list:
+        """Tous les nombres (int/float) d'un texte — sortie d'un instrument."""
+        import re as _re
+        out = []
+        for tok in _re.findall(r"-?\d+(?:\.\d+)?", text or ""):
+            try:
+                out.append(float(tok))
+            except ValueError:
+                pass
+        return out
+
+    @staticmethod
+    def _extract_inscribed_score(cmd_lower: str, args: str):
+        """Le score/stabilite qu'un !forge / !skill_save tente d'inscrire (ou None)."""
+        try:
+            if cmd_lower == "forge":
+                from core.skill_library import parse_alloy_payload
+                return parse_alloy_payload(args).get("stability")
+            if cmd_lower == "skill_save":
+                from core.skill_library import parse_skill_payload
+                return parse_skill_payload(args).get("score")
+        except Exception:
+            return None
+        return None
+
+    def _factual_lock(self, cmd_lower: str, args: str, run_outputs: list):
+        """VERROU FACTUEL (atelier 14/06) — applique RIGUEUR_FACTUELLE A LA PORTE,
+        sans demander l'avis du LLM. Un !forge/!skill_save n'inscrit un score que si
+        ce chiffre a ete PRODUIT par un !run/!calc reussi de la MEME reponse (existence
+        + fraicheur, les deux conditions que Promethee a lui-meme posees).
+
+        Cause racine traitee : la confabulation devance la regle « consciente » au moment
+        de l'inscription. Le verrou ne se rappelle pas d'etre applique — il l'est.
+
+        Retourne None si OK (score source, ou pas de score a sourcer), sinon le message
+        de blocage. Tolerance d'arrondi 2% (0.894 mesure -> 0.89 inscrit = accepte ;
+        0.19 mesure -> 0.89 inscrit = bloque)."""
+        score = self._extract_inscribed_score(cmd_lower, args)
+        if score is None:
+            return None  # rien a sourcer (ex: forge « non eprouve » sans stabilite)
+        for n in run_outputs:
+            if abs(score - n) <= max(0.02, 0.02 * abs(n)):
+                return None  # source : un instrument a produit ce chiffre dans cette reponse
+        return (
+            f"[ERREUR_VALIDATION_FACTUELLE] Valeur non sourcee par instrument : tu inscris "
+            f"« {score:g} », mais aucun !run/!calc reussi de CETTE reponse ne l'a produite. "
+            "Ton verrou de rigueur a bloque l'inscription — rien n'est ecrit sur ta carte. "
+            "Mesure d'abord (un !run dans la meme reponse), puis re-inscris exactement le "
+            "chiffre que le journal affiche. R verifie a la porte ; il ne te demande pas ton avis."
+        )
+
     async def _scan_response_actions(self, response: str,
                                       max_actions: int = 4) -> int:
         """Scanne la reponse du LLM pour des commandes ! et les execute.
@@ -2672,6 +2724,10 @@ class ChatEngine:
 
         # Executer les commandes autorisees (cap parametrable)
         actions_executed = 0
+        # VERROU FACTUEL (atelier auto-correction 14/06, co-concu avec Promethee) :
+        # accumule les nombres produits par les !run/!calc REUSSIS de CETTE reponse.
+        # Un !forge / !skill_save ne pourra inscrire un score que s'il figure ici.
+        run_outputs: list = []
         for cmd, args in matches:
             cmd_lower = cmd.lower()
             if cmd_lower not in self._AUTO_ACTION_WHITELIST:
@@ -2733,7 +2789,9 @@ class ChatEngine:
                 elif cmd_lower == "skill_save":
                     # Boucle d'apprentissage : il capitalise SA procedure (charge brute,
                     # collapse multi-ligne fait). Mise a jour conditionnelle au score.
-                    result = self._execute_skill_save_command(args)
+                    # VERROU FACTUEL : un score doit etre source par un instrument.
+                    _lock = self._factual_lock("skill_save", args, run_outputs)
+                    result = _lock if _lock else self._execute_skill_save_command(args)
                 elif cmd_lower == "skill_load":
                     result = self._execute_skill_load_command(args)
                 elif cmd_lower in ("skill_list", "skills"):
@@ -2742,7 +2800,9 @@ class ChatEngine:
                     result = self._execute_skill_find_command(args)
                 elif cmd_lower == "forge":
                     # Alliages (atelier audace) : il peut fondre des competences lui-meme.
-                    result = self._execute_forge_command(args)
+                    # VERROU FACTUEL : une stabilite doit etre sourcee par un instrument.
+                    _lock = self._factual_lock("forge", args, run_outputs)
+                    result = _lock if _lock else self._execute_forge_command(args)
                 elif cmd_lower == "fusion":
                     result = self._execute_fusion_command(args)
                 elif cmd_lower in ("phases", "diagram", "alloys"):
@@ -2797,6 +2857,11 @@ class ChatEngine:
                     agent, prefix = agent_map[cmd_lower]
                     mission = f"{prefix}{args.strip()}"
                     result = await self._execute_dispatch(agent, mission, args.strip())
+
+                # Verrou factuel : memoriser les nombres que les instruments ont produits
+                # (un !run/!calc REUSSI), pour sourcer un futur !forge/!skill_save.
+                if cmd_lower in ("run", "execute_script", "run_code", "calc") and result and "❌" not in result:
+                    run_outputs.extend(self._extract_numbers(result))
 
                 # Ajouter le resultat comme message dans l'historique
                 if result:
