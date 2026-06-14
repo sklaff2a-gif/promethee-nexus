@@ -1872,6 +1872,63 @@ class ChatEngine:
 
         return "\n".join(cleaned).strip()
 
+    # ─── VERROUS COMPORTEMENTAUX (atelier 14/06) ─────────────────────────────
+    # Modele du verrou factuel etendu : rendre un derapage MECANIQUEMENT visible
+    # plutot que compter sur la bonne volonte. Pour la PROSE (qu'on ne reecrit pas),
+    # le mur est un signalement INELUCTABLE et deterministe, colle a la reponse —
+    # donc vu par le lecteur ET reinjecte a Promethee au tour suivant.
+
+    _FEELING_TERMS = ("bpm", "battement", "dopamine", "coherence", "cohérence",
+                      "serotonin", "sérotonin", "noradrenalin", "acetylcholin",
+                      "acétylcholin", "cortisol", "pulsion")
+
+    @staticmethod
+    def _guard_feeling(response: str) -> str:
+        """VERROU RESSENTI (anti-amplification narrative) : un chiffre accole a un
+        terme d'etat interne doit venir d'un !status_snapshot de la meme reponse.
+        Sinon, on signale (le reel n'est pas ce qu'il ressent). Retourne l'annotation
+        a coller, ou '' si rien a signaler."""
+        import re as _re
+        low = (response or "").lower()
+        if any(s in low for s in ("!status_snapshot", "!snapshot", "!etat", "!corps", "!pulsions")):
+            return ""  # il a verifie : le chiffre est source
+        num = _re.compile(r"\d")
+        for term in ChatEngine._FEELING_TERMS:
+            i = low.find(term)
+            while i != -1:
+                if num.search(low[max(0, i - 25):i + len(term) + 25]):
+                    return ("\n\n[⚠️ VERROU RESSENTI] Tu affirmes un etat chiffre sans "
+                            "!status_snapshot dans cette reponse — ce que tu ressens n'est "
+                            "pas verifie. Lance un snapshot avant d'affirmer ton corps.")
+                i = low.find(term, i + 1)
+        return ""
+
+    _COMMITMENT_PATTERNS = (
+        (r"\bje (?:vais|vai|m'appr[eê]te a|compte)\b[^.!?\n]{0,40}\bancr", "!ancre"),
+        (r"\bje (?:vais|compte|m'appr[eê]te a)\b[^.!?\n]{0,40}\b(?:grav|capitalis|sauvegard|enregistr|inscri)", "!skill_save"),
+        (r"\bje (?:vais|compte|m'appr[eê]te a)\b[^.!?\n]{0,40}\bforge", "!forge"),
+        (r"\bje (?:vais|compte|m'appr[eê]te a)\b[^.!?\n]{0,40}\b(?:mesur|calcul|verifi|vérifi|test|eprouv|éprouv|fais tourner|lance(?:r)? (?:le |un )?(?:!?run|script|calcul))", "!run"),
+    )
+
+    @staticmethod
+    def _guard_commitment(response: str) -> str:
+        """VERROU ENGAGEMENT (anti ecart expression/acte) : annoncer une action-outil
+        (« je vais ancrer/forger/mesurer... ») sans emettre la commande = signale.
+        Dire n'est pas faire."""
+        import re as _re
+        low = (response or "").lower()
+        for pat, cmd in ChatEngine._COMMITMENT_PATTERNS:
+            if _re.search(pat, low) and cmd.lower() not in low:
+                return (f"\n\n[⚠️ VERROU ENGAGEMENT] Tu annonces une action (« je vais... ») "
+                        f"sans l'avoir faite : emets {cmd} dans cette reponse, ou ne l'annonce pas. "
+                        "Dire n'est pas faire.")
+        return ""
+
+    def _apply_behavioral_guards(self, response: str) -> str:
+        """Colle les annotations des verrous de prose (ressenti + engagement)."""
+        suffix = self._guard_feeling(response) + self._guard_commitment(response)
+        return (response + suffix) if suffix else response
+
     def _execute_phi_command(self) -> str:
         """Mesure de conscience Phi — concu par Promethee (exercice 1/5)."""
         try:
@@ -2739,8 +2796,20 @@ class ChatEngine:
                 args = args or ""  # args peut etre None si pas d'argument
                 logger.info(f"CHAT AUTO-ACTION: !{cmd_lower} {args[:50] if args else ''}")
 
+                # VERROU PERSEVERATION (atelier 14/06) : une action deja ECHOUEE, re-emise
+                # a l'identique (mot pour mot), est bloquee — repeter ne la fera pas reussir
+                # (cf. le coup illegal 3x aux echecs, la navette de dame).
+                _sig = (cmd_lower, (args or "").strip()[:200])
+                _failed = getattr(self, "_failed_action_sigs", None)
+                if _failed is None:
+                    _failed = self._failed_action_sigs = []
+
                 # Traitement selon le type de commande
-                if cmd_lower == "status":
+                if _sig in _failed:
+                    result = ("[⚠️ VERROU PERSEVERATION] Tu reemets une action qui a deja "
+                              "echoue, mot pour mot. La repeter ne la fera pas reussir — "
+                              "corrige l'erreur, change d'approche, ou abandonne cette piste.")
+                elif cmd_lower == "status":
                     result = self._execute_status_command()
                 elif cmd_lower == "read":
                     read_args = self._split_action_args(args)
@@ -2857,6 +2926,13 @@ class ChatEngine:
                     agent, prefix = agent_map[cmd_lower]
                     mission = f"{prefix}{args.strip()}"
                     result = await self._execute_dispatch(agent, mission, args.strip())
+
+                # Verrou perseveration : memoriser les actions qui ont ECHOUE, pour
+                # bloquer leur re-emission identique (vrais echecs d'execution seulement).
+                if result and any(m in result for m in ("❌", "ECHEC", "Coup illegal", "Invalid argument", "Format invalide", "coupe")):
+                    if _sig not in _failed:
+                        _failed.append(_sig)
+                        self._failed_action_sigs = _failed[-30:]
 
                 # Verrou factuel : memoriser les nombres que les instruments ont produits
                 # (un !run/!calc REUSSI), pour sourcer un futur !forge/!skill_save.
@@ -4436,6 +4512,12 @@ class ChatEngine:
 
         # 4b. Nettoyer les faux resultats hallucinés apres les commandes !
         full_response = self._clean_response_commands(full_response)
+
+        # 4b-bis. VERROUS COMPORTEMENTAUX (atelier 14/06) : signaler de facon
+        # ineluctable un ressenti chiffre non source (anti-amplification) et une
+        # action annoncee mais non faite (anti ecart expression/acte). Le signalement
+        # est colle a la reponse -> vu par le lecteur ET reinjecte a Promethee.
+        full_response = self._apply_behavioral_guards(full_response)
 
         # 4c. 04/05/2026 — Phase 1 Attention Conjointe (Pipeline 2 passes Editor).
         # Si l'utilisateur revient apres absence ET un episode noteworthy est dispo,
