@@ -240,6 +240,9 @@ class ChatEngine:
         "  !skill_load <nom>        — Recharger une competence stockee (fidele, deterministe)\n"
         "  !skill_find <cas>        — Reconnaitre si un nouveau cas releve d'une competence connue\n"
         "  !skill_list              — Lister mes competences capitalisees\n"
+        "  !forge COMPOSANTS: a + b | PROCEDURE: | CONTEXTE: | STABILITE: — FONDRE 2 competences en un ALLIAGE eprouve (biblio v2)\n"
+        "  !fusion <a + b>          — AUDIT PRE-FUSION : cet alliage est-il deja eprouve (stable/cassant) ou inconnu ?\n"
+        "  !phases                  — Mon DIAGRAMME DE PHASES : la carte de tous mes alliages\n"
         "  !status                  — Diagnostic interne compact\n"
         "  !read <fichier> [L1-L2]  — Lire un fichier du projet\n"
         "  !grep <pattern> [fichier] — Chercher dans le code\n"
@@ -319,6 +322,13 @@ class ChatEngine:
             return (head[0].lower(), [head[1] if len(head) > 1 else ""])
         if head and head[0].lower() in ("skill_list", "skills"):
             return ("skill_list", [])
+        # !forge / !fusion : alliages (skill_library v2, atelier audace). Charge brute
+        # (composants + procedure multi-mots). !phases : pas d'argument. NB: !fusion et
+        # PAS !audit (deja pris par l'audit systeme = 10 dernieres actions).
+        if head and head[0].lower() in ("forge", "fusion"):
+            return (head[0].lower(), [head[1] if len(head) > 1 else ""])
+        if head and head[0].lower() in ("phases", "diagram", "alloys"):
+            return ("phases", [])
         try:
             parts = shlex.split(stripped, posix=True)
         except ValueError as e:
@@ -553,6 +563,13 @@ class ChatEngine:
             return self._execute_skill_list_command()
         if cmd == "skill_find":   # reconnaitre qu'un nouveau cas releve d'une competence connue
             return self._execute_skill_find_command(args[0] if args else "")
+
+        if cmd == "forge":   # skill_library v2 : fondre 2+ competences en un alliage eprouve
+            return self._execute_forge_command(args[0] if args else "")
+        if cmd == "fusion":   # audit pre-fusion : la combinaison est-elle deja eprouvee ?
+            return self._execute_fusion_command(args[0] if args else "")
+        if cmd in ("phases", "diagram", "alloys"):   # le diagramme de phases (la carte)
+            return self._execute_phases_command()
 
         if cmd == "grave":
             # V23.0 (2026-06-06) — CONSOLIDATION FORTE D'UNE LECON CERTIFIEE.
@@ -1548,6 +1565,66 @@ class ChatEngine:
         except Exception as e:
             return f"!skill_find : erreur — {e}"
 
+    # ─── Bibliotheque v2 : les ALLIAGES (atelier audace, 14/06) ───────────────
+    # Une competence peut FONDRE avec d'autres en un alliage eprouve. La biblio
+    # devient un « diagramme de phases » : !forge (fondre+mesurer+inscrire),
+    # !fusion (audit pre-fusion : deja eprouve ?), !phases (la carte). Honnetete
+    # gravee par lui : on ne predit JAMAIS un alliage jamais forge.
+
+    def _execute_forge_command(self, payload: str) -> str:
+        """!forge COMPOSANTS: a + b / NOM: / PROCEDURE: / CONTEXTE: / STABILITE: 0.8
+
+        Fonds 2+ competences en un alliage. Mise a jour conditionnelle a la stabilite."""
+        if not (payload or "").strip():
+            return ("Usage : !forge COMPOSANTS: competenceA + competenceB | PROCEDURE: comment "
+                    "elles fusionnent | CONTEXTE: temperature/situation | STABILITE: 0.0-1.0\n"
+                    "(la stabilite ∈ [0,1] : 1 = l'alliage fait bien mieux que ses composants "
+                    "seuls, 0 = ils se nuisent. >=0.6 stable, <=0.4 cassant.)")
+        try:
+            from core.skill_library import parse_alloy_payload, _parse_components, forge_alloy
+            f = parse_alloy_payload(payload)
+            components = _parse_components(f["components_raw"])
+            if len(components) < 2:
+                return ("!forge : il faut au moins DEUX competences a fondre. "
+                        "Ex : COMPOSANTS: RIGUEUR_FACTUELLE + OPTIMISATION_MONTEE_LOCALE")
+            res = forge_alloy(components, procedure=f["procedure"], contexte=f["contexte"],
+                              stability=f["stability"], nom=f["nom"], verdict=f["verdict"] or None)
+            if res.get("status") == "error":
+                return f"!forge : {res.get('message')}"
+            icon = {"forged": "🔥", "reinforced": "📈", "kept": "🛡️", "revised": "✏️"}.get(res["status"], "•")
+            out = f"[!forge] {icon} {res['message']}"
+            if res.get("missing_components"):
+                out += ("\n⚠️ Composant(s) absent(s) de ta bibliotheque : "
+                        + ", ".join(res["missing_components"])
+                        + " — l'alliage est forge quand meme, mais il fond une competence que tu n'as pas (encore) capitalisee.")
+            return out
+        except Exception as e:
+            return f"!forge : erreur — {e}"
+
+    def _execute_fusion_command(self, raw: str) -> str:
+        """!fusion <a + b> — AUDIT PRE-FUSION : cette combinaison est-elle deja sur la carte ?"""
+        raw = (raw or "").strip()
+        if not raw:
+            return "Usage : !fusion competenceA + competenceB — je regarde si cet alliage est deja eprouve (stable/cassant) ou inconnu."
+        try:
+            from core.skill_library import _parse_components, audit_fusion, format_alloy
+            components = _parse_components(raw)
+            res = audit_fusion(components)
+            head = f"[!fusion] {res.get('message')}"
+            if res.get("known") and res.get("alloy"):
+                return head + "\n" + format_alloy(res["alloy"])
+            return head
+        except Exception as e:
+            return f"!fusion : erreur — {e}"
+
+    def _execute_phases_command(self) -> str:
+        """!phases — le DIAGRAMME DE PHASES : la carte de tous mes alliages eprouves."""
+        try:
+            from core.skill_library import format_phase_diagram
+            return format_phase_diagram()
+        except Exception as e:
+            return f"!phases : erreur — {e}"
+
     async def _apply_attention_conjointe(
         self,
         passe1_response: str,
@@ -2460,7 +2537,7 @@ class ChatEngine:
 
     # Commandes dispatch autorisees en auto-action
     # "observe" remis avec cooldown 5min (voir _scan_response_actions)
-    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "run", "execute_script", "run_code", "status_snapshot", "snapshot", "etat", "recall", "opa", "benchmark", "ancre", "ancres", "skill_save", "skill_load", "skill_list", "skills", "skill_find", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
+    _AUTO_ACTION_WHITELIST = frozenset({"research", "learn", "code", "calc", "run", "execute_script", "run_code", "status_snapshot", "snapshot", "etat", "recall", "opa", "benchmark", "ancre", "ancres", "skill_save", "skill_load", "skill_list", "skills", "skill_find", "forge", "fusion", "phases", "diagram", "alloys", "read", "status", "grep", "github", "test", "audit", "phi", "signals", "who", "memory", "report", "diff", "votes", "codelets", "network", "health", "dashboard", "invoke", "craft", "antibodies", "write", "metrics", "observe", "consciousness", "ethics"})
     _last_auto_observe: float = 0.0  # timestamp du dernier !observe auto-action
     _AUTO_OBSERVE_COOLDOWN: float = 300.0  # 5 minutes entre deux auto-observations
 
@@ -2521,7 +2598,7 @@ class ChatEngine:
         # plusieurs lignes par le LLM -> repliee comme un !run pour ne pas etre
         # amputee (la procedure reconvertit les \n litteraux en vrais sauts).
         return _re.sub(
-            r'(?m)^!(calc|run|execute_script|run_code|skill_save)[ \t]*\n?[ \t]*'
+            r'(?m)^!(calc|run|execute_script|run_code|skill_save|forge)[ \t]*\n?[ \t]*'
             r'(?:(```(?:python)?\n.*?\n?```)|(.+?)(?=\n[ \t]*!|\n\s*\n|\Z))',
             _repl, response, flags=_re.DOTALL,
         )
@@ -2663,6 +2740,13 @@ class ChatEngine:
                     result = self._execute_skill_list_command()
                 elif cmd_lower == "skill_find":
                     result = self._execute_skill_find_command(args)
+                elif cmd_lower == "forge":
+                    # Alliages (atelier audace) : il peut fondre des competences lui-meme.
+                    result = self._execute_forge_command(args)
+                elif cmd_lower == "fusion":
+                    result = self._execute_fusion_command(args)
+                elif cmd_lower in ("phases", "diagram", "alloys"):
+                    result = self._execute_phases_command()
                 elif cmd_lower == "antibodies":
                     ab_args = self._split_action_args(args)
                     result = self._execute_antibodies_command(ab_args)

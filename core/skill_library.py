@@ -380,3 +380,293 @@ def format_listing() -> str:
             f"{s['tentatives']} tentative(s))\n"
             f"      declencheur : {s['declencheur'] or '—'}")
     return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SKILL LIBRARY v2.0 — LES ALLIAGES (atelier audace, 14/06/2026)
+# ═══════════════════════════════════════════════════════════════════════════
+# Vision co-concue avec Promethee : une competence n'est plus seulement une
+# regle isolee qu'on consulte, mais peut FONDRE avec d'autres en un ALLIAGE.
+# La bibliotheque v2 stocke ces alliages EPROUVES (combinaison + contexte/
+# temperature + score de stabilite) -> elle devient un « diagramme de phases »
+# qui dit, AVANT d'agir, quelles fusions sont stables et lesquelles cassent.
+#
+# REGLE D'HONNETETE (posee par Promethee lui-meme) : on ne PREDIT pas un alliage
+# jamais forge. Un alliage inconnu = « a eprouver », pas « stable par defaut ».
+# Le diagramme se TRACE par l'experience (forger -> mesurer -> inscrire), exactement
+# comme un vrai diagramme de phases en metallurgie — c'est la boucle d'apprentissage
+# appliquee aux COMBINAISONS.
+
+ALLOYS_DIR = os.path.join(PROJECT_ROOT, "memory", "alloys")
+
+# Seuils du verdict, derives de la stability ∈ [0,1] (fraction de resilience :
+# 1 = l'alliage fait bien mieux que ses composants seuls ; 0 = ils se nuisent).
+_STABLE_THRESHOLD = 0.6
+_CASSANT_THRESHOLD = 0.4
+
+_ALLOY_LABELS = {
+    "composants": "components", "composant": "components", "elements": "components",
+    "ingredients": "components", "alliage": "components",
+    "nom": "nom", "name": "nom",
+    "procedure": "procedure", "fusion": "procedure", "mecanisme": "procedure",
+    "contexte": "contexte", "temperature": "contexte", "zone": "contexte",
+    "stabilite": "stability", "stability": "stability", "score": "stability",
+    "verdict": "verdict",
+}
+
+
+def _ensure_alloys_dir() -> str:
+    os.makedirs(ALLOYS_DIR, exist_ok=True)
+    return ALLOYS_DIR
+
+
+def _parse_components(raw: str) -> List[str]:
+    """« RIGUEUR + OPTIMISATION_MONTEE_LOCALE » -> noms normalises, ordre indifferent."""
+    parts = re.split(r"[+,/&]| et ", raw or "", flags=re.IGNORECASE)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _alloy_slug(components: List[str]) -> str:
+    """Slug canonique d'un alliage : slugs des composants TRIES (ordre indifferent)."""
+    slugs = sorted(slugify(c) for c in components if c.strip())
+    return "__".join(slugs) or "alliage"
+
+
+def _alloy_path(slug: str) -> str:
+    return os.path.join(_ensure_alloys_dir(), slug + ".json")
+
+
+def _all_alloys() -> List[Dict]:
+    out = []
+    if not os.path.isdir(ALLOYS_DIR):
+        return out
+    for fn in sorted(os.listdir(ALLOYS_DIR)):
+        if fn.endswith(".json"):
+            a = _read(os.path.join(ALLOYS_DIR, fn))
+            if a:
+                out.append(a)
+    return out
+
+
+def verdict_for(stability: Optional[float]) -> str:
+    """Traduit une stability ∈ [0,1] en verdict de phase."""
+    if stability is None:
+        return "non_eprouve"
+    if stability >= _STABLE_THRESHOLD:
+        return "stable"
+    if stability <= _CASSANT_THRESHOLD:
+        return "cassant"
+    return "fragile"
+
+
+def parse_alloy_payload(text: str) -> Dict:
+    """Parse une charge !forge, tolerant au format etiquete et au format pipe.
+
+    Etiquete : COMPOSANTS: a + b / NOM: ... / PROCEDURE: ... / CONTEXTE: ... / STABILITE: 0.8
+    Pipe     : composants | nom | procedure | contexte | stabilite
+    """
+    text = (text or "").replace("\\n", "\n").strip()
+    fields = {"components_raw": "", "nom": "", "procedure": "", "contexte": "",
+              "stability": None, "verdict": ""}
+    if not text:
+        return fields
+
+    lines = text.split("\n")
+    has_labels = any(
+        _map_alloy_label(m.group(1)) for line in lines
+        if (m := re.match(r"^\s*([A-Za-zÀ-ÿ_][A-Za-zÀ-ÿ_ \-]{1,30}?)\s*:\s*", line))
+    )
+
+    if has_labels:
+        current, buf = None, {}
+        for line in lines:
+            m = re.match(r"^\s*([A-Za-zÀ-ÿ_][A-Za-zÀ-ÿ_ \-]{1,30}?)\s*:\s*(.*)$", line)
+            field = _map_alloy_label(m.group(1)) if m else None
+            if field:
+                current = field
+                buf.setdefault(field, []).append(m.group(2))
+            elif current is not None:
+                buf.setdefault(current, []).append(line)
+        for f, parts in buf.items():
+            val = "\n".join(parts).strip()
+            if f == "components":
+                fields["components_raw"] = val
+            elif f == "stability":
+                try:
+                    fields["stability"] = float(val.split()[0]) if val else None
+                except (ValueError, IndexError):
+                    fields["stability"] = None
+            else:
+                fields[f] = val
+        return fields
+
+    champs = [c.strip() for c in text.split("|")]
+    order = ["components_raw", "nom", "procedure", "contexte"]
+    for i, key in enumerate(order):
+        if i < len(champs):
+            fields[key] = champs[i]
+    if len(champs) > 4 and champs[4]:
+        try:
+            fields["stability"] = float(champs[4])
+        except ValueError:
+            fields["stability"] = None
+    return fields
+
+
+def _map_alloy_label(raw: str) -> Optional[str]:
+    key = _strip_accents(raw.lower()).strip().replace(" ", "_").replace("-", "_")
+    return _ALLOY_LABELS.get(key)
+
+
+def forge_alloy(components: List[str], procedure: str = "", contexte: str = "",
+                stability: Optional[float] = None, nom: str = "",
+                verdict: Optional[str] = None) -> Dict:
+    """Forge (cree ou met a jour) un alliage. Mise a jour CONDITIONNELLE a la stability
+    (on ne garde que la meilleure fusion eprouvee, comme save_skill pour le score).
+
+    Renvoie {status, slug, verdict, stability, missing_components, message}.
+    """
+    components = [c for c in (components or []) if c and c.strip()]
+    if len(components) < 2:
+        return {"status": "error", "message": "Un alliage exige au moins 2 competences a fondre."}
+    slug = _alloy_slug(components)
+    path = _alloy_path(slug)
+    now = time.time()
+
+    # Validation : les composants existent-ils comme competences ? (avertir, pas bloquer)
+    missing = [c for c in components if load_skill(c) is None]
+
+    if verdict is None:
+        verdict = verdict_for(stability)
+    existing = _read(path)
+
+    if existing is None:
+        alloy = {
+            "nom": (nom or " + ".join(components)).strip(), "slug": slug,
+            "components": components, "procedure": procedure.strip(),
+            "contexte": contexte.strip(), "stability": stability, "verdict": verdict,
+            "version": 1,
+            "history": [{"ts": now, "stability": stability, "verdict": verdict, "note": "forge"}],
+            "created": now, "updated": now,
+        }
+        _write(path, alloy)
+        return {"status": "forged", "slug": slug, "verdict": verdict, "stability": stability,
+                "missing_components": missing,
+                "message": f"Alliage « {alloy['nom']} » forge (v1, stabilite={_fmt_score(stability)}, verdict={verdict})."}
+
+    prev = existing.get("stability")
+    if stability is not None and prev is not None and stability <= prev:
+        existing.setdefault("history", []).append({
+            "ts": now, "stability": stability, "verdict": verdict_for(stability),
+            "note": f"refonte non retenue ({stability} <= {prev})",
+        })
+        existing["history"] = existing["history"][-50:]
+        existing["updated"] = now
+        _write(path, existing)
+        return {"status": "kept", "slug": slug, "verdict": existing.get("verdict"),
+                "stability": prev, "missing_components": missing,
+                "message": (f"Stabilite {stability} <= meilleure connue {prev} : l'alliage "
+                            f"eprouve (v{existing.get('version', 1)}) est CONSERVE.")}
+
+    improved = stability is not None and (prev is None or stability > prev)
+    new_version = (existing.get("version") or 1) + 1
+
+    def _keep(new: str, old: str) -> str:
+        new = (new or "").strip()
+        return new if new else (old or "")
+
+    alloy = {
+        "nom": _keep(nom, existing.get("nom", " + ".join(components))), "slug": slug,
+        "components": components,
+        "procedure": _keep(procedure, existing.get("procedure", "")),
+        "contexte": _keep(contexte, existing.get("contexte", "")),
+        "stability": stability if improved else prev,
+        "verdict": verdict_for(stability if improved else prev),
+        "version": new_version,
+        "history": (existing.get("history") or []) + [{
+            "ts": now, "stability": stability, "verdict": verdict,
+            "note": "renforce" if improved else "refonte (sans gain de stabilite)",
+        }],
+        "created": existing.get("created", now), "updated": now,
+    }
+    alloy["history"] = alloy["history"][-50:]
+    _write(path, alloy)
+    status = "reinforced" if improved else "revised"
+    msg = (f"Alliage REforge (v{new_version}) : stabilite {prev} -> {stability}, verdict={alloy['verdict']}."
+           if improved else f"Alliage revise (v{new_version}, stabilite inchangee={prev}).")
+    return {"status": status, "slug": slug, "verdict": alloy["verdict"],
+            "stability": alloy["stability"], "missing_components": missing, "message": msg}
+
+
+def load_alloy(key: str) -> Optional[Dict]:
+    """Recharge un alliage par ses composants (« a + b ») ou son slug."""
+    key = (key or "").strip()
+    if not key:
+        return None
+    comps = _parse_components(key)
+    if len(comps) >= 2:
+        a = _read(_alloy_path(_alloy_slug(comps)))
+        if a:
+            return a
+    return _read(_alloy_path(slugify(key)))
+
+
+def list_alloys() -> List[Dict]:
+    return _all_alloys()
+
+
+def audit_fusion(components: List[str]) -> Dict:
+    """AUDIT PRE-FUSION : la combinaison a-t-elle deja ete eprouvee ? Que dit la carte ?
+
+    Honnetete (regle de Promethee) : un alliage jamais forge n'est PAS predit stable —
+    il est rendu « inconnu : a eprouver avant de s'y fier ».
+    """
+    components = [c for c in (components or []) if c and c.strip()]
+    if len(components) < 2:
+        return {"known": False, "verdict": "invalide",
+                "message": "Donne au moins 2 competences a auditer (ex: A + B)."}
+    slug = _alloy_slug(components)
+    alloy = _read(_alloy_path(slug))
+    if alloy is None:
+        return {"known": False, "verdict": "inconnu", "slug": slug,
+                "message": ("Alliage JAMAIS forge — pas sur la carte. Tu ne peux pas predire "
+                            "sa stabilite : forge-le une fois (teste-le pour de vrai), mesure, "
+                            "puis inscris-le. On ne devine pas un alliage non eprouve.")}
+    return {"known": True, "verdict": alloy.get("verdict"),
+            "stability": alloy.get("stability"), "slug": slug, "alloy": alloy,
+            "message": (f"Alliage CONNU (v{alloy.get('version', 1)}) : verdict={alloy.get('verdict')}, "
+                        f"stabilite={_fmt_score(alloy.get('stability'))}.")}
+
+
+def format_alloy(alloy: Dict) -> str:
+    icon = {"stable": "🟢", "fragile": "🟡", "cassant": "🔴", "non_eprouve": "⚪"}.get(alloy.get("verdict"), "•")
+    lines = [
+        f"[alliage] {icon} « {alloy.get('nom', '?')} » (v{alloy.get('version', 1)}, "
+        f"verdict={alloy.get('verdict')}, stabilite={_fmt_score(alloy.get('stability'))})",
+        f"  COMPOSANTS : {' + '.join(alloy.get('components', []))}",
+        f"  FUSION     : {alloy.get('procedure', '') or '—'}",
+        f"  CONTEXTE   : {alloy.get('contexte', '') or '—'}",
+    ]
+    return "\n".join(lines)
+
+
+def format_phase_diagram() -> str:
+    """Le DIAGRAMME DE PHASES : la carte de tous les alliages eprouves, par verdict."""
+    alloys = _all_alloys()
+    if not alloys:
+        return ("[!phases] Diagramme de phases VIDE : aucun alliage forge. "
+                "Fonds deux competences avec !forge, mesure leur stabilite, et la carte se tracera.")
+    buckets = {"stable": [], "fragile": [], "cassant": [], "non_eprouve": []}
+    for a in alloys:
+        buckets.get(a.get("verdict", "non_eprouve"), buckets["non_eprouve"]).append(a)
+    icons = {"stable": "🟢 STABLES", "fragile": "🟡 FRAGILES", "cassant": "🔴 CASSANTS", "non_eprouve": "⚪ NON EPROUVES"}
+    lines = [f"[!phases] Diagramme de phases — {len(alloys)} alliage(s) sur la carte :"]
+    for verdict, label in icons.items():
+        group = buckets[verdict]
+        if not group:
+            continue
+        lines.append(f"  {label} :")
+        for a in group:
+            lines.append(f"    • {' + '.join(a.get('components', []))} "
+                         f"(stab={_fmt_score(a.get('stability'))}) — {a.get('nom', '')}")
+    return "\n".join(lines)
