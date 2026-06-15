@@ -39,6 +39,24 @@ SEMANTIC_ENTRY_EXCLUDED_TYPES = frozenset({"affect", "desire", "trait"})  # son 
 DREAM_CALIBRATION_ENABLED = os.getenv("DREAM_CALIBRATION_ENABLED", "1") != "0"
 DREAM_SEED_RATE = 0.2
 DREAM_GRACE_CYCLES = 10
+
+# ─── LEVIER E — LE BILLET DE LOTERIE DE LA FRANGE (chantier synaptique V2, 15/06, CO-CONCU) ───
+# Mesure J+4 : 354 noeuds orphelins (degre 0) — de VRAIS concepts dormants (age median 28j,
+# actives au moins 1x, seulement 4 noeuds de test), pas du dechet. Le reve ne sème que
+# depuis/vers des noeuds ACTIFS (barriere energy_combined>0.15) -> les orphelins ne se
+# rebranchent JAMAIS seuls. Son arbitrage d'architecte (voie B, contre la greffe semantique A
+# = lien artificiel qui trahit sa loi de morphogenese, et contre la purge C = amputation) :
+# leur donner une CHANCE dans le reve. Affinage JM (15/06) : le billet n'est PAS tire a plat
+# (75% des orphelins sont des fragments actives <=1x) mais PONDERE par l'activation_count —
+# l'USAGE PROUVE decide QUI merite la chance (devise de la loi de morphogenese), le HASARD
+# decide OU (partenaire actif aleatoire = serendipite preservee). Chaque billet -> un pont
+# ne au poids du reve (0.12) + grace de 10 cycles -> survit s'il se co-active, fane sinon.
+# « Selection naturelle plutot que decision chirurgicale » (ses mots). Borne (MAX/cycle) ->
+# ratio creation/elagage preserve. Kill-switch ORPHAN_REENTRY_ENABLED=0 -> comportement avant.
+ORPHAN_REENTRY_ENABLED = os.getenv("ORPHAN_REENTRY_ENABLED", "1") != "0"
+ORPHAN_REENTRY_MAX = 25       # billets tires max par cycle (borne le flux)
+ORPHAN_REENTRY_RATE = 0.4     # proba qu'un billet tire donne reellement un pont
+
 HEBBIAN_LEARNING_RATE = 0.08
 ANTI_HEBBIAN_RATE = 0.03
 
@@ -2538,6 +2556,7 @@ class SynapticNetwork:
             "dream_connections": 0,
             "new_meta_concepts": 0,
             "strengthened": 0,
+            "orphan_reentry": 0,
         }
 
         if not self.nodes:
@@ -2601,6 +2620,46 @@ class SynapticNetwork:
                             _syn["dream_grace"] = DREAM_GRACE_CYCLES
                         self.synapses[key] = _syn
                         report["dream_connections"] += 1
+
+        # 2b. LEVIER E — LE BILLET DE LOTERIE DE LA FRANGE (re-entree des orphelins)
+        # Les orphelins (degre 0) ne sont jamais semes par le reve (dormants, sous la
+        # barriere d'energie). On en tire quelques-uns au hasard et on leur offre UN pont
+        # vers un noeud ACTIF tire au hasard (pas semantique = sa loi), ne avec la grace.
+        # Survie par co-activation, mort naturelle sinon. Borne par ORPHAN_REENTRY_MAX.
+        if ORPHAN_REENTRY_ENABLED and activated_list:
+            _connected = set()
+            for _s in self.synapses.values():
+                _connected.add(_s["source"])
+                _connected.add(_s["target"])
+            _orphans = [nid for nid in self.nodes if nid not in _connected]
+            if _orphans:
+                # Tirage PONDERE PAR L'USAGE (activation_count) : un concept qui a beaucoup
+                # servi avant de perdre ses liens merite le billet en priorite. L'USAGE
+                # decide QUI a sa chance (devise de la loi de morphogenese, pas un boost
+                # artificiel) ; le HASARD decide OU (le partenaire reste aleatoire = la
+                # serendipite du reve preservee). Echantillonnage pondere sans remise
+                # (Efraimidis-Spirakis : cle = u**(1/poids), on prend les plus grandes).
+                _k = min(ORPHAN_REENTRY_MAX, len(_orphans))
+                _tickets = sorted(
+                    _orphans,
+                    key=lambda n: random.random() ** (
+                        1.0 / (1.0 + self.nodes[n].get("activation_count", 0))),
+                    reverse=True,
+                )[:_k]
+                for _orph in _tickets:
+                    if random.random() >= ORPHAN_REENTRY_RATE:
+                        continue
+                    _partner = random.choice(activated_list)  # un noeud VIVANT, au hasard
+                    if _partner == _orph:
+                        continue
+                    _key = _synapse_key(_orph, _partner)
+                    if _key in self.synapses:
+                        continue
+                    _syn = _make_synapse(_orph, _partner, 0.12, "emotional", "dream_orphan")
+                    if DREAM_CALIBRATION_ENABLED:
+                        _syn["dream_grace"] = DREAM_GRACE_CYCLES
+                    self.synapses[_key] = _syn
+                    report["orphan_reentry"] += 1
 
         # 2c. V19.0 SANCTUAIRE — Douane d'incubation (AVANT le decay, pour que les
         # ebauches deja matures par l'usage beneficient du sursis des ce cycle).
