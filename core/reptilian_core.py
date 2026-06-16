@@ -215,6 +215,9 @@ class ReptilianCore:
         # --- V14.3 Pilier 2 nocicepteurs : cooldown REPTILIAN_ALERT par menace ---
         self._alert_cooldowns: Dict[str, float] = {}     # pattern → timestamp dernière alerte
 
+        # --- Nocicepteur respiration : cooldown BREATH_GASP par symptôme ---
+        self._gasp_cooldowns: Dict[str, float] = {}      # symptôme → timestamp dernier gasp traité
+
         # --- V14.11 Couplage fort source-de-vérité-unique ---
         # urgency_cond + last_urgent_* : source de vérité pour les
         # subscribers (AutonomyEngine via watcher mirror). Lazy-init pour
@@ -643,6 +646,32 @@ class ReptilianCore:
     # --- FREEZE ---
     def _activate_freeze(self, now: float):
         """Arrêt complet des routines autonomes."""
+        # CHECKPOINT D'URGENCE : verrouiller l'état de TOUS les organes sur disque
+        # AVANT le gel. À threat >= 7.0 on est proche du crash / kill-switch RAM ;
+        # c'est le dernier instant fiable pour graver l'état. Best-effort : un
+        # organe qui échoue à sauvegarder est signalé mais ne bloque pas le FREEZE.
+        try:
+            from core.organ_registry import save_all_organs
+            result = save_all_organs()
+            if result.get("failed"):
+                logger.critical(
+                    f"REPTILIEN: checkpoint FREEZE PARTIEL — organes NON "
+                    f"verrouillés: {result['failed']} (catastrophe dans la catastrophe)"
+                )
+                # Signaler le snapshot incomplet (additif, fire-and-forget).
+                try:
+                    from core.event_bus.bus import bus
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(bus.publish("EMERGENCY_CHECKPOINT_FAILED", {
+                        "failed_organs": result["failed"],
+                        "saved": result["saved"],
+                        "timestamp": now,
+                    }))
+                except RuntimeError:
+                    pass  # pas de boucle asyncio (contexte sync / tests)
+        except Exception as e:
+            logger.error(f"REPTILIEN: échec checkpoint d'urgence avant FREEZE: {e}")
+
         self._freeze_until = now + 180  # 3 minutes de freeze
         self._last_activity = now  # Reset idle pour éviter spirale FREEZE→idle→FREEZE
         self._record_reflex("FREEZE")
@@ -790,8 +819,59 @@ class ReptilianCore:
             bus.subscribe("SYNAPTIC_DEBT_PRESSURE", self._on_synaptic_debt_pressure)
             # Option B — Pilier 2bis : menace congestion (densité)
             bus.subscribe("SYNAPTIC_CONGESTION_PRESSURE", self._on_synaptic_congestion_pressure)
+            # --- Nocicepteur respiration : un gasp de SURVIE escalade la menace ---
+            bus.subscribe("BREATH_GASP", self._on_breath_gasp)
         except Exception as e:
             logger.warning(f"REPTILIEN: Échec souscription bus: {e}")
+
+    # Symptômes de SURVIE / HARDWARE qui peuvent escalader la cascade reptilienne.
+    # `alarme_sourde` est VOLONTAIREMENT EXCLU : c'est le signal propre du
+    # reptilien (threat_level) — le réinjecter créerait une boucle
+    # threat → symptôme → gasp → threat. Les symptômes épistémiques
+    # (faim_de_comprendre, vertige_du_sol/STABILITE, solitude...) ne sont pas
+    # ici : la respiration ne réveille l'urgentiste que pour la survie du corps.
+    _SURVIVAL_GASP_SYMPTOMS = frozenset({
+        "pouls_emballe",   # BPM en pic
+        "surchauffe",      # intensité émotionnelle / la poitrine brûle
+        "souffle_court",   # VRAM saturée (actif quand body_schema.resources sera câblé)
+        "geste_compte",    # budget GPU épuisé (idem)
+    })
+    _BREATH_GASP_COOLDOWN_S = 60.0
+
+    async def _on_breath_gasp(self, event: dict):
+        """BREATH_GASP (respiration) : un symptôme corporel franchit un seuil.
+
+        NOCICEPTEUR — pas un kill-switch parallèle. Seule une classe ÉTROITE de
+        gasp (survie/hardware) escalade la menace ; les gasps épistémiques sont
+        ignorés. Le reptilien reste l'UNIQUE autorité d'urgence : la respiration
+        ne fait que l'AVERTIR (elle n'interrompt ni ne dispatche elle-même). La
+        cascade existante (ADRENALINE→FLINCH→SHED→FREEZE) décide de la suite, et
+        le decay du watchdog relâche la pression si le symptôme disparaît.
+        """
+        symptome = event.get("symptome", "") if isinstance(event, dict) else ""
+        if symptome not in self._SURVIVAL_GASP_SYMPTOMS:
+            return  # gasp épistémique → le tronc cérébral ne s'en mêle pas
+
+        now = time.time()
+        last = self._gasp_cooldowns.get(symptome, 0.0)
+        if now - last < self._BREATH_GASP_COOLDOWN_S:
+            return
+        self._gasp_cooldowns[symptome] = now
+
+        try:
+            saillance = float(event.get("saillance", 0.0))
+        except (TypeError, ValueError):
+            saillance = 0.0
+
+        # Montée de menace BORNÉE : un seul souffle n'amène jamais directement au
+        # FREEZE (cap 6.0). Il ouvre la cascade (ADRENALINE/FLINCH) ; seule une
+        # pression de survie répétée/cumulée avec d'autres détecteurs atteint 7.0.
+        floor = min(6.0, 3.0 + max(0.0, saillance - 3.0))
+        self.threat_level = min(10.0, max(self.threat_level, floor))
+        logger.warning(
+            f"REPTILIEN: BREATH_GASP survie '{symptome}' (saillance={saillance:.2f}) "
+            f"→ menace montée à {self.threat_level:.1f}"
+        )
 
     async def _on_routine_complete(self, event: dict):
         """Routine terminée → apaisement si succès."""

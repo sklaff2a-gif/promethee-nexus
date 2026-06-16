@@ -99,6 +99,49 @@ def get_all_organs() -> Dict[str, Any]:
     return dict(_registry)
 
 
+def save_all_organs() -> Dict[str, Any]:
+    """Checkpoint d'urgence : persiste l'état de TOUS les organes enregistrés.
+
+    Best-effort et défensif : chaque `.save()` est isolé dans son propre
+    try/except — l'échec d'un organe à verrouiller son état sur disque
+    N'EMPÊCHE PAS les autres de sauvegarder. Les organes sans méthode `.save()`
+    (ex: la respiration, mémoire de travail volontairement volatile) sont
+    simplement ignorés.
+
+    SIGNAL MINIMAL renvoyé à l'appelant (le reptilien) :
+        {"total": int, "saved": int, "failed": [noms]}
+
+    `failed` NON VIDE = au moins un organe n'a pas pu graver son état pendant
+    le snapshot d'urgence (catastrophe DANS la catastrophe). L'appelant teste
+    simplement la vérité de `result["failed"]` pour savoir s'il doit alerter.
+    """
+    saved: list = []
+    failed: list = []
+    for name, organ in get_all_organs().items():
+        save_fn = getattr(organ, "save", None)
+        if not callable(save_fn):
+            continue  # organe sans persistance (ex: respiration) — normal
+        try:
+            save_fn()
+            saved.append(name)
+        except Exception as e:
+            failed.append(name)
+            logger.error(
+                f"[CHECKPOINT] Organe '{name}' n'a PAS pu verrouiller son état "
+                f"sur disque: {e}"
+            )
+
+    result = {"total": len(saved) + len(failed), "saved": len(saved), "failed": failed}
+    if failed:
+        logger.critical(
+            f"[CHECKPOINT] SNAPSHOT D'URGENCE PARTIEL — {len(saved)} sauvegardés, "
+            f"organes NON verrouillés: {failed}"
+        )
+    else:
+        logger.info(f"[CHECKPOINT] Snapshot d'urgence complet ({len(saved)} organes).")
+    return result
+
+
 def reset_registry():
     """Vide le registre. Appelé dans les fixtures de test."""
     _registry.clear()
