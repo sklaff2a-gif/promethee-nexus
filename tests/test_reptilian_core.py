@@ -1813,3 +1813,60 @@ class TestStaleDreamThreat:
         await asyncio.sleep(0.05)
         from core.reptilian_core import STALE_DREAM_PATTERN
         assert STALE_DREAM_PATTERN in rept.threat_memories
+
+
+# ============================================================
+# Cicatrisation des fossiles de RESSOURCE (diagnostic « Fantôme du 14 juin »)
+# ============================================================
+
+class TestResourceFossilHealing:
+    """Les threat_memories de ressource (cpu/ram/ollama/...) doivent décroître
+    quand elles sont DORMANTES (condition disparue depuis > grâce), mais JAMAIS
+    quand elles sont fraîches (détecteur actif rafraîchissant last_seen)."""
+
+    def _make_mem(self, rept, pattern, severity, age_s):
+        from core.reptilian_core import ThreatMemory
+        rept.threat_memories[pattern] = ThreatMemory(
+            pattern=pattern, severity=severity, occurrences=10,
+            last_seen=time.time() - age_s, conditioned_reflex="FREEZE",
+        )
+
+    def test_fossile_dormant_s_erode(self, rept):
+        """Un fossile dormant (vieux last_seen) perd de la severity à chaque tick."""
+        from core.reptilian_core import RESOURCE_THREAT_GRACE_S, RESOURCE_THREAT_DECAY_PER_TICK
+        self._make_mem(rept, "error_streak", severity=3.0, age_s=RESOURCE_THREAT_GRACE_S + 100)
+        rept._decay_stale_dream_threat()
+        assert rept.threat_memories["error_streak"].severity == pytest.approx(
+            3.0 - RESOURCE_THREAT_DECAY_PER_TICK, abs=1e-6
+        )
+
+    def test_fossile_dormant_finit_supprime(self, rept):
+        """Sous le seuil remove_below, le fossile disparaît de threat_memories."""
+        from core.reptilian_core import RESOURCE_THREAT_GRACE_S
+        self._make_mem(rept, "ollama", severity=0.15, age_s=RESOURCE_THREAT_GRACE_S + 100)
+        rept._decay_stale_dream_threat()  # 0.15 - 0.1 = 0.05 < 0.1 remove_below
+        assert "ollama" not in rept.threat_memories
+
+    def test_memoire_fraiche_jamais_touchee(self, rept):
+        """Grâce : une mémoire ressource récente (détecteur actif) ne décroît PAS."""
+        self._make_mem(rept, "ram", severity=4.0, age_s=10)  # vue il y a 10s
+        rept._decay_stale_dream_threat()
+        assert "ram" in rept.threat_memories
+        assert rept.threat_memories["ram"].severity == 4.0  # intacte
+
+    def test_threat_level_inchange_par_erosion(self, rept):
+        """L'érosion des fossiles ne touche PAS threat_level (= MAX détecteurs actifs)."""
+        from core.reptilian_core import RESOURCE_THREAT_GRACE_S
+        rept.threat_level = 1.5
+        self._make_mem(rept, "cpu", severity=8.0, age_s=RESOURCE_THREAT_GRACE_S + 100)
+        rept._decay_stale_dream_threat()
+        assert rept.threat_level == 1.5
+
+    def test_tous_les_patterns_ressource_couverts(self, rept):
+        """Les 6 patterns ressource sont éligibles à l'érosion."""
+        from core.reptilian_core import RESOURCE_THREAT_PATTERNS, RESOURCE_THREAT_GRACE_S
+        for p in RESOURCE_THREAT_PATTERNS:
+            self._make_mem(rept, p, severity=0.15, age_s=RESOURCE_THREAT_GRACE_S + 100)
+        rept._decay_stale_dream_threat()
+        for p in RESOURCE_THREAT_PATTERNS:
+            assert p not in rept.threat_memories, f"{p} aurait du s'eroder"

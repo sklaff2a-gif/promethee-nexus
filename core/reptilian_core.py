@@ -111,6 +111,19 @@ STALE_DREAM_DECAY_PER_TICK = 0.5           # severity diminue par tick watchdog 
 STALE_DREAM_REMOVE_BELOW = 0.1             # supprimée de threat_memories sous ce seuil
 STALE_DREAM_ALERT_COOLDOWN_S = 120         # min entre 2 REPTILIAN_ALERT pour cette menace
 
+# --- Cicatrisation des fossiles de RESSOURCE (diagnostic « Fantôme du 14 juin ») ---
+# Les threat_memories des détecteurs ressource ne décroissaient JAMAIS : une
+# crise vieille de 105 jours restait gravée à severity 3.0, persistée et
+# rechargée à chaque reboot, conditionnant des réflexes sur des événements morts.
+# On réutilise _decay_pattern_threat (helper éprouvé par stale_dream).
+# SÛRETÉ : un détecteur ACTIF rafraîchit last_seen via _condition_threat → la
+# grâce n'est jamais atteinte → seules les mémoires DORMANTES (condition disparue
+# depuis > grâce) s'érodent. La détection live et threat_level sont intacts.
+RESOURCE_THREAT_PATTERNS = ("cpu", "ram", "ollama", "error_streak", "budget", "process_memory")
+RESOURCE_THREAT_GRACE_S = 1800        # 30 min sans refresh → début d'érosion (intermittence tolérée)
+RESOURCE_THREAT_DECAY_PER_TICK = 0.1  # érosion douce (~3 min pour effacer severity 4 une fois dormante)
+RESOURCE_THREAT_REMOVE_BELOW = 0.1    # supprimée de threat_memories sous ce seuil
+
 # --- Option B — Pilier 2bis nocicepteurs : menace synaptic_congestion ---
 # Symétrique à stale_dream mais sur la DENSITÉ d'épisodes pending consolidation
 # (vs le TEMPS depuis dernier rêve). Réutilise les mêmes constantes : la
@@ -1341,6 +1354,18 @@ class ReptilianCore:
             SYNAPTIC_CONGESTION_DECAY_PER_TICK,
             SYNAPTIC_CONGESTION_REMOVE_BELOW,
         )
+        # Cicatrisation des fossiles ressource (cpu/ram/ollama/error_streak/
+        # budget/process_memory) : même helper, grâce longue (30 min). N'érode
+        # QUE les mémoires dormantes — un détecteur actif rafraîchit last_seen
+        # via _condition_threat, donc la grâce n'est jamais atteinte pour une
+        # menace vive. Soigne les fossiles qui hantaient les reboots.
+        for _pattern in RESOURCE_THREAT_PATTERNS:
+            self._decay_pattern_threat(
+                _pattern,
+                RESOURCE_THREAT_GRACE_S,
+                RESOURCE_THREAT_DECAY_PER_TICK,
+                RESOURCE_THREAT_REMOVE_BELOW,
+            )
 
     def _decay_pattern_threat(
         self,
