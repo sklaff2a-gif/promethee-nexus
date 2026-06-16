@@ -445,6 +445,13 @@ async def lifespan(app: FastAPI):
     heart_task = asyncio.create_task(heart.start_beating())
     print(f"   💓 COEUR: Moteur cardiaque actif (BPM={heart.bpm:.0f}).")
 
+    # --- RESPIRATION (Présence continue) — couplée au battement cardiaque ---
+    # Pas de timer propre : s'abonne à CARDIAC_BEAT (couplage cardio-respiratoire).
+    # Maintient le tampon proprioceptif chaud lu par les forward passes.
+    from core.respiration import respiration
+    respiration.init()
+    print("   🫁 RESPIRATION: Présence continue active (tampon proprioceptif chaud).")
+
     # --- CORPUS CALLOSUM (Resonance Inter-Organes) ---
     from core.corpus_callosum import callosum
     callosum.init()

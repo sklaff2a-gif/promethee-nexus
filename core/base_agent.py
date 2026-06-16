@@ -1032,6 +1032,18 @@ class BaseAgent:
         except Exception:
             pass
 
+        # Proprioception : tampon chaud maintenu par la respiration (lecture RAM,
+        # 0 LLM, 0 requête). Le corps est DÉJÀ là dans le prompt, avec ses valeurs
+        # RÉELLES mesurées — c'est l'anti-hallucination du "110 BPM imaginés".
+        proprio_block = ""
+        try:
+            from core.respiration import respiration
+            _proprio = respiration.get_warm_buffer()
+            if _proprio:
+                proprio_block = f"\n{_proprio}\n"
+        except Exception:
+            pass
+
         # Note: council.py injecte aussi un contexte projet (_COUNCIL_PROJECT_CONTEXT) — garder cohérent
         # Guardrail anti-hallucination 9B (suffixe — biais de recence)
         # V15.4 (2026-04-24) : si le prompt contient deja une injection RAG
@@ -1054,6 +1066,7 @@ class BaseAgent:
             f"Pas de Kubernetes/Docker/Kafka/microservices/blockchain.]\n"
             f"{context_memory}"
             f"{intuition_block}"
+            f"{proprio_block}"
             f"{prompt}"
             f"{_anti_halluc}"
         )
