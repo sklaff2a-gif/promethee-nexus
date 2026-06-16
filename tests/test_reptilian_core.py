@@ -1870,3 +1870,63 @@ class TestResourceFossilHealing:
         rept._decay_stale_dream_threat()
         for p in RESOURCE_THREAT_PATTERNS:
             assert p not in rept.threat_memories, f"{p} aurait du s'eroder"
+
+
+# ============================================================
+# Instrumentation RSS (levier #1 du Fantôme) — mesure, ZÉRO changement de comportement
+# ============================================================
+
+class TestRssInstrumentation:
+    """Le RSS Python est enregistré dans _rss_tracker à chaque scan et persisté,
+    SANS altérer la détection process_memory (seuil live 2000 inchangé)."""
+
+    def _patches(self, rss_mb):
+        """Contexte de mock psutil/httpx (calque TestSensors)."""
+        from contextlib import ExitStack
+        stack = ExitStack()
+        stack.enter_context(patch("psutil.cpu_percent", return_value=30))
+        stack.enter_context(patch("psutil.virtual_memory", return_value=MagicMock(percent=50)))
+        mock_proc = stack.enter_context(patch("psutil.Process"))
+        mock_proc.return_value.memory_info.return_value = MagicMock(rss=int(rss_mb * 1024 * 1024))
+        mock_client = stack.enter_context(patch("httpx.AsyncClient"))
+        resp = MagicMock(status_code=200)
+        mock_client.return_value.__aenter__ = AsyncMock(return_value=MagicMock(get=AsyncMock(return_value=resp)))
+        mock_client.return_value.__aexit__ = AsyncMock(return_value=False)
+        return stack
+
+    @pytest.mark.asyncio
+    async def test_rss_enregistre_a_chaque_scan(self, rept):
+        """Le RSS est enregistré dans _rss_tracker, même bien SOUS le seuil."""
+        assert rept._rss_tracker.count() == 0
+        with self._patches(rss_mb=500):
+            threats = await rept._sense_threats()
+        assert rept._rss_tracker.count() == 1               # mesuré
+        assert "process_memory" not in threats              # 500 MB < 2000 → pas de menace
+
+    @pytest.mark.asyncio
+    async def test_detection_process_memory_inchangee(self, rept):
+        """ZÉRO changement de comportement : process_memory fire toujours a >= 2000 MB."""
+        with self._patches(rss_mb=2500):
+            threats = await rept._sense_threats()
+        assert threats.get("process_memory") == 5.0         # detection intacte
+        assert rept._rss_tracker.count() == 1               # et mesuree au passage
+
+    @pytest.mark.asyncio
+    async def test_seuil_shadow_distinct_du_live(self, rept):
+        """Entre 2000 et 2800 : le live FIRE, le shadow ne fire pas — seuils distincts."""
+        from core.reptilian_core import THRESHOLDS, PROCESS_MEM_SHADOW_MB
+        assert THRESHOLDS["process_mem_warn_mb"] == 2000     # autorite live inchangee
+        assert PROCESS_MEM_SHADOW_MB == 2800                 # shadow-only
+        with self._patches(rss_mb=2500):                     # 2000 <= 2500 < 2800
+            threats = await rept._sense_threats()
+        assert threats.get("process_memory") == 5.0          # le live fire bien (shadow n'empeche rien)
+
+    def test_rss_tracker_persiste(self, rept):
+        """Round-trip save/load : le _rss_tracker survit au reboot."""
+        for v in (1800.0, 1950.0, 2010.0, 1875.0):
+            rept._rss_tracker.record(v)
+        n = rept._rss_tracker.count()
+        rept.save()
+        ReptilianCore.reset_singleton()
+        r2 = ReptilianCore()
+        assert r2._rss_tracker.count() == n                  # restauré depuis le disque

@@ -60,6 +60,15 @@ THRESHOLDS = {
     "process_mem_warn_mb": 2000,   # 2 Go de RAM Python
 }
 
+# --- Levier #1 du Fantôme : instrumentation RSS (mesurer AVANT de toucher le seuil) ---
+# process_mem_warn_mb=2000 reste l'UNIQUE seuil de détection live. Le seuil ci-dessous
+# n'est utilisé QUE pour le log shadow (comparaison observationnelle). On accumule la
+# distribution du RSS Python pour décider, sur données, si le baseline est STABLE
+# (torch/CUDA → seuil trop serré, sûr de relever) ou CROISSANT (vraie fuite → NE PAS
+# masquer). Zéro effet sur la détection ou la cascade tant que cette phase dure.
+PROCESS_MEM_SHADOW_MB = 2800             # seuil PROPOSÉ, shadow-only (jamais utilisé pour fire)
+RSS_INSTRUMENT_LOG_COOLDOWN_S = 300      # log de la distribution RSS toutes les 5 min
+
 # Seuils de sécurité absolus — garde-fou "grenouille bouillie"
 # Toujours critique, même si les percentiles disent le contraire
 ABSOLUTE_SAFETY_LIMITS = {
@@ -210,6 +219,9 @@ class ReptilianCore:
         from core.percentile_tracker import PercentileTracker
         self._cpu_tracker = PercentileTracker()
         self._ram_tracker = PercentileTracker()
+        # Levier #1 : instrumentation RSS Python (mesure pure, n'alimente PAS la détection).
+        self._rss_tracker = PercentileTracker()
+        self._rss_log_at: float = 0.0
 
         # --- Flags de réflexes actifs ---
         self._freeze_until: float = 0.0          # timestamp de fin de FREEZE
@@ -440,6 +452,22 @@ class ReptilianCore:
             proc_mem_mb = proc.memory_info().rss / (1024 * 1024)
             if proc_mem_mb >= THRESHOLDS["process_mem_warn_mb"]:
                 threats["process_memory"] = 5.0
+            # --- Instrumentation RSS (lecture seule : n'altère NI threats NI cascade) ---
+            self._rss_tracker.record(proc_mem_mb)
+            _rss_now = time.time()
+            if (_rss_now - self._rss_log_at >= RSS_INSTRUMENT_LOG_COOLDOWN_S
+                    and self._rss_tracker.is_ready()):
+                self._rss_log_at = _rss_now
+                _live = "FIRE" if proc_mem_mb >= THRESHOLDS["process_mem_warn_mb"] else "ok"
+                _shadow = "FIRE" if proc_mem_mb >= PROCESS_MEM_SHADOW_MB else "ok"
+                logger.info(
+                    f"REPTILIEN [RSS-INSTR]: rss={proc_mem_mb:.0f}MB "
+                    f"p50={self._rss_tracker.get_value_at(0.5):.0f} "
+                    f"p90={self._rss_tracker.get_value_at(0.9):.0f} "
+                    f"max={self._rss_tracker.get_value_at(1.0):.0f} "
+                    f"(n={self._rss_tracker.count()}) | seuil {THRESHOLDS['process_mem_warn_mb']}→{_live}"
+                    f" | shadow {PROCESS_MEM_SHADOW_MB}→{_shadow}"
+                )
         except Exception:
             pass  # psutil indisponible → pas de menace détectée
 
@@ -1090,6 +1118,7 @@ class ReptilianCore:
             "cpu_tracker_samples": self._cpu_tracker.count(),
             "ram_tracker_ready": self._ram_tracker.is_ready(),
             "ram_tracker_samples": self._ram_tracker.count(),
+            "rss_tracker_samples": self._rss_tracker.count(),
         }
 
     # ============================================================
@@ -1112,6 +1141,7 @@ class ReptilianCore:
             "beat_counter": self._beat_counter,
             "cpu_tracker": self._cpu_tracker.to_dict(),
             "ram_tracker": self._ram_tracker.to_dict(),
+            "rss_tracker": self._rss_tracker.to_dict(),
             "threat_persistence": self._threat_persistence,
             "threat_habituation": self._threat_habituation,
             "timestamp": time.time(),
@@ -1156,6 +1186,8 @@ class ReptilianCore:
                     self._cpu_tracker = PercentileTracker.from_dict(state["cpu_tracker"])
                 if "ram_tracker" in state:
                     self._ram_tracker = PercentileTracker.from_dict(state["ram_tracker"])
+                if "rss_tracker" in state:
+                    self._rss_tracker = PercentileTracker.from_dict(state["rss_tracker"])
             except Exception:
                 pass  # Trackers restent vides — cold start
 
