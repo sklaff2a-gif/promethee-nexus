@@ -267,7 +267,11 @@ class BloomIndexManager:
         """Parse le projet via AST, construit les 3 index.
         Retourne le nombre d'entrees par index."""
         t0 = time.perf_counter()
-        for target in ["core", "Agents", "tests"]:
+        # ÉTANCHÉITÉ (périmètre de production) : on n'indexe QUE le code de prod.
+        # tests/ est EXCLU — un symbole de test (_MockAgent, classes Test*…) n'est
+        # pas un identifiant de production que le LLM pourrait halluciner ; l'avaler
+        # ne fait que gonfler la masse du Bloom et son taux de faux positifs.
+        for target in ["core", "Agents"]:
             target_path = os.path.join(project_root, target)
             if not os.path.isdir(target_path):
                 continue

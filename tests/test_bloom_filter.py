@@ -334,6 +334,18 @@ class TestRealProject:
         assert veto is not None
         assert "magic_rainbow_unicorn_v99" in veto.response
 
+    def test_tests_dir_excluded_from_index(self, real_manager):
+        """ÉTANCHÉITÉ : un symbole défini UNIQUEMENT dans tests/ (ex: la classe
+        TestRealProject de CE fichier) n'est PAS un symbole de production. Depuis
+        l'amputation de "tests" de la liste blanche d'ingestion, il ne doit plus
+        être dans le dictionnaire Bloom → il déclenche un veto légitime. Prouve
+        que le dictionnaire a été purgé de ses scories de test."""
+        veto = real_manager.check_prompt(
+            "test", "```\nInstancie `TestRealProject` pour le test.\n```"
+        )
+        assert veto is not None
+        assert veto.ref_kind == "class"
+
 
 # ============================================================
 # V4.2.1 - Fix faux positifs nocturnes (2026-04-20)
