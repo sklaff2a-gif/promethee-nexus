@@ -33,6 +33,33 @@ _GRADIENT_HIGH_DIVERGENCE = 0.6   # divergence finale >= 0.6 + pente plate -> st
 PRESIDENT_AGENT_NAME = "architect"
 MIN_ROUNDS_BEFORE_PRESIDENT = 2
 
+# --- WATCHDOG DU COUNCIL (chien de garde de la délibération) ---
+# Doctrine : guillotine FIXE & DÉCOUPLÉE + avortement sur la DÉRIVÉE de menace.
+# Le timeout absolu ne dépend PAS du reptile (il doit tenir même si le reptile
+# est faussé au moment où Ollama s'emballe). L'avortement anticipé s'indexe sur
+# le RISE de menace DEPUIS l'ouverture du council (front montant), JAMAIS sur le
+# niveau absolu — contaminé par la menace de fond chronique ("Fantôme du 14 juin"
+# ~5.0, plat -> rise=0 -> n'avorte rien). Un abort-watchdog est de l'hygiène,
+# pas une défaite : status dédié qui NE déclenche PAS le DIP dopamine.
+COUNCIL_MAX_WALL_S = 180.0           # plafond total absolu (bien sous les 300s du guardian)
+COUNCIL_PRESIDENT_TIMEOUT_S = 45.0   # borne le président (architect), aligné sur le timeout agent
+COUNCIL_THREAT_RISE_ABORT = 2.0      # +2.0 de menace DEPUIS l'ouverture = pic aigu -> abort
+WATCHDOG_TIMEOUT_STATUS = "watchdog_timeout"
+
+
+def _read_threat_level() -> float:
+    """Lit le niveau de menace du reptilien (lecture seule, défensive).
+
+    Sert UNIQUEMENT à calculer une dérivée (rise depuis l'ouverture du council).
+    Retourne 0.0 si indisponible — fail-safe : seule la deadline fixe protège
+    alors, et c'est suffisant (la guillotine ne dépend pas du reptile)."""
+    try:
+        from core.organ_registry import get_organ
+        reptile = get_organ("reptilian")
+        return float(getattr(reptile, "threat_level", 0.0)) if reptile else 0.0
+    except Exception:
+        return 0.0
+
 # Contexte projet injecté dans tous les prompts Council
 # Note: base_agent.generate_content() injecte aussi un header projet court — garder cohérent
 _COUNCIL_PROJECT_CONTEXT = (
@@ -1017,7 +1044,20 @@ class Council:
         try:
             architect = self.agents[PRESIDENT_AGENT_NAME]
             prompt = self._build_president_prompt(round_num)
-            response = await architect.generate_content(prompt)
+            # Borne le président : un architect qui hang (Ollama lag) ne doit pas
+            # figer tout le council. Sur timeout → verdict NEUTRE (ni ABORT ni
+            # consensus fabriqué) : on laisse le round suivant ou la deadline trancher.
+            try:
+                response = await asyncio.wait_for(
+                    architect.generate_content(prompt),
+                    timeout=COUNCIL_PRESIDENT_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Council {self.council_id} — président timeout "
+                    f"({COUNCIL_PRESIDENT_TIMEOUT_S:.0f}s) au tour {round_num}, verdict neutre."
+                )
+                return {"verdict": "PERTINENT", "feedback": ""}
             result = _parse_president_verdict(response)
 
             # Publication événement
@@ -1185,9 +1225,32 @@ class Council:
         abort_reason = ""
         president_feedback = ""
 
+        # --- WATCHDOG : état d'ouverture (guillotine fixe + dérivée de menace) ---
+        _wd_deadline = time.monotonic() + COUNCIL_MAX_WALL_S
+        _wd_threat_at_start = _read_threat_level()
+        watchdog_aborted = False
+        watchdog_reason = ""
+
         for round_num in range(1, self.max_rounds + 1):
             rounds_used = round_num
             round_consensus_count = 0
+
+            # WATCHDOG — contrôles COOPÉRATIFs en frontière de round (pas de cancel
+            # en plein milieu : transcript préservé, état global propre).
+            # 1) Deadline absolue, DÉCOUPLÉE du reptile (tient même si Ollama emballé).
+            if time.monotonic() >= _wd_deadline:
+                watchdog_aborted = True
+                watchdog_reason = f"deadline {COUNCIL_MAX_WALL_S:.0f}s dépassée"
+                logger.warning(f"[COUNCIL {self.council_id}] WATCHDOG: {watchdog_reason} — abort.")
+                break
+            # 2) Avortement sur la DÉRIVÉE de menace (rise depuis l'ouverture), JAMAIS
+            #    sur le niveau absolu (immunisé contre le Fantôme à 5.0, plat -> rise=0).
+            _wd_rise = _read_threat_level() - _wd_threat_at_start
+            if _wd_rise >= COUNCIL_THREAT_RISE_ABORT:
+                watchdog_aborted = True
+                watchdog_reason = f"pic de menace +{_wd_rise:.1f} pendant le débat"
+                logger.warning(f"[COUNCIL {self.council_id}] WATCHDOG: {watchdog_reason} — abort.")
+                break
 
             # --- Étudiant ouvre/relance ---
             if self.enable_student:
@@ -1329,7 +1392,9 @@ class Council:
                 break
 
         # Résumé final
-        if aborted:
+        if watchdog_aborted:
+            status = WATCHDOG_TIMEOUT_STATUS
+        elif aborted:
             status = "aborted"
         elif consensus_reached:
             status = "consensus"
@@ -1339,7 +1404,9 @@ class Council:
         final_summary = "\n".join(
             f"[{e['agent'].upper()}] {e['content'][:200]}" for e in last_contributions
         )
-        if aborted:
+        if watchdog_aborted:
+            final_summary = f"[WATCHDOG — {watchdog_reason}] délibération écourtée.\n\n{final_summary}"
+        elif aborted:
             final_summary = f"[PRÉSIDENT — ABORT] {abort_reason}\n\n{final_summary}"
 
         # Publication fin
@@ -1408,6 +1475,12 @@ class Council:
         best_entry = max(agent_entries, key=lambda e: e.get("score", 0)) if agent_entries else {}
 
         gradient = self._compute_gradient(consensus_reached)
+        # ANTI-SPIRALE : un abort-watchdog n'est PAS un débat stérile. On neutralise
+        # son verdict pour qu'il ne soit JAMAIS classé "sterile" (autonomy_engine:2169
+        # plafonnerait la note -> DIP dopamine -> spirale menace↑→abort→échec→menace↑↑).
+        # L'avortement est de l'hygiène, pas une défaite.
+        if watchdog_aborted:
+            gradient["verdict"] = WATCHDOG_TIMEOUT_STATUS
         # Observabilite (2026-06-01) : le Gradient ne doit pas etre un capteur muet
         # (travers des moniteurs morts). On journalise verdict + pente + trajectoire
         # a chaque fin de debat pour pouvoir auditer ses decisions a posteriori.
