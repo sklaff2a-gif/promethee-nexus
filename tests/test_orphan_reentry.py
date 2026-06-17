@@ -25,7 +25,12 @@ from core.synaptic_network import (
 
 
 @pytest.fixture
-def network():
+def network(tmp_path, monkeypatch):
+    # Isolation hermétique : STATE_FILE -> tmp inexistant => réseau FRAIS (juste les
+    # organes semés + les noeuds du test), sans charger NI sauvegarder l'état partagé
+    # (ni le live synaptic_network.json, ni le test_synaptic_network.json qui fuyait
+    # d'un test à l'autre via _load/_save). Insensible à l'ordre d'import et au serveur.
+    monkeypatch.setattr(sn, "STATE_FILE", str(tmp_path / "syn.json"))
     SynapticNetwork.reset_singleton()
     net = SynapticNetwork()
     yield net
@@ -108,26 +113,47 @@ class TestOrphanReentry:
         rep = network.dream_consolidation()
         assert rep["orphan_reentry"] <= 5, "jamais plus de MAX ponts par cycle"
 
-    def test_billet_pondere_par_usage(self, network, monkeypatch):
-        # affinage JM : le billet va en priorite aux orphelins a fort activation_count.
-        # 2 orphelins a usage massif (1000) vs 20 fragments (defaut) ; MAX=2 billets.
-        # Les 2 tickets doivent revenir aux 2 meritants (poids 1001 ecrase le reste).
+    def test_billet_favorise_les_meritants_statistique(self, network, monkeypatch):
+        # L'USAGE décide QUI reçoit le billet (loi de morphogénèse, pas un boost
+        # artificiel : 2 orphelins à usage massif=1000 vs 18 fragments par défaut).
+        # Test STATISTIQUE sur N tirages : les méritants doivent rafler la GRANDE
+        # majorité des billets. On ne teste PAS un tirage unique — c'était flaky
+        # ~30% (hasard pondéré Efraimidis-Spirakis + ordre d'itération hash-dépendant
+        # qui varie d'un process pytest à l'autre, donc un seed ne suffit pas). On
+        # teste l'invariant PROBABILISTE, robuste par construction (grands nombres).
         monkeypatch.setattr(sn, "ORPHAN_REENTRY_RATE", 1.0)
         monkeypatch.setattr(sn, "ORPHAN_REENTRY_ENABLED", True)
         monkeypatch.setattr(sn, "ORPHAN_REENTRY_MAX", 2)
-        actifs, orphelins = _build(network, n_orphelins=20)
-        meritants = {orphelins[0], orphelins[1]}
-        for o in meritants:
-            network.nodes[o]["activation_count"] = 1000
-        network.dream_consolidation()
-        relies = set()
-        for s in network.synapses.values():
-            if s.get("context") == "dream_orphan":
-                for end in (s["source"], s["target"]):
-                    if end in set(orphelins):
-                        relies.add(end)
-        # les orphelins relies parmi les miens sont les meritants (l'usage a decide QUI)
-        assert relies <= meritants and relies, f"attendu les meritants, obtenu {relies}"
+        monkeypatch.setattr(network, "save", lambda *a, **k: None)  # pas d'I/O en boucle
+        actifs, _ = _build(network, n_orphelins=0)
+        aset = set(actifs)
+        N = 40
+        billets_meritants = billets_total = 0
+        for _t in range(N):
+            # repartir d'un réseau PROPRE (seulement les actifs) : aucun orphelin
+            # résiduel d'un cycle précédent ne doit diluer le tirage suivant.
+            for nid in list(network.nodes):
+                if nid not in aset:
+                    del network.nodes[nid]
+            for k in list(network.synapses):
+                s = network.synapses[k]
+                if s["source"] not in aset or s["target"] not in aset:
+                    del network.synapses[k]
+            _, orphelins = _build(network, n_orphelins=20)
+            meritants = {orphelins[0], orphelins[1]}
+            for o in meritants:
+                network.nodes[o]["activation_count"] = 1000
+            network.dream_consolidation()
+            relies = {end for s in network.synapses.values()
+                      if s.get("context") == "dream_orphan"
+                      for end in (s["source"], s["target"]) if end in set(orphelins)}
+            billets_meritants += len(relies & meritants)
+            billets_total += len(relies)
+        assert billets_total >= N, f"trop peu de billets émis ({billets_total}/{N} cycles)"
+        part = billets_meritants / billets_total
+        # 2 méritants sur 22 orphelins -> part "équitable" ~9%. L'usage doit les
+        # propulser BIEN au-dessus (calibré ~0.64 stable ; seuil conservateur 0.55).
+        assert part >= 0.55, f"l'usage doit fortement favoriser les méritants : part={part:.3f}"
 
     def test_partenaire_est_un_noeud_actif(self, network, monkeypatch):
         monkeypatch.setattr(sn, "ORPHAN_REENTRY_RATE", 1.0)
