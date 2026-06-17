@@ -11837,6 +11837,48 @@ RAISON: <1 phrase courte>"""
             f"tests_ok={result.tests_passed} dur={total_duration_s:.1f}s"
         )
 
+    def _write_immersion_food(self, focus: str, query: str, web_raw: str,
+                              base_dir: str = None):
+        """Phase 1 (boucle auto-alimentée) — dépose les EXTRAITS WEB RÉELS (ancrés
+        URL) dans data/raw_flux/post_mortems/ pour que l'immersion digère du vrai
+        savoir externe et nourrisse pulsion:maitrise_epistemic.
+
+        VERROU ANTI-FICTION : n'écrit QUE si de vraies URLs ont été fetchées
+        (marqueur 'LIEN: http' du WebSurfer). Sinon -> None, aucune nourriture
+        inventée n'entre dans le flux d'immersion. On dépose les extraits SOURCÉS,
+        pas une paraphrase LLM (le researcher est courier, pas auteur)."""
+        if not web_raw or "LIEN: http" not in web_raw:
+            return None  # pas de source web réelle -> pas de nourriture (anti-fiction)
+        import os
+        import re
+        import time
+        from pathlib import Path
+        if base_dir is None:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        dest = Path(base_dir) / "data" / "raw_flux" / "post_mortems"
+        dest.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^a-zA-Z0-9]+", "_", (focus or "veille")).strip("_")[:40] or "veille"
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        path = dest / f"veille_web_{safe}_{ts}.txt"
+        content = (
+            f"Veille IA — {focus}\n"
+            f"Source: recherche web (Google/DuckDuckGo)\n"
+            f"Requete: {query}\n"
+            f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"[GROUNDED:web]\n\n"
+            f"## Extraits sources\n{web_raw.strip()}\n"
+        )
+        try:
+            path.write_text(content, encoding="utf-8")
+            logger.info(
+                f"[VEILLE_IA->IMMERSION] nourriture ancrée écrite: {path.name} "
+                f"({len(content)} chars)"
+            )
+            return path
+        except Exception as e:
+            logger.warning(f"[VEILLE_IA->IMMERSION] échec écriture nourriture: {e}")
+            return None
+
     async def _execute_immersion_domain(self) -> dict:
         """IMMERSION_DOMAIN — ingestion d un document du flux brut.
 
@@ -12242,6 +12284,20 @@ RAISON: <1 phrase courte>"""
             })
 
             result_text = response.get("result", "") if response else ""
+
+            # --- IMMERSION FEED (Phase 1) : déposer les EXTRAITS WEB RÉELS (ancrés
+            # URL) en raw_flux pour que l'immersion digère du vrai savoir externe et
+            # nourrisse pulsion:maitrise_epistemic (la faim ressentie). Le verrou
+            # anti-fiction est DANS _write_immersion_food (écrit seulement si de
+            # vraies URLs ont été fetchées).
+            try:
+                self._write_immersion_food(
+                    topic.get("focus", "veille"),
+                    topic.get("query", ""),
+                    response.get("web_raw", "") if response else "",
+                )
+            except Exception as e:
+                logger.warning(f"[VEILLE_IA] feed immersion échoué: {e}")
 
             # Stocker en mémoire vectorielle
             if result_text and len(result_text) > 50:

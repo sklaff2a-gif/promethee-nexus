@@ -80,7 +80,12 @@ class DivineResearcher(BaseAgent):
             logger.info(f"[RESEARCHER] Veille sans PRINCIPE -> non memorisee "
                         f"(gate du principe): {query[:60]}")
 
-        return {"status": "success", "result": synthesis}
+        # web_raw : les extraits web BRUTS (titres + LIEN: url + INFO: snippet),
+        # exposés pour que VEILLE_IA puisse en faire une nourriture d'immersion
+        # ANCRÉE (vrai texte externe + sources), au lieu de la paraphrase LLM.
+        # Le researcher est courier de savoir externe réel, pas auteur de nourriture.
+        return {"status": "success", "result": synthesis,
+                "web_raw": web_results, "query": query}
 
     @staticmethod
     def _extraire_principe(synthesis: str) -> str:
