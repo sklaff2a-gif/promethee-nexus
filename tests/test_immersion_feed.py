@@ -66,6 +66,30 @@ def test_anti_fiction_llm_prose_without_url_no_write(tmp_path):
     assert autonomy._write_immersion_food("f", "q", prose, base_dir=str(tmp_path)) is None
 
 
+def test_backlog_cap_throttle(tmp_path):
+    """Anti-noyade : au-delà de MAX_PENDING_IMMERSION_FOOD repas en attente, on saute.
+    VEILLE_SILENCIEUSE (60-120×/j) ne doit pas inonder une immersion qui digère 3-8×/j."""
+    from core.autonomy_engine import MAX_PENDING_IMMERSION_FOOD
+    dest = _food_dir(tmp_path)
+    dest.mkdir(parents=True)
+    # Remplir le backlog jusqu'au cap avec des repas factices
+    for i in range(MAX_PENDING_IMMERSION_FOOD):
+        (dest / f"veille_web_pending_{i}.txt").write_text("x", encoding="utf-8")
+    # Le dépôt suivant (pourtant ancré) doit être SAUTÉ
+    p = autonomy._write_immersion_food("focus", "q", _WEB_RAW_OK, base_dir=str(tmp_path))
+    assert p is None
+    assert len(list(dest.glob("veille_web_*.txt"))) == MAX_PENDING_IMMERSION_FOOD  # pas de 6e
+
+
+def test_under_cap_still_writes(tmp_path):
+    """Sous le cap : le dépôt ancré passe normalement."""
+    dest = _food_dir(tmp_path)
+    dest.mkdir(parents=True)
+    (dest / "veille_web_pending_0.txt").write_text("x", encoding="utf-8")  # 1 < cap
+    p = autonomy._write_immersion_food("focus", "q", _WEB_RAW_OK, base_dir=str(tmp_path))
+    assert p is not None
+
+
 def test_filename_sanitized(tmp_path):
     """Le focus avec caractères spéciaux/accents donne un nom de fichier sûr."""
     p = autonomy._write_immersion_food(

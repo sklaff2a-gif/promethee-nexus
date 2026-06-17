@@ -45,6 +45,12 @@ AUDIT_SURVIE_ERROR_STREAK = 3             # Seuil error_streak alarmant
 AUDIT_SURVIE_FRUITLESS_WINDOW = 10        # Fenêtre historique pour fruitless detection
 AUDIT_SURVIE_FRUITLESS_COUNT = 3          # N occurrences même intent faible qualité
 
+# Throttle de la boucle d'auto-alimentation (immersion feed) : nombre max de
+# repas web (veille_web_*) en attente de digestion dans raw_flux/post_mortems.
+# L'immersion ne digère qu'~3-8 docs/jour ; VEILLE_SILENCIEUSE écrit 60-120×/jour
+# -> ce cap empêche le flood (au-delà, les dépôts sont sautés, la faim est servie).
+MAX_PENDING_IMMERSION_FOOD = 5
+
 # V14.6 — Audit étendu à l'introspection cognitive.
 # Avant : AUDIT_SURVIE ne lisait que CPU/RAM/dopamine/drives, et pouvait
 # déclarer "tout nominal" pendant que le reptilien hurlait à la nécrose
@@ -4197,6 +4203,21 @@ class AutonomyEngine:
         # Slug Grimoire réel (pour la rotation)
         grimoire_slug = getattr(self, "_last_grimoire_slug", "")
         self._last_grimoire_slug = ""
+
+        # --- IMMERSION FEED (enhancement) : VEILLE_SILENCIEUSE est la routine web
+        # HAUTE fréquence (60-120×/jour, via le researcher). Comme VEILLE_IA, elle
+        # rapporte web_raw -> on dépose les extraits sourcés en raw_flux. Le verrou
+        # anti-fiction ET le cap de backlog sont DANS _write_immersion_food (pas de
+        # flood : au-delà de MAX_PENDING_IMMERSION_FOOD repas en attente, on saute).
+        if intent == "VEILLE_SILENCIEUSE" and isinstance(response, dict):
+            try:
+                self._write_immersion_food(
+                    "Veille silencieuse",
+                    response.get("query", ""),
+                    response.get("web_raw", ""),
+                )
+            except Exception as e:
+                logger.warning(f"[VEILLE_SILENCIEUSE] feed immersion échoué: {e}")
 
         # Score qualité post-routine
         quality_score = self._score_result_quality(response, intent)
@@ -11857,6 +11878,20 @@ RAISON: <1 phrase courte>"""
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         dest = Path(base_dir) / "data" / "raw_flux" / "post_mortems"
         dest.mkdir(parents=True, exist_ok=True)
+        # THROTTLE anti-noyade : l'immersion ne digère qu'~3-8 docs/jour (1/cycle).
+        # VEILLE_SILENCIEUSE tourne 60-120×/jour -> sans borne, raw_flux deborderait.
+        # On ne laisse pas plus de MAX_PENDING_IMMERSION_FOOD repas web en attente ;
+        # au-dela, on skip (la faim est deja servie, inutile d'empiler).
+        try:
+            pending = len(list(dest.glob("veille_web_*.txt")))
+            if pending >= MAX_PENDING_IMMERSION_FOOD:
+                logger.info(
+                    f"[VEILLE->IMMERSION] backlog plein ({pending}/{MAX_PENDING_IMMERSION_FOOD}) "
+                    f"-> dépôt sauté (throttle anti-noyade)"
+                )
+                return None
+        except Exception:
+            pass
         safe = re.sub(r"[^a-zA-Z0-9]+", "_", (focus or "veille")).strip("_")[:40] or "veille"
         ts = time.strftime("%Y%m%d_%H%M%S")
         path = dest / f"veille_web_{safe}_{ts}.txt"
