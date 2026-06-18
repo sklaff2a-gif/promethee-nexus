@@ -241,7 +241,7 @@ class ChromaMemoryManager:
                     try:
                         result_new = shadow_col.query(query_texts=query_texts, n_results=n_results)
                         if result_new and result_new.get("ids") and result_new["ids"] and result_new["ids"][0]:
-                            return result_new   # EXCLUSIF : 100% multilingue
+                            return self._maybe_irrigate(query_texts, result_new)   # EXCLUSIF : 100% multilingue
                     except Exception:
                         pass   # neuf en echec -> on retombe sur l'ancien (securite)
             col = self._get_collection(collection_name)
@@ -249,7 +249,7 @@ class ChromaMemoryManager:
             # --- GREFFE SHADOW READING (Phase 1) — fantome passif, n'altere JAMAIS result_old ---
             if SHADOW_READ_ENABLED:
                 self._shadow_observe(query_texts, n_results, collection_name, result_old)
-            return result_old
+            return self._maybe_irrigate(query_texts, result_old)
         except Exception as e:
             print(f"❌ Erreur Mémoire (Query): {e}")
             return None
@@ -318,6 +318,72 @@ class ChromaMemoryManager:
         except Exception:
             self._shadow_collections[shadow_name] = None   # cache l'echec : pas de retry par requete
             return None
+
+    # --- Irrigation neurochimique (Incision A, 18/06) — BORG défensif --------
+    # Calque _shadow_observe : intercepte le flux de rappel SANS ré-embedding (réutilise
+    # les distances déjà retournées), module par l'état métabolique. Double commutateur :
+    # SHADOW (observe+logge, retour inchangé) puis ACTIVE (applique, Phase 2 — OFF défaut).
+    def _maybe_irrigate(self, query_texts, result):
+        """Aiguillage des commutateurs d'irrigation. En SHADOW : retour BIT-IDENTIQUE."""
+        try:
+            from core import irrigation
+        except Exception:
+            return result
+        if irrigation.IRRIGATION_ACTIVE:
+            return self._irrigation_apply(query_texts, result)
+        if irrigation.IRRIGATION_SHADOW:
+            self._irrigation_observe(query_texts, result)
+        return result
+
+    def _irrigation_observe(self, query_texts, result):
+        """TRY/EXCEPT BORG : calcule le re-ranking d'irrigation, logge l'écart vs ordre
+        cosinus en JSONL. NE MODIFIE JAMAIS result. Aucune exception ne remonte."""
+        try:
+            from core import irrigation
+            ids = ((result or {}).get("ids") or [[]])[0]
+            if not ids:
+                return
+            dists = ((result or {}).get("distances") or [[]])[0]
+            metas = ((result or {}).get("metadatas") or [[]])[0]
+            state = irrigation.read_neuro_state()
+            rr = irrigation.rerank(ids, dists, metas, state)
+            import json
+            rec = {
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "query": (query_texts[0] if query_texts else "")[:80],
+                "cosine_order": ids,
+                "irrigated_order": rr["order"],
+                "changed": ids != rr["order"],
+                "threat": round(state["threat"], 2),
+                "d_threat_dt": round(state["d_threat_dt"], 4),
+                "dopamine_rel": round(state["dopamine_rel"], 3),
+                "perfusion": rr["perfusion"],
+            }
+            with open(irrigation.IRRIGATION_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception as e:
+            try:   # le BORG ne laisse RIEN fuir, pas même l'échec d'écriture du log
+                from core import irrigation as _irr
+                with open(_irr.IRRIGATION_LOG_PATH + ".err", "a", encoding="utf-8") as f:
+                    f.write(f"[irrigation] {e}\n")
+            except Exception:
+                pass
+
+    def _irrigation_apply(self, query_texts, result):
+        """Phase 2 (DORMANT, IRRIGATION_ACTIVE=0) : applique le re-ranking au rappel
+        servi. Logge aussi en shadow pour traçabilité. Sur échec : retour intact."""
+        try:
+            from core import irrigation
+            ids = ((result or {}).get("ids") or [[]])[0]
+            if not ids or len(ids) < 2:
+                return result
+            dists = ((result or {}).get("distances") or [[]])[0]
+            metas = ((result or {}).get("metadatas") or [[]])[0]
+            state = irrigation.read_neuro_state()
+            rr = irrigation.rerank(ids, dists, metas, state)
+            return irrigation.reorder_result(result, rr["order"])
+        except Exception:
+            return result
 
     def add_premium_lesson(self, text, concepts=None, origin_ts=None, lesson_id=None):
         """V2 (08/06) — CABLE `!grave` -> tier PREMIUM. Upsert une lecon CERTIFIEE par le gate
