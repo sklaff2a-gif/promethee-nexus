@@ -171,6 +171,45 @@ class TestShadowEtancheite:
         assert out == {"reordered": True}            # le chemin ACTIVE applique
         assert calls["apply"] == 1 and calls["observe"] == 0
 
+    def test_observe_ignore_resultat_unique(self, monkeypatch, tmp_path):
+        # Le rappel de dédup (remember, n_results=1) ne doit RIEN logger : un seul
+        # document ne peut pas être re-rangé -> aucun signal, pas de bruit dans le JSONL.
+        from core.vector_store import ChromaMemoryManager
+        log = tmp_path / "irr.jsonl"
+        monkeypatch.setattr(irr, "IRRIGATION_LOG_PATH", str(log))
+
+        class _Fake:
+            pass
+        f = _Fake()
+        f._irrigation_observe = ChromaMemoryManager._irrigation_observe.__get__(f)
+        f._irrigation_observe(["q"], {"ids": [["seul"]], "distances": [[0.1]], "metadatas": [[{}]]})
+        assert not log.exists() or log.read_text(encoding="utf-8").strip() == ""
+
+    def test_observe_logge_un_delta_multi(self, monkeypatch, tmp_path):
+        # Avec >=2 docs : une ligne de delta est écrite (ordre cosinus vs irrigué).
+        import json
+        from core.vector_store import ChromaMemoryManager
+        irr.reset()
+        log = tmp_path / "irr.jsonl"
+        monkeypatch.setattr(irr, "IRRIGATION_LOG_PATH", str(log))
+
+        class _Fake:
+            pass
+        f = _Fake()
+        f._irrigation_observe = ChromaMemoryManager._irrigation_observe.__get__(f)
+        result = {
+            "ids": [["a", "b"]],
+            "distances": [[0.2, 0.3]],
+            "metadatas": [[{"source": "strategist"}, {"tier_status": "PREMIUM"}]],
+        }
+        f._irrigation_observe(["ma requête"], result)
+        assert log.exists()
+        rec = json.loads(log.read_text(encoding="utf-8").strip().splitlines()[0])
+        assert rec["cosine_order"] == ["a", "b"]
+        assert "irrigated_order" in rec and "perfusion" in rec
+        # le résultat passé n'est pas muté (observe = lecture seule)
+        assert result["ids"] == [["a", "b"]]
+
     def test_commutateurs_defaut_surs(self):
         # En prod, par défaut (env non positionné) : SHADOW ON (on observe),
         # ACTIVE OFF (on n'agit jamais sur le rappel servi en Phase 1).

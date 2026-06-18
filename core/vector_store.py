@@ -261,11 +261,14 @@ class ChromaMemoryManager:
                 from config import Config
                 n_results = getattr(Config, "RAG_DEFAULT_N_RESULTS", 3)
             col = self._canonical_collection(collection_name)   # full switch -> temoin multilingue
-            return col.query(
+            result = col.query(
                 query_texts=query_texts,
                 n_results=n_results,
                 include=["documents", "metadatas", "distances"]
             )
+            # Irrigation (Incision A) : c'est LE chemin de rappel-pour-génération des
+            # agents (base_agent:518) et du chat. En SHADOW, retour BIT-IDENTIQUE.
+            return self._maybe_irrigate(query_texts, result)
         except Exception as e:
             print(f"❌ Erreur Mémoire (QueryMeta): {e}")
             return None
@@ -341,8 +344,8 @@ class ChromaMemoryManager:
         try:
             from core import irrigation
             ids = ((result or {}).get("ids") or [[]])[0]
-            if not ids:
-                return
+            if len(ids) < 2:
+                return   # rien à re-ranker (ex: dédup remember() n_results=1) — pas de signal
             dists = ((result or {}).get("distances") or [[]])[0]
             metas = ((result or {}).get("metadatas") or [[]])[0]
             state = irrigation.read_neuro_state()
