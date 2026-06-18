@@ -1044,6 +1044,13 @@ class AutonomyEngine:
         # Soliloque quotidien : garantir 1 SOLILOQUE_INTERNE par jour
         self._daily_soliloque_done: bool = False
         self._daily_stefan_done: bool = False
+        # Immersion quotidienne garantie (Couche 26quinquies, 2026-06-18) :
+        # plancher de digestion 1x/jour quand de la nourriture pourrit en
+        # file ET que la famine epistemique est critique. Sans ce plancher,
+        # l appetit plafonne a +4.0 (doctrine) ne fait JAMAIS gagner
+        # IMMERSION_DOMAIN contre l ecole (8-14) -> nourriture jamais
+        # digeree (constat 18/06 : stale=999h, 4 repas en file, famine 689h).
+        self._daily_immersion_done: bool = False
 
         # SensoriumLoop : dernier snapshot post-action pour boucle fermee
         self._last_feedback_snapshot: dict = {}
@@ -1635,6 +1642,7 @@ class AutonomyEngine:
             self._daily_soliloque_done = False
             self._immersion_daily_count = 0
             self._daily_stefan_done = False
+            self._daily_immersion_done = False
             self._daily_open_intent_count = 0
             self._curiosity_explored_tonight = False
             self._nap_refund_used_today = False  # Nouveau second souffle disponible
@@ -3738,6 +3746,63 @@ class AutonomyEngine:
                         scored[i] = (routine, s + thematic_bonus)
         except Exception:
             pass
+
+        # --- Immersion quotidienne garantie (Couche 26quinquies, 2026-06-18) ---
+        # PLANCHER de digestion 1x/jour. Diagnostic 18/06 : IMMERSION_DOMAIN
+        # est scoree (+4.0 d appetit) mais ne gagne JAMAIS la selection contre
+        # l ecole (8-14) -> _execute_immersion_domain jamais appele -> portes
+        # A/B/C jamais atteintes -> nourriture jamais digeree (stale=999h),
+        # famine epistemique 689h en hausse. Le plafond d appetit +4.0 est
+        # DELIBERE (appetit, pas obligation) : on ne le touche pas. A la place,
+        # on garantit UN tour de selection par jour quand la nourriture pourrit
+        # ET que la famine est critique. Ce n est qu un PLANCHER : l appetit
+        # opportuniste continue d en declencher davantage si le pool est calme.
+        # On force la SELECTION, pas l EXECUTION : should_trigger_immersion
+        # (portes A/B/C, kill switches reptilien/metabolique) reste juge
+        # souverain de la digestion. Si une porte de survie bloque, le tour
+        # est rendu sans digerer (restraint correct en crise).
+        # Apres 10 routines (matinee ecole etablie, declenche tot pour
+        # commencer a fermer la famine).
+        if not self._daily_immersion_done and self.daily_count >= 10 and not self._forced_next_intent:
+            try:
+                import os as _os_floor
+                _root = _os_floor.path.dirname(_os_floor.path.dirname(_os_floor.path.abspath(__file__)))
+                _food = 0
+                for _sub in ("data/raw_flux/post_mortems", "USER_DROPZONE/limite_pauseai"):
+                    _d = _os_floor.path.join(_root, _sub)
+                    if not _os_floor.path.exists(_d):
+                        continue
+                    for _fn in _os_floor.listdir(_d):
+                        if _fn.startswith(".") or not _fn.endswith(".txt"):
+                            continue
+                        if ".preempted." in _fn:
+                            continue  # blesse en convalescence, pas un repas frais
+                        _food += 1
+                # Famine epistemique : slot le PLUS affame (MIN, coherent avec
+                # le Veto Executif et la Porte C).
+                _famine_h = 0.0
+                try:
+                    from core.synaptic_network import SynapticNetwork as _SynFloor
+                    _closures = list(getattr(_SynFloor(), "_epistemic_last_closure", {}).values())
+                    if _closures:
+                        _famine_h = (time.time() - min(_closures)) / 3600.0
+                    else:
+                        _famine_h = 999.0  # jamais ferme -> famine maximale
+                except Exception:
+                    _famine_h = 0.0
+                if self._immersion_floor_should_arm(_food, _famine_h):
+                    self._forced_next_intent = "IMMERSION_DOMAIN"
+                    self._daily_immersion_done = True
+                    print(
+                        f"   🍽️ IMMERSION: digestion quotidienne garantie "
+                        f"(1x/jour, {_food} repas en file, famine {_famine_h:.0f}h)"
+                    )
+                    logger.info(
+                        f"[IMMERSION_FLOOR] plancher arme : food={_food} "
+                        f"famine={_famine_h:.0f}h -> IMMERSION_DOMAIN force"
+                    )
+            except Exception as _floor_err:
+                logger.debug(f"[IMMERSION_FLOOR] check echoue: {_floor_err}")
 
         # --- Soliloque quotidien garanti (Couche 26c) ---
         # Garantir 1 SOLILOQUE_INTERNE par jour : dialogue introspectif avec le compagnon
@@ -11913,6 +11978,25 @@ RAISON: <1 phrase courte>"""
         except Exception as e:
             logger.warning(f"[VEILLE_IA->IMMERSION] échec écriture nourriture: {e}")
             return None
+
+    # Plancher immersion (Couche 26quinquies) : seuils de la politique pure.
+    IMMERSION_FLOOR_MIN_FOOD: int = 1        # au moins 1 repas frais en file
+    IMMERSION_FLOOR_FAMINE_HOURS: float = 48.0  # famine epistemique critique
+
+    @staticmethod
+    def _immersion_floor_should_arm(food_count: int, famine_hours: float) -> bool:
+        """Politique PURE du plancher quotidien d immersion (testable hors I/O).
+
+        Arme le forcage UNIQUEMENT si de la nourriture fraiche est en file ET
+        que la famine epistemique est critique. Les gardes de cadence
+        (1x/jour, daily_count>=10, pas d intent deja force) et la lecture
+        filesystem/synaptique sont faites par l appelant ; ici c est la seule
+        regle metier, isolee pour le test.
+        """
+        return (
+            food_count >= AutonomyEngine.IMMERSION_FLOOR_MIN_FOOD
+            and famine_hours >= AutonomyEngine.IMMERSION_FLOOR_FAMINE_HOURS
+        )
 
     async def _execute_immersion_domain(self) -> dict:
         """IMMERSION_DOMAIN — ingestion d un document du flux brut.
