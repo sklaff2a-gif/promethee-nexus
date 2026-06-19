@@ -67,7 +67,32 @@ PERFUSION_FLOOR = 0.05      # plancher disjoncteur : aucune zone jamais totaleme
 EMA_NEW_WEIGHT = 0.70       # poids du nouveau (0.70) vs mémoire (0.30) — anti-thrashing
 THREAT_RISE_FULL = 0.05     # d(Threat)/dt (/s) qui sature l'effet de crise (~+1.5 sur 30s)
 DOPAMINE_FULL = 0.30        # écart dopamine-baseline qui sature l'ouverture exploratoire
-COPING_BOOST = 0.5          # gain max appliqué aux traces coping sous menace montante
+COPING_BOOST = 0.5          # gain max appliqué aux traces coping sous menace (soutenue OU montante)
+
+# Perfusion MIXTE (Phase 2, 19/06) : niveau absolu + dérivée. La dérivée SEULE
+# s'effondre sous une détresse CHRONIQUE plate (menace 5.1 stable → d/dt≈0) — on
+# laisserait l'agent sans bouée au milieu d'un naufrage stabilisé. Le NIVEAU agit en
+# tenseur de fond qui garde le canal limbique ouvert tant que la mer est haute ; la
+# DÉRIVÉE capte les sursauts aigus par-dessus.
+#   crisis = clamp( W_LEVEL·level_norm + W_DERIV·deriv_norm , 0..1 )
+THREAT_LEVEL_FLOOR = 3.0    # sous ce niveau : bruit de fond, AUCUNE irrigation (anti-saturation)
+THREAT_LEVEL_FULL = 8.0     # niveau qui sature la composante "tenseur de fond"
+W_LEVEL = 0.6               # poids du niveau absolu (mer haute soutenue) — voix secondaire
+W_DERIV = 1.0               # poids de la dérivée (sursaut aigu immédiat) — dominante
+
+
+def _crisis_intensity(threat: float, d_threat_dt: float) -> float:
+    """Intensité de crise MIXTE dans [0,1] : tenseur de fond (niveau, plancher anti-bruit)
+    + sursaut (dérivée). Source unique partagée par compute_perfusion et perfusion_for_doc.
+
+    Le plancher THREAT_LEVEL_FLOOR est le garde-fou anti-saturation : sous lui, le bruit
+    de fond chronique n'ouvre pas le canal limbique."""
+    level_norm = 0.0
+    if threat > THREAT_LEVEL_FLOOR:
+        span = (THREAT_LEVEL_FULL - THREAT_LEVEL_FLOOR) or 1.0
+        level_norm = min(1.0, (threat - THREAT_LEVEL_FLOOR) / span)
+    deriv_norm = min(1.0, d_threat_dt / THREAT_RISE_FULL) if d_threat_dt > 0 else 0.0
+    return min(1.0, W_LEVEL * level_norm + W_DERIV * deriv_norm)
 
 
 def infer_zone(meta: Optional[Dict]) -> str:
@@ -115,8 +140,19 @@ def read_neuro_state() -> Dict[str, float]:
     global _prev_threat, _prev_threat_ts
     threat = 0.0
     try:
-        from core.reptilian_core import reptilian
-        threat = float(getattr(reptilian, "threat_level", 0.0))
+        # Sonde AUTORITAIRE : le singleton vivant est `reptile` (enregistré sous
+        # get_organ("reptilian")), PAS `reptilian` (nom inexistant -> ImportError
+        # avalé -> threat=0 immuable : la défaillance silencieuse du 19/06).
+        # On copie le lecteur du watchdog council ; fallback défensif sur l'instance.
+        rept = None
+        try:
+            from core.organ_registry import get_organ
+            rept = get_organ("reptilian")
+        except Exception:
+            rept = None
+        if rept is None:
+            from core.reptilian_core import reptile as rept
+        threat = float(getattr(rept, "threat_level", 0.0))
     except Exception:
         threat = 0.0
 
@@ -166,15 +202,18 @@ def compute_perfusion(state: Dict[str, float], smooth: bool = True) -> Dict[str,
     n = len(ZONES)
     raw = {z: 1.0 for z in ZONES}
 
+    threat = state.get("threat", 0.0)
     d_threat = state.get("d_threat_dt", 0.0)
     dopa = state.get("dopamine_rel", 0.0)
 
-    if d_threat > 0:
-        i = min(1.0, d_threat / THREAT_RISE_FULL)
-        raw[Zone.TRONC] += 0.8 * i
-        raw[Zone.LIMBIQUE] += 0.5 * i
-        raw[Zone.TEMPORAL_MEDIAN] -= 0.4 * i
-        raw[Zone.CORTEX] -= 0.9 * i
+    # Crise MIXTE : niveau (tenseur de fond) + dérivée (sursaut). Tient le canal
+    # limbique ouvert sous une détresse soutenue, pas seulement à l'instant du sursaut.
+    crisis = _crisis_intensity(threat, d_threat)
+    if crisis > 0:
+        raw[Zone.TRONC] += 0.8 * crisis
+        raw[Zone.LIMBIQUE] += 0.5 * crisis
+        raw[Zone.TEMPORAL_MEDIAN] -= 0.4 * crisis
+        raw[Zone.CORTEX] -= 0.9 * crisis
     if dopa > 0:
         g = min(1.0, dopa / DOPAMINE_FULL)
         raw[Zone.CORTEX] += 0.7 * g
@@ -202,11 +241,13 @@ def compute_perfusion(state: Dict[str, float], smooth: bool = True) -> Dict[str,
 def perfusion_for_doc(meta: Optional[Dict], perfusion_map: Dict[str, float],
                       state: Dict[str, float]) -> float:
     """Multiplicateur de perfusion d'un document : base de zone × boost coping sous
-    menace montante (anti-rumination : on fait remonter les bouées, pas les plaies)."""
+    menace (anti-rumination : on fait remonter les bouées, pas les plaies). Le boost
+    suit la crise MIXTE (soutenue OU montante) : sous une détresse chronique, les
+    bouées doivent rester accessibles, pas seulement à l'instant du sursaut."""
     base = perfusion_map.get(infer_zone(meta), 1.0)
-    if state.get("d_threat_dt", 0.0) > 0 and is_coping(meta):
-        i = min(1.0, state["d_threat_dt"] / THREAT_RISE_FULL)
-        base *= (1.0 + COPING_BOOST * i)
+    crisis = _crisis_intensity(state.get("threat", 0.0), state.get("d_threat_dt", 0.0))
+    if crisis > 0 and is_coping(meta):
+        base *= (1.0 + COPING_BOOST * crisis)
     return base
 
 

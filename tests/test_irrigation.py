@@ -100,6 +100,60 @@ class TestPerfusion:
 
 # --- Document-level + re-ranker ---------------------------------------------
 
+class TestSonde:
+    """La sonde de threat (read_neuro_state) doit lire l'organe VIVANT, pas un nom
+    inexistant. Régression du bug 19/06 : `import reptilian` (n'existe pas) -> threat=0
+    immuable, shadow aveugle pendant 90 requêtes."""
+
+    def test_lit_le_threat_via_get_organ(self, monkeypatch):
+        import types as _t
+        fake = _t.SimpleNamespace(threat_level=5.1)
+        import core.organ_registry as reg
+        monkeypatch.setattr(reg, "get_organ", lambda name: fake if name == "reptilian" else None)
+        st = irr.read_neuro_state()
+        assert st["threat"] == 5.1, "la sonde doit refléter le threat réel de l'organe"
+
+    def test_organe_absent_fallback_zero(self, monkeypatch):
+        import core.organ_registry as reg
+        monkeypatch.setattr(reg, "get_organ", lambda name: None)
+        # même sans organe registre, ne crash pas (fallback défensif)
+        st = irr.read_neuro_state()
+        assert "threat" in st and isinstance(st["threat"], float)
+
+
+class TestPerfusionMixte:
+    """Perfusion MIXTE niveau+dérivée (Phase 2). Le cas qui prouve le fix : une menace
+    CHRONIQUE PLATE (d/dt=0) doit QUAND MÊME ouvrir le canal limbique via le niveau."""
+
+    def test_menace_soutenue_plate_irrigue_le_tronc(self):
+        # threat haut, dérivée NULLE -> avant le fix : uniforme (bug) ; après : TRONC>CORTEX
+        w = irr.compute_perfusion({"threat": 5.1, "d_threat_dt": 0.0, "dopamine_rel": 0.0}, smooth=False)
+        assert w[Zone.TRONC] > 1.0
+        assert w[Zone.CORTEX] < 1.0
+        assert w[Zone.TRONC] > w[Zone.CORTEX]
+
+    def test_plancher_anti_bruit(self):
+        # sous THREAT_LEVEL_FLOOR : le bruit de fond n'ouvre RIEN (anti-saturation)
+        w = irr.compute_perfusion({"threat": 2.0, "d_threat_dt": 0.0, "dopamine_rel": 0.0}, smooth=False)
+        for z in ZONES:
+            assert abs(w[z] - 1.0) < 1e-9, f"{z} ne doit pas bouger sous le plancher de bruit"
+
+    def test_crisis_intensity_mixte_bornee(self):
+        # niveau seul (plat) : 0 < crisis < 1 ; dérivée forte : sature à 1 ; sous plancher : 0
+        assert irr._crisis_intensity(2.0, 0.0) == 0.0
+        c_level = irr._crisis_intensity(5.1, 0.0)
+        assert 0.0 < c_level < 1.0
+        assert irr._crisis_intensity(9.0, 999.0) == 1.0  # clamp haut
+
+    def test_coping_remonte_sous_menace_soutenue(self):
+        # la bouée doit remonter même à dérivée nulle (détresse chronique)
+        state = {"threat": 5.1, "d_threat_dt": 0.0, "dopamine_rel": 0.0}
+        perf = irr.compute_perfusion(state, smooth=False)
+        coping = {"tier_status": "PREMIUM", "source": "reptilian"}
+        plaie = {"source": "reptilian"}
+        assert irr.perfusion_for_doc(coping, perf, state) > irr.perfusion_for_doc(plaie, perf, state)
+
+
 class TestRerank:
     def test_coping_remonte_sous_stress(self):
         state = {"d_threat_dt": 0.04, "dopamine_rel": 0.0}
