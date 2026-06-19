@@ -619,6 +619,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"[MAIN] ExperienceClock non cable: {e}")
 
+    # --- Memoire de secours (Incision B) : ecoute veto + FREEZE, tague coping ---
+    try:
+        from core.coping_memory import wire_to_bus as _wire_coping
+        _wire_coping()
+    except Exception as e:
+        logger.warning(f"[MAIN] CopingMemory non cable: {e}")
+
     # --- Emploi du temps scolaire ---
     try:
         from core.school_schedule import schedule as school_schedule
