@@ -264,9 +264,48 @@ class TestShadowEtancheite:
         # le résultat passé n'est pas muté (observe = lecture seule)
         assert result["ids"] == [["a", "b"]]
 
-    def test_commutateurs_defaut_surs(self):
-        # En prod, par défaut (env non positionné) : SHADOW ON (on observe),
-        # ACTIVE OFF (on n'agit jamais sur le rappel servi en Phase 1).
+    def test_commutateurs_phase2(self):
+        # Phase 2 : par défaut (env non positionné) SHADOW ON et ACTIVE ON (mirror
+        # MEM_V2). Kill-switch : IRRIGATION_ACTIVE=0 -> rollback vers SHADOW pur.
         import os
         assert (os.getenv("IRRIGATION_SHADOW", "1") != "0") is True
-        assert (os.getenv("IRRIGATION_ACTIVE", "0") == "1") is False
+        assert (os.getenv("IRRIGATION_ACTIVE", "1") != "0") is True
+
+    def test_apply_no_op_si_ordre_inchange(self, monkeypatch):
+        # GARDE : si le re-ranking ne change pas l'ordre (mono-zone), retour BIT-IDENTIQUE.
+        from core.vector_store import ChromaMemoryManager
+        irr.reset()
+        # état neutre (threat=0) -> perfusion uniforme -> ordre inchangé
+        monkeypatch.setattr(irr, "read_neuro_state",
+                            lambda: {"threat": 0.0, "d_threat_dt": 0.0, "dopamine_rel": 0.0})
+
+        class _Fake:
+            pass
+        f = _Fake()
+        f._irrigation_apply = ChromaMemoryManager._irrigation_apply.__get__(f)
+        result = {"ids": [["a", "b"]], "distances": [[0.2, 0.3]],
+                  "metadatas": [[{"source": "x"}, {"source": "y"}]]}
+        out = f._irrigation_apply(["q"], result)
+        assert out is result   # aucun changement -> objet identique retourné
+
+    def test_apply_reordonne_sous_menace_multizone(self, monkeypatch):
+        # GARDE : sous menace, une bouée coping derrière en cosinus passe devant -> apply réordonne.
+        from core.vector_store import ChromaMemoryManager
+        irr.reset()
+        monkeypatch.setattr(irr, "read_neuro_state",
+                            lambda: {"threat": 5.1, "d_threat_dt": 0.3, "dopamine_rel": 0.0})
+
+        class _Fake:
+            pass
+        f = _Fake()
+        f._irrigation_apply = ChromaMemoryManager._irrigation_apply.__get__(f)
+        result = {
+            "ids": [["cortex", "bouee"]],
+            "distances": [[0.30, 0.38]],   # cortex meilleur en cosinus pur
+            "documents": [["dc", "db"]],
+            "metadatas": [[{"source": "strategist"}, {"tier_status": "PREMIUM", "source": "reptilian"}]],
+        }
+        out = f._irrigation_apply(["q"], result)
+        assert out["ids"] == [["bouee", "cortex"]]          # réordonné
+        assert out["documents"] == [["db", "dc"]]           # alignement préservé
+        assert out["distances"] == [[0.38, 0.30]]

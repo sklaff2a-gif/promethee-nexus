@@ -373,8 +373,10 @@ class ChromaMemoryManager:
                 pass
 
     def _irrigation_apply(self, query_texts, result):
-        """Phase 2 (DORMANT, IRRIGATION_ACTIVE=0) : applique le re-ranking au rappel
-        servi. Logge aussi en shadow pour traçabilité. Sur échec : retour intact."""
+        """Phase 2 ACTIVE : applique le re-ranking au rappel servi. GARDÉ — ne réordonne
+        QUE si l'ordre change réellement (no-op sur les rappels mono-zone) ; LOGGE chaque
+        réordonnancement réel (traçabilité, on inspecte enfin la qualité). Sur échec :
+        retour intact. reorder_result préserve l'alignement ids/distances/documents/metadatas."""
         try:
             from core import irrigation
             ids = ((result or {}).get("ids") or [[]])[0]
@@ -384,6 +386,16 @@ class ChromaMemoryManager:
             metas = ((result or {}).get("metadatas") or [[]])[0]
             state = irrigation.read_neuro_state()
             rr = irrigation.rerank(ids, dists, metas, state)
+            if rr["order"] == ids:
+                return result   # aucun changement d'ordre -> rappel BIT-IDENTIQUE (cas ~99%)
+            try:
+                logger.info(
+                    f"[IRRIGATION] APPLIQUÉ : threat={round(state.get('threat', 0.0), 2)} "
+                    f"d/dt={round(state.get('d_threat_dt', 0.0), 3)} "
+                    f"cosine={ids} -> irrigué={rr['order']} perfusion={rr['perfusion']}"
+                )
+            except Exception:
+                pass
             return irrigation.reorder_result(result, rr["order"])
         except Exception:
             return result

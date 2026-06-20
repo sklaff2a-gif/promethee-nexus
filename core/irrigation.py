@@ -38,7 +38,11 @@ logger = logging.getLogger("Irrigation")
 
 # --- Commutateurs d'urgence -------------------------------------------------
 IRRIGATION_SHADOW = os.getenv("IRRIGATION_SHADOW", "1") != "0"   # observe + logge
-IRRIGATION_ACTIVE = os.getenv("IRRIGATION_ACTIVE", "0") == "1"   # applique (Phase 2, OFF)
+# Phase 2 ACTIVATION (20/06) : actif PAR DÉFAUT (mirror MEM_V2_FULL_SWITCH). L'application
+# est GARDÉE (ne réordonne QUE sur un vrai changement d'ordre — no-op sur les ~99% de
+# rappels mono-zone) et LOGGÉE (chaque réordonnancement réel tracé). Kill-switch : env
+# IRRIGATION_ACTIVE=0 → rollback instantané vers SHADOW pur.
+IRRIGATION_ACTIVE = os.getenv("IRRIGATION_ACTIVE", "1") != "0"   # applique (Phase 2, ON par défaut)
 
 IRRIGATION_LOG_PATH = os.path.join("memory", "irrigation_shadow.jsonl")
 
