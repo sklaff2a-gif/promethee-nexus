@@ -1035,8 +1035,12 @@ class AutonomyEngine:
 
         # Auto-analyse quotidienne : garantir 1 SELF_ANALYSIS par jour
         self._daily_analysis_done: bool = False
-        # Introspection vesperale quotidienne : garantir 1 EVENING_REFLECTION par jour
-        self._daily_reflection_done: bool = False
+        # Introspection vesperale quotidienne : garantir 1 EVENING_REFLECTION par jour.
+        # PERSISTÉ (fix 20/06) : sinon chaque reboot remettait le flag à False/0 et,
+        # combiné a la mort du canal post-budget (16/06), la reflexion ne tirait plus.
+        # Le rollover quotidien (_check_daily_budget) remet done=False sur un jour neuf.
+        self._daily_reflection_done: bool = bool(persisted.get("_daily_reflection_done", False))
+        self._last_reflection_ts = float(persisted.get("_last_reflection_ts", 0.0))
         # IMMERSION_DOMAIN (2026-05-08) : compteurs metaboliques pour la
         # routine d ingestion de flux brut. Reseted via reset_daily_state.
         self._last_immersion_time: float = 0.0
@@ -2081,6 +2085,8 @@ class AutonomyEngine:
             "daily_count": self.daily_count,
             "daily_budget_used": self.daily_budget_used,
             "last_reset_day": self.last_reset_day.isoformat() if self.last_reset_day else None,
+            "_daily_reflection_done": getattr(self, "_daily_reflection_done", False),
+            "_last_reflection_ts": getattr(self, "_last_reflection_ts", 0.0),
             "routine_history": self.routine_history,
             "recent_inspect_actions": getattr(self, "_recent_inspect_actions", [])[-10:],  # V27.0 (defensif V27.1)
             "last_health_check": self.last_health_check,
@@ -3803,6 +3809,21 @@ class AutonomyEngine:
                     )
             except Exception as _floor_err:
                 logger.debug(f"[IMMERSION_FLOOR] check echoue: {_floor_err}")
+
+        # --- Introspection vespérale garantie (Couche 26f, 20/06) ---
+        # Diag 20/06 : EVENING_REFLECTION n'avait qu'UN canal de livraison fiable — le
+        # post-budget — MORT depuis le 16/06 (0 occurrence). Le scoring ne la sélectionne
+        # jamais (bonus +5 perd contre l'école 8-20). Résultat : plus aucune réflexion
+        # depuis le 15/06. On garantit le tir le SOIR via le forçage (même mécanisme que
+        # le plancher immersion / SOLILOQUE / STEFAN). 1 tentative/jour : on pose le flag
+        # à l'armement (si la routine skip — cooldown 8h ou pas assez d'interactions —
+        # tant pis, pas de boucle de re-forçage). Le rollover quotidien réarme.
+        if self._reflection_should_arm(time.localtime().tm_hour,
+                                       self._daily_reflection_done,
+                                       bool(self._forced_next_intent)):
+            self._forced_next_intent = "EVENING_REFLECTION"
+            self._daily_reflection_done = True
+            print("   🌙 INTROSPECTION: garantie vespérale forcée (1x/jour)")
 
         # --- Soliloque quotidien garanti (Couche 26c) ---
         # Garantir 1 SOLILOQUE_INTERNE par jour : dialogue introspectif avec le compagnon
@@ -12067,6 +12088,15 @@ RAISON: <1 phrase courte>"""
     # Cooldown introspection vesperale (max 1 par 8h)
     _last_reflection_ts: float = 0.0
     _REFLECTION_COOLDOWN: float = 8 * 3600  # 8 heures
+    REFLECTION_EVENING_HOUR: int = 18       # heure d'armement de la garantie vespérale
+
+    @staticmethod
+    def _reflection_should_arm(hour: int, reflection_done: bool, forced_busy: bool) -> bool:
+        """Politique PURE de la garantie vespérale (Couche 26f, testable hors scoring) :
+        on force EVENING_REFLECTION le soir si elle n'a pas encore été faite et qu'aucun
+        autre intent n'est déjà forcé."""
+        return (not reflection_done) and (not forced_busy) \
+            and hour >= AutonomyEngine.REFLECTION_EVENING_HOUR
 
     async def _execute_evening_reflection(self) -> dict:
         """Introspection vesperale : relire le vecu du jour et identifier les questions ouvertes.
