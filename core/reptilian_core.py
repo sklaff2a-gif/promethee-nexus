@@ -61,12 +61,15 @@ THRESHOLDS = {
 }
 
 # --- Levier #1 du Fantôme : instrumentation RSS (mesurer AVANT de toucher le seuil) ---
-# process_mem_warn_mb=2000 reste l'UNIQUE seuil de détection live. Le seuil ci-dessous
-# n'est utilisé QUE pour le log shadow (comparaison observationnelle). On accumule la
-# distribution du RSS Python pour décider, sur données, si le baseline est STABLE
-# (torch/CUDA → seuil trop serré, sûr de relever) ou CROISSANT (vraie fuite → NE PAS
-# masquer). Zéro effet sur la détection ou la cascade tant que cette phase dure.
-PROCESS_MEM_SHADOW_MB = 2800             # seuil PROPOSÉ, shadow-only (jamais utilisé pour fire)
+# PHASE 2 (20/06) — fin de la mesure : process_memory devient ADAPTATIF (mirror RAM/CPU).
+# Donnée : RSS Python p50=1238 mais p90=3619 / max=3645 (torch/CUDA spike legitimement a
+# 3600+). Le seuil statique 2000 etait SOUS l'enveloppe normale -> faux threat=5.0 chronique
+# (le "Fantome"). Un statique 2800 ne suffit pas (p90=3619>2800). On bascule sur le pattern
+# adaptatif de l'organe : fire si RSS est a la fois dans son HAUT percentile ET au-dessus
+# d'un plancher pose AU-DESSUS de l'enveloppe normale (3800), + plafond OOM absolu (vraie
+# fuite, jamais aveugle). Kill-switch PROCESS_MEM_ADAPTIVE=0 -> retour au statique 2000.
+PROCESS_MEM_ADAPTIVE = os.getenv("PROCESS_MEM_ADAPTIVE", "1") != "0"
+PROCESS_MEM_SHADOW_MB = 2800             # seuil cold-start (tracker pas encore pret)
 RSS_INSTRUMENT_LOG_COOLDOWN_S = 300      # log de la distribution RSS toutes les 5 min
 
 # Seuils de sécurité absolus — garde-fou "grenouille bouillie"
@@ -74,6 +77,7 @@ RSS_INSTRUMENT_LOG_COOLDOWN_S = 300      # log de la distribution RSS toutes les
 ABSOLUTE_SAFETY_LIMITS = {
     "cpu_absolute_crit": 98,
     "ram_absolute_crit": 97,
+    "process_mem_absolute_crit_mb": 5500,   # vraie fuite process : fire TOUJOURS (anti-OOM)
 }
 
 # Seuils adaptatifs basés sur les percentiles glissants 24h
@@ -87,6 +91,12 @@ ADAPTIVE_THRESHOLDS = {
     "cpu_crit_floor": 85,    # pas d'alerte CPU crit sous 85%
     "ram_warn_floor": 70,    # pas d'alerte RAM warn sous 70%
     "ram_crit_floor": 80,    # pas d'alerte RAM crit sous 80%
+    # process_memory (RSS Python) : percentiles + planchers EN MB, posés AU-DESSUS de
+    # l'enveloppe normale (max torch ~3645) pour ne pas alarmer sur les spikes legitimes.
+    "rss_warn_percentile": 0.88,
+    "rss_crit_percentile": 0.95,
+    "rss_warn_floor_mb": 3800,   # pas d'alerte sous 3800 MB (au-dessus du max normal 3645)
+    "rss_crit_floor_mb": 4800,   # fuite serieuse
 }
 
 # Cooldowns des réflexes (secondes) — anti-spam
@@ -214,6 +224,7 @@ class ReptilianCore:
         self._ollama_ok: bool = True
         self._ollama_ok_streak: int = 0     # Cycles consécutifs OK
         self._ram_critical_logged: float = 0.0
+        self._process_mem_crit_logged: float = 0.0
 
         # --- Trackers adaptatifs (percentiles glissants 24h) ---
         from core.percentile_tracker import PercentileTracker
@@ -450,23 +461,48 @@ class ReptilianCore:
             # Fuite mémoire Python
             proc = psutil.Process()
             proc_mem_mb = proc.memory_info().rss / (1024 * 1024)
-            if proc_mem_mb >= THRESHOLDS["process_mem_warn_mb"]:
-                threats["process_memory"] = 5.0
+            # --- process_memory : ADAPTATIF (mirror RAM), tue le Fantôme sans masquer une fuite ---
+            if not PROCESS_MEM_ADAPTIVE:
+                # Kill-switch : retour au comportement statique d'origine
+                if proc_mem_mb >= THRESHOLDS["process_mem_warn_mb"]:
+                    threats["process_memory"] = 5.0
+            elif proc_mem_mb >= ABSOLUTE_SAFETY_LIMITS["process_mem_absolute_crit_mb"]:
+                # Niveau 1 : sécurité absolue (vraie fuite process, anti-OOM) — jamais aveugle
+                threats["process_memory"] = 8.0
+                now = time.time()
+                if now - self._process_mem_crit_logged > 120:
+                    logger.warning(
+                        f"REPTILIEN: FUITE PROCESS {proc_mem_mb:.0f}MB "
+                        f"(seuil absolu {ABSOLUTE_SAFETY_LIMITS['process_mem_absolute_crit_mb']}MB)"
+                    )
+                    self._process_mem_crit_logged = now
+            elif self._rss_tracker.is_ready():
+                # Niveau 2 : adaptatif (percentile haut ET au-dessus de l'enveloppe normale)
+                rss_pct = self._rss_tracker.get_percentile_of(proc_mem_mb)
+                if (rss_pct >= ADAPTIVE_THRESHOLDS["rss_crit_percentile"]
+                        and proc_mem_mb >= ADAPTIVE_THRESHOLDS["rss_crit_floor_mb"]):
+                    threats["process_memory"] = 6.0
+                elif (rss_pct >= ADAPTIVE_THRESHOLDS["rss_warn_percentile"]
+                        and proc_mem_mb >= ADAPTIVE_THRESHOLDS["rss_warn_floor_mb"]):
+                    threats["process_memory"] = 4.0
+            else:
+                # Niveau 3 : cold start (tracker pas encore prêt) — statique prudent 2800
+                if proc_mem_mb >= PROCESS_MEM_SHADOW_MB:
+                    threats["process_memory"] = 5.0
             # --- Instrumentation RSS (lecture seule : n'altère NI threats NI cascade) ---
             self._rss_tracker.record(proc_mem_mb)
             _rss_now = time.time()
             if (_rss_now - self._rss_log_at >= RSS_INSTRUMENT_LOG_COOLDOWN_S
                     and self._rss_tracker.is_ready()):
                 self._rss_log_at = _rss_now
-                _live = "FIRE" if proc_mem_mb >= THRESHOLDS["process_mem_warn_mb"] else "ok"
-                _shadow = "FIRE" if proc_mem_mb >= PROCESS_MEM_SHADOW_MB else "ok"
+                _verdict = "FIRE" if threats.get("process_memory") else "ok"
                 logger.info(
                     f"REPTILIEN [RSS-INSTR]: rss={proc_mem_mb:.0f}MB "
                     f"p50={self._rss_tracker.get_value_at(0.5):.0f} "
                     f"p90={self._rss_tracker.get_value_at(0.9):.0f} "
                     f"max={self._rss_tracker.get_value_at(1.0):.0f} "
-                    f"(n={self._rss_tracker.count()}) | seuil {THRESHOLDS['process_mem_warn_mb']}→{_live}"
-                    f" | shadow {PROCESS_MEM_SHADOW_MB}→{_shadow}"
+                    f"(n={self._rss_tracker.count()}) | adaptatif→{_verdict}"
+                    f" (threat={threats.get('process_memory', 0)})"
                 )
         except Exception:
             pass  # psutil indisponible → pas de menace détectée

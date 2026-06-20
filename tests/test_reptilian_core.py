@@ -260,13 +260,13 @@ class TestSensors:
 
     @pytest.mark.asyncio
     async def test_sense_process_memory_high(self, rept):
-        """Process Python > 2Go → alerte."""
+        """Cold-start (tracker pas prêt) : fire au seuil prudent 2800 (3 Go >= 2800)."""
         with patch("psutil.cpu_percent", return_value=30), \
              patch("psutil.virtual_memory", return_value=MagicMock(percent=50)), \
              patch("psutil.Process") as mock_proc, \
              patch("httpx.AsyncClient") as mock_client:
             mock_proc.return_value.memory_info.return_value = MagicMock(
-                rss=2500 * 1024 * 1024  # 2.5 Go
+                rss=3000 * 1024 * 1024  # 3 Go (cold-start : >= 2800)
             )
             resp = MagicMock(status_code=200)
             mock_client.return_value.__aenter__ = AsyncMock(return_value=MagicMock(
@@ -1877,8 +1877,9 @@ class TestResourceFossilHealing:
 # ============================================================
 
 class TestRssInstrumentation:
-    """Le RSS Python est enregistré dans _rss_tracker à chaque scan et persisté,
-    SANS altérer la détection process_memory (seuil live 2000 inchangé)."""
+    """Le RSS Python est enregistré dans _rss_tracker à chaque scan et persisté.
+    Phase 2 (20/06) : process_memory est désormais ADAPTATIF (percentile + plancher
+    au-dessus de l'enveloppe normale) — le Fantôme (faux 5.0 sur spikes torch) est éteint."""
 
     def _patches(self, rss_mb):
         """Contexte de mock psutil/httpx (calque TestSensors)."""
@@ -1904,22 +1905,45 @@ class TestRssInstrumentation:
         assert "process_memory" not in threats              # 500 MB < 2000 → pas de menace
 
     @pytest.mark.asyncio
-    async def test_detection_process_memory_inchangee(self, rept):
-        """ZÉRO changement de comportement : process_memory fire toujours a >= 2000 MB."""
-        with self._patches(rss_mb=2500):
+    async def test_fantome_eteint_sous_enveloppe_normale(self, rept):
+        """LE FIX : un spike RSS NORMAL (torch, ~3600 MB) dans le haut percentile ne
+        fire PLUS (sous le plancher 3800). C'est la mort du Fantôme (avant : 5.0 dès 2000)."""
+        for _ in range(8700):   # >= _min_samples (8640) → tracker prêt (sinon cold-start)
+            rept._rss_tracker.record(1200.0)   # baseline basse -> tracker prêt
+        assert rept._rss_tracker.is_ready()
+        with self._patches(rss_mb=3600):       # spike legitime, percentile haut MAIS < 3800
             threats = await rept._sense_threats()
-        assert threats.get("process_memory") == 5.0         # detection intacte
-        assert rept._rss_tracker.count() == 1               # et mesuree au passage
+        assert "process_memory" not in threats              # Fantôme éteint
 
     @pytest.mark.asyncio
-    async def test_seuil_shadow_distinct_du_live(self, rept):
-        """Entre 2000 et 2800 : le live FIRE, le shadow ne fire pas — seuils distincts."""
-        from core.reptilian_core import THRESHOLDS, PROCESS_MEM_SHADOW_MB
-        assert THRESHOLDS["process_mem_warn_mb"] == 2000     # autorite live inchangee
-        assert PROCESS_MEM_SHADOW_MB == 2800                 # shadow-only
-        with self._patches(rss_mb=2500):                     # 2000 <= 2500 < 2800
+    async def test_vraie_fuite_fire_adaptatif(self, rept):
+        """Une vraie dérive (RSS au-dessus de l'enveloppe normale) fire bien (4.0 → 6.0)."""
+        for _ in range(8700):   # >= _min_samples (8640) → tracker prêt (sinon cold-start)
+            rept._rss_tracker.record(1200.0)
+        with self._patches(rss_mb=4000):       # > plancher warn 3800, percentile = 1.0
             threats = await rept._sense_threats()
-        assert threats.get("process_memory") == 5.0          # le live fire bien (shadow n'empeche rien)
+        assert threats.get("process_memory") == 4.0         # warn adaptatif
+        with self._patches(rss_mb=5000):       # > plancher crit 4800
+            threats = await rept._sense_threats()
+        assert threats.get("process_memory") == 6.0         # crit adaptatif
+
+    @pytest.mark.asyncio
+    async def test_plafond_oom_absolu_jamais_aveugle(self, rept):
+        """Sécurité absolue : RSS >= 5500 MB fire 8.0 quoi qu'il arrive (anti-OOM)."""
+        for _ in range(8700):   # >= _min_samples (8640) → tracker prêt (sinon cold-start)
+            rept._rss_tracker.record(1200.0)
+        with self._patches(rss_mb=5600):
+            threats = await rept._sense_threats()
+        assert threats.get("process_memory") == 8.0
+
+    @pytest.mark.asyncio
+    async def test_killswitch_retour_statique(self, rept, monkeypatch):
+        """Kill-switch PROCESS_MEM_ADAPTIVE=0 → comportement statique d'origine (>= 2000 → 5.0)."""
+        import core.reptilian_core as rc
+        monkeypatch.setattr(rc, "PROCESS_MEM_ADAPTIVE", False)
+        with self._patches(rss_mb=2500):
+            threats = await rept._sense_threats()
+        assert threats.get("process_memory") == 5.0
 
     def test_rss_tracker_persiste(self, rept):
         """Round-trip save/load : le _rss_tracker survit au reboot."""
