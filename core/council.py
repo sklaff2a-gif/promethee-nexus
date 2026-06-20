@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import json
 import logging
 import time
 import uuid
@@ -45,6 +46,20 @@ COUNCIL_MAX_WALL_S = 180.0           # plafond total absolu (bien sous les 300s 
 COUNCIL_PRESIDENT_TIMEOUT_S = 45.0   # borne le président (architect), aligné sur le timeout agent
 COUNCIL_THREAT_RISE_ABORT = 2.0      # +2.0 de menace DEPUIS l'ouverture = pic aigu -> abort
 WATCHDOG_TIMEOUT_STATUS = "watchdog_timeout"
+
+# --- HALTING APPRIS (Point 1 TRM "Tiny Recursive Model", shadow) ---
+# q_hat de convergence : le Gradient (_compute_gradient) mesure deja la pente de
+# convergence inter-agents, mais en POST-MORTEM (il plafonne la note a posteriori
+# -> DIP dopamine, autonomy_engine:2189). Un debat "echo" brule donc ses N tours de
+# GPU complets AVANT d'etre puni. Le q_hat de TRM est le chainon manquant : detecter
+# le plateau STERILE EN COURS de debat pour pouvoir l'ecourter avant de gaspiller le GPU.
+# Doctrine shadow-reader (cf IRRIGATION_SHADOW, SENTINEL_GATE_MODE) : Phase 1 = on MESURE
+# et on LOGGE la decision "would_halt" SANS jamais ecourter le debat (run() bit-identique).
+# Passage en 'active' GATED sur N councils de donnees shadow prouvant que le would-halt
+# ne coincide JAMAIS avec un debat qui aurait fini par atteindre le consensus.
+#   COUNCIL_HALT_MODE = 'shadow' (defaut, mesure) | 'off' (desactive) | 'active' (NON branche)
+COUNCIL_HALT_MODE = os.getenv("COUNCIL_HALT_MODE", "shadow")
+_HALT_SHADOW_LOG = "memory/council_halt_shadow.jsonl"
 
 
 def _read_threat_level() -> float:
@@ -1139,23 +1154,22 @@ class Council:
             "best_argument": best_arg,
         }
 
-    def _compute_gradient(self, consensus_reached: bool) -> Dict[str, Any]:
-        """LE GRADIENT (V1) — pente de convergence inter-agents sur la duree du debat.
+    def _divergence_trajectory(self, max_round: Optional[int] = None) -> List[float]:
+        """Trajectoire de divergence inter-agents (1 - Jaccard des mots-cles) tour
+        par tour, jusqu'a max_round INCLUS (None = tous les tours). Exclut etudiant
+        et avocat (deterministes, ils fausseraient la mesure).
 
-        Distingue un debat FERTILE (divergence qui decroit tour apres tour, "le pont
-        s'approche") d'un debat STERILE (divergence figee haute, "l'echo"). Sert a
-        decoupler le score d'un council du simple fait d'avoir tenu N tours.
-        Retourne {trajectory, slope, verdict in (fertile|sterile|n/a), rounds}.
-        Thermometre, PAS arbitre : il mesure, il ne tranche pas le debat.
-        """
-        # Contributions reelles par tour (exclut etudiant et avocat)
+        Brique PURE partagee entre le Gradient post-mortem (_compute_gradient) et le
+        halting shadow incremental (_shadow_halt_check). Extraite a l'identique de
+        _compute_gradient (refactor iso-comportement)."""
         rounds: Dict[int, list] = {}
         for e in self.transcript:
             if e.get("is_student") or e.get("is_advocate"):
                 continue
+            if max_round is not None and e["round"] > max_round:
+                continue
             rounds.setdefault(e["round"], []).append(e)
 
-        # Divergence moyenne inter-agents (1 - Jaccard des mots-cles) par tour
         trajectory: List[float] = []
         for r in sorted(rounds):
             entries = rounds[r]
@@ -1170,6 +1184,75 @@ class Council:
                     divs.append(1.0 - jacc)
             if divs:
                 trajectory.append(sum(divs) / len(divs))
+        return trajectory
+
+    def _shadow_halt_check(self, round_num: int) -> Optional[Dict[str, Any]]:
+        """HALTING APPRIS (q_hat shadow, Point 1 TRM) — evalue EN COURS de debat si
+        la convergence permettrait d'ecourter, SANS jamais ecourter (mode shadow).
+
+        Reutilise les SEUILS du Gradient pour la coherence. Verdicts :
+          - 'sterile_plateau' : echo fige haut (divergence finale >= seuil, pente plate)
+            -> debat ecourtable sans rien perdre = le would_halt cible.
+          - 'converging'      : la divergence decroit nettement (le pont s'approche).
+          - 'undecided'       : ni l'un ni l'autre (on laisse explorer).
+        Fusible : < _GRADIENT_MIN_ROUNDS tours mesures -> None (trop court pour juger,
+        meme garde-fou que le Gradient).
+
+        MESURE SEULEMENT : logge (logger + jsonl append-only) ; ne casse JAMAIS le run
+        (try/except total sur l'I/O) ; ne modifie ni status, ni gradient, ni payload bus."""
+        if COUNCIL_HALT_MODE == "off":
+            return None
+        traj = self._divergence_trajectory(max_round=round_num)
+        n = len(traj)
+        if n < _GRADIENT_MIN_ROUNDS:
+            return None  # trop court pour juger une pente (meme fusible que le Gradient)
+        slope = (traj[-1] - traj[0]) / (n - 1)
+        last = traj[-1]
+        if slope <= -_GRADIENT_SLOPE_EPS:
+            verdict = "converging"                  # le pont s'approche
+        elif last >= _GRADIENT_HIGH_DIVERGENCE:
+            verdict = "sterile_plateau"             # echo : ecourtable sans rien perdre
+        else:
+            verdict = "undecided"                   # on ne punit que la stagnation prouvee
+        would_halt = (verdict == "sterile_plateau")
+
+        record = {
+            "council_id": self.council_id,
+            "round": round_num,
+            "max_rounds": self.max_rounds,
+            "trajectory": [round(d, 3) for d in traj],
+            "slope": round(slope, 4),
+            "verdict": verdict,
+            "would_halt": would_halt,
+            "rounds_saved_if_active": (self.max_rounds - round_num) if would_halt else 0,
+            "mode": COUNCIL_HALT_MODE,
+            "timestamp": time.time(),
+        }
+        logger.info(
+            f"[COUNCIL {self.council_id}] HALT-SHADOW t{round_num} verdict={verdict} "
+            f"would_halt={would_halt} slope={record['slope']} last={round(last, 3)}"
+        )
+        try:
+            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            path = os.path.join(root, _HALT_SHADOW_LOG.replace("/", os.sep))
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception:
+            pass  # le shadow ne casse JAMAIS le debat (doctrine fail-safe)
+        return record
+
+    def _compute_gradient(self, consensus_reached: bool) -> Dict[str, Any]:
+        """LE GRADIENT (V1) — pente de convergence inter-agents sur la duree du debat.
+
+        Distingue un debat FERTILE (divergence qui decroit tour apres tour, "le pont
+        s'approche") d'un debat STERILE (divergence figee haute, "l'echo"). Sert a
+        decoupler le score d'un council du simple fait d'avoir tenu N tours.
+        Retourne {trajectory, slope, verdict in (fertile|sterile|n/a), rounds}.
+        Thermometre, PAS arbitre : il mesure, il ne tranche pas le debat.
+        """
+        # Divergence moyenne inter-agents (1 - Jaccard des mots-cles) par tour.
+        # Brique partagee avec le halting shadow (cf _divergence_trajectory).
+        trajectory = self._divergence_trajectory()
 
         # Pente : delta normalise du premier au dernier tour mesure
         n = len(trajectory)
@@ -1374,6 +1457,12 @@ class Council:
                 president_feedback = verdict["feedback"]
             else:
                 president_feedback = ""
+
+            # --- HALTING APPRIS (q_hat shadow, Point 1 TRM) ---
+            # Mesure la convergence du debat EN COURS pour journaliser un "would_halt"
+            # (plateau sterile ecourtable). Mode shadow : LOGGE seulement, n'ecourte
+            # JAMAIS (doctrine shadow-reader). Le fusible <3 tours vit dans la methode.
+            self._shadow_halt_check(round_num)
 
             # V6.0 Reforme 2 : Majorite simple validee par le President.
             # Avant : quorum ceil(2/3) -> impossible avec 3 LLM 8B qui
