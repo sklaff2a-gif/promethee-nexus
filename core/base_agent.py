@@ -921,8 +921,19 @@ class BaseAgent:
         except Exception:
             pass
         try:
-            from core.reptilian_core import reptilian
-            threat = reptilian.get_threat_level()
+            # Sonde AUTORITAIRE (fix 20/06) : le singleton vivant est `reptile`
+            # (get_organ("reptilian")), PAS `reptilian` (nom inexistant -> ImportError
+            # avale -> threat jamais injecte dans le contexte de l'agent depuis des
+            # semaines). On copie le lecteur du watchdog council + fallback defensif.
+            rept = None
+            try:
+                from core.organ_registry import get_organ
+                rept = get_organ("reptilian")
+            except Exception:
+                rept = None
+            if rept is None:
+                from core.reptilian_core import reptile as rept
+            threat = rept.get_threat_level()
             if threat > 0.3:
                 state["threat"] = round(threat, 2)
         except Exception:

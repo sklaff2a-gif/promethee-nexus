@@ -650,9 +650,19 @@ def gather_state(now_ts: Optional[float] = None) -> Dict[str, Any]:
 
     # Reptilian
     try:
-        from core.reptilian_core import reptilian
+        # Sonde AUTORITAIRE (fix 20/06) : singleton vivant = `reptile`
+        # (get_organ("reptilian")), pas `reptilian` (inexistant) -> le tampon
+        # proprioceptif etait aveugle au threat depuis des semaines.
+        rept = None
+        try:
+            from core.organ_registry import get_organ
+            rept = get_organ("reptilian")
+        except Exception:
+            rept = None
+        if rept is None:
+            from core.reptilian_core import reptile as rept
         state["reptilian"] = {
-            "threat_level": getattr(reptilian, "threat_level", None),
+            "threat_level": getattr(rept, "threat_level", None),
         }
     except Exception:
         state["reptilian"] = {}
