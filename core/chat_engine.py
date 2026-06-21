@@ -246,6 +246,7 @@ class ChatEngine:
         "  !status                  — Diagnostic interne compact\n"
         "  !read <fichier> [L1-L2]  — Lire un fichier du projet\n"
         "  !grep <pattern> [fichier] — Chercher dans le code\n"
+        "  !ls [dossier]            — Lister un dossier du projet (nb lignes / tailles)\n"
         "  !github                  — Stats de ma page GitHub\n"
         "  !test [fichier_test]      — Lancer un test et voir le resultat\n"
         "  !audit                   — 10 dernieres actions du systeme\n"
@@ -802,6 +803,9 @@ class ChatEngine:
             if not args:
                 return "Usage : !grep <pattern> [fichier]\nExemple : !grep compute_routine core/autonomy_engine.py"
             return self._execute_grep_command(args)
+
+        if cmd == "ls":
+            return self._execute_ls_command(args)
 
         if cmd == "github":
             return self._execute_github_command()
@@ -2415,6 +2419,73 @@ class ChatEngine:
 
         header = f"🔍 {len(results)} resultats pour '{pattern}'\n"
         return header + "\n".join(results)
+
+    def _execute_ls_command(self, args: list) -> str:
+        """!ls [dossier] — liste un dossier du projet en LECTURE SEULE (atelier V, choix (b)
+        de Promethee : voir ses fichiers sans pouvoir toucher son etat reel).
+
+        Confinement calque sur !read : meme whitelist _READ_ALLOWED_DIRS (core/Agents/tools/
+        config/tests) -> memory/, .env, .git, logs, lora_adapters sont HORS perimetre, donc
+        l'etat persistant et les secrets restent inaccessibles. Read-only pur : aucune
+        ecriture, aucun acces sandbox -> ne touche AUCUNE des 6 couches du sandbox !run.
+        Pour chaque fichier texte : nb de lignes (sert a 'quel est le plus gros fichier') ;
+        sinon : taille. Dossiers suffixes '/'. Cap 200 entrees."""
+        import os as _os
+
+        # Sans argument : montrer les dossiers listables (auto-decouverte)
+        if not args:
+            return ("📂 Dossiers listables (!ls <dossier>) : "
+                    + ", ".join(sorted(self._READ_ALLOWED_DIRS))
+                    + "\nExemple : !ls core")
+
+        rel = args[0].replace("\\", "/").strip().strip("/")
+        first_dir = rel.split("/")[0] if rel else ""
+        if first_dir not in self._READ_ALLOWED_DIRS:
+            return (f"Acces refuse : '{first_dir or rel}' hors perimetre.\n"
+                    f"Dossiers autorises : {', '.join(sorted(self._READ_ALLOWED_DIRS))}")
+
+        project_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        abs_path = _os.path.normpath(_os.path.join(project_root, rel))
+        if not abs_path.startswith(project_root):
+            return "Acces refuse : chemin hors du projet."
+        if not _os.path.isdir(abs_path):
+            if _os.path.exists(abs_path):
+                return f"{rel} est un fichier, pas un dossier. Utilise !read {rel}."
+            return f"Dossier non trouve : {rel}"
+
+        _TEXT = (".py", ".md", ".txt", ".json", ".yaml", ".yml",
+                 ".html", ".js", ".css", ".cfg", ".ini")
+        try:
+            entries = sorted(_os.listdir(abs_path))
+        except Exception as e:
+            return f"!ls : erreur lecture {rel} — {e}"
+
+        out, n_files, n_dirs = [], 0, 0
+        for name in entries[:200]:
+            full = _os.path.join(abs_path, name)
+            if _os.path.isdir(full):
+                n_dirs += 1
+                out.append(f"  {name}/")
+                continue
+            n_files += 1
+            ext = _os.path.splitext(name)[1].lower()
+            if ext in _TEXT:
+                try:
+                    with open(full, "r", encoding="utf-8", errors="replace") as f:
+                        nlines = sum(1 for _ in f)
+                    out.append(f"  {name}  ({nlines} lignes)")
+                except Exception:
+                    out.append(f"  {name}")
+            else:
+                try:
+                    out.append(f"  {name}  ({_os.path.getsize(full)} o)")
+                except Exception:
+                    out.append(f"  {name}")
+
+        header = f"📂 {rel} — {n_dirs} dossier(s), {n_files} fichier(s)"
+        if len(entries) > 200:
+            header += f" (200 premiers sur {len(entries)})"
+        return header + "\n" + "\n".join(out)
 
     def _execute_github_command(self) -> str:
         """Consulte la page GitHub de Promethee via gh CLI."""
