@@ -11407,6 +11407,35 @@ RAISON: <1 phrase courte>"""
                     grade = eval_result["grade"]
                     # Injecter la note dans la response pour que _score_result_quality la voie
                     response["school_grade"] = grade
+
+                    # === Conseil de Contradiction — sonde "bac a sable de la prose" (Phase 1 SHADOW) ===
+                    # Organe co-concu Atelier IV (21/06) : mesure l'ECART D'ANCRAGE AU REEL d'un livrable
+                    # de PROSE (claims-vs-actions / fabrication / note haute+contenu mince) et LOGGE le
+                    # verdict binaire A COTE de la note professor -- SANS jamais clipper (gating = Phase 2,
+                    # gated sur ces donnees + arbitrage JM). 0 LLM, prose-only, try/except total (ne casse
+                    # jamais la notation). Rien a voir avec le Veto Prefrontal (organe separe protege).
+                    try:
+                        from core.contradiction_probe import probe as _contra_probe
+                        _cp = _contra_probe(deliverable, slot, grade, action_trace)
+                        if _cp.get("applicable"):
+                            logger.info(
+                                f"[CONTRADICTION-SHADOW] slot={slot} grade={grade:.1f} "
+                                f"verdict={_cp['verdict']} signals={_cp['signals']}"
+                            )
+                            try:
+                                import json as _json_cp, os as _os_cp, time as _time_cp
+                                with open(_os_cp.path.join("memory", "contradiction_shadow.jsonl"),
+                                          "a", encoding="utf-8") as _f_cp:
+                                    _f_cp.write(_json_cp.dumps({
+                                        "ts": _time_cp.time(), "slot": slot, "intent": intent,
+                                        "grade": grade, "verdict": _cp["verdict"],
+                                        "signals": _cp["signals"], "score": _cp["score"],
+                                    }, ensure_ascii=False) + "\n")
+                            except Exception:
+                                pass  # le shadow ne casse JAMAIS la notation
+                    except Exception as e:
+                        logger.debug(f"[CONTRADICTION-SHADOW] skip (non bloquant): {e}")
+
                     print(f"   📝 NOTE: {grade:.1f}/10 — {eval_result['feedback'][:80]}")
                     if eval_result.get("challenge"):
                         print(f"   🎯 DEFI: {eval_result['challenge'][:100]}")
