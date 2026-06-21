@@ -6786,6 +6786,21 @@ class AutonomyEngine:
         except Exception as e:
             logger.debug(f"[DREAM] Amygdala dream integration skipped: {e}")
 
+        # Phase 2.7 — Digestion des brouillons (organe co-concu Atelier III, 20/06 ; Phase 1)
+        # A FROID, dans la consolidation : digere le MOTIF de derive RECURRENT des ebauches
+        # VETOEES (jamais le contenu -> anti-cosmetique natif, cf prefrontal_mirror:180).
+        # Phase 1 = CONSCIENCE PURE : le digest rejoint THOUGHT_STREAM + journal intime via
+        # dream_report ; AUCUN retour dans le Veto ni dans les synapses (les canaux d'action
+        # sont Phase 2, gated sur ces donnees + arbitrage JM). 0 LLM, lecture defensive.
+        try:
+            from core.brouillon_digestion import digest_recent
+            _dig = digest_recent()
+            if _dig.get("summary"):
+                dream_report.append(_dig["summary"])
+                logger.info(f"[DREAM] {_dig['summary']}")
+        except Exception as e:
+            logger.debug(f"[DREAM] Digestion brouillons skipped (non bloquant): {e}")
+
         # Phase 3 — Publier le rêve sur le bus
         if dream_report:
             self._nap_tasks_done.append("DREAM")
