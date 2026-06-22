@@ -159,6 +159,48 @@ def test_active_ignore_un_pic_transitoire(corps, monkeypatch, tmp_path):
     assert e._should_auto_nap() is False
 
 
+# ─── VOIE C : dette de sieste = temps depuis la derniere sieste reelle (recalibrage 22/06) ───
+def test_voie_c_dette_declenche(monkeypatch):
+    """>= NAP_DEBT_HOURS depuis la derniere sieste reelle -> would_trigger."""
+    e = _engine()
+    e._nap_last_exit = 1000.0
+    sig = e._nap_debt_signal(now=1000.0 + (ae.NAP_DEBT_HOURS + 1) * 3600)
+    assert sig["would_trigger"] is True
+    assert sig["hours_since_nap"] >= ae.NAP_DEBT_HOURS
+
+
+def test_voie_c_sieste_recente_pas_de_dette():
+    e = _engine()
+    e._nap_last_exit = 1000.0
+    sig = e._nap_debt_signal(now=1000.0 + 3600)   # 1h seulement
+    assert sig["would_trigger"] is False
+
+
+def test_voie_c_jamais_sans_sieste_anterieure():
+    """_nap_last_exit == 0 (systeme vierge) -> pas de delta-epoch parasite."""
+    e = _engine()
+    e._nap_last_exit = 0.0
+    sig = e._nap_debt_signal(now=9_999_999_999.0)
+    assert sig["would_trigger"] is False
+
+
+def test_active_declenche_sur_dette_de_sieste(corps, monkeypatch, tmp_path):
+    """En 'active', une dette de sieste (voie C) declenche, meme si voie A et B sont inactives."""
+    monkeypatch.setattr(ae, "SLEEP_GATE_PRESSURE_MODE", "active")
+    monkeypatch.setattr(ae, "_SLEEP_GATE_SHADOW_LOG", str(tmp_path / "sg.jsonl"))
+    corps(repos=10, coherence=0.8, chaleur=0.1)                       # VOIE A inactive
+    monkeypatch.setitem(hypothalamus.current_values, "sleep_pressure", 0.3)  # VOIE B inactive
+    e = _engine()
+    e._sleep_pressure_high_since = 0.0
+    e._nap_last_exit = 1.0                                            # dette enorme -> VOIE C
+    assert e._should_auto_nap() is True
+
+
+def test_defaut_gate_sieste_est_active():
+    """Recalibrage : defaut bascule a 'active' (env = kill-switch)."""
+    assert ae.SLEEP_GATE_PRESSURE_MODE == "active"
+
+
 # ─── CRISTALLISATION (replay du vecu du jour, validee JM 10/06) ───
 @pytest.mark.asyncio
 async def test_crystallisation_lecons_du_jour_seulement(tmp_path, monkeypatch):

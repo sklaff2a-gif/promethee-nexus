@@ -501,9 +501,16 @@ NAP_MODE_CAPS = {
 # INCHANGE ; passage 'active' = 1 flip env, GATED sur les donnees + arbitrage JM (l'AUTO-NAP
 # est un reflexe co-concu protege).
 #   SLEEP_GATE_PRESSURE_MODE = 'shadow' (defaut, mesure) | 'off' | 'active' (voie B branchee)
-SLEEP_GATE_PRESSURE_MODE = os.getenv("SLEEP_GATE_PRESSURE_MODE", "shadow")
-SLEEP_PRESSURE_NAP_THRESHOLD = 0.7    # > target(0.4)+tolerance(0.2)=0.6 : zone d'alarme reelle
-SLEEP_PRESSURE_SUSTAINED_S = 1800     # 30 min CONTINUES : un pic transitoire n'y arrive jamais
+# Recalibrage 22/06 : MESURE des logs -> sleep_pressure reste a 0.30 dans 1922 cas (spiky,
+# soulage), n'atteint 0.7 que 4x (transitoire) -> voie B ne tire JAMAIS (shadow vide), et la
+# crise du matin (2 jours sans sieste) avait sleep_pressure BAS. Le vrai signal de dette est le
+# TEMPS DEPUIS LA DERNIERE SIESTE REELLE (_nap_last_exit, persiste). On ajoute la VOIE C la-dessus
+# et on bascule le defaut a 'active' (patron IRRIGATION_ACTIVE ; env = kill-switch).
+#   SLEEP_GATE_PRESSURE_MODE = 'active' (defaut, B+C agissent) | 'shadow' (mesure) | 'off'
+SLEEP_GATE_PRESSURE_MODE = os.getenv("SLEEP_GATE_PRESSURE_MODE", "active")
+SLEEP_PRESSURE_NAP_THRESHOLD = 0.7    # voie B : > target(0.4)+tolerance(0.2)=0.6 (rare en pratique)
+SLEEP_PRESSURE_SUSTAINED_S = 1800     # voie B : 30 min CONTINUES (anti-pic transitoire)
+NAP_DEBT_HOURS = 24.0                 # voie C : >= 24h sans VRAIE sieste -> maintenance garantie
 _SLEEP_GATE_SHADOW_LOG = "memory/sleep_gate_shadow.jsonl"
 
 # Mode café : socialisation libre avec Alfred (et Stefan si matériel)
@@ -6195,25 +6202,39 @@ class AutonomyEngine:
             repos_path = False
 
         # --- VOIE B (Atelier VI) : sleep_pressure ELEVEE sur DUREE CONTINUE ---
-        # Repare le decouplage REPOS<->sleep_pressure. SHADOW par defaut : on MESURE le
-        # would_trigger et on le logge, SANS changer le return (bit-identique). 'active' (1 flip
-        # env) ajoute la voie B au OU final. La continuite (>=30min) = garde-fou anti-fuite.
+        # Repare le decouplage REPOS<->sleep_pressure (continuite >=30min = anti-fuite). En
+        # pratique tire rarement (sleep_pressure spiky) -> conservee mais secondaire.
         signal = self._sleep_pressure_nap_signal()
-        if SLEEP_GATE_PRESSURE_MODE != "off" and signal["would_trigger"] and not repos_path:
+
+        # --- VOIE C (recalibrage 22/06) : dette = TEMPS depuis la derniere sieste REELLE ---
+        # Le vrai manque (constate ce matin) : 2 jours sans sieste alors que sleep_pressure etait
+        # BAS. _nap_last_exit (persiste) le capte. Maintenance garantie : >= NAP_DEBT_HOURS sans
+        # nap -> sieste. Garde-fous PRESERVES : cap 1/jour (deja teste plus haut) + droit de refus
+        # (enter_nap). Esprit Atelier VI : "si le substrat est en peril, le repos devient une
+        # priorite de maintenance, pas une option psychologique".
+        debt = self._nap_debt_signal()
+
+        # SHADOW (ou active) : on LOGGE le would_trigger des voies B/C (monitoring). En 'active',
+        # B ou C s'ajoute(nt) au OU final. En 'shadow', return inchange (mesure seule).
+        _wt = signal["would_trigger"] or debt["would_trigger"]
+        if SLEEP_GATE_PRESSURE_MODE != "off" and _wt and not repos_path:
             try:
                 with open(_SLEEP_GATE_SHADOW_LOG.replace("/", os.sep), "a", encoding="utf-8") as _f_sg:
                     _f_sg.write(json.dumps({
-                        "ts": time.time(), "pressure": signal["pressure"],
-                        "sustained_s": signal["sustained_s"], "mode": SLEEP_GATE_PRESSURE_MODE,
+                        "ts": time.time(), "mode": SLEEP_GATE_PRESSURE_MODE,
+                        "voie_b_pressure": signal["pressure"], "voie_b_sustained_s": signal["sustained_s"],
+                        "voie_b_trigger": signal["would_trigger"],
+                        "voie_c_h_since_nap": debt["hours_since_nap"], "voie_c_trigger": debt["would_trigger"],
                     }, ensure_ascii=False) + "\n")
                 logger.info(
-                    f"[SLEEP-GATE-SHADOW] would_nap via sleep_pressure={signal['pressure']} "
-                    f"sustained={signal['sustained_s']:.0f}s mode={SLEEP_GATE_PRESSURE_MODE}"
+                    f"[SLEEP-GATE] would_nap mode={SLEEP_GATE_PRESSURE_MODE} "
+                    f"voieB(p={signal['pressure']},sust={signal['sustained_s']:.0f}s,{signal['would_trigger']}) "
+                    f"voieC(h={debt['hours_since_nap']},{debt['would_trigger']})"
                 )
             except Exception:
-                pass  # le shadow ne casse JAMAIS la deliberation
+                pass  # le log ne casse JAMAIS la deliberation
 
-        pressure_path = (SLEEP_GATE_PRESSURE_MODE == "active") and signal["would_trigger"]
+        pressure_path = (SLEEP_GATE_PRESSURE_MODE == "active") and _wt
         return repos_path or pressure_path
 
     def _sleep_pressure_nap_signal(self, now: float = None) -> dict:
@@ -6241,6 +6262,23 @@ class AutonomyEngine:
         would_trigger = sustained_s >= SLEEP_PRESSURE_SUSTAINED_S
         return {"pressure": round(pressure, 3), "sustained_s": round(sustained_s, 1),
                 "would_trigger": would_trigger}
+
+    def _nap_debt_signal(self, now: float = None) -> dict:
+        """VOIE C du gate de sieste (recalibrage 22/06) : dette = TEMPS depuis la derniere sieste
+        REELLE (_nap_last_exit, PERSISTE -> robuste aux reboots). would_trigger si >= NAP_DEBT_HOURS
+        sans nap. Pur (ne mute aucun etat). Garde-fou : ne tire PAS si aucune sieste anterieure
+        (_nap_last_exit <= 0) -> evite un delta-epoch parasite sur un systeme vierge (la 1re sieste
+        viendra de la voie A / manuel, puis la voie C entretient la cadence). Borg : illisible -> False.
+        Retourne {hours_since_nap, would_trigger}."""
+        now = now if now is not None else time.time()
+        try:
+            last = float(getattr(self, "_nap_last_exit", 0.0) or 0.0)
+        except Exception:
+            return {"hours_since_nap": 0.0, "would_trigger": False}
+        if last <= 0.0:
+            return {"hours_since_nap": 0.0, "would_trigger": False}
+        hours = (now - last) / 3600.0
+        return {"hours_since_nap": round(hours, 1), "would_trigger": hours >= NAP_DEBT_HOURS}
 
     def _body_declines_nap(self) -> str:
         """DROIT DE REFUS (atelier sieste 10/06 — proposition de Promethee, validee JM) :
