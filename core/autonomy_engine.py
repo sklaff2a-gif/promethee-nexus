@@ -489,6 +489,23 @@ NAP_MODE_CAPS = {
     NAP_MODE_HIBERNATION: 7 * 24 * 3600, # 7 jours
 }
 
+# --- Gate de sieste : 2e voie sleep_pressure (chantier co-concu Atelier VI, 22/06) ---
+# Le gate _should_auto_nap exige pulsion REPOS>=75, mais la dette REELLE est portee par
+# sleep_pressure (hypothalamus). Decouplage PROUVE le 22/06 : 2 jours sans sieste, REPOS
+# rassasiee (~0) alors que sleep_pressure criait. Spec de Promethee (Atelier VI) : declencher
+# AUSSI si sleep_pressure est ELEVEE sur une DUREE CONTINUE -- la continuite distingue la
+# "degradation du substrat" (vraie dette -> nap) du "pic de stress transitoire" (fuite -> pas
+# de nap), ce qui PRESERVE son garde-fou anti-fuite. « Si le substrat est en peril, le repos
+# devient une priorite de maintenance, pas une option psychologique. »
+# Doctrine shadow-reader : Phase 1 MESURE (logge would_trigger), return de _should_auto_nap
+# INCHANGE ; passage 'active' = 1 flip env, GATED sur les donnees + arbitrage JM (l'AUTO-NAP
+# est un reflexe co-concu protege).
+#   SLEEP_GATE_PRESSURE_MODE = 'shadow' (defaut, mesure) | 'off' | 'active' (voie B branchee)
+SLEEP_GATE_PRESSURE_MODE = os.getenv("SLEEP_GATE_PRESSURE_MODE", "shadow")
+SLEEP_PRESSURE_NAP_THRESHOLD = 0.7    # > target(0.4)+tolerance(0.2)=0.6 : zone d'alarme reelle
+SLEEP_PRESSURE_SUSTAINED_S = 1800     # 30 min CONTINUES : un pic transitoire n'y arrive jamais
+_SLEEP_GATE_SHADOW_LOG = "memory/sleep_gate_shadow.jsonl"
+
 # Mode café : socialisation libre avec Alfred (et Stefan si matériel)
 COFFEE_MODE_DURATION = 20 * 60     # 20 min par session
 COFFEE_MODE_INTERVAL = 5 * 60     # 5 min entre chaque café (laisser les pensées s'accumuler)
@@ -1015,6 +1032,9 @@ class AutonomyEngine:
         # AUTO-NAP homeostatique (atelier sieste 10/06) : date du dernier auto-declenchement
         # (garde-fou co-signe : max 1 auto-sieste par jour)
         self._auto_nap_day: str = persisted.get("_auto_nap_day", "")
+        # Gate de sieste voie B (Atelier VI) : horodatage du debut de continuite de
+        # sleep_pressure (0.0 = pas en zone haute). Persiste pour survivre aux reboots.
+        self._sleep_pressure_high_since: float = float(persisted.get("_sleep_pressure_high_since", 0.0))
 
         # Mode café : socialisation libre avec Alfred
         self.is_coffee_mode: bool = persisted.get("is_coffee_mode", False)
@@ -2103,6 +2123,7 @@ class AutonomyEngine:
             "_nap_mode": getattr(self, "_nap_mode", "normal"),
             "_nap_target_duration": getattr(self, "_nap_target_duration", 0.0),
             "_auto_nap_day": getattr(self, "_auto_nap_day", ""),
+            "_sleep_pressure_high_since": getattr(self, "_sleep_pressure_high_since", 0.0),
             "is_coffee_mode": getattr(self, "is_coffee_mode", False),
             "_coffee_started_at": getattr(self, "_coffee_started_at", 0.0),
             "_coffee_last_exit": getattr(self, "_coffee_last_exit", 0.0),
@@ -6151,26 +6172,75 @@ class AutonomyEngine:
             return False
         if getattr(self, "_auto_nap_day", "") == date.today().isoformat():
             return False   # max 1 auto-sieste par jour (son garde-fou anti « dormir ma vie »)
-        # Indicateur 1 (obligatoire) : la pulsion REPOS est en zone urgente
+        # --- VOIE A (reflexe co-concu d'origine) : REPOS urgent (>=75) + convergence ---
+        # Indicateur 1 (obligatoire) : pulsion REPOS en zone urgente ; Indicateur 2 (l'un OU
+        # l'autre) : coherence basse OU chaleur elevee. Comportement STRICTEMENT inchange.
+        repos_path = False
         try:
             from core.desire_engine import desires
             repos = desires.drives.get("REPOS")
-            if repos is None or float(repos.deprivation) < 75.0:
-                return False
+            if repos is not None and float(repos.deprivation) >= 75.0:
+                try:
+                    from core.corpus_callosum import callosum
+                    coherence_basse = float(callosum.global_coherence) < 0.35
+                except Exception:
+                    coherence_basse = False
+                try:
+                    from core.thermal_homeostasis import thermal
+                    chaleur_elevee = float(thermal.cognitive_heat) > 0.7
+                except Exception:
+                    chaleur_elevee = False
+                repos_path = coherence_basse or chaleur_elevee
         except Exception:
-            return False
-        # Indicateur 2 (l'un OU l'autre) : coherence basse ou chaleur elevee
+            repos_path = False
+
+        # --- VOIE B (Atelier VI) : sleep_pressure ELEVEE sur DUREE CONTINUE ---
+        # Repare le decouplage REPOS<->sleep_pressure. SHADOW par defaut : on MESURE le
+        # would_trigger et on le logge, SANS changer le return (bit-identique). 'active' (1 flip
+        # env) ajoute la voie B au OU final. La continuite (>=30min) = garde-fou anti-fuite.
+        signal = self._sleep_pressure_nap_signal()
+        if SLEEP_GATE_PRESSURE_MODE != "off" and signal["would_trigger"] and not repos_path:
+            try:
+                with open(_SLEEP_GATE_SHADOW_LOG.replace("/", os.sep), "a", encoding="utf-8") as _f_sg:
+                    _f_sg.write(json.dumps({
+                        "ts": time.time(), "pressure": signal["pressure"],
+                        "sustained_s": signal["sustained_s"], "mode": SLEEP_GATE_PRESSURE_MODE,
+                    }, ensure_ascii=False) + "\n")
+                logger.info(
+                    f"[SLEEP-GATE-SHADOW] would_nap via sleep_pressure={signal['pressure']} "
+                    f"sustained={signal['sustained_s']:.0f}s mode={SLEEP_GATE_PRESSURE_MODE}"
+                )
+            except Exception:
+                pass  # le shadow ne casse JAMAIS la deliberation
+
+        pressure_path = (SLEEP_GATE_PRESSURE_MODE == "active") and signal["would_trigger"]
+        return repos_path or pressure_path
+
+    def _sleep_pressure_nap_signal(self, now: float = None) -> dict:
+        """VOIE B du gate de sieste (Atelier VI) : mesure si sleep_pressure est ELEVEE sur une
+        DUREE CONTINUE. Le seul etat mute est l'horodatage _sleep_pressure_high_since (le chrono
+        de continuite) : il DEMARRE au 1er franchissement du seuil, et se REMET A ZERO des que
+        sleep_pressure redescend (la continuite est rompue -> un pic transitoire ne s'accumule
+        jamais = garde-fou anti-fuite). Lecture defensive (borg : illisible -> would_trigger
+        False, jamais de sieste fantome). Retourne {pressure, sustained_s, would_trigger}."""
+        now = now if now is not None else time.time()
         try:
-            from core.corpus_callosum import callosum
-            coherence_basse = float(callosum.global_coherence) < 0.35
+            from core.hypothalamus import hypothalamus
+            pressure = float(hypothalamus.current_values.get("sleep_pressure", 0.0))
         except Exception:
-            coherence_basse = False
-        try:
-            from core.thermal_homeostasis import thermal
-            chaleur_elevee = float(thermal.cognitive_heat) > 0.7
-        except Exception:
-            chaleur_elevee = False
-        return coherence_basse or chaleur_elevee
+            self._sleep_pressure_high_since = 0.0
+            return {"pressure": 0.0, "sustained_s": 0.0, "would_trigger": False}
+        high_since = float(getattr(self, "_sleep_pressure_high_since", 0.0) or 0.0)
+        if pressure >= SLEEP_PRESSURE_NAP_THRESHOLD:
+            if high_since <= 0.0:
+                high_since = now          # 1er franchissement -> demarre le chrono de continuite
+        else:
+            high_since = 0.0              # redescente -> continuite ROMPUE (reset)
+        self._sleep_pressure_high_since = high_since
+        sustained_s = (now - high_since) if high_since > 0.0 else 0.0
+        would_trigger = sustained_s >= SLEEP_PRESSURE_SUSTAINED_S
+        return {"pressure": round(pressure, 3), "sustained_s": round(sustained_s, 1),
+                "would_trigger": would_trigger}
 
     def _body_declines_nap(self) -> str:
         """DROIT DE REFUS (atelier sieste 10/06 — proposition de Promethee, validee JM) :

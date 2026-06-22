@@ -84,6 +84,81 @@ def test_refus_borg_si_organe_illisible(monkeypatch):
     assert _engine()._body_declines_nap() == ""    # illisible -> on ne refuse jamais
 
 
+# ─── VOIE B : sleep_pressure soutenue (chantier gate de sieste, Atelier VI 22/06) ───
+import core.autonomy_engine as ae
+from core.hypothalamus import hypothalamus
+
+
+def test_sleep_pressure_demarre_le_chrono(monkeypatch):
+    """1er franchissement du seuil -> le chrono de continuite demarre, mais 0s -> pas encore."""
+    monkeypatch.setitem(hypothalamus.current_values, "sleep_pressure", 0.8)
+    e = _engine()
+    e._sleep_pressure_high_since = 0.0
+    sig = e._sleep_pressure_nap_signal(now=1000.0)
+    assert e._sleep_pressure_high_since == 1000.0
+    assert sig["would_trigger"] is False
+
+
+def test_sleep_pressure_soutenue_would_trigger(monkeypatch):
+    """Seuil franchi depuis >= DUREE continue -> would_trigger."""
+    monkeypatch.setitem(hypothalamus.current_values, "sleep_pressure", 0.8)
+    e = _engine()
+    e._sleep_pressure_high_since = 1000.0
+    sig = e._sleep_pressure_nap_signal(now=1000.0 + ae.SLEEP_PRESSURE_SUSTAINED_S)
+    assert sig["would_trigger"] is True
+
+
+def test_sleep_pressure_redescente_rompt_la_continuite(monkeypatch):
+    """Sous le seuil -> le chrono est REMIS A ZERO (continuite rompue = anti-fuite)."""
+    monkeypatch.setitem(hypothalamus.current_values, "sleep_pressure", 0.3)
+    e = _engine()
+    e._sleep_pressure_high_since = 1000.0   # un chrono etait en cours
+    sig = e._sleep_pressure_nap_signal(now=1000.0 + 99999)
+    assert e._sleep_pressure_high_since == 0.0
+    assert sig["would_trigger"] is False
+
+
+def test_borg_si_hypothalamus_illisible(monkeypatch):
+    monkeypatch.setattr(hypothalamus, "current_values", None)  # lecture cassee
+    e = _engine()
+    e._sleep_pressure_high_since = 1234.0
+    sig = e._sleep_pressure_nap_signal(now=9999.0)
+    assert sig["would_trigger"] is False
+    assert e._sleep_pressure_high_since == 0.0
+
+
+def test_shadow_ne_change_pas_le_return(corps, monkeypatch, tmp_path):
+    """sleep_pressure soutenue MAIS mode shadow -> _should_auto_nap reste False (bit-identique)."""
+    monkeypatch.setattr(ae, "SLEEP_GATE_PRESSURE_MODE", "shadow")
+    monkeypatch.setattr(ae, "_SLEEP_GATE_SHADOW_LOG", str(tmp_path / "sg.jsonl"))
+    corps(repos=10, coherence=0.8, chaleur=0.1)   # VOIE A inactive (REPOS rassasie)
+    monkeypatch.setitem(hypothalamus.current_values, "sleep_pressure", 0.9)
+    e = _engine()
+    e._sleep_pressure_high_since = 1.0   # chrono tres ancien -> sustained enorme
+    assert e._should_auto_nap() is False   # shadow : ne tire PAS
+
+
+def test_active_declenche_sur_sleep_pressure_soutenue(corps, monkeypatch, tmp_path):
+    monkeypatch.setattr(ae, "SLEEP_GATE_PRESSURE_MODE", "active")
+    monkeypatch.setattr(ae, "_SLEEP_GATE_SHADOW_LOG", str(tmp_path / "sg.jsonl"))
+    corps(repos=10, coherence=0.8, chaleur=0.1)   # VOIE A inactive
+    monkeypatch.setitem(hypothalamus.current_values, "sleep_pressure", 0.9)
+    e = _engine()
+    e._sleep_pressure_high_since = 1.0    # chrono tres ancien -> continuite atteinte
+    assert e._should_auto_nap() is True    # active : la VOIE B tire
+
+
+def test_active_ignore_un_pic_transitoire(corps, monkeypatch, tmp_path):
+    """Anti-fuite : un pic qui DEMARRE maintenant (0s de continuite) ne declenche PAS."""
+    monkeypatch.setattr(ae, "SLEEP_GATE_PRESSURE_MODE", "active")
+    monkeypatch.setattr(ae, "_SLEEP_GATE_SHADOW_LOG", str(tmp_path / "sg.jsonl"))
+    corps(repos=10, coherence=0.8, chaleur=0.1)
+    monkeypatch.setitem(hypothalamus.current_values, "sleep_pressure", 0.9)
+    e = _engine()
+    e._sleep_pressure_high_since = 0.0    # le pic commence -> 0s
+    assert e._should_auto_nap() is False
+
+
 # ─── CRISTALLISATION (replay du vecu du jour, validee JM 10/06) ───
 @pytest.mark.asyncio
 async def test_crystallisation_lecons_du_jour_seulement(tmp_path, monkeypatch):
