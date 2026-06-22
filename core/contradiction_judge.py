@@ -26,8 +26,9 @@ import time
 
 from core.contradiction_probe import HIGH_GRADE, PROSE_SLOTS, _normalize_slot, _FILE_REF
 
-# Kill-switch. off (defaut, GPU intact) | shadow (mesure, appelle le juge mais ne gate pas).
-CONTRADICTION_LLM_JUDGE = os.getenv("CONTRADICTION_LLM_JUDGE", "off")
+# Kill-switch. shadow (defaut depuis le 22/06 soir, decision JM : MESURE -- appelle le juge sur
+# l'escalade frugale, logge le signal, mais ne gate JAMAIS la note) | off (GPU intact, desactive).
+CONTRADICTION_LLM_JUDGE = os.getenv("CONTRADICTION_LLM_JUDGE", "shadow")
 SUBSTANTIAL_CHARS = 600       # en-deca, note_haute_contenu_mince (Phase 1) couvre deja
 JUDGE_DAILY_CAP = 20          # plafond d'appels LLM/jour (GPU nocturne serre)
 
