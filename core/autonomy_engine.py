@@ -11541,6 +11541,29 @@ RAISON: <1 phrase courte>"""
                                     }, ensure_ascii=False) + "\n")
                             except Exception:
                                 pass  # le shadow ne casse JAMAIS la notation
+
+                            # Phase 3 (juge LLM 'dire->faire', Atelier C) : escalade FRUGALE sur
+                            # la prose pure-generique bien notee (cas que le deterministe ne sait
+                            # pas juger). Defaut OFF (kill-switch CONTRADICTION_LLM_JUDGE) ; reste
+                            # shadow (logge le signal, ne gate jamais la note). await frugal + cap/j.
+                            try:
+                                from core.contradiction_judge import judge_operational
+                                _j = await judge_operational(deliverable, slot, grade, _cp)
+                                if _j.get("signal"):
+                                    import json as _json_p3, os as _os_p3, time as _time_p3
+                                    logger.info(
+                                        f"[CONTRADICTION-PHASE3] slot={slot} grade={grade:.1f} "
+                                        f"signal={_j['signal']} raison={_j['raison'][:80]}"
+                                    )
+                                    with open(_os_p3.path.join("memory", "contradiction_shadow.jsonl"),
+                                              "a", encoding="utf-8") as _f_p3:
+                                        _f_p3.write(_json_p3.dumps({
+                                            "ts": _time_p3.time(), "slot": slot, "intent": intent,
+                                            "grade": grade, "phase": 3, "signal": _j["signal"],
+                                            "raison": _j["raison"],
+                                        }, ensure_ascii=False) + "\n")
+                            except Exception as _e3:
+                                logger.debug(f"[CONTRADICTION-PHASE3] skip (non bloquant): {_e3}")
                     except Exception as e:
                         logger.debug(f"[CONTRADICTION-SHADOW] skip (non bloquant): {e}")
 
