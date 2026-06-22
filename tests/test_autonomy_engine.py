@@ -1741,6 +1741,9 @@ class TestAwakeningFrustration:
     @pytest.mark.asyncio
     async def test_frustration_forces_intent(self):
         """Frustration >= 4 et deprivation >= 70 → forced_next_intent défini."""
+        # Neutralise la garantie vespérale (hour>=18 -> EVENING_REFLECTION forcé) : ce test
+        # isole le forçage par frustration et doit être indépendant de l'horloge murale.
+        self.engine._daily_reflection_done = True
         from core.desire_engine import Drive
 
         mock_desires = MagicMock()
@@ -1767,6 +1770,8 @@ class TestAwakeningFrustration:
     @pytest.mark.asyncio
     async def test_no_frustration_no_forced_intent(self):
         """Pas de frustration → _forced_next_intent reste vide."""
+        # Neutralise la garantie vespérale (hour>=18 -> EVENING_REFLECTION) : indépendance horloge.
+        self.engine._daily_reflection_done = True
         from core.desire_engine import Drive
 
         mock_desires = MagicMock()
@@ -2597,6 +2602,8 @@ class TestForcedFailureThreshold:
     @pytest.mark.asyncio
     async def test_forced_skipped_after_threshold(self):
         """Un intent FORCED avec trop d'echecs est ignore, fallback au scoring normal."""
+        # Neutralise la garantie vespérale (hour>=18 -> EVENING_REFLECTION) : indépendance horloge.
+        self.engine._daily_reflection_done = True
         self.engine._forced_next_intent = "REFACTOR_RANDOM"
         self.engine._forced_failure_counts = {"REFACTOR_RANDOM": 3}
         health = _make_health("GO")
