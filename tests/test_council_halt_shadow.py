@@ -144,3 +144,46 @@ def test_shadow_io_ne_casse_jamais_le_run(monkeypatch):
     rec = c._shadow_halt_check(round_num=3)
     assert rec is not None
     assert rec["would_halt"] is True
+
+
+# ── HALTING ACTIF (Point 1 TRM, commit #2) — integration run() ─────────────
+from unittest.mock import AsyncMock, MagicMock
+
+
+def _sterile_agents():
+    """2 agents aux mots-cles DISJOINTS et CONSTANTS -> divergence figee ~1.0 (plateau sterile,
+    JAMAIS de consensus car contenu court < MIN_CONSENSUS_CONTENT_LENGTH)."""
+    a = MagicMock()
+    a.generate_content = AsyncMock(return_value="alpha bravo charlie delta epsilon zigzag")
+    b = MagicMock()
+    b.generate_content = AsyncMock(return_value="zeta theta iota kappa lambda omega")
+    return {"coder": a, "security": b}
+
+
+@pytest.mark.asyncio
+async def test_active_ecourte_plateau_sterile(monkeypatch):
+    """En 'active', un plateau sterile est ECOURTE (status halted_sterile, < max_rounds),
+    et le DIP est PRESERVE (gradient verdict 'sterile')."""
+    monkeypatch.setattr(council_mod, "COUNCIL_HALT_MODE", "active")
+    c = Council(_sterile_agents(), ["coder", "security"], "mission test",
+                max_rounds=5, enable_student=False, enable_advocate=False)
+    res = await c.run()
+    assert res["status"] == "halted_sterile"
+    assert res["rounds_used"] < 5                       # ecourte (halt vers le tour 3)
+    assert res["gradient"]["verdict"] == "sterile"      # DIP-sur-sterile preserve
+
+
+@pytest.mark.asyncio
+async def test_shadow_n_ecourte_pas(monkeypatch):
+    """En 'shadow', le meme plateau sterile n'est PAS ecourte (run() va a max_rounds)."""
+    monkeypatch.setattr(council_mod, "COUNCIL_HALT_MODE", "shadow")
+    c = Council(_sterile_agents(), ["coder", "security"], "mission test",
+                max_rounds=4, enable_student=False, enable_advocate=False)
+    res = await c.run()
+    assert res["status"] == "max_rounds"
+    assert res["rounds_used"] == 4
+
+
+def test_defaut_est_active():
+    """Patron IRRIGATION : defaut bascule a 'active' (env = kill-switch)."""
+    assert council_mod.COUNCIL_HALT_MODE == "active"

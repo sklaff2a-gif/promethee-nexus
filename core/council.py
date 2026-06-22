@@ -55,10 +55,11 @@ WATCHDOG_TIMEOUT_STATUS = "watchdog_timeout"
 # le plateau STERILE EN COURS de debat pour pouvoir l'ecourter avant de gaspiller le GPU.
 # Doctrine shadow-reader (cf IRRIGATION_SHADOW, SENTINEL_GATE_MODE) : Phase 1 = on MESURE
 # et on LOGGE la decision "would_halt" SANS jamais ecourter le debat (run() bit-identique).
-# Passage en 'active' GATED sur N councils de donnees shadow prouvant que le would-halt
-# ne coincide JAMAIS avec un debat qui aurait fini par atteindre le consensus.
-#   COUNCIL_HALT_MODE = 'shadow' (defaut, mesure) | 'off' (desactive) | 'active' (NON branche)
-COUNCIL_HALT_MODE = os.getenv("COUNCIL_HALT_MODE", "shadow")
+# Phase 2 (22/06) : passage en 'active' (decide JM). Le break est branche dans run() ; un
+# plateau sterile (would_halt) ecourte le debat -> GPU economise. Le shadow continue de logger
+# (monitoring). Patron projet IRRIGATION_ACTIVE : defaut bascule 'active', env = kill-switch.
+#   COUNCIL_HALT_MODE = 'active' (defaut, ecourte) | 'shadow' (mesure seule) | 'off' (desactive)
+COUNCIL_HALT_MODE = os.getenv("COUNCIL_HALT_MODE", "active")
 _HALT_SHADOW_LOG = "memory/council_halt_shadow.jsonl"
 
 
@@ -1306,6 +1307,7 @@ class Council:
         consensus_reached = False
         aborted = False
         abort_reason = ""
+        halted_sterile = False   # HALTING ACTIF (Point 1 TRM) : plateau sterile ecourte
         president_feedback = ""
 
         # --- WATCHDOG : état d'ouverture (guillotine fixe + dérivée de menace) ---
@@ -1458,11 +1460,10 @@ class Council:
             else:
                 president_feedback = ""
 
-            # --- HALTING APPRIS (q_hat shadow, Point 1 TRM) ---
-            # Mesure la convergence du debat EN COURS pour journaliser un "would_halt"
-            # (plateau sterile ecourtable). Mode shadow : LOGGE seulement, n'ecourte
-            # JAMAIS (doctrine shadow-reader). Le fusible <3 tours vit dans la methode.
-            self._shadow_halt_check(round_num)
+            # --- HALTING APPRIS (q_hat, Point 1 TRM) ---
+            # Mesure la convergence du debat EN COURS. _shadow_halt_check LOGGE toujours
+            # (monitoring, en shadow comme en active). Le fusible <3 tours vit dans la methode.
+            _halt = self._shadow_halt_check(round_num)
 
             # V6.0 Reforme 2 : Majorite simple validee par le President.
             # Avant : quorum ceil(2/3) -> impossible avec 3 LLM 8B qui
@@ -1480,6 +1481,20 @@ class Council:
                 )
                 break
 
+            # --- HALTING ACTIF (Point 1 TRM, commit #2) ---
+            # Apres le check consensus (donc consensus PRIORITAIRE) : en mode 'active', un
+            # plateau sterile (would_halt) est ecourte pour economiser le GPU des tours
+            # restants. Le DIP-sur-sterile est PRESERVE : _compute_gradient verra le plateau
+            # (round >= 3) et renverra verdict='sterile' -> autonomy plafonne la note.
+            if COUNCIL_HALT_MODE == "active" and _halt and _halt.get("would_halt"):
+                halted_sterile = True
+                logger.info(
+                    f"[COUNCIL {self.council_id}] HALT ACTIF au tour {round_num} : plateau "
+                    f"sterile ecourte (slope={_halt['slope']}, "
+                    f"{_halt['rounds_saved_if_active']} tour(s) economise(s))."
+                )
+                break
+
         # Résumé final
         if watchdog_aborted:
             status = WATCHDOG_TIMEOUT_STATUS
@@ -1487,6 +1502,8 @@ class Council:
             status = "aborted"
         elif consensus_reached:
             status = "consensus"
+        elif halted_sterile:
+            status = "halted_sterile"   # ecourte (Point 1 TRM) ; DIP preserve via gradient sterile
         else:
             status = "max_rounds"
         last_contributions = [e for e in self.transcript if e["round"] == rounds_used and not e.get("is_student") and not e.get("is_advocate")]

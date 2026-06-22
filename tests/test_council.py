@@ -692,7 +692,10 @@ class TestPresidentEvaluation:
             "architect": architect_mock,
         }
         council = Council(agents, ["coder", "security"], "test", max_rounds=n)
-        result = await council.run()
+        # COUNCIL_HALT_MODE=shadow : ce test porte sur la robustesse au crash president
+        # (pas sur le halt actif, qui ecourterait le plateau sterile en 'halted_sterile').
+        with patch.object(council_module, "COUNCIL_HALT_MODE", "shadow"):
+            result = await council.run()
         # Le débat continue malgré l'erreur
         assert result["status"] == "max_rounds"
         assert result["rounds_used"] == n
@@ -897,9 +900,12 @@ class TestStudentParticipation:
         mock_heart.current_emotion = "curiosite"
         mock_heart.coherence = 0.7
 
+        # COUNCIL_HALT_MODE=shadow : ce test porte sur le consensus (pas sur le halt actif) ;
+        # sans ca, le plateau sterile serait ecourte (status 'halted_sterile') et masquerait
+        # le point teste (l'etudiant ne fait pas quorum -> pas de consensus).
         with patch.dict("sys.modules", {
             "core.cardiac_engine": MagicMock(heart=mock_heart),
-        }):
+        }), patch.object(council_module, "COUNCIL_HALT_MODE", "shadow"):
             result = await council.run()
 
         # L'etudiant ne peut pas faire basculer vers un consensus
