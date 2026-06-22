@@ -111,3 +111,68 @@ def test_n_executed_defensif():
     assert _n_executed({"executed": []}) == 0
     assert _n_executed({"executed": ["a", "b"]}) == 2
     assert _n_executed({"autre": 1}) is None
+
+
+# ── Phase 2 : fichiers hallucines ──────────────────────────────────────────
+from core.contradiction_probe import _hallucinated_files, _has_noop_code
+
+
+def test_fichiers_hallucines_instable():
+    """>= 2 fichiers projet inexistants cites -> instable."""
+    body = ("Il faut modifier core/zzz_fake_alpha.py et core/zzz_fake_beta.py puis "
+            "core/zzz_fake_gamma.py. " + _LONG_GROUNDED)
+    r = probe(body, "BULLETIN", grade=4.0)
+    assert "fichiers_hallucines" in r["signals"]
+    assert r["verdict"] == "instable"
+
+
+def test_vrais_fichiers_pas_de_signal():
+    """Des fichiers projet QUI EXISTENT ne declenchent pas le signal."""
+    body = ("L'analyse porte sur core/prefrontal.py et core/dopamine_system.py "
+            "et core/council.py. " + _LONG_GROUNDED)
+    r = probe(body, "BULLETIN", grade=4.0)
+    assert "fichiers_hallucines" not in r["signals"]
+
+
+def test_un_seul_fichier_halluc_sous_le_seuil():
+    """1 seul fichier inexistant (< seuil 2) -> pas de signal (anti-typo)."""
+    body = "Voir core/zzz_inexistant_xyz.py pour le detail. " + _LONG_GROUNDED
+    assert "fichiers_hallucines" not in probe(body, "CREATION", grade=5.0)["signals"]
+    # mais le helper le voit bien
+    assert "core/zzz_inexistant_xyz.py" in _hallucinated_files(body)
+
+
+# ── Phase 2 : code no-op ───────────────────────────────────────────────────
+_NOOP = ("Voici mon analogie.\n```python\n"
+         "def compare():\n    analogy = \"je suis comme une riviere\"\n    return analogy\n```\n"
+         + _LONG_GROUNDED)
+_REAL = ("Un vrai calcul.\n```python\n"
+         "def somme(n):\n    total = 0\n    for i in range(n):\n        total += i\n    return total\n```\n"
+         + _LONG_GROUNDED)
+
+
+def test_code_noop_instable():
+    """Un bloc python qui ne fait que retourner une constante -> code_noop -> instable."""
+    r = probe(_NOOP, "CREATION", grade=8.4)   # le cas reel : CREATION 8.4 'riviere'
+    assert "code_noop" in r["signals"]
+    assert r["verdict"] == "instable"
+    assert _has_noop_code(_NOOP) is True
+
+
+def test_code_avec_vrai_travail_ok():
+    """Un bloc avec boucle/calcul reel -> pas de signal code_noop."""
+    r = probe(_REAL, "CREATION", grade=8.4)
+    assert "code_noop" not in r["signals"]
+    assert _has_noop_code(_REAL) is False
+
+
+def test_prose_nue_sans_code_pas_de_noop():
+    """Pas de bloc python du tout -> pas de signal code_noop (ne flag pas la prose seule)."""
+    assert _has_noop_code(_LONG_GROUNDED) is False
+
+
+def test_cas_reel_creation_riviere_enfin_instable():
+    """Capstone Phase 2 : la CREATION 8.4 'riviere' (generique + python no-op), classee 'ancre'
+    en Phase 1, devient enfin 'instable' grace a code_noop."""
+    r = probe(_NOOP, "CREATION", grade=8.4)
+    assert r["verdict"] == "instable" and r["score"] >= 1
