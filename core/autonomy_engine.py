@@ -6909,6 +6909,21 @@ class AutonomyEngine:
         except Exception as e:
             logger.debug(f"[DREAM] Digestion brouillons skipped (non bloquant): {e}")
 
+        # Phase 2.8 — DÉBORDANCE (chantier co-conçu Puits 23/06 ; Phase 1 SHADOW).
+        # Chasse les ponts cross-domaines (creative_bridges) et GATE chacun par le juge dire→faire :
+        # ce lien déborde-t-il en une QUESTION / un BESOIN D'OUTIL, ou est-ce de l'apophénie ? SHADOW :
+        # logge les candidats (memory/debordance_shadow.jsonl), ne pousse RIEN à JM, ne dispatch RIEN.
+        # Kill-switch DEBORDANCE_MODE (off pour désactiver). Frugal (top-N + cap/j). Lecture seule des ponts.
+        try:
+            from core.debordance import chase_and_gate
+            _deb = await chase_and_gate()
+            if _deb.get("candidates"):
+                logger.info(f"[DREAM] DÉBORDANCE shadow: {len(_deb['candidates'])}/{_deb['examined']} "
+                            f"ponts déborderaient ({_deb['candidates'][0]['mode']}: "
+                            f"{_deb['candidates'][0]['payload'][:60]})")
+        except Exception as e:
+            logger.debug(f"[DREAM] Débordance skipped (non bloquant): {e}")
+
         # Phase 3 — Publier le rêve sur le bus
         if dream_report:
             self._nap_tasks_done.append("DREAM")
