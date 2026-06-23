@@ -456,7 +456,7 @@ NOVELTY_BONUS_MAX = 3.0               # Bonus max (stagnation sévère)
 EXPLORATION_INTENTS = {
     "EXPANSION_CODE", "EXPANSION_CATALOG", "CREATIVE_PLAY", "VEILLE_SILENCIEUSE", "VEILLE_IA",
     "ROADMAP_RESEARCH", "ROADMAP_SPEC", "GRIMOIRE_EVOLVE",
-    "COUNCIL_DEBATE", "DROPZONE_SCAN", "VISUAL_OBSERVATION",
+    "COUNCIL_DEBATE", "DROPZONE_SCAN", "VISUAL_OBSERVATION", "DEBORDANCE",
 }
 EXPLORATION_MULTIPLIER = 1.5          # Les intents exploratoires reçoivent 1.5x le bonus
 
@@ -784,6 +784,7 @@ CONTEXT_KEYWORDS = {
     "SELF_INSPECT": ["github", "code source", "repo", "inspection", "miroir", "auto-analyse"],
     "SELF_ANALYSIS": ["diagnostic", "analyse", "problème", "anomalie", "qualité", "routine", "performance", "rapport"],
     "EVENING_REFLECTION": ["introspection", "réflexion", "journée", "question", "graine", "écart", "vécu", "bilan"],
+    "DEBORDANCE": ["débordance", "connexion", "correspondance", "pont", "lien", "domaine", "chasse", "inattendu"],
     "SEED_RECALL": ["graine", "rappel", "consolidation", "axiome", "résonance", "ebbinghaus", "mantra"],
     "AUTO_FUZZING": ["fuzz", "test", "edge case", "crash", "robustesse", "exception", "bug"],
     "CREATIVE_PLAY": ["créatif", "association", "analogie", "exploration", "idée", "hypothèse"],
@@ -2102,6 +2103,8 @@ class AutonomyEngine:
                 "Introspection vesperale : relire les moments forts de la journee et identifier les questions ouvertes.")},
             {"agent": "_seed_recall", "intent": "SEED_RECALL",
              "mission": "Reveil d'une graine due : activation co-Hebbian + mesure resonance (Ebbinghaus J+3/J+5/J+7)."},
+            {"agent": "_debordance", "intent": "DEBORDANCE",
+             "mission": "Chasse les ponts cross-domaines et mesure lesquels deborderaient en question/outil (shadow)."},
             {"agent": "_coffee_break", "intent": "COFFEE_BREAK", "mission": "Pause café avec Alfred — conversation amicale et décontractée."},
             {"agent": "_stefan_confrontation", "intent": "STEFAN_CONFRONTATION", "mission": "Confrontation avec Stefan — une question que Prométhée a évitée."},
         ]
@@ -2918,11 +2921,11 @@ class AutonomyEngine:
 
         # 6h-12h : exploration (matin frais, idées nouvelles)
         MORNING_INTENTS = {"EXPANSION_CODE", "VEILLE_IA", "CREATIVE_PLAY",
-                          "ROADMAP_RESEARCH", "CURIOSITY_REFLEX", "VEILLE_SILENCIEUSE"}
+                          "ROADMAP_RESEARCH", "CURIOSITY_REFLEX", "VEILLE_SILENCIEUSE", "DEBORDANCE"}
         # 12h-18h : production (après-midi, focus)
         AFTERNOON_INTENTS = {"SCHOOL_CODE_REVIEW", "SCHOOL_RESEARCH", "SCHOOL_WORKSHOP",
                             "SCHOOL_CREATION", "SCHOOL_BULLETIN", "SECURITY_AUDIT",
-                            "REFACTOR_RANDOM"}
+                            "REFACTOR_RANDOM", "DEBORDANCE"}
         # 18h-00h : consolidation (soir, digérer la journée)
         EVENING_INTENTS = {"MEMORY_CONSOLIDATION", "SOLILOQUE_INTERNE", "SELF_ANALYSIS",
                           "EVENING_REFLECTION", "MEMORY_CLEANUP", "STEFAN_CONFRONTATION"}
@@ -4129,6 +4132,8 @@ class AutonomyEngine:
             response = await self._execute_param_experiment()
         elif intent == "EVENING_REFLECTION":
             response = await self._execute_evening_reflection()
+        elif intent == "DEBORDANCE":
+            response = await self._execute_debordance_routine()
         elif intent == "SEED_RECALL":
             response = await self._execute_seed_recall()
         elif intent == "IMMERSION_DOMAIN":
@@ -4798,6 +4803,8 @@ class AutonomyEngine:
             response = await self._execute_param_experiment()
         elif intent == "EVENING_REFLECTION":
             response = await self._execute_evening_reflection()
+        elif intent == "DEBORDANCE":
+            response = await self._execute_debordance_routine()
         elif intent == "SEED_RECALL":
             response = await self._execute_seed_recall()
         elif intent == "IMMERSION_DOMAIN":
@@ -12279,6 +12286,31 @@ RAISON: <1 phrase courte>"""
     _last_reflection_ts: float = 0.0
     _REFLECTION_COOLDOWN: float = 8 * 3600  # 8 heures
     REFLECTION_EVENING_HOUR: int = 18       # heure d'armement de la garantie vespérale
+
+    async def _execute_debordance_routine(self) -> dict:
+        """Routine DÉBORDANCE (Phase 2, scorée — tourne pendant la cognition active de JOUR).
+        Chasse les ponts cross-domaines (creative_bridges) et MESURE lesquels déborderaient en
+        question/outil via le gate dire→faire. PHASE 1 SHADOW : ne pousse RIEN à JM, ne dispatch
+        RIEN, logge les candidats (memory/debordance_shadow.jsonl). try/except total : ne casse
+        jamais le cycle. Retourne toujours status=success (une mesure, même vide, est un run valide)."""
+        try:
+            from core.debordance import chase_and_gate
+            _deb = await chase_and_gate()
+            ex = _deb.get("examined", 0)
+            cands = _deb.get("candidates", [])
+            if cands:
+                top = cands[0]
+                summary = (f"Débordance: {len(cands)}/{ex} ponts déborderaient "
+                           f"({top['mode']}: {top['payload'][:80]})")
+            elif ex:
+                summary = f"Débordance: {ex} ponts examinés, 0 débordement (apophénie ou champ pauvre)"
+            else:
+                summary = "Débordance: aucun pont frais à chasser ce cycle"
+            logger.info(f"[DÉBORDANCE] {summary}")
+            return {"status": "success", "result": summary, "final_summary": summary}
+        except Exception as e:
+            logger.debug(f"[DÉBORDANCE] skip (non bloquant): {e}")
+            return {"status": "success", "result": "Débordance: skip (non bloquant)", "final_summary": ""}
 
     @staticmethod
     def _reflection_should_arm(hour: int, reflection_done: bool, forced_busy: bool) -> bool:
