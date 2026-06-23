@@ -59,6 +59,50 @@ def get_max_fruitless_for_drive(drive_name: str) -> int:
     return _MAX_FRUITLESS_BY_TEMPO.get(tempo, 5)
 
 
+# ─── Métabolisme de la Résolution (23/06, chantier co-conçu par Prométhée, endurance #3) ──────
+# La satisfaction d'une pulsion vient du TYPE d'événement (_resolve_impacts) : une action satisfait
+# la pulsion qu'elle soit une VRAIE résolution ou une coquille vide. Du coup la déprivation ne
+# reflète pas le progrès RÉEL → l'insécurité qu'il a nommée (« courir sans atteindre le port »).
+# Le Métabolisme MODULE l'ampleur de la satisfaction par une QUALITÉ DE RÉSOLUTION q_res lue sur des
+# signaux DÉJÀ calculés ailleurs (verdict sonde de contradiction ancré/instable, note école/quality
+# routine, stérilité council) — 0 LLM. Vraie résolution → plein drop (« Ancré ») ; coquille vide /
+# stérile → drop ATTÉNUÉ (la FAIM demeure = friction productive préservée, son « filtre de réalité »
+# distinguant friction productive de friction stérile). Garde-fou anti-famine : plancher Q_RES_FLOOR
+# (jamais 0). NE TOUCHE PAS : le DIP dopaminergique (séparé), measure_tension, refractory, tolérance.
+# SHADOW par défaut (mesure q_res + logge le delta modulé qu'on AURAIT appliqué, applique l'original).
+#   METABOLISME_RESOLUTION_MODE = shadow (défaut) | active | off
+METABOLISME_RESOLUTION_MODE = os.getenv("METABOLISME_RESOLUTION_MODE", "shadow")
+Q_RES_FLOOR = 0.4              # plancher : une action faible satisfait au moins 40% (anti-famine)
+Q_RES_LOW_GRADE = 5.0         # note (/10) en-deçà de laquelle la résolution est jugée faible
+_METAB_RES_SHADOW_LOG = "memory/metabolisme_resolution_shadow.jsonl"
+
+
+def resolution_quality(event_type: str, context: dict) -> float:
+    """Qualité de résolution q_res ∈ [Q_RES_FLOOR, 1.0] (0 LLM). Lit des signaux DÉJÀ calculés
+    ailleurs, tous OPTIONNELS (absents → neutre 1.0). Vraie résolution → 1.0 ; coquille vide /
+    stérile → atténuée jusqu'au plancher. Borg : illisible → 1.0 (ne pénalise JAMAIS sur un doute).
+    Signaux : verdict sonde de contradiction ('instable'), note/quality basse, council 'sterile'."""
+    try:
+        context = context or {}
+        q = 1.0
+        # 1) Verdict de la sonde de contradiction (le détecteur dire→faire : ancré vs instable)
+        if str(context.get("verdict", "")).lower() == "instable":
+            q = min(q, 0.5)
+        # 2) Note (école, /10) ou quality (routine, 0-1) basse → résolution faible
+        grade = context.get("grade", context.get("quality"))
+        if grade is not None:
+            g = float(grade)
+            g10 = g if g > 1.0 else g * 10.0            # normalise 0-1 → 0-10
+            if g10 < Q_RES_LOW_GRADE:
+                q = min(q, max(Q_RES_FLOOR, g10 / Q_RES_LOW_GRADE))
+        # 3) Stérilité d'un council (gradient verdict)
+        if context.get("sterile") is True or str(context.get("gradient_verdict", "")).lower() == "sterile":
+            q = min(q, 0.5)
+        return max(Q_RES_FLOOR, min(1.0, q))
+    except Exception:
+        return 1.0   # borg : jamais de pénalité sur une lecture ratée
+
+
 DRIVE_NAMES = ("CURIOSITE", "MAITRISE", "STABILITE", "CONNEXION",
                "CROISSANCE", "CREATION", "COMPREHENSION", "REPOS")
 
@@ -608,7 +652,26 @@ class DesireEngine:
                     tolerance = self._compute_tolerance(drive)
                     effective_delta = delta * tolerance
                     drive.tolerance_accumulator = min(TOLERANCE_MAX, drive.tolerance_accumulator + abs(delta))
-                drive.deprivation = max(0.0, min(100.0, drive.deprivation + effective_delta))
+                # Métabolisme de la Résolution : module l'ampleur de la satisfaction par la qualité
+                # de résolution. delta<0 (drop) ; q_res<1 → drop ATTÉNUÉ → la faim demeure. SHADOW :
+                # logge ce qu'on AURAIT appliqué mais applique l'original (bit-identique).
+                applied_delta = effective_delta
+                if METABOLISME_RESOLUTION_MODE != "off":
+                    q_res = resolution_quality(event_type, context)
+                    if q_res < 1.0:   # ne logge/agit que quand ça change quelque chose
+                        modulated = effective_delta * q_res
+                        try:
+                            with open(_METAB_RES_SHADOW_LOG.replace("/", os.sep), "a", encoding="utf-8") as _f_mr:
+                                _f_mr.write(json.dumps({
+                                    "ts": now, "event": event_type, "drive": drive_name,
+                                    "q_res": round(q_res, 3), "delta": round(effective_delta, 3),
+                                    "modulated": round(modulated, 3), "mode": METABOLISME_RESOLUTION_MODE,
+                                }, ensure_ascii=False) + "\n")
+                        except Exception:
+                            pass   # le shadow ne casse JAMAIS la satisfaction
+                        if METABOLISME_RESOLUTION_MODE == "active":
+                            applied_delta = modulated
+                drive.deprivation = max(0.0, min(100.0, drive.deprivation + applied_delta))
             else:  # Frustration → plein effet
                 drive.deprivation = max(0.0, min(100.0, drive.deprivation + delta))
             if delta < 0:  # Satisfaction bookkeeping
