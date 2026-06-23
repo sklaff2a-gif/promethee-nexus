@@ -106,8 +106,21 @@ class ProfessorAgent(BaseAgent):
         # 3. Ajuster la difficulte
         adjusted = self._adjust_difficulty(course_type, grade)
 
+        # Phase 2 Métabolisme de la Résolution : verdict de la sonde dire->faire (0 LLM, déterministe)
+        # pour que la satisfaction soit ATTENUEE sur une coquille vide BIEN NOTEE ('instable') que la
+        # note seule ne rattrape pas. Dims prose (code_noop/fichiers_hallucines/note_haute) n'exigent
+        # pas action_trace -> meme verdict ici. try/except total : ne casse JAMAIS la notation.
+        _verdict = None
+        try:
+            from core.contradiction_probe import probe as _contra_probe
+            _cp = _contra_probe(deliverable, course_type, grade, None)
+            if _cp.get("applicable"):
+                _verdict = _cp.get("verdict")
+        except Exception:
+            _verdict = None
+
         # 4. Nourrir le DesireEngine
-        self._feed_desire_engine(course_type, grade)
+        self._feed_desire_engine(course_type, grade, _verdict)
 
         # 5. Sauvegarder la note
         grade_entry = {
@@ -411,8 +424,13 @@ class ProfessorAgent(BaseAgent):
 
         return adjusted
 
-    def _feed_desire_engine(self, course_type: str, grade: float):
-        """Nourrit le DesireEngine selon la note."""
+    def _feed_desire_engine(self, course_type: str, grade: float, verdict: str = None):
+        """Nourrit le DesireEngine selon la note.
+
+        verdict (Phase 2 Métabolisme de la Résolution, 23/06) : verdict de la sonde de contradiction
+        ('ancre'/'instable'), transporte le juge dire->faire jusqu'au context de satisfaction.
+        resolution_quality le lit pour ATTENUER la satisfaction d'un livrable bien note mais 'instable'
+        (coquille vide) que la note seule ne rattrape pas. Optionnel (None -> neutre)."""
         try:
             from core.event_bus.bus import publish_from_sync
             event_type = "SCHOOL_GRADE_HIGH" if grade >= 7.0 else "SCHOOL_GRADE_LOW"
@@ -421,6 +439,8 @@ class ProfessorAgent(BaseAgent):
                 "grade": grade,
                 "event_type": event_type,
             }
+            if verdict:
+                event["verdict"] = verdict
             publish_from_sync("SCHOOL_GRADE_RECEIVED", event, label="professor.feed_desire")
         except Exception as e:
             logger.debug(f"[PROFESSOR] Bus publish failed: {e}")
