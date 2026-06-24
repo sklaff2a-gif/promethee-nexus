@@ -121,6 +121,20 @@ STATE_FILE = os.path.join(
 # Rise naturelle par heure
 NATURAL_RISE_PER_HOUR = 3.0
 
+# ─── Rééquilibrage STABILITÉ (24/06, racine du flux anxieux) ───────────────────────────────
+# Diagnostic (analyse_flux_pensee) : STABILITÉ est structurellement INSATISFIABLE -> pinned ~80 ->
+# alarme chronique qui colonise le flux + fabrique les prédictions "menace 5" + appauvrit la réverie.
+# CAUSE : la montée n'honore PAS le TEMPO (un drive "slow" montait aussi vite qu'un "fast", 3.0/h),
+# + le ×1.5 frustration en fait un cercle vicieux (4.5/h) -> rise ≈ +108/j >> satisfaction ≈ −36/j.
+# Règle A+B (en 'active') : facteur tempo (slow ×0.5 -> 1.5/h) ET pas de ×1.5 pour les drives slow.
+# SHADOW (défaut) : un counterfactuel ISOLÉ _stab_shadow_depriv évolue sous la règle A+B (même base_rise,
+# résonance, MÊMES satisfactions/frustrations que le réel) -> on MESURE la trajectoire qu'aurait STABILITÉ
+# sans changer le réel. Kill-switch ; NE TOUCHE PAS le DIP/Métabolisme/refractory/tolérance.
+#   STABILITE_REBALANCE_MODE = shadow (défaut) | active | off
+STABILITE_REBALANCE_MODE = os.getenv("STABILITE_REBALANCE_MODE", "shadow")
+_RISE_TEMPO_FACTOR = {"slow": 0.5, "medium": 0.75, "fast": 1.0}
+_STAB_REBALANCE_SHADOW_LOG = "memory/stabilite_rebalance_shadow.jsonl"
+
 # Tolerance biologique (habituation) - V5.0 ajuste (2026-04-19) :
 # diagnostic de saturation pathologique (MAITRISE tol=169 / 200, plafond)
 # avec recovery 15/h exactement compense par rythme de satisfaction 15/h,
@@ -305,7 +319,11 @@ class DesireEngine:
         }
         self._last_tick: float = time.time()
         self._subscribed = False
+        self._stab_shadow_depriv = None       # counterfactuel STABILITÉ (règle rééquilibrée)
+        self._stab_rebalance_last_log: float = 0.0
         self._load()
+        if self._stab_shadow_depriv is None:
+            self._stab_shadow_depriv = self.drives["STABILITE"].deprivation
 
     # --- Init & Reset ---
 
@@ -320,6 +338,8 @@ class DesireEngine:
         self._last_tick = time.time()
         self._subscribed = False
         self._initialized = False
+        self._stab_shadow_depriv = self.drives["STABILITE"].deprivation
+        self._stab_rebalance_last_log = 0.0
 
     @classmethod
     def reset_singleton(cls):
@@ -473,6 +493,11 @@ class DesireEngine:
                 continue
 
             rise = base_rise
+            _tempo = DRIVE_METABOLIC_TEMPO.get(drive.name, "fast")
+
+            # Rééquilibrage (24/06) : en 'active', la montée honore enfin le TEMPO (slow ×0.5).
+            if STABILITE_REBALANCE_MODE == "active":
+                rise *= _RISE_TEMPO_FACTOR.get(_tempo, 1.0)
 
             # Amplification par resonance PSYCHE
             resonance = TRAIT_RESONANCE.get(drive.name, {})
@@ -481,8 +506,9 @@ class DesireEngine:
                 amplifier = (trait_val - 50.0) / 50.0 * weight
                 rise *= (1.0 + amplifier)
 
-            # Frustration amplifie aussi (effet boule de neige)
-            if drive.frustration_streak >= 3:
+            # Frustration amplifie aussi (effet boule de neige). Rééquilibrage : en 'active', on CASSE
+            # ce ×1.5 pour les drives slow (sinon STABILITÉ pinned monte 4.5/h = cercle vicieux auto-renforçant).
+            if drive.frustration_streak >= 3 and not (STABILITE_REBALANCE_MODE == "active" and _tempo == "slow"):
                 rise *= 1.5
 
             # Amortissement homeostatique : la montee ralentit pres du plafond
@@ -493,10 +519,46 @@ class DesireEngine:
 
             drive.deprivation = min(100.0, drive.deprivation + rise)
 
+            # SHADOW counterfactuel STABILITÉ : même base_rise + résonance, mais règle A+B (tempo ×0.5,
+            # PAS de ×1.5 frustration). Reçoit les mêmes satisfactions/frustrations via on_event ->
+            # mesure la trajectoire qu'aurait STABILITÉ sous la nouvelle règle, SANS toucher le réel.
+            if STABILITE_REBALANCE_MODE != "off" and drive.name == "STABILITE":
+                _sr = base_rise * _RISE_TEMPO_FACTOR.get("slow", 0.5)
+                for trait, weight in resonance.items():
+                    _sr *= (1.0 + (traits_avg.get(trait, 50.0) - 50.0) / 50.0 * weight)
+                _sd = self._stab_shadow_depriv
+                if _sd > DEPRIVATION_CEILING_START:
+                    _sr *= max(0.0, 1.0 - (_sd - DEPRIVATION_CEILING_START) / (100.0 - DEPRIVATION_CEILING_START))
+                self._stab_shadow_depriv = min(100.0, _sd + _sr)
+                self._maybe_log_stab_rebalance(drive.deprivation)
+
             # Recuperation tolerance (l'organisme se deshabitue au repos)
             if drive.tolerance_accumulator > 0:
                 recovery = TOLERANCE_RECOVERY_PER_HOUR * elapsed_hours
                 drive.tolerance_accumulator = max(0.0, drive.tolerance_accumulator - recovery)
+
+    def _mirror_stab_shadow(self, drive_name: str, delta: float):
+        """Le counterfactuel STABILITÉ reçoit la MÊME satisfaction/frustration que le réel (on isole
+        l'effet du rise rééquilibré). No-op hors STABILITÉ ou en mode off."""
+        if drive_name == "STABILITE" and STABILITE_REBALANCE_MODE != "off" \
+                and self._stab_shadow_depriv is not None:
+            self._stab_shadow_depriv = max(0.0, min(100.0, self._stab_shadow_depriv + delta))
+
+    def _maybe_log_stab_rebalance(self, real_depriv: float):
+        """Logge {réel, shadow} de STABILITÉ ~toutes les 30 min (throttle) pour mesurer la trajectoire
+        counterfactuelle. Borg : ne casse jamais le tick."""
+        now = time.time()
+        if now - self._stab_rebalance_last_log < 1800.0:
+            return
+        self._stab_rebalance_last_log = now
+        try:
+            with open(_STAB_REBALANCE_SHADOW_LOG.replace("/", os.sep), "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "ts": now, "real": round(real_depriv, 2),
+                    "shadow": round(self._stab_shadow_depriv, 2), "mode": STABILITE_REBALANCE_MODE,
+                }, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
     def _get_traits_avg(self) -> Dict[str, float]:
         """Recupere la moyenne des traits PSYCHE (import local)."""
@@ -672,8 +734,10 @@ class DesireEngine:
                         if METABOLISME_RESOLUTION_MODE == "active":
                             applied_delta = modulated
                 drive.deprivation = max(0.0, min(100.0, drive.deprivation + applied_delta))
+                self._mirror_stab_shadow(drive_name, applied_delta)   # counterfactuel reçoit la même satisfaction
             else:  # Frustration → plein effet
                 drive.deprivation = max(0.0, min(100.0, drive.deprivation + delta))
+                self._mirror_stab_shadow(drive_name, delta)           # counterfactuel reçoit la même frustration
             if delta < 0:  # Satisfaction bookkeeping
                 drive.satiation_count += 1
                 drive.total_satisfied += 1
@@ -889,6 +953,7 @@ class DesireEngine:
                         tolerance_accumulator=d.get("tolerance_accumulator", 0.0),
                     )
             self._last_tick = data.get("last_tick", time.time())
+            self._stab_shadow_depriv = data.get("stab_shadow_depriv", None)
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
@@ -898,6 +963,7 @@ class DesireEngine:
         data = {
             "version": "1.0",
             "last_tick": self._last_tick,
+            "stab_shadow_depriv": round(self._stab_shadow_depriv, 2) if self._stab_shadow_depriv is not None else None,
             "drives": {
                 name: {
                     "deprivation": round(d.deprivation, 2),
