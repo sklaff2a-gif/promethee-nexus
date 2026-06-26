@@ -16,6 +16,15 @@ CRASH_WINDOW = 30 # Si ça plante en moins de 30s, c'est un crash de démarrage 
 HEARTBEAT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory", "heartbeat.txt")
 HEARTBEAT_MAX_AGE = 300          # 5 min : seuil de détection du gel
 HEARTBEAT_CHECK_INTERVAL = 10    # poll toutes les 10s pendant surveillance
+# --- Grâce de démarrage (faux gel post-coupure, 26/06) ---
+# Après une coupure de courant brutale, heartbeat.txt reste figé à l'heure
+# de la coupure. Au redémarrage, guardian le lisait comme "vieux de N heures"
+# et tuait le process AVANT la fin du boot (lequel n'a pas encore réécrit son
+# heartbeat) -> boucle kill+restart -> circuit breaker. Parade : on ignore tout
+# heartbeat antérieur au lancement courant ; on ne se fie au seuil de gel
+# qu'une fois que le process a écrit SON propre heartbeat (mtime > launch_time),
+# ou après STARTUP_GRACE secondes si le boot est réellement bloqué.
+STARTUP_GRACE = 180              # 3 min : marge de boot (indexation source ~95s incluse)
 GEL_RESTART_WINDOW = 1800        # 30 min : fenêtre du circuit breaker
 GEL_RESTART_MAX = 3              # max 3 gel-restarts par fenêtre, sinon escalation
 
@@ -87,6 +96,7 @@ def main():
         try:
             # 1. Lancement de Nexus
             log("Lancement de Prométhée...", "INFO")
+            launch_time = time.time()
             process = subprocess.Popen([sys.executable, NEXUS_SCRIPT])
 
             # 2. Surveillance : crash (process.poll) OU gel (heartbeat trop vieux).
@@ -96,9 +106,16 @@ def main():
                     if rc is not None:
                         break  # process terminé (crash ou exit normal)
                     if os.path.exists(HEARTBEAT_PATH):
-                        age = time.time() - os.path.getmtime(HEARTBEAT_PATH)
-                        if age > HEARTBEAT_MAX_AGE:
-                            log(f"GEL DETECTE : heartbeat vieux de {age:.0f}s (> {HEARTBEAT_MAX_AGE}s) -> kill+restart", "WARN")
+                        hb_mtime = os.path.getmtime(HEARTBEAT_PATH)
+                        age = time.time() - hb_mtime
+                        # Le process a-t-il déjà écrit SON propre heartbeat depuis ce lancement ?
+                        booted = hb_mtime > launch_time
+                        # Tant qu'il n'a pas booté, on ignore un heartbeat périmé (coupure) ;
+                        # on ne tue que si le boot dépasse la grâce (boot réellement bloqué).
+                        within_grace = (time.time() - launch_time) <= STARTUP_GRACE
+                        if age > HEARTBEAT_MAX_AGE and (booted or not within_grace):
+                            cause = "boucle morte" if booted else f"boot bloqué (> {STARTUP_GRACE}s)"
+                            log(f"GEL DETECTE ({cause}) : heartbeat vieux de {age:.0f}s (> {HEARTBEAT_MAX_AGE}s) -> kill+restart", "WARN")
                             process.terminate()
                             try:
                                 process.wait(timeout=10)
