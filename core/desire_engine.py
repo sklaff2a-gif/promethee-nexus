@@ -127,11 +127,15 @@ NATURAL_RISE_PER_HOUR = 3.0
 # CAUSE : la montée n'honore PAS le TEMPO (un drive "slow" montait aussi vite qu'un "fast", 3.0/h),
 # + le ×1.5 frustration en fait un cercle vicieux (4.5/h) -> rise ≈ +108/j >> satisfaction ≈ −36/j.
 # Règle A+B (en 'active') : facteur tempo (slow ×0.5 -> 1.5/h) ET pas de ×1.5 pour les drives slow.
-# SHADOW (défaut) : un counterfactuel ISOLÉ _stab_shadow_depriv évolue sous la règle A+B (même base_rise,
+# SHADOW : un counterfactuel ISOLÉ _stab_shadow_depriv évolue sous la règle A+B (même base_rise,
 # résonance, MÊMES satisfactions/frustrations que le réel) -> on MESURE la trajectoire qu'aurait STABILITÉ
 # sans changer le réel. Kill-switch ; NE TOUCHE PAS le DIP/Métabolisme/refractory/tolérance.
-#   STABILITE_REBALANCE_MODE = shadow (défaut) | active | off
-STABILITE_REBALANCE_MODE = os.getenv("STABILITE_REBALANCE_MODE", "shadow")
+# 27/06 : PROMU shadow -> active. Mesure shadow (99 pts) : réel ~85 -> rééquilibré ~28 ; STABILITÉ
+# est bien "slow" donc le chemin active reproduit fidèlement le counterfactuel. De-pinne la saturation
+# pathologique (racine du flux anxieux + boucle compulsive AUDIT_SURVIE / junk-food V34). Le shadow
+# continue de logger en active (monitoring). Kill-switch env pour rollback (patron IRRIGATION/HALT).
+#   STABILITE_REBALANCE_MODE = active (défaut, B+A agissent) | shadow (mesure) | off
+STABILITE_REBALANCE_MODE = os.getenv("STABILITE_REBALANCE_MODE", "active")
 _RISE_TEMPO_FACTOR = {"slow": 0.5, "medium": 0.75, "fast": 1.0}
 _STAB_REBALANCE_SHADOW_LOG = "memory/stabilite_rebalance_shadow.jsonl"
 

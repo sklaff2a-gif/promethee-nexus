@@ -97,7 +97,7 @@ def test_persistance_round_trip(monkeypatch, tmp_path):
     assert e._stab_shadow_depriv == 42.0
 
 
-def test_defaut_shadow():
-    # le défaut module (os.getenv) est 'shadow' ; les tests le remettent
-    de.STABILITE_REBALANCE_MODE = "shadow"
-    assert de.STABILITE_REBALANCE_MODE == "shadow"
+def test_defaut_active():
+    # 27/06 : promu shadow -> active. Le défaut module (os.getenv) est 'active'.
+    import os
+    assert os.getenv("STABILITE_REBALANCE_MODE", "active") == "active"
