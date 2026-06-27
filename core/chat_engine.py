@@ -3135,9 +3135,16 @@ class ChatEngine:
         # sur "Montre-moi la derive" — boucle DMN sur photo aleatoire). Reste
         # couvert : "montre-moi cette photo" matche via "photo" qui est strong.
         # "montre-moi" seul est metaphorique 90% du temps -> bascule en WEAK.
+        # 27/06/2026 : "observe" retire de STRONG -> WEAK (meme cause que "montre-moi"
+        # le 27/05). Pendant les ateliers introspectifs du 26/06, "observe-moi",
+        # "observe-toi", "observe ton mentor", "observe l'observateur" ont detourne la
+        # boucle de chat vers une OBSERVATION VISUELLE parasite (photo BatTheo injectee
+        # 3x). "observe" est polysemique a outrance dans ce projet (s'observer soi-meme).
+        # Reste couvert : "observe cette photo/la dropzone" matche via le mot fort present.
         STRONG_VISUAL = ["photo", "dropzone", "visuel", "selfie", "picture",
-                         "cliche", "cliché", "observe"]
-        WEAK_VISUAL = ["image", "voir", "vois", "regarde", "montre", "montre-moi", "vision", "famille"]
+                         "cliche", "cliché"]
+        WEAK_VISUAL = ["image", "voir", "vois", "regarde", "montre", "montre-moi",
+                       "vision", "famille", "observe"]
 
         strong_hits = [w for w in STRONG_VISUAL
                        if re.search(r'\b' + re.escape(w) + r'\b', msg_lower)]

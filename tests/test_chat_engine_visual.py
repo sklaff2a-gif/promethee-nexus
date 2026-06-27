@@ -52,6 +52,27 @@ class TestFauxPositifsFigures:
         assert engine._is_visual_request("quelle est ta vision de ton evolution future") is False
 
 
+# --- Faux positifs "observe" introspectif (regression ateliers 26/06/2026) ---
+# "observe" etait STRONG -> "observe-moi/observe-toi/observe ton mentor" pendant les
+# ateliers d'introspection detournaient le chat vers une observation photo parasite
+# (photo BatTheo injectee 3x). "observe" bascule en WEAK : seul, il ne declenche plus.
+
+class TestObserveIntrospectif:
+
+    def test_observe_moi_mentor(self, engine):
+        assert engine._is_visual_request("ecris le rapport d'observateur sur moi, observe-moi vraiment") is False
+
+    def test_observe_toi_repondre(self, engine):
+        assert engine._is_visual_request("en repondant, observe-toi repondre") is False
+
+    def test_observe_ton_etat(self, engine):
+        assert engine._is_visual_request("observe ton etat interne maintenant") is False
+
+    def test_observe_avec_photo_reste_vrai(self, engine):
+        """Garde-fou : 'observe' + un mot FORT declenche toujours."""
+        assert engine._is_visual_request("observe cette photo") is True
+
+
 # --- Vrais positifs : doivent retourner True ---
 
 class TestVraisPositifs:
